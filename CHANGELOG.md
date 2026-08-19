@@ -10,6 +10,30 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 the proto schema, the plugin protocol, exit codes, the `kno.yaml` schema, and the public Go API are
 covenants — breaking any of them requires a major version.
 
+## 1.0.0 (2026-08-19)
+
+
+### Features
+
+* **build:** enforce coverage floors and godoc coverage ([#9](https://github.com/Knograph/kno/issues/9)) ([bf924d2](https://github.com/Knograph/kno/commit/bf924d2e72de1b5edf1ca2d9685f29d0c8f11f69))
+* **proto:** add Goal Direction so the sign of every reported number is interpretable ([#8](https://github.com/Knograph/kno/issues/8)) ([e5d4b98](https://github.com/Knograph/kno/commit/e5d4b98780dfbd9159757cbd16161e1a846f2a65))
+* **proto:** the kno.v1 contract — Ring-0 schema and generated types (M0b) ([#2](https://github.com/Knograph/kno/issues/2)) ([8361e2a](https://github.com/Knograph/kno/commit/8361e2a4b69fffcbad25f9550f3c3b5470d3c2e5))
+
+
+### Bug Fixes
+
+* **build:** make gate recipes enforce failure without relying on .SHELLFLAGS ([#7](https://github.com/Knograph/kno/issues/7)) ([199ea63](https://github.com/Knograph/kno/commit/199ea63d8b3f50924d92a8543d18f7066c6f31eb))
+
+
+### Documentation
+
+* initial repo scaffold with design and operating manual ([b5ea55c](https://github.com/Knograph/kno/commit/b5ea55c861f97d274d90e6cd1d151436fa699906))
+
+
+### Build & Dependencies
+
+* repository foundation — gates, governance, and process machinery (M0a) ([#1](https://github.com/Knograph/kno/issues/1)) ([fb55946](https://github.com/Knograph/kno/commit/fb559461eac9481fe0be4242e31eb1b6f6e97a53))
+
 ## [Unreleased]
 
 ### Changed
