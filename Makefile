@@ -40,10 +40,14 @@ BIN        := $(CURDIR)/bin
 # across the standard library. Pinning makes the toolchain as reproducible as
 # everything else in tools/go.mod. Bump it deliberately, in a PR.
 #
-# It must satisfy the HIGHEST floor across both modules: go.mod requires
+# The version is READ FROM go.mod's toolchain directive rather than duplicated
+# here, so there is one source of truth. setup-go reads the same line, which is
+# what stops CI from installing one toolchain and then downloading a second.
+#
+# It must satisfy the highest floor across both modules: go.mod requires
 # >= 1.25.8 (GO-2026-4602 in the standard library) and tools/go.mod requires
 # >= 1.25.10 (buf). Pinning below either one fails at `make tools`.
-export GOTOOLCHAIN := go1.25.10
+export GOTOOLCHAIN := $(shell awk '/^toolchain /{print $$2}' go.mod)
 
 # Put the pinned tools ahead of everything on PATH for every recipe.
 #

@@ -56,17 +56,34 @@ jobs:
         uses: actions/cache@v4
         with:
           path: bin
-          # Keyed on the Go version too: a toolchain bump must not restore
-          # binaries built by the old compiler.
-          key: ${{ runner.os }}-knotools-${{ steps.go.outputs.go-version }}-${{ hashFiles('tools/go.sum') }}
+          # Keyed on go.mod as well as tools/go.sum, because go.mod carries the
+          # `toolchain` directive that decides which compiler actually builds
+          # these binaries. Keying on setup-go's version instead was wrong: it
+          # reported 1.25.8 while the toolchain directive built them with
+          # 1.25.10, so the key did not describe its own contents and a
+          # toolchain bump would have restored stale binaries.
+          key: ${{ runner.os }}-knotools-${{ hashFiles('go.mod', 'tools/go.sum') }}
+
+      - name: Cache gitleaks
+        id: gitleaks-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/kno-gitleaks
+          key: ${{ runner.os }}-gitleaks-${{ env.GITLEAKS_VERSION }}
 
       - name: Install gitleaks (pinned, checksum-verified)
-        # Same version on both matrix legs — an unpinned `brew install` on macOS
-        # would run a different scanner with a different rule set, so a leak
-        # could be caught on one OS and missed on the other. Verified against
-        # the release checksums file rather than piped blind into PATH.
+        # One pinned version on both matrix legs. An unpinned `brew install` on
+        # macOS would run a different scanner with a different rule set, so a
+        # leak could be caught on one OS and missed on the other.
+        #
+        # The checksum is verified on download AND on cache restore: a cached
+        # binary is still an executable placed on PATH, and trusting it just
+        # because it came from a cache would defeat the point of pinning.
         run: |
           set -euo pipefail
+          cache="$HOME/.cache/kno-gitleaks"
+          mkdir -p "$cache"
+
           case "${{ runner.os }}" in
             Linux) asset="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" ;;
             macOS) asset="gitleaks_${GITLEAKS_VERSION}_darwin_arm64.tar.gz" ;;
@@ -74,11 +91,14 @@ jobs:
           esac
           sums="gitleaks_${GITLEAKS_VERSION}_checksums.txt"
           base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
-          curl -sSfL -o "$asset" "$base/$asset"
-          curl -sSfL -o "$sums" "$base/$sums"
-          grep " $asset\$" "$sums" | shasum -a 256 -c -
-          sudo tar -xzf "$asset" -C /usr/local/bin gitleaks
-          rm -f "$asset" "$sums"
+
+          if [ ! -f "$cache/$asset" ] || [ ! -f "$cache/$sums" ]; then
+            curl -sSfL -o "$cache/$asset" "$base/$asset"
+            curl -sSfL -o "$cache/$sums" "$base/$sums"
+          fi
+
+          ( cd "$cache" && grep " $asset\$" "$sums" | shasum -a 256 -c - )
+          sudo tar -xzf "$cache/$asset" -C /usr/local/bin gitleaks
           gitleaks version
 
       - run: make tools
