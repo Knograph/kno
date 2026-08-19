@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package kno.v1;
+
+import "kno/v1/common.proto";
+
+// Asset is one candidate data unit — an example, document, fact, or feature —
+// carrying its own economics.
+//
+// An Asset is a portfolio holding: it has a cost, a measured contribution, and
+// a destination. It earns its place with a measurement or it does not ship.
+message Asset {
+  // Stable identifier, ULID-formatted.
+  string id = 1;
+
+  // The Asset's content. Bytes rather than string because a Pool may hold
+  // non-text assets, and because content is passed through unmodified.
+  bytes content = 2;
+
+  // What this Asset fundamentally is. Judged by mechanism routing, and
+  // overridable by the user — the judgement is a measurement input, not an
+  // authority.
+  Kind kind = 3;
+
+  // Where this Asset belongs. Assigned by routing after measurement; unset
+  // before Select has run.
+  Destination destination = 4;
+
+  // What carrying this Asset costs.
+  CostVector cost = 5;
+
+  // Where it came from.
+  Provenance provenance = 6;
+
+  // Human-readable label for reports and the rejection log.
+  string title = 7;
+
+  // Tags for slicing, matching Case.tags where the vocabulary overlaps.
+  repeated string tags = 8;
+
+  // Set when the user pinned kind or destination by hand, so the report can
+  // distinguish a measured routing decision from an asserted one.
+  bool user_overridden = 9;
+}

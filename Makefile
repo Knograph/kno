@@ -233,14 +233,18 @@ $(call proto_bootstrap_check,typecheck-proto); \
 	fi
 
 .PHONY: generate-check
-generate-check: generate ## Fail if checked-in generated code drifted from proto
+generate-check: $(BUF) ## Fail if regenerating from proto would change anything
 	@if [ -f proto/PENDING ]; then \
 		$(call pending,generate-check,M0b (feat/proto-contract)); \
-	elif [ -n "$$(git status --porcelain -- gen/)" ]; then \
-		printf '\033[31m FAIL \033[0m gen/ is stale — run `make generate` and commit the result.\n'; \
-		git status --porcelain -- gen/; \
-		exit 1; \
 	else \
+		before=$$(find gen -type f -print0 2>/dev/null | sort -z | xargs -0 shasum -a 256 2>/dev/null | shasum -a 256); \
+		$(BUF) generate; \
+		after=$$(find gen -type f -print0 2>/dev/null | sort -z | xargs -0 shasum -a 256 2>/dev/null | shasum -a 256); \
+		if [ "$$before" != "$$after" ]; then \
+			printf '\033[31m FAIL \033[0m gen/ is stale — regenerating changed it. Commit the result.\n'; \
+			git status --porcelain -- gen/; \
+			exit 1; \
+		fi; \
 		printf '\033[32m  OK  \033[0m gen/ matches proto/\n'; \
 	fi
 

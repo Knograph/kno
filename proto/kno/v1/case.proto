@@ -1,0 +1,175 @@
+syntax = "proto3";
+
+package kno.v1;
+
+import "kno/v1/common.proto";
+
+// Split says which half of the Evals a Case belongs to. This is structural,
+// not conventional, precisely because the guarantee it encodes is the one most
+// easily lost: selection without a holdout systematically inflates reported
+// gains, because Assets that win on the dev slice win partly by luck.
+enum Split {
+  // Unset. A Case with no Split must never be scored — an unassigned Case
+  // silently defaulting into dev is exactly how a holdout leaks.
+  SPLIT_UNSPECIFIED = 0;
+
+  // Used for measurement and selection. Read freely.
+  SPLIT_DEV = 1;
+
+  // Untouched until Validate. Nothing reads a holdout Case before then, and a
+  // canary test asserts it. This slice produces the only number you may put in
+  // a slide.
+  SPLIT_HOLDOUT = 2;
+}
+
+// Case is one scoreable eval interaction: an input, and either an expected
+// outcome or a rubric to judge against.
+//
+// Cases come from the Evals adapter — the exam. Assets come from the Pool —
+// the study material. They are deliberately separate concepts with separate
+// adapters.
+message Case {
+  // Stable identifier, ULID-formatted. Used to correlate traces, valuations,
+  // and reports across a run and between runs.
+  string id = 1;
+
+  // What the agent receives.
+  string input = 2;
+
+  // The expected outcome, when there is a deterministic one. Mutually
+  // usable with rubric: a Case may have both, either, or only a rubric.
+  string expected = 3;
+
+  // Natural-language criteria for a judge, when correctness is not exact-match.
+  string rubric = 4;
+
+  // Which half of the Evals this belongs to. Assigned at ingestion, never
+  // later — re-splitting mid-run is how a holdout stops being a holdout.
+  Split split = 5;
+
+  // Labels for slicing results: "billing", "refund", "tool-use". Failure
+  // clusters are reported in these terms.
+  repeated string tags = 6;
+
+  // Where this Case came from.
+  Provenance provenance = 7;
+
+  // Prior conversation turns, for multi-turn Cases. Empty for single-turn.
+  repeated Turn history = 8;
+}
+
+// Role is who produced a Turn.
+//
+// An enum rather than a free string because this is a small, closed, stable
+// set, and a string would let "assistant" and "Assistant" drift apart across
+// adapters with nothing to catch it. Changing a string field to an enum after
+// release is wire-breaking, so it is done now, while nothing consumes this.
+//
+// Contrast AgentRef.scheme, which is correctly a string: that set is genuinely
+// open, because any Ring-1 or Ring-2 adapter may introduce a new scheme.
+enum Role {
+  // Unset.
+  ROLE_UNSPECIFIED = 0;
+
+  // System or developer instruction.
+  ROLE_SYSTEM = 1;
+
+  // The end user.
+  ROLE_USER = 2;
+
+  // The agent.
+  ROLE_ASSISTANT = 3;
+
+  // A tool result returned to the agent.
+  ROLE_TOOL = 4;
+}
+
+// ToolCall is one tool invocation the agent made.
+//
+// Structured rather than an opaque string because Kind.BEHAVIOR names tool-use
+// patterns as one of the two things behavior Assets exist to capture, and
+// BEHAVIOR is the only Kind that faces the fine-tuning bridge. Measuring
+// improvement in tool use against ad-hoc per-adapter JSON blobs would undercut
+// the fidelity of exactly the measurement the bridge depends on.
+message ToolCall {
+  // Tool name as the agent called it.
+  string name = 1;
+
+  // Arguments as the agent supplied them, provider-formatted (typically JSON).
+  string arguments = 2;
+
+  // What the tool returned, when the adapter reports it.
+  string result = 3;
+
+  // Set when the call itself failed, as opposed to returning an unhelpful
+  // result. A failed tool call and a bad answer are different failure modes
+  // and route to different Assets.
+  string error = 4;
+}
+
+// Turn is one message in a conversation history.
+message Turn {
+  // Who produced this Turn.
+  Role role = 1;
+
+  // Message content.
+  string content = 2;
+
+  // Tool calls made in this Turn, when the role is ROLE_ASSISTANT.
+  repeated ToolCall tool_calls = 3;
+}
+
+// Response is what an Agent returned for a Case.
+message Response {
+  // The Case this answers.
+  string case_id = 1;
+
+  // The agent's output.
+  string output = 2;
+
+  // Prompt tokens consumed. Zero when the adapter does not report usage — see
+  // Capabilities.token_counts before treating this as measured rather than
+  // absent.
+  int64 prompt_tokens = 3;
+
+  // Completion tokens produced.
+  int64 completion_tokens = 4;
+
+  // What this single invocation cost, in MICRO-USD.
+  int64 cost_usd_micros = 5;
+
+  // Wall-clock latency.
+  int64 latency_ms = 6;
+
+  // Tool calls the agent made, if the adapter reports them.
+  repeated ToolCall tool_calls = 7;
+
+  // Set when the agent failed rather than answered. An errored Response is
+  // still recorded: silently dropping failures biases every downstream number.
+  string error = 8;
+}
+
+// Score is the Goal's judgement of one Response.
+message Score {
+  // The Case scored.
+  string case_id = 1;
+
+  // The score itself. Direction is defined by the Goal, not assumed here —
+  // higher is not universally better.
+  double value = 2;
+
+  // Whether this counts as a pass, for Goals with a threshold.
+  bool passed = 3;
+
+  // Component scores for composite Goals, keyed by component name.
+  map<string, double> components = 4;
+
+  // The judge's stated reason. Retained because a number without a reason
+  // cannot be audited, and judges are the epistemic foundation here.
+  string rationale = 5;
+
+  // Which judge model produced this. The judge model defaults to something
+  // other than the agent model; recording it makes correlated blind spots
+  // detectable after the fact.
+  string judge_model = 6;
+}

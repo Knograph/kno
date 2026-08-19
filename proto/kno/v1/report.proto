@@ -1,0 +1,125 @@
+syntax = "proto3";
+
+package kno.v1;
+
+import "kno/v1/common.proto";
+import "kno/v1/portfolio.proto";
+import "kno/v1/valuation.proto";
+
+// Gap is a failure cluster that NO Asset in the Pool improved.
+//
+// This is the most forward-looking output Kno produces and the one no eval
+// framework ships: not "your data is bad" but "here is a failure mode nothing
+// you have can fix, so here is what to start collecting".
+message Gap {
+  // Cluster identifier.
+  string cluster_id = 1;
+
+  // What these failures have in common, in the user's own domain terms.
+  string description = 2;
+
+  // Cases in this cluster.
+  repeated string case_ids = 3;
+
+  // Share of total observed failures, 0..1. Sizing the gap is what makes it
+  // actionable — a 23% cluster and a 2% cluster warrant different responses.
+  double failure_share = 4;
+
+  // What to collect, derived from how humans resolved these cases when they
+  // did.
+  string recommendation = 5;
+
+  // Assets that were tried against this cluster and did not help. Recorded so
+  // the recommendation is auditable rather than asserted.
+  repeated string attempted_asset_ids = 6;
+}
+
+// Report is the deliverable: what was selected, what was rejected and why,
+// what it cost, and what the holdout says it is actually worth.
+message Report {
+  // The run this reports on.
+  string run_id = 1;
+
+  // RFC 3339 timestamp.
+  string created_at = 2;
+
+  // The agent measured.
+  AgentRef agent = 3;
+
+  // The Goal optimized.
+  string goal_name = 4;
+
+  // The selected Portfolio with its full rejection log.
+  Portfolio portfolio = 5;
+
+  // Baseline score before any Asset was added.
+  //
+  // `optional` is load-bearing: without it a proto3 scalar has no presence, so
+  // "Baseline has not run" would be indistinguishable from "the baseline
+  // scored exactly zero". Check presence before reading.
+  optional double baseline_score = 6;
+
+  // Score with the whole Portfolio applied, measured on the UNTOUCHED HOLDOUT.
+  //
+  // This is the only number that belongs in a slide. Portfolio.expected_gain
+  // is a dev-slice estimate inflated by the winner's curse; this one is not.
+  // Absent until Validate has run — and absent means ABSENT: this field is
+  // `optional`, so presence is tracked and a missing value cannot be read as
+  // a real score of zero.
+  optional double holdout_score = 7;
+
+  // holdout_score - baseline_score.
+  //
+  // The single most consequential number this tool produces, and therefore the
+  // one whose absence must be impossible to misread. `optional` guarantees
+  // that a Report emitted after Select but before Validate reports NO gain,
+  // rather than a gain of zero.
+  optional double holdout_gain = 8;
+
+  // Confidence interval on holdout_gain. ABSENT means Validate has not run;
+  // never present holdout_gain without it.
+  Interval holdout_interval = 9;
+
+  // Set when the Portfolio underperforms the sum of its parts — two
+  // individually-helpful Assets can be jointly contradictory. Assets are
+  // valued individually but ship as a set, so this is a real and reportable
+  // outcome, not an anomaly.
+  bool interaction_penalty_detected = 10;
+
+  // Suspected interacting Asset pairs, when a penalty was detected.
+  repeated AssetPair suspect_interactions = 11;
+
+  // Failure clusters nothing in the Pool could fix.
+  repeated Gap gaps = 12;
+
+  // Total spend for the run, in MICRO-USD.
+  int64 total_cost_usd_micros = 13;
+
+  // Total LLM calls made.
+  int64 total_llm_calls = 14;
+
+  // Number of Cases in each split, so a reader can judge statistical weight
+  // without recomputing it.
+  int32 dev_case_count = 15;
+
+  // Cases in the holdout split. A small holdout produces a wide interval on
+  // holdout_gain, so this number is part of reading that one honestly.
+  int32 holdout_case_count = 16;
+
+  // Set when the run stopped early — budget exhausted, interrupted, or a
+  // provider failure. A partial report says so rather than presenting itself
+  // as complete.
+  string incomplete_reason = 17;
+}
+
+// AssetPair names two Assets suspected of interacting badly.
+message AssetPair {
+  // First Asset in the suspected interaction.
+  string asset_id_a = 1;
+
+  // Second Asset. Order carries no meaning — interaction is symmetric.
+  string asset_id_b = 2;
+
+  // What the pairwise measurement showed.
+  string detail = 3;
+}

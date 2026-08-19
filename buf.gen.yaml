@@ -1,0 +1,25 @@
+version: v2
+
+managed:
+  enabled: true
+  override:
+    # Generated Go lands in gen/kno/v1 (ADR-0002). DESIGN.md names proto/ as
+    # the contract and is silent on codegen output; gen/ is an addition.
+    - file_option: go_package_prefix
+      value: github.com/knograph/kno/gen
+
+plugins:
+  # Local, pinned via tools/go.mod's `tool` directive — not a buf remote
+  # plugin. Remote plugins would add a network dependency and third-party
+  # binary execution at codegen time for no benefit `go tool` doesn't provide.
+  - local: protoc-gen-go
+    out: gen
+    opt:
+      - paths=source_relative
+      # PIN THE API LEVEL. protoc-gen-go's Opaque API replaces exported struct
+      # fields with generated setters and builders. Because ADR-0001 makes
+      # these generated messages the domain types, a silent default-flip to
+      # opaque would break every &core.Asset{...} literal and every test
+      # fixture at once. Pinned explicitly, not inherited from the default.
+      # DEBT(docs/debt.md#5): revisit before any protoc-gen-go major bump.
+      - default_api_level=API_OPEN
