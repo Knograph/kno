@@ -12,8 +12,17 @@ covenants — breaking any of them requires a major version.
 
 ## [Unreleased]
 
+### Changed
+
+- Go toolchain pinned to `go1.25.8` (from 1.25.5), which `govulncheck` flagged for `GO-2026-4602`
+  in the standard library, reachable from `covercheck`. `GOTOOLCHAIN` is pinned in the Makefile so
+  the toolchain is as reproducible as every other tool.
+
 ### Added
 
+- `covercheck` and `godoccheck`, retiring the two gates that had reported `PEND` since the
+  foundation landed. Coverage floors (85% on `core`/`stats`/`bridge`/`plugin`, 70% repo-wide) and
+  the no-decrease ratchet are now enforced, as is godoc coverage on every exported symbol.
 - `Direction` enum (`DIRECTION_MAXIMIZE` / `DIRECTION_MINIMIZE`) and `Report.goal_direction`.
   `DESIGN.md` defines a Goal as having a direction and both `Score.value` and
   `Valuation.delta_goal` document their sign as relative to it, but direction was represented

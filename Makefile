@@ -31,6 +31,20 @@ SAFE := set -euo pipefail;
 
 BIN        := $(CURDIR)/bin
 
+# Pin the Go toolchain, not just the tools.
+#
+# GOTOOLCHAIN=auto resolves the version per invocation, and with a mix of
+# module go directives it can end up compiling packages with one toolchain
+# while running the compile binary from another — producing
+# `compile: version "go1.25.8" does not match go tool version "go1.25.5"`
+# across the standard library. Pinning makes the toolchain as reproducible as
+# everything else in tools/go.mod. Bump it deliberately, in a PR.
+#
+# It must satisfy the HIGHEST floor across both modules: go.mod requires
+# >= 1.25.8 (GO-2026-4602 in the standard library) and tools/go.mod requires
+# >= 1.25.10 (buf). Pinning below either one fails at `make tools`.
+export GOTOOLCHAIN := go1.25.10
+
 # Put the pinned tools ahead of everything on PATH for every recipe.
 #
 # buf resolves `local:` codegen plugins by name from $PATH, so without this it
@@ -161,15 +175,11 @@ test-live: ## Integration tests against LIVE providers. Spends real money.
 
 .PHONY: coverage-check
 coverage-check: ## Enforce coverage floors and the no-decrease ratchet
-	@$(SAFE) if [ -x $(BIN)/covercheck ]; then \
-		$(BIN)/covercheck -profile=$(COVERAGE) -baseline=$(BASELINE); \
-	else \
-		$(call pending,coverage ratchet,M0c (feat/ring0-surface)); \
-	fi
+	@go run ./internal/cmd/covercheck -profile=$(COVERAGE) -baseline=$(BASELINE)
 
 .PHONY: update-coverage-baseline
 update-coverage-baseline: test ## Regenerate .coverage-baseline (review the diff like code)
-	@$(BIN)/covercheck -profile=$(COVERAGE) -baseline=$(BASELINE) -write
+	@go run ./internal/cmd/covercheck -profile=$(COVERAGE) -baseline=$(BASELINE) -write
 
 .PHONY: secrets-scan
 secrets-scan: ## gitleaks over BOTH the working tree and git history
@@ -308,11 +318,7 @@ bench-diff: ## Tripwire: fails once benchmarks exist, until the gate is implemen
 
 .PHONY: docs
 docs: ## Regenerate OpenAPI, check godoc coverage, verify links
-	@$(SAFE) if [ -x $(BIN)/godoccheck ]; then \
-		$(BIN)/godoccheck ./...; \
-	else \
-		$(call pending,godoc coverage,M0c (feat/ring0-surface)); \
-	fi
+	@go run ./internal/cmd/godoccheck
 	@$(call pending,OpenAPI generation,the first proto service definition)
 
 ## ─── Meta ───────────────────────────────────────────────────────────────────
