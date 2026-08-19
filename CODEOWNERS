@@ -1,0 +1,34 @@
+# Review routing. See CONTRIBUTING.md.
+#
+# Later matches win, so the most specific rule for a path is the one that
+# applies. Every path has an owner; nothing merges unreviewed.
+
+*                       @devarispbrown
+
+# The contract. Breaking changes here are covenant-level after 1.0.
+/proto/                 @devarispbrown
+/gen/                   @devarispbrown
+
+# The engine and the statistics. CLAUDE.md routes these to maintainers.
+/core/                  @devarispbrown
+/stats/                 @devarispbrown
+/bridge/                @devarispbrown
+
+# Ring 2: the plugin protocol is a compatibility and security boundary.
+/plugin/                @devarispbrown
+
+# Process law and architecture truth.
+/CLAUDE.md              @devarispbrown
+/DESIGN.md              @devarispbrown
+/docs/adr/              @devarispbrown
+/docs/debt.md           @devarispbrown
+
+# Adapters are the designed contributor on-ramp; add adapter owners here.
+/adapters/              @devarispbrown
+
+# Judges are the epistemic foundation.
+/judge/                 @devarispbrown
+
+# Supply chain.
+/.github/workflows/     @devarispbrown
+/tools/                 @devarispbrown

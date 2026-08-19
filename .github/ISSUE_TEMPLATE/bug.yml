@@ -1,0 +1,42 @@
+name: Bug report
+description: Something behaves incorrectly
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. If this is a **security** issue, please stop and
+        follow [SECURITY.md](../blob/main/SECURITY.md) instead — do not file it publicly.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what you got instead.
+    validations: { required: true }
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: The exact commands, with a minimal config if relevant.
+      render: shell
+    validations: { required: true }
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `kno --version`.
+    validations: { required: true }
+  - type: dropdown
+    id: stage
+    attributes:
+      label: Which stage
+      options: [init, mine, baseline, value, select, validate, export, report, judge, serve, plugins, other/unsure]
+    validations: { required: true }
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Run with `--json` if you can. **Scrub API keys and any end-user conversation
+        content** — traces may contain customer data.
+      render: shell

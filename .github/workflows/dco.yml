@@ -1,0 +1,70 @@
+name: DCO
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: sign-off
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Bots do not sign off, and cannot. Dependabot opens PRs against three
+    # ecosystems in this repo; requiring a DCO trailer from it would make every
+    # dependency PR permanently red.
+    if: github.event.pull_request.user.login != 'dependabot[bot]'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Every commit must be signed off
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          # Fail CLOSED. If the range cannot be read (force-push, unusual fork
+          # topology, shallow fetch), `git rev-list` errors, the loop body never
+          # runs, and a naive script reports success. Materialize the list first
+          # and check the exit status.
+          if ! commits="$(git rev-list --no-merges "$BASE".."$HEAD")"; then
+            echo "::error::cannot read commit range $BASE..$HEAD — refusing to pass"
+            exit 1
+          fi
+
+          if [ -z "$commits" ]; then
+            echo "no non-merge commits in range; nothing to verify"
+            exit 0
+          fi
+
+          failed=0
+          while read -r sha; do
+            [ -z "$sha" ] && continue
+            author="$(git show -s --format='%an <%ae>' "$sha")"
+            committer="$(git show -s --format='%cn <%ce>' "$sha")"
+            body="$(git show -s --format='%B' "$sha")"
+            # The DCO permits either the author or the committer to sign off.
+            # Match on a line-anchored trailer, not a substring anywhere in the
+            # message body.
+            # grep -x anchors the whole line, -F treats the name/email as a
+            # literal, so no regex escaping of . + ( ) in a real name is needed.
+            if printf '%s\n' "$body" | tr -d '\r' \
+                 | grep -qxiF -e "Signed-off-by: $author" -e "Signed-off-by: $committer"; then
+              continue
+            fi
+            echo "::error::commit $sha is missing 'Signed-off-by: $author'"
+            failed=1
+          done <<< "$commits"
+
+          if [ "$failed" -ne 0 ]; then
+            echo "Sign off with: git commit -s   (or fix history: git rebase --signoff $BASE)"
+            echo "See CONTRIBUTING.md — we use the DCO, not a CLA."
+            exit 1
+          fi
+          echo "all commits signed off"

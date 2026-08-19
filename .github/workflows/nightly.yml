@@ -1,0 +1,71 @@
+name: Nightly
+
+on:
+  schedule:
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  KNO_CI: "1"
+
+jobs:
+  fuzz-long:
+    name: fuzz (extended)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
+      - run: make fuzz-short FUZZTIME=15m
+
+  live:
+    name: live API tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # This is the only job in the repository that can spend money.
+    #
+    # It is DISARMED until the budget guard exists. `make test-live` refuses to
+    # run unless KNO_MAX_COST_USD is set AND some Go code actually reads it —
+    # so this cannot become a silent-overspend trap the moment someone adds the
+    # first adapter test. stats/budget lands in M0c; see docs/debt.md#11.
+    #
+    # CLAUDE.md: live tests are NEVER in PR CI. Fixture-based integration tests
+    # run there instead, via `make test` -> `make test-integration`.
+    env:
+      KNO_MAX_COST_USD: "5.00"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
+      - name: Integration tests against live providers
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: make test-live
+
+  vuln:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
+      - run: make tools
+      - run: make vuln

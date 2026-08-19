@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A new push to a PR cancels the previous run; main runs always finish so the
+# proto and coverage baselines stay accurate.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  # Read by the Makefile: turns any "tool missing" warning into a hard failure,
+  # so an absent binary can never silently disable a gate here. This is the
+  # actual mechanism — not a grep over stdout, which would fire on any tool
+  # banner that happened to contain the word SKIP.
+  KNO_CI: "1"
+  GITLEAKS_VERSION: "8.30.1"
+
+jobs:
+  check:
+    name: check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # buf breaking --against '.git#branch=main' needs real history, and
+          # the coverage ratchet compares against the committed baseline.
+          fetch-depth: 0
+
+      - name: Fetch main for the proto breaking-change baseline
+        # A PR is checked out as a detached merge ref. buf breaking compares
+        # against main, so main must actually exist locally — otherwise the
+        # single most covenant-critical gate errors instead of running.
+        run: git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+
+      - uses: actions/setup-go@v5
+        id: go
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
+
+      - name: Cache tool binaries
+        uses: actions/cache@v4
+        with:
+          path: bin
+          # Keyed on the Go version too: a toolchain bump must not restore
+          # binaries built by the old compiler.
+          key: ${{ runner.os }}-knotools-${{ steps.go.outputs.go-version }}-${{ hashFiles('tools/go.sum') }}
+
+      - name: Install gitleaks (pinned, checksum-verified)
+        # Same version on both matrix legs — an unpinned `brew install` on macOS
+        # would run a different scanner with a different rule set, so a leak
+        # could be caught on one OS and missed on the other. Verified against
+        # the release checksums file rather than piped blind into PATH.
+        run: |
+          set -euo pipefail
+          case "${{ runner.os }}" in
+            Linux) asset="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" ;;
+            macOS) asset="gitleaks_${GITLEAKS_VERSION}_darwin_arm64.tar.gz" ;;
+            *) echo "::error::unsupported runner"; exit 1 ;;
+          esac
+          sums="gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          curl -sSfL -o "$asset" "$base/$asset"
+          curl -sSfL -o "$sums" "$base/$sums"
+          grep " $asset\$" "$sums" | shasum -a 256 -c -
+          sudo tar -xzf "$asset" -C /usr/local/bin gitleaks
+          rm -f "$asset" "$sums"
+          gitleaks version
+
+      - run: make tools
+
+      # make check is the whole PR gate: fmt, lint, test (incl. fixture
+      # integration), proto, generate-check, vuln, docs, fuzz, bench tripwire.
+      # KNO_CI makes any skipped gate a hard failure.
+      - run: make check
+
+  release-please-config:
+    name: release-please config is valid
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Manifest and config parse
+        run: |
+          set -euo pipefail
+          jq -e . release-please-config.json > /dev/null
+          jq -e . .release-please-manifest.json > /dev/null
+          echo "release-please config OK"

@@ -1,0 +1,32 @@
+name: Feature request
+description: Propose a capability
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check [DESIGN.md](../blob/main/DESIGN.md) first — particularly
+        "What is deliberately NOT in the OSS project". Some things are excluded on
+        purpose rather than missing.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that you can't do today? Describe the situation, not the solution.
+    validations: { required: true }
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed approach
+      description: Optional. If you have a design in mind, sketch it.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried instead
+      description: Workarounds, other tools, or why the existing verbs don't cover it.
+  - type: checkboxes
+    id: vocabulary
+    attributes:
+      label: Vocabulary
+      options:
+        - label: I've described this using Kno's vocabulary (Case, Evals, Asset, Pool, Goal, Valuation, Portfolio, Destination, Bridge, Holdout) where it applies

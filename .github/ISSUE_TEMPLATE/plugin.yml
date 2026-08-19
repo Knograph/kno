@@ -1,0 +1,40 @@
+name: Plugin or adapter
+description: Propose or report an issue with an adapter (Ring 1) or exec plugin (Ring 2)
+labels: ["adapter", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Adapters are the designed contributor on-ramp — if you want to build this
+        yourself, say so and we'll help scope it.
+  - type: dropdown
+    id: ring
+    attributes:
+      label: Ring
+      options:
+        - "Ring 1 — first-party, in-tree, ships in the binary"
+        - "Ring 2 — exec plugin on $PATH, any language (experimental until 1.0)"
+    validations: { required: true }
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      options: [agent, evals, pool, tuner, goal/judge]
+    validations: { required: true }
+  - type: input
+    id: source
+    attributes:
+      label: Source or provider
+      description: e.g. Notion, Snowflake, Bedrock, vLLM. If it has an MCP server, say so — the MCP pool adapter may already cover it.
+    validations: { required: true }
+  - type: textarea
+    id: capabilities
+    attributes:
+      label: Capabilities
+      description: Which of context_inject, knowledge_write, stream does it support? What can't it do?
+  - type: checkboxes
+    id: contributing
+    attributes:
+      label: Contribution
+      options:
+        - label: I'd like to build this myself

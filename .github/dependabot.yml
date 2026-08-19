@@ -1,0 +1,34 @@
+version: 2
+updates:
+  # The shipping module. Every new dependency needs justification in the PR
+  # body per CONTRIBUTING.md, so keep this surface small and visible.
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "build"
+      include: scope
+    labels: ["dependencies"]
+
+  # Build tools are isolated from the shipping module deliberately (see
+  # docs/adr/0002-generated-code-layout.md), so they update independently and
+  # never appear in the product's dependency graph.
+  - package-ecosystem: gomod
+    directory: "/tools"
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "build"
+      include: scope
+    labels: ["dependencies", "tooling"]
+    groups:
+      build-tools:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule: { interval: weekly, day: monday }
+    commit-message:
+      prefix: "build"
+    labels: ["dependencies", "ci"]

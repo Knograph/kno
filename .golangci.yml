@@ -1,0 +1,156 @@
+# golangci-lint configuration.
+#
+# Schema is v2 (verified with `golangci-lint config verify` — v2 rejects a
+# v1-shaped config outright with "unsupported version of the configuration").
+# Note that formatters are a separate top-level block in v2 and are invoked by
+# `golangci-lint fmt`, not by `run`.
+#
+# Zero tolerance: no //nolint without a justification comment and a linked
+# issue or docs/debt.md entry. nolintlint enforces that mechanically.
+
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - gocritic
+    - gosec
+    - govet
+    - misspell
+    - revive
+    - staticcheck
+    # godot: comments end in a period. Bundled per CLAUDE.md.
+    - godot
+    # godox + nolintlint make two CONTRIBUTING.md claims real rather than
+    # aspirational: naked TODO/FIXME/HACK markers are rejected (they must
+    # reference a ledger entry or an issue), and //nolint must carry a reason.
+    - godox
+    - nolintlint
+    # ── Gates holding the proto-alias design together ────────────────────────
+    # See docs/adr/0001-proto-as-domain-types.md. Generated proto messages ARE
+    # the domain types (core.Case is an alias of knov1.Case). That buys one
+    # definition and zero drift, but it inherits two footguns that these two
+    # linters are the only mechanical defense against. Disabling or narrowing
+    # either one is a change to ADR-0001, not a lint tweak — see docs/debt.md#10.
+    - depguard
+    - forbidigo
+
+  settings:
+    depguard:
+      rules:
+        # Proto3 JSON mapping requires int64 as QUOTED STRINGS and enums as
+        # NAMES. encoding/json emits bare numbers and raw ints, silently
+        # diverging from the OpenAPI spec generated from the same proto — so a
+        # consumer written against the spec breaks on values marshaled the
+        # wrong way. protojson is the only correct marshaler for kno.v1 types.
+        #
+        # The exemption is deliberately NOT the whole api/ tree: ADR-0001's
+        # stated harm materializes precisely at the serialization boundary, so
+        # exempting all of api/ would permit the bug exactly where it is fatal.
+        # Only files explicitly named for non-proto envelope encoding are
+        # exempt, and the pattern is anchored at the repo root so a future
+        # adapters/*/api/ directory cannot silently widen it.
+        no-encoding-json:
+          list-mode: lax
+          files:
+            - "!**/api/jsonenvelope*.go"
+          deny:
+            - pkg: encoding/json
+              desc: >-
+                use google.golang.org/protobuf/encoding/protojson for kno.v1
+                types; encoding/json diverges on int64 and enum encoding.
+                See docs/adr/0001-proto-as-domain-types.md.
+
+    forbidigo:
+      analyze-types: true
+      forbid:
+        # Proto messages carry DoNotCompare ([0]func()). Comparing two of them
+        # directly is a compile error (loud, safe), but boxing either side into
+        # `any` — a generic helper, a map[string]any, a naive dedup set — turns
+        # it into a RUNTIME PANIC that go vet cannot see, because the static
+        # type at the comparison site is `any`.
+        #
+        # This MUST apply to _test.go files: reflect.DeepEqual is almost
+        # exclusively a test-file construct, so excluding tests would remove
+        # the defense from every realistic call site.
+        - pattern: '^reflect\.DeepEqual$'
+          msg: >-
+            reflect.DeepEqual panics on proto messages boxed into any (they
+            carry DoNotCompare). Use google.golang.org/protobuf/testing/protocmp
+            with go-cmp instead.
+        # No naked writes to stdout/stderr outside tui/ — CLAUDE.md
+        # Observability. Output must go through the charmbracelet/log logger so
+        # it is leveled, redacted, and --json-able.
+        #
+        # Specifying `forbid` REPLACES forbidigo's default list, so the builtin
+        # print/println are re-added explicitly; omitting them silently drops
+        # protection the stock config provides.
+        - pattern: '^fmt\.Print(f|ln)?$'
+          msg: "no naked fmt.Print outside tui/; use the charmbracelet/log logger."
+        - pattern: '^print(ln)?$'
+          msg: "no builtin print/println; use the charmbracelet/log logger."
+        - pattern: '^os\.Std(out|err)$'
+          msg: >-
+            no direct os.Stdout/os.Stderr writes outside tui/; use the
+            charmbracelet/log logger so output is leveled and redacted.
+
+    gosec:
+      excludes:
+        # G104 duplicates errcheck, which is already enabled and stricter.
+        - G104
+
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+      allow-unused: false
+
+    godox:
+      keywords: [TODO, FIXME, HACK, XXX]
+
+  exclusions:
+    generated: lax
+    rules:
+      # Generated code is not ours to lint. Excluded by explicit path rather
+      # than a blanket wildcard so the exclusion stays auditable.
+      #
+      # Known cost, accepted: this also silences ST1003 on generated field
+      # names, so protoc-gen-go's non-idiomatic spellings (Id, not ID; Url, not
+      # URL) are permanently invisible to the linter.
+      # DEBT(docs/debt.md#6): set a kno.v1 field-naming policy before 1.0.
+      - path: '(^|/)gen/'
+        linters: [errcheck, gocritic, gosec, govet, misspell, revive, staticcheck, godot, godox, nolintlint]
+      - path: '\.pb\.go$'
+        linters: [errcheck, gocritic, gosec, govet, misspell, revive, staticcheck, godot, godox, nolintlint]
+
+      # tui/ is the one package allowed to write to the terminal directly —
+      # that is its entire job. Everything else routes through the logger.
+      - path: '(^|/)tui/'
+        linters: [forbidigo]
+
+      # Tests may print diagnostics. This exclusion is scoped by `text` to the
+      # print rules ONLY — it must never take reflect.DeepEqual down with it,
+      # which is the single place that ban actually matters.
+      - path: '_test\.go$'
+        linters: [forbidigo]
+        text: '(fmt\.Print|^print|os\.Std)'
+      # Test fixtures legitimately trip gosec's hardcoded-credential and
+      # file-permission heuristics.
+      - path: '_test\.go$'
+        linters: [gosec]
+    paths:
+      - gen
+      - tools
+
+formatters:
+  enable:
+    - gofumpt
+  exclusions:
+    generated: lax
+    paths:
+      - gen
+      - tools
+
+issues:
+  # Report everything; a capped report trains people to ignore the tail.
+  max-issues-per-linter: 0
+  max-same-issues: 0
