@@ -95,6 +95,67 @@ func (Kind) EnumDescriptor() ([]byte, []int) {
 	return file_kno_v1_common_proto_rawDescGZIP(), []int{0}
 }
 
+// Direction is which way is better for a Goal.
+//
+// DESIGN.md defines a Goal as "the outcome metric, with direction", and both
+// Score.value and Valuation.delta_goal document their sign as relative to it —
+// but without this, direction exists nowhere, and a consumer holding a Report
+// cannot tell whether a holdout_gain of -0.03 is an improvement or a
+// regression. The headline number's sign is uninterpretable without it.
+type Direction int32
+
+const (
+	// Unset. A Score or delta whose Goal direction is unspecified must not be
+	// rendered with a sign-based judgement attached.
+	Direction_DIRECTION_UNSPECIFIED Direction = 0
+	// Higher Score.value is better: accuracy, resolution rate, pass rate.
+	Direction_DIRECTION_MAXIMIZE Direction = 1
+	// Lower Score.value is better: latency, cost per resolution, escalation
+	// rate, hallucination count.
+	Direction_DIRECTION_MINIMIZE Direction = 2
+)
+
+// Enum value maps for Direction.
+var (
+	Direction_name = map[int32]string{
+		0: "DIRECTION_UNSPECIFIED",
+		1: "DIRECTION_MAXIMIZE",
+		2: "DIRECTION_MINIMIZE",
+	}
+	Direction_value = map[string]int32{
+		"DIRECTION_UNSPECIFIED": 0,
+		"DIRECTION_MAXIMIZE":    1,
+		"DIRECTION_MINIMIZE":    2,
+	}
+)
+
+func (x Direction) Enum() *Direction {
+	p := new(Direction)
+	*p = x
+	return p
+}
+
+func (x Direction) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (Direction) Descriptor() protoreflect.EnumDescriptor {
+	return file_kno_v1_common_proto_enumTypes[1].Descriptor()
+}
+
+func (Direction) Type() protoreflect.EnumType {
+	return &file_kno_v1_common_proto_enumTypes[1]
+}
+
+func (x Direction) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use Direction.Descriptor instead.
+func (Direction) EnumDescriptor() ([]byte, []int) {
+	return file_kno_v1_common_proto_rawDescGZIP(), []int{1}
+}
+
 // Destination is where a measured Asset belongs. Assigned by mechanism
 // routing, never by the user directly — though a user may override it.
 type Destination int32
@@ -144,11 +205,11 @@ func (x Destination) String() string {
 }
 
 func (Destination) Descriptor() protoreflect.EnumDescriptor {
-	return file_kno_v1_common_proto_enumTypes[1].Descriptor()
+	return file_kno_v1_common_proto_enumTypes[2].Descriptor()
 }
 
 func (Destination) Type() protoreflect.EnumType {
-	return &file_kno_v1_common_proto_enumTypes[1]
+	return &file_kno_v1_common_proto_enumTypes[2]
 }
 
 func (x Destination) Number() protoreflect.EnumNumber {
@@ -157,7 +218,7 @@ func (x Destination) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use Destination.Descriptor instead.
 func (Destination) EnumDescriptor() ([]byte, []int) {
-	return file_kno_v1_common_proto_rawDescGZIP(), []int{1}
+	return file_kno_v1_common_proto_rawDescGZIP(), []int{2}
 }
 
 // InjectionMode records HOW a Valuation was measured. Every Valuation carries
@@ -228,11 +289,11 @@ func (x InjectionMode) String() string {
 }
 
 func (InjectionMode) Descriptor() protoreflect.EnumDescriptor {
-	return file_kno_v1_common_proto_enumTypes[2].Descriptor()
+	return file_kno_v1_common_proto_enumTypes[3].Descriptor()
 }
 
 func (InjectionMode) Type() protoreflect.EnumType {
-	return &file_kno_v1_common_proto_enumTypes[2]
+	return &file_kno_v1_common_proto_enumTypes[3]
 }
 
 func (x InjectionMode) Number() protoreflect.EnumNumber {
@@ -241,7 +302,7 @@ func (x InjectionMode) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use InjectionMode.Descriptor instead.
 func (InjectionMode) EnumDescriptor() ([]byte, []int) {
-	return file_kno_v1_common_proto_rawDescGZIP(), []int{2}
+	return file_kno_v1_common_proto_rawDescGZIP(), []int{3}
 }
 
 // CostVector is what carrying an Asset costs. Every Asset has one, because the
@@ -610,7 +671,11 @@ const file_kno_v1_common_proto_rawDesc = "" +
 	"\x04Kind\x12\x14\n" +
 	"\x10KIND_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eKIND_KNOWLEDGE\x10\x01\x12\x11\n" +
-	"\rKIND_BEHAVIOR\x10\x02*\x99\x01\n" +
+	"\rKIND_BEHAVIOR\x10\x02*V\n" +
+	"\tDirection\x12\x19\n" +
+	"\x15DIRECTION_UNSPECIFIED\x10\x00\x12\x16\n" +
+	"\x12DIRECTION_MAXIMIZE\x10\x01\x12\x16\n" +
+	"\x12DIRECTION_MINIMIZE\x10\x02*\x99\x01\n" +
 	"\vDestination\x12\x1b\n" +
 	"\x17DESTINATION_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13DESTINATION_CONTEXT\x10\x01\x12\x1e\n" +
@@ -638,16 +703,17 @@ func file_kno_v1_common_proto_rawDescGZIP() []byte {
 	return file_kno_v1_common_proto_rawDescData
 }
 
-var file_kno_v1_common_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_kno_v1_common_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
 var file_kno_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_kno_v1_common_proto_goTypes = []any{
 	(Kind)(0),            // 0: kno.v1.Kind
-	(Destination)(0),     // 1: kno.v1.Destination
-	(InjectionMode)(0),   // 2: kno.v1.InjectionMode
-	(*CostVector)(nil),   // 3: kno.v1.CostVector
-	(*Provenance)(nil),   // 4: kno.v1.Provenance
-	(*Capabilities)(nil), // 5: kno.v1.Capabilities
-	(*AgentRef)(nil),     // 6: kno.v1.AgentRef
+	(Direction)(0),       // 1: kno.v1.Direction
+	(Destination)(0),     // 2: kno.v1.Destination
+	(InjectionMode)(0),   // 3: kno.v1.InjectionMode
+	(*CostVector)(nil),   // 4: kno.v1.CostVector
+	(*Provenance)(nil),   // 5: kno.v1.Provenance
+	(*Capabilities)(nil), // 6: kno.v1.Capabilities
+	(*AgentRef)(nil),     // 7: kno.v1.AgentRef
 }
 var file_kno_v1_common_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for method output_type
@@ -667,7 +733,7 @@ func file_kno_v1_common_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kno_v1_common_proto_rawDesc), len(file_kno_v1_common_proto_rawDesc)),
-			NumEnums:      3,
+			NumEnums:      4,
 			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   0,

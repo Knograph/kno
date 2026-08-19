@@ -387,3 +387,35 @@ func TestEveryDeltaHasAnIntervalField(t *testing.T) {
 		})
 	}
 }
+
+// TestGoalDirectionIsRepresentable guards the interpretability of every signed
+// number this tool reports.
+//
+// DESIGN.md defines a Goal as "the outcome metric, with direction", and both
+// Score.value and Valuation.delta_goal document their sign as relative to that
+// direction. Before this field existed, direction was defined nowhere: a
+// consumer holding a Report could not tell whether holdout_gain = -0.03 was an
+// improvement on a minimize-Goal or a regression on a maximize-Goal.
+//
+// A sign without a direction is not a result.
+func TestGoalDirectionIsRepresentable(t *testing.T) {
+	t.Parallel()
+
+	report := (&knov1.Report{}).ProtoReflect().Descriptor()
+	f := report.Fields().ByName("goal_direction")
+	if f == nil {
+		t.Fatal("Report has no goal_direction; the sign of holdout_gain is uninterpretable")
+	}
+	if f.Kind() != protoreflect.EnumKind ||
+		f.Enum().FullName() != "kno.v1.Direction" {
+		t.Fatalf("Report.goal_direction is %s, want the kno.v1.Direction enum", f.Kind())
+	}
+
+	// Both directions must exist: a tool that could only maximize would quietly
+	// misreport every latency, cost, and escalation-rate Goal.
+	for _, want := range []string{"DIRECTION_MAXIMIZE", "DIRECTION_MINIMIZE"} {
+		if f.Enum().Values().ByName(protoreflect.Name(want)) == nil {
+			t.Errorf("Direction has no %s", want)
+		}
+	}
+}

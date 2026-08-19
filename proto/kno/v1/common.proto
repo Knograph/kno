@@ -34,6 +34,26 @@ enum Kind {
   KIND_BEHAVIOR = 2;
 }
 
+// Direction is which way is better for a Goal.
+//
+// DESIGN.md defines a Goal as "the outcome metric, with direction", and both
+// Score.value and Valuation.delta_goal document their sign as relative to it —
+// but without this, direction exists nowhere, and a consumer holding a Report
+// cannot tell whether a holdout_gain of -0.03 is an improvement or a
+// regression. The headline number's sign is uninterpretable without it.
+enum Direction {
+  // Unset. A Score or delta whose Goal direction is unspecified must not be
+  // rendered with a sign-based judgement attached.
+  DIRECTION_UNSPECIFIED = 0;
+
+  // Higher Score.value is better: accuracy, resolution rate, pass rate.
+  DIRECTION_MAXIMIZE = 1;
+
+  // Lower Score.value is better: latency, cost per resolution, escalation
+  // rate, hallucination count.
+  DIRECTION_MINIMIZE = 2;
+}
+
 // Destination is where a measured Asset belongs. Assigned by mechanism
 // routing, never by the user directly — though a user may override it.
 enum Destination {
