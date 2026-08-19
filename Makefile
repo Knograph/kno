@@ -39,7 +39,11 @@ BIN        := $(CURDIR)/bin
 # `compile: version "go1.25.8" does not match go tool version "go1.25.5"`
 # across the standard library. Pinning makes the toolchain as reproducible as
 # everything else in tools/go.mod. Bump it deliberately, in a PR.
-export GOTOOLCHAIN := go1.25.8
+#
+# It must satisfy the HIGHEST floor across both modules: go.mod requires
+# >= 1.25.8 (GO-2026-4602 in the standard library) and tools/go.mod requires
+# >= 1.25.10 (buf). Pinning below either one fails at `make tools`.
+export GOTOOLCHAIN := go1.25.10
 
 # Put the pinned tools ahead of everything on PATH for every recipe.
 #
