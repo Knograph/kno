@@ -1,0 +1,132 @@
+# ─── Secrets & credentials ────────────────────────────────────────────────
+# Never commit API keys. Kno reads them from env or OS keychain only.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+.netrc
+
+# ─── Local run state & customer data ──────────────────────────────────────
+# Trace stores contain end-user conversation content (see CLAUDE.md § Security).
+# These must never reach the repo, public or private.
+.kno/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+traces/
+runs/
+
+# Local config. kno.example.yaml IS committed; the real one is not.
+kno.yaml
+!kno.example.yaml
+!examples/**/kno.yaml
+!testdata/**/kno.yaml
+
+# ─── Kno outputs ──────────────────────────────────────────────────────────
+# Generated portfolios, exports, and reports from local runs.
+out/
+dist/
+*.report.md
+*.report.json
+training_set*.jsonl
+portfolio*.json
+
+# Recorded fixtures ARE committed (deterministic tests depend on them):
+# testdata/fixtures/ is tracked. Only scratch recordings are ignored.
+testdata/fixtures/.scratch/
+*.cassette.tmp
+
+# ─── Go ───────────────────────────────────────────────────────────────────
+/kno
+/bin/
+/build/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.out
+coverage.html
+coverage.txt
+cover.profile
+*.prof
+*.pprof
+!docs/perf/*.pprof
+go.work
+go.work.sum
+vendor/
+
+# Fuzz corpora: seed corpus is committed under testdata/fuzz/;
+# machine-generated crashers cached by the toolchain are not.
+testdata/fuzz/**/crashers/
+
+# ─── Proto / buf ──────────────────────────────────────────────────────────
+# Generated Go code IS committed so `go get` works without a codegen step.
+# Only buf's local caches and image artifacts are ignored.
+buf.lock.tmp
+*.bin
+image.binpb
+
+# ─── BAML ─────────────────────────────────────────────────────────────────
+# baml_src/ is source and committed. Generated clients are committed too
+# (contributors shouldn't need the BAML toolchain to build). Caches are not.
+baml_client/.cache/
+.baml_log/
+
+# ─── Charm / vhs ──────────────────────────────────────────────────────────
+# .tape scripts are committed; rendered GIFs are build artifacts regenerated
+# in CI. Exception: the README hero GIF is committed so GitHub renders it.
+docs/demos/*.gif
+!docs/demos/quickstart.gif
+*.ascii
+vhs-*.mp4
+
+# ─── Python SDK / sidecar ─────────────────────────────────────────────────
+sdk/python/build/
+sdk/python/dist/
+*.egg-info/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# ─── TypeScript SDK ───────────────────────────────────────────────────────
+node_modules/
+sdk/ts/dist/
+*.tsbuildinfo
+.npm/
+
+# ─── Docs site ────────────────────────────────────────────────────────────
+docs/.vitepress/cache/
+docs/.vitepress/dist/
+site/
+
+# ─── Tooling & editors ────────────────────────────────────────────────────
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.shared.json
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+.direnv/
+
+# ─── Claude Code ──────────────────────────────────────────────────────────
+# .claude/agents/, commands/, and settings.json ARE committed — every
+# contributor and agent should inherit the same rig. Only local overrides
+# and session scratch are ignored.
+.claude/settings.local.json
+.claude/*.local.md
+.claude/sessions/
