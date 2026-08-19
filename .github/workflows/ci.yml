@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A new push to a PR cancels the previous run; main runs always finish so the
+# proto and coverage baselines stay accurate.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  # Gates must fail loudly, never silently skip, in CI.
+  KNO_CI: "1"
+
+jobs:
+  check:
+    name: check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # buf breaking --against '.git#branch=main' needs real history, and
+          # the coverage ratchet compares against the committed baseline.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
+
+      - name: Cache tool binaries
+        uses: actions/cache@v4
+        with:
+          path: bin
+          key: ${{ runner.os }}-knotools-${{ hashFiles('tools/go.sum') }}
+
+      - name: Install gitleaks
+        # The secrets scan is never allowed to silently skip in CI.
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            brew install gitleaks
+          else
+            VERSION=8.28.0
+            curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" \
+              | tar -xz -C /usr/local/bin gitleaks
+          fi
+          gitleaks version
+
+      - run: make tools
+
+      - name: make check
+        # Run once, capture once. A SKIP line means a gate did not run: locally
+        # that is a warning, here it is a failure, or the gate is theater.
+        run: |
+          set -euo pipefail
+          make check 2>&1 | tee check.log
+          if grep -q 'SKIP' check.log; then
+            echo "::error::a quality gate printed SKIP in CI — gates must never skip here"
+            grep 'SKIP' check.log
+            exit 1
+          fi
+
+      - name: Verify generated code is not stale
+        run: make generate-check
+
+  fuzz:
+    name: fuzz (short)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
+      - run: make fuzz-short
+
+  bench:
+    name: bench-diff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
+      - run: make bench-diff

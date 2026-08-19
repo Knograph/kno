@@ -1,0 +1,114 @@
+# golangci-lint configuration.
+#
+# Schema is v2 (verified with `golangci-lint config verify` — v2 rejects a
+# v1-shaped config outright with "unsupported version of the configuration").
+# Note that formatters are a separate top-level block in v2 and are invoked by
+# `golangci-lint fmt`, not by `run`.
+#
+# Zero tolerance: no //nolint without a justification comment and a linked
+# issue or docs/debt.md entry.
+
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - gocritic
+    - gosec
+    - govet
+    - misspell
+    - revive
+    - staticcheck
+    # ── Gates holding the proto-alias design together ────────────────────────
+    # See docs/adr/0001-proto-as-domain-types.md. Generated proto messages ARE
+    # the domain types (core.Case is an alias of knov1.Case). That buys one
+    # definition and zero drift, but it inherits two footguns that these two
+    # linters are the only mechanical defense against.
+    - depguard
+    - forbidigo
+    # godot: comments end in a period. Bundled per CLAUDE.md.
+    - godot
+
+  settings:
+    depguard:
+      rules:
+        # Proto3 JSON mapping requires int64 as QUOTED STRINGS and enums as
+        # NAMES. encoding/json emits bare numbers and raw ints, silently
+        # diverging from the OpenAPI spec generated from the same proto — so a
+        # consumer written against the spec breaks on values marshaled the
+        # wrong way. protojson is the only correct marshaler for kno.v1 types.
+        no-encoding-json:
+          list-mode: lax
+          files:
+            - "!**/api/**"
+            - "!**/*_test.go"
+          deny:
+            - pkg: encoding/json
+              desc: >-
+                use google.golang.org/protobuf/encoding/protojson for kno.v1
+                types; encoding/json diverges on int64 and enum encoding.
+                See docs/adr/0001-proto-as-domain-types.md.
+
+    forbidigo:
+      analyze-types: true
+      forbid:
+        # Proto messages carry DoNotCompare ([0]func()). Comparing two of them
+        # directly is a compile error (loud, safe), but boxing either side into
+        # `any` — a generic helper, a map[string]any, a naive dedup set — turns
+        # it into a RUNTIME PANIC that go vet cannot see, because the static
+        # type at the comparison site is `any`.
+        - pattern: '^reflect\.DeepEqual$'
+          msg: >-
+            reflect.DeepEqual panics on proto messages boxed into any (they
+            carry DoNotCompare). Use google.golang.org/protobuf/testing/protocmp
+            with go-cmp instead.
+        # No naked fmt.Print* outside tui/ — CLAUDE.md Observability.
+        - pattern: '^fmt\.Print(f|ln)?$'
+          msg: >-
+            no naked fmt.Print outside tui/; use the charmbracelet/log logger so
+            output is leveled, redacted, and --json-able.
+
+    revive:
+      rules:
+        - name: exported
+          arguments: [checkPrivateReceivers, disableStutteringCheck]
+
+    gosec:
+      excludes:
+        # G104 duplicates errcheck, which is already enabled and stricter.
+        - G104
+
+  exclusions:
+    generated: lax
+    rules:
+      # Generated code is not ours to lint. Excluded by explicit path rather
+      # than a blanket wildcard so the exclusion stays auditable.
+      #
+      # Known cost, accepted: this also silences ST1003 on generated field
+      # names, so protoc-gen-go's non-idiomatic spellings (Id, not ID; Url, not
+      # URL) are permanently invisible to the linter.
+      # DEBT(docs/debt.md#6): set a kno.v1 field-naming policy before 1.0.
+      - path: '(^|/)gen/'
+        linters: [errcheck, gocritic, gosec, govet, misspell, revive, staticcheck, godot]
+      - path: '\.pb\.go$'
+        linters: [errcheck, gocritic, gosec, govet, misspell, revive, staticcheck, godot]
+      # Tests may use fmt.Print for diagnostics and encoding/json for fixtures.
+      - path: '_test\.go$'
+        linters: [forbidigo, gosec]
+    paths:
+      - gen
+      - tools
+
+formatters:
+  enable:
+    - gofumpt
+  exclusions:
+    generated: lax
+    paths:
+      - gen
+      - tools
+
+issues:
+  # Report everything; a capped report trains people to ignore the tail.
+  max-issues-per-linter: 0
+  max-same-issues: 0

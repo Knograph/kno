@@ -1,0 +1,14 @@
+# Generated protobuf code: collapsed in GitHub diffs, excluded from language
+# stats, and never linted. Source of truth is proto/. See ADR-0002.
+gen/** linguist-generated=true
+*.pb.go linguist-generated=true
+
+# Golden files and recorded fixtures are data, not code — diff them as text
+# but keep them out of language statistics.
+testdata/** linguist-vendored=true
+
+# Normalize line endings so golden-file and CLI-snapshot tests behave
+# identically on Windows contributors' machines.
+* text=auto eol=lf
+*.png binary
+*.gif binary
