@@ -130,6 +130,13 @@ func TestMoneyIsAlwaysInt64MicroUSD(t *testing.T) {
 		"kno.v1.Report.total_cost_usd_micros",
 		"kno.v1.TuningJob.estimated_cost_usd_micros",
 		"kno.v1.JobState.actual_cost_usd_micros",
+		// The event spine (M1-1). Money crosses the wire to dashboards and CI
+		// here too, so it is held to the same int64 micro-USD rule.
+		"kno.v1.CaseScored.cost_usd_micros",
+		"kno.v1.CaseErrored.cost_usd_micros",
+		"kno.v1.SpendRecorded.total_cost_usd_micros",
+		"kno.v1.SpendRecorded.remaining_cost_usd_micros",
+		"kno.v1.RunFinished.total_cost_usd_micros",
 	}
 	slices.Sort(wantMoneyFields)
 	if diff := cmp.Diff(wantMoneyFields, found); diff != "" {
@@ -416,6 +423,178 @@ func TestGoalDirectionIsRepresentable(t *testing.T) {
 	for _, want := range []string{"DIRECTION_MAXIMIZE", "DIRECTION_MINIMIZE"} {
 		if f.Enum().Values().ByName(protoreflect.Name(want)) == nil {
 			t.Errorf("Direction has no %s", want)
+		}
+	}
+}
+
+// TestEventsCannotCarryConversationContent is a security invariant, enforced
+// structurally rather than by reviewer vigilance.
+//
+// The event stream feeds the TUI, the logs, and eventually SSE. CLAUDE.md
+// forbids conversation content in telemetry and in logs above DEBUG, and
+// SECURITY.md classes trace-content leakage as a vulnerability. Relying on
+// every future event author to remember that is exactly the kind of rule that
+// holds until the one time it doesn't.
+//
+// So the check is on the schema: no event payload may carry a field that
+// transports Case input, Response output, or Asset content — by name or by
+// referencing a message that contains them.
+func TestEventsCannotCarryConversationContent(t *testing.T) {
+	t.Parallel()
+
+	// Field names that carry end-user text. A payload naming one of these is
+	// leaking content into a stream that is logged and streamed.
+	forbiddenFields := map[string]bool{
+		"input": true, "output": true, "content": true,
+		"expected": true, "rationale": true, "history": true,
+	}
+	// Messages whose whole purpose is to carry content. An event referencing
+	// one of these transports everything inside it.
+	forbiddenMessages := map[string]bool{
+		"kno.v1.Case": true, "kno.v1.Response": true,
+		"kno.v1.Asset": true, "kno.v1.Turn": true, "kno.v1.ToolCall": true,
+	}
+
+	eventDesc, err := protoregistry.GlobalFiles.FindDescriptorByName("kno.v1.Event")
+	if err != nil {
+		t.Fatalf("looking up kno.v1.Event: %v", err)
+	}
+	event := eventDesc.(protoreflect.MessageDescriptor)
+
+	var checked int
+	var walk func(md protoreflect.MessageDescriptor, path string, depth int)
+	walk = func(md protoreflect.MessageDescriptor, path string, depth int) {
+		if depth > 6 {
+			return
+		}
+		fields := md.Fields()
+		for i := range fields.Len() {
+			f := fields.Get(i)
+			checked++
+			where := path + "." + string(f.Name())
+
+			if forbiddenFields[string(f.Name())] {
+				t.Errorf("%s carries conversation content into the event stream.\n"+
+					"Events are logged and streamed; identify work by id, tags, or title.", where)
+			}
+			if f.Kind() == protoreflect.MessageKind {
+				name := string(f.Message().FullName())
+				if forbiddenMessages[name] {
+					t.Errorf("%s references %s, which transports content wholesale.\n"+
+						"Carry the identifier instead.", where, name)
+					continue
+				}
+				if strings.HasPrefix(name, "kno.v1.") {
+					walk(f.Message(), where, depth+1)
+				}
+			}
+		}
+	}
+	walk(event, "Event", 0)
+
+	if checked == 0 {
+		t.Fatal("walked no fields; the test is not exercising the schema")
+	}
+	t.Logf("checked %d event fields transitively", checked)
+}
+
+// TestEventDistinguishesScoredFromErrored pins the denominator rule on the
+// wire.
+//
+// An errored Case is not a scored Case: the agent did not answer badly, it did
+// not answer. If the event stream expressed a failure as a CaseScored carrying
+// an error, a consumer counting scores would include it, its denominator would
+// differ from the Report's, and deltas computed from either would be measured
+// against different populations — silently.
+func TestEventDistinguishesScoredFromErrored(t *testing.T) {
+	t.Parallel()
+
+	event := (&knov1.Event{}).ProtoReflect().Descriptor()
+
+	scored := event.Fields().ByName("case_scored")
+	errored := event.Fields().ByName("case_errored")
+	if scored == nil || errored == nil {
+		t.Fatal("Event must carry case_scored and case_errored as separate payloads")
+	}
+	if scored.ContainingOneof() == nil || errored.ContainingOneof() == nil {
+		t.Error("both must live in the payload oneof, so exactly one can be set")
+	}
+
+	// CaseScored must not have an error field: that shape is what would let a
+	// failure masquerade as a score.
+	if f := scored.Message().Fields().ByName("error"); f != nil {
+		t.Error("CaseScored carries an error field; a failure must be a CaseErrored, " +
+			"not a score with an excuse attached")
+	}
+
+	// The three counts must travel together wherever they appear, so no
+	// consumer has to infer one from the others.
+	for _, msg := range []string{"kno.v1.StageProgress", "kno.v1.RunFinished"} {
+		d, err := protoregistry.GlobalFiles.FindDescriptorByName(protoreflect.FullName(msg))
+		if err != nil {
+			t.Fatalf("looking up %s: %v", msg, err)
+		}
+		fields := d.(protoreflect.MessageDescriptor).Fields()
+		for _, want := range []string{"attempted", "scored", "errored"} {
+			if fields.ByName(protoreflect.Name(want)) == nil {
+				t.Errorf("%s is missing %q; all three counts must travel together", msg, want)
+			}
+		}
+	}
+}
+
+// TestAggregateScoreAbsenceIsRepresentable extends the presence discipline to
+// the event stream.
+//
+// A Run that scored nothing has no mean. A bare double would report 0.0, which
+// is indistinguishable from a genuine mean of zero — the same defect caught on
+// Report.holdout_gain during M0b review.
+func TestAggregateScoreAbsenceIsRepresentable(t *testing.T) {
+	t.Parallel()
+
+	finished := (&knov1.RunFinished{}).ProtoReflect().Descriptor()
+	f := finished.Fields().ByName("aggregate_score")
+	if f == nil {
+		t.Fatal("RunFinished has no aggregate_score")
+	}
+	if !f.HasPresence() {
+		t.Error("RunFinished.aggregate_score does not track presence: a Run that scored " +
+			"nothing would report a mean of zero, indistinguishable from a real zero")
+	}
+
+	// Same for the Run's own finished_at and the spend headroom fields.
+	run := (&knov1.Run{}).ProtoReflect().Descriptor()
+	if f := run.Fields().ByName("finished_at"); f == nil || !f.HasPresence() {
+		t.Error("Run.finished_at must track presence: a running Run has no end time")
+	}
+	spend := (&knov1.SpendRecorded{}).ProtoReflect().Descriptor()
+	for _, name := range []string{"remaining_cost_usd_micros", "remaining_calls"} {
+		f := spend.Fields().ByName(protoreflect.Name(name))
+		if f == nil || !f.HasPresence() {
+			t.Errorf("SpendRecorded.%s must track presence: an uncapped run has no "+
+				"remaining headroom, which is not the same as zero headroom", name)
+		}
+	}
+}
+
+// TestRunStatusSeparatesBudgetStopFromFailure guards a distinction CI depends
+// on: a budget stop means the run did what it was told and can continue, while
+// a failure means something is wrong. Collapsing them would make a deploy gate
+// treat a deliberate spending limit as a broken build.
+func TestRunStatusSeparatesBudgetStopFromFailure(t *testing.T) {
+	t.Parallel()
+
+	d, err := protoregistry.GlobalFiles.FindDescriptorByName("kno.v1.RunStatus")
+	if err != nil {
+		t.Fatalf("looking up RunStatus: %v", err)
+	}
+	values := d.(protoreflect.EnumDescriptor).Values()
+	for _, want := range []string{
+		"RUN_STATUS_COMPLETED", "RUN_STATUS_FAILED",
+		"RUN_STATUS_BUDGET_STOPPED", "RUN_STATUS_INTERRUPTED",
+	} {
+		if values.ByName(protoreflect.Name(want)) == nil {
+			t.Errorf("RunStatus is missing %s", want)
 		}
 	}
 }

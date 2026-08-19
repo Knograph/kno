@@ -1,0 +1,154 @@
+syntax = "proto3";
+
+package kno.v1;
+
+import "kno/v1/common.proto";
+import "kno/v1/portfolio.proto";
+
+// Stage is which of the five pipeline stages produced a Run.
+//
+// The loop is Baseline, Value, Select, Validate, Export. Each stage reads what
+// the previous one wrote, so a Run's stage decides which artifacts it is
+// allowed to produce and which it may read.
+enum Stage {
+  // Unset.
+  STAGE_UNSPECIFIED = 0;
+
+  // Run the agent over the evals and score it. Establishes the reference
+  // every later delta is measured against.
+  STAGE_BASELINE = 1;
+
+  // Measure each Asset's marginal contribution.
+  STAGE_VALUE = 2;
+
+  // Build the Portfolio under budget.
+  STAGE_SELECT = 3;
+
+  // Run the Portfolio as a set against the untouched holdout. The only stage
+  // permitted to read SPLIT_HOLDOUT Cases.
+  STAGE_VALIDATE = 4;
+
+  // Write the training set, report, and gaps.
+  STAGE_EXPORT = 5;
+}
+
+// RunStatus is how a Run ended, or that it has not.
+//
+// The distinction between FAILED and BUDGET_STOPPED is load-bearing: one means
+// something is wrong, the other means the run did exactly what it was told and
+// can be continued. Collapsing them would make a deploy gate treat a
+// deliberate spending limit as a broken build.
+enum RunStatus {
+  // Unset.
+  RUN_STATUS_UNSPECIFIED = 0;
+
+  // Still executing, or the process died without recording an ending.
+  RUN_STATUS_RUNNING = 1;
+
+  // Finished. Note that a completed Run may still be unusable as a reference —
+  // see Run.incomplete_reason and Run.error_rate_exceeded.
+  RUN_STATUS_COMPLETED = 2;
+
+  // Stopped by an error. Exit code 1.
+  RUN_STATUS_FAILED = 3;
+
+  // Stopped by a budget cap. Resumable, and NOT a failure. Exit code 2.
+  RUN_STATUS_BUDGET_STOPPED = 4;
+
+  // Stopped by a signal. Checkpointed, resumable.
+  RUN_STATUS_INTERRUPTED = 5;
+}
+
+// Run is one execution of one pipeline stage.
+//
+// It is the correlation key for every trace, score, and event the stage
+// produced, and it carries the inputs that decide whether a later resume is
+// even comparable.
+message Run {
+  // Stable identifier, ULID-formatted.
+  string id = 1;
+
+  // Which stage this Run executed.
+  Stage stage = 2;
+
+  // RFC 3339 start timestamp.
+  string created_at = 3;
+
+  // RFC 3339 end timestamp. Absent while the Run is still going, which is why
+  // it is optional rather than an empty string that could mean either.
+  optional string finished_at = 4;
+
+  // The agent measured.
+  AgentRef agent = 5;
+
+  // The Goal optimized, and which way is better for it. Both are needed to
+  // interpret the sign of anything this Run produced.
+  string goal_name = 6;
+
+  // Which way is better for that Goal. Without it the sign of every number
+  // this Run produced is uninterpretable.
+  Direction goal_direction = 7;
+
+  // The caps this Run executed under.
+  Budget budget = 8;
+
+  // How it ended.
+  RunStatus status = 9;
+
+  // Why the result should not be trusted as a clean reference, when it should
+  // not be. Empty on a healthy Run.
+  string incomplete_reason = 10;
+
+  // Fingerprint of the inputs: eval source content, goal, agent ref,
+  // split_seed, holdout_frac.
+  //
+  // A resume whose fingerprint differs from the checkpoint's is refused with
+  // ErrCheckpointStale, because continuing would mix results computed against
+  // different inputs into one run — which looks like one measurement and is
+  // not.
+  string input_fingerprint = 11;
+
+  // Optional salt for the dev/holdout split. Empty by default, and empty is
+  // the right default: the split is keyed on Case ID alone so that adding
+  // Cases never moves the ones already there. Changing this deliberately
+  // re-splits, which is why it is part of input_fingerprint.
+  string split_seed = 12;
+
+  // Fraction of Cases assigned to the holdout, e.g. 0.2.
+  double holdout_frac = 13;
+
+  // Case counts, recorded so a reader can judge statistical weight without
+  // recomputing them, and so the denominator behind every later delta is
+  // visible rather than inferred.
+  //
+  // attempted = scored + errored. An errored Case is NOT a scored Case: the
+  // agent did not answer badly, it did not answer, and counting infrastructure
+  // failure as task failure would bias the baseline downward and make every
+  // later Asset look better than it is.
+  // Cases in the dev split — the ones this Run was allowed to read.
+  int32 dev_case_count = 14;
+
+  // Cases held back. A small holdout produces a wide interval, so this number
+  // is part of reading the final result honestly.
+  int32 holdout_case_count = 15;
+
+  // Cases the Run tried to execute.
+  int32 attempted_case_count = 16;
+
+  // Cases that produced a Score. This is the denominator.
+  int32 scored_case_count = 17;
+
+  // Cases where the agent failed to answer. Excluded from the score, recorded
+  // here so the exclusion is visible rather than implied.
+  int32 errored_case_count = 18;
+
+  // Set when the holdout is too small to support a meaningful confidence
+  // interval. The Run still executes; the number is reported with the caveat
+  // attached rather than presented as if it meant the same thing.
+  bool holdout_underpowered = 19;
+
+  // Set when the share of errored Cases exceeded the configured threshold. A
+  // Run in this state is not a baseline, and later stages must refuse to treat
+  // it as a clean reference.
+  bool error_rate_exceeded = 20;
+}
