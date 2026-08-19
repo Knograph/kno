@@ -1,0 +1,23 @@
+name: Release Please
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Maintains a release PR from Conventional Commits: CHANGELOG entries and
+      # the SemVer bump are derived, never hand-edited. Merging that PR tags the
+      # release. Without this workflow, CHANGELOG.md's claim that entries are
+      # "derived by release-please" would be false.
+      - uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

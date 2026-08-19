@@ -30,8 +30,10 @@ attract.
 
 - `.gitattributes` marks `gen/**` as `linguist-generated`, so GitHub collapses it in diffs and
   excludes it from language statistics.
-- `make generate-check` fails CI if `make generate` produces a diff, so checked-in output can never
-  drift from its `.proto` source.
+- `make generate-check` fails CI if regenerating changes anything under `gen/`. It tests
+  `git status --porcelain -- gen/`, not `git diff` — `git diff` compares tracked content only, so a
+  newly generated `.pb.go` (the common case when a message or file is added) would be untracked and
+  the check would pass on stale output.
 - `gen/` is excluded from linting and formatting (`.golangci.yml`) — generated code is not ours to
   lint. The known cost of that exclusion is recorded in `docs/debt.md#6`.
 

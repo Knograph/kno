@@ -8,6 +8,9 @@ on:
 permissions:
   contents: read
 
+env:
+  KNO_CI: "1"
+
 jobs:
   fuzz-long:
     name: fuzz (extended)
@@ -27,10 +30,16 @@ jobs:
     name: live API tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Never in PR CI: these spend real money. Nightly only, capped.
+    # This is the only job in the repository that can spend money.
+    #
+    # It is DISARMED until the budget guard exists. `make test-live` refuses to
+    # run unless KNO_MAX_COST_USD is set AND some Go code actually reads it —
+    # so this cannot become a silent-overspend trap the moment someone adds the
+    # first adapter test. stats/budget lands in M0c; see docs/debt.md#11.
+    #
+    # CLAUDE.md: live tests are NEVER in PR CI. Fixture-based integration tests
+    # run there instead, via `make test` -> `make test-integration`.
     env:
-      KNO_LIVE_TESTS: "1"
-      # Hard ceiling. The budget guard aborts the run rather than exceed it.
       KNO_MAX_COST_USD: "5.00"
     steps:
       - uses: actions/checkout@v4
@@ -44,11 +53,12 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: make test-integration
+        run: make test-live
 
   vuln:
     name: govulncheck
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

@@ -4,7 +4,10 @@
 
 ## Definition of Done
 
-<!-- CI verifies these against the diff. Strike through with a reason if genuinely N/A. -->
+<!-- These are checked by a HUMAN reviewer, not by CI — nothing in our workflows reads
+     the PR body. Strike through with a reason if genuinely N/A; do not tick a box you
+     have not actually done. What CI does enforce mechanically: `make check`, the DCO
+     sign-off, and a Conventional Commit PR title. -->
 
 - [ ] **Plan linked** — `docs/plans/YYYY-MM-DD-<slug>.md` (required for >~50 LOC or any
       schema/interface change)

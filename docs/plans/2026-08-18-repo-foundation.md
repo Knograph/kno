@@ -1,7 +1,7 @@
 # Plan: Repository Foundation (Milestone 0)
 
 - **Date:** 2026-08-18
-- **Status:** Phase 1 complete — amended after adversarial review; approved for Phase 2
+- **Status:** M0a merged-ready (Phases 0–4 complete). M0b/M0c pending.
 - **Author:** DeVaris Brown
 - **Phase-1 reviewers:** two independent adversarial passes (architecture/schema/statistics; Go/proto
   mechanics). Both returned **BLOCK**. Findings and dispositions in "Phase-1 review record" below.
@@ -483,3 +483,39 @@ Two independent adversarial passes, both **BLOCK**. Dispositions:
 | 8 | Borrow-for-one-iteration is a godoc convention, not a compiler-enforced rule (G12) | Before the first stage that fans out workers over one iterator (M1) |
 | 9 | No mechanism decided for platform-only fields; "just add a field to `Case`" is the path of least resistance (G14) | Before platform proto work begins — ADR-0003 records the intended split (separate platform package referencing OSS IDs; `kno.v1` never carries platform-only fields) |
 | 10 | Alias design chosen over generated-idiomatic-types (Alternative F); four findings are handled by gates rather than dissolved (G13) | Revisit if the depguard/forbidigo gates are bypassed or prove insufficient in review |
+
+---
+
+## Phase-3 review record (M0a)
+
+One adversarial pass over commit `1d47faf`. Verdict **BLOCK**, with every finding verified
+empirically against a scratch copy rather than argued from reading. Because this PR *is* the
+enforcement machinery, the reviewer's framing was right: the highest-damage failure is a gate that
+appears to enforce something and does not. Five of those shipped.
+
+**Fixed:**
+
+| Finding | What was actually wrong | Fix |
+|---|---|---|
+| F1 | `forbidigo` was excluded from `_test.go`, so the `reflect.DeepEqual` ban was off in the only place that construct appears. ADR-0001 names it a precondition of the alias design; the design shipped unprotected. | Exclusion scoped by `text:` to the print rules only. Verified: `reflect.DeepEqual` now caught in tests, `fmt.Println` still allowed there. |
+| F2 | `typecheck-proto` and `generate` shipped the exact `[ -d proto ]` heuristic Phase-1 finding A8 rejected — a `proto/` rename would silently disable breaking-change protection, and CI greps for `SKIP`, not `PEND`. | Replaced with a tracked `proto/PENDING` token that M0b deletes. Hard-fails if any `.proto` exists while the token remains. Verified both directions. |
+| F3 | The nightly live-API job carried real credentials and a `KNO_MAX_COST_USD` comment claiming budget-guard protection. No code reads that variable; `stats/budget` is a stub. A trap set ahead of the guard. | New `make test-live`, unreachable from `check`, refusing to run unless the cap is set *and* some Go file reads it. Ledger entry 11. |
+| F4 | `gitleaks detect` scans history only — a live key sitting uncommitted in the working tree passed. The gate only turned red after remediation required a history rewrite. | Runs `gitleaks dir` (tree) *and* `gitleaks git` (history). |
+| F5 | `git diff --quiet -- gen/` cannot see *new* untracked generated files, which is the common case when a message is added. ADR-0002's "can never drift" was false for additions. | `git status --porcelain -- gen/`. ADR-0002 corrected. |
+| F6 | DCO checked merge commits (blocking legitimate PRs), had no Dependabot exemption (every dependency PR would be red), and failed **open** when `git rev-list` errored. | `--no-merges`, bot exemption, materialize-then-check so an unreadable range fails closed, and `grep -xF` matching author *or* committer. A regex-escaping bug in the first fix was caught by dry-running it against real history. |
+| F7 | `make check` omitted `test-integration`, `fuzz-short`, `bench-diff`, and `generate-check`, so green locally did not predict CI — and the fixture integration path never gated a PR at all, while the only path that ran it was the money-spending one. | All four folded into `check`. CI now runs exactly `make check`. |
+| F8 | Six documented mechanisms did not exist: godox/nolintlint enforcement, CI verification of the PR template, release-please invocation, commit-message linting, SLSA/cosign/SBOM, and the ledger-lapse check. | `godox` and `nolintlint` enabled; release-please and commit-lint workflows added; PR template now says a human checks it; SECURITY.md states plainly that no release pipeline exists. Ledger entries 13 and 15. |
+| F9 | `tools` was `.PHONY`, so every gate reinstalled all five tools and the CI cache was inert. | Stamp file keyed on `tools/go.{mod,sum}`; cache key now includes the Go version. |
+| F10 | The `fmt.Print` rule had no `tui/` carve-out despite the comment claiming one, and overriding `forbid` silently dropped forbidigo's builtin `print`/`println` defaults. | `tui/` exclusion added, builtins re-added, `os.Std{out,err}` covered. All verified firing. |
+| F11 | depguard exempted the entire `api/` tree — precisely where the protojson divergence is fatal — via an unanchored `**/api/**` glob that would widen as the tree grew. | Narrowed to explicitly-named envelope files; test exemption dropped entirely. |
+| F12 | gitleaks was installed unpinned and unverified, differing between matrix legs, so a leak could be caught on one OS and missed on the other. | Pinned to one version on both legs, checksum-verified before extraction. Action SHA-pinning recorded as ledger entry 14. |
+| F13 | `GOTESTFLAGS ?=` let `GOTESTFLAGS= make test` silently drop `-race`, directly under a comment saying it must not be removable. | `:=`, with a separate `GOTESTEXTRA ?=` for real tuning. |
+| F14 | `KNO_CI` was dead configuration; the actual mechanism was a `grep 'SKIP'` over merged stdout, which would also fire on any tool banner containing that word. | `KNO_CI` wired into `skip_missing` so a missing tool exits 1. Grep removed. Verified both states. |
+| LOW | `.NOTPARALLEL` absent, `revive` custom rules silently replacing its defaults (so `package-comments` was unenforced), `make help` fragile under `pipefail`, no job timeouts, `docs/debt.md#N` anchors not resolving. | All fixed; ledger rows now carry explicit HTML anchors. |
+
+**Not fixed — recorded as debt with triggers:** entries 11–15 (`docs/debt.md`).
+
+**Verification:** `make check` green with zero `SKIP`; `KNO_CI=1 make check` green, confirming the
+CI path. The proto sentinel, the `KNO_CI` interlock, the DCO matcher, and every lint rule were each
+exercised in both the passing and the failing direction — a gate only counts once it has been seen
+to fail.

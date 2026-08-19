@@ -51,5 +51,9 @@ These are architectural commitments, so violations are vulnerabilities rather th
 - **Budget bypass.** A code path that can spend against an LLM or fine-tuning API without passing
   the budget guard is treated as a security issue, not just a bug: it spends someone else's money
   without consent.
-- **Supply chain.** Release artifacts are built in CI with SLSA provenance, cosign signatures, and
-  an SBOM. Anything undermining that chain is in scope.
+- **Supply chain.** Build tools are pinned by `tools/go.sum` and dependencies by `go.sum`;
+  anything undermining that pinning is in scope today.
+
+  *Not yet true, stated plainly rather than implied:* there is no release pipeline yet, so there
+  are no signed artifacts, no SLSA provenance, and no SBOM. Those land with the first release
+  (`docs/debt.md#13`). Until then, there are no official binaries — build from source.

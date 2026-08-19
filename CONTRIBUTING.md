@@ -12,7 +12,7 @@ disagree, `CLAUDE.md` wins and the disagreement is a bug — please file it.
 ```bash
 git clone https://github.com/knograph/kno && cd kno
 make tools     # installs pinned build tools into ./bin
-make check     # runs every gate CI will run
+make check     # runs every gate CI runs on a PR
 ```
 
 `make check` is the only command you need to remember.
@@ -65,18 +65,22 @@ These exist because breaking them produces bugs that are expensive, silent, or d
 
 ## Quality gates
 
-CI enforces these; run them locally first.
+`make check` runs all of these, in fail-fast order. CI runs exactly the same target, so a green
+`make check` locally should mean a green CI. Some gates are honestly incomplete this early — the
+table says which, and each names the ledger entry that retires it. A gate that quietly passes when
+it did not run is worse than no gate, so they announce themselves as `PEND`.
 
 | Command | What it checks |
 |---|---|
 | `make lint` | golangci-lint. Zero tolerance. No `//nolint` without a justification and a linked issue |
 | `make test` | Unit tests, always `-race` and `-shuffle=on`. Coverage floors: 85% on `core`, `stats`, `bridge`, `plugin`; 70% repo-wide, and coverage may not decrease |
-| `make test-integration` | Adapter tests against recorded fixtures. Live-API tests are opt-in (`KNO_LIVE_TESTS=1`) and never run in PR CI |
+| `make test-integration` | Adapter tests against recorded fixtures. Runs inside `make test`, so it gates every PR. It **refuses to run** if `KNO_LIVE_TESTS` is set |
+| `make test-live` | Integration tests against live providers. Spends real money, never runs in PR CI, and refuses to start unless a budget cap is set *and* some code actually reads it |
 | `make typecheck-proto` | `buf lint` + `buf breaking` against main |
-| `make fuzz-short` | 30s fuzz on parsers |
-| `make vuln` | `govulncheck` + dependency audit |
-| `make docs` | OpenAPI regeneration, godoc coverage, CLI help snapshots, link check |
-| `make bench-diff` | Hot-path benchmarks vs main; >10% regression fails |
+| `make fuzz-short` | 30s fuzz on parsers. No fuzz targets exist yet; it discovers them automatically, so it starts working the moment you add one ([docs/debt.md#4](docs/debt.md)) |
+| `make vuln` | `govulncheck` over the shipping module. The `tools/` module is **not** scanned yet ([docs/debt.md#12](docs/debt.md)) |
+| `make docs` | Will regenerate OpenAPI and check godoc coverage. **Both are pending** — `godoccheck` lands with M0c and OpenAPI needs a proto service to exist. It reports what it did not run rather than passing quietly |
+| `make bench-diff` | **Currently a tripwire, not a comparison.** No benchmarks exist yet, so it passes. The moment you add the first `func Benchmark`, it fails deliberately and asks you to implement the >10% regression gate ([docs/debt.md#3](docs/debt.md)) — that is the forcing function, not a bug |
 
 **New dependencies need justification in the PR body:** what it does, why the standard library or
 an existing dependency can't, its license, and its maintenance signal.
@@ -107,7 +111,8 @@ an existing dependency can't, its license, and its maintenance signal.
   abstraction, especially in adapters.
 - Soft caps: ~400 lines per file, ~60 per function. Exceeding either is a smell to justify, not a
   rule to game.
-- Every exported symbol has a godoc comment. `make docs` enforces it.
+- Every exported symbol has a godoc comment. `make docs` will enforce this once `godoccheck` lands
+  (M0c); until then it is reviewed by hand.
 
 ## Commits and PRs
 
