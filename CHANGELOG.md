@@ -24,6 +24,13 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
+- The Ring-0 contracts in `core`: `Agent`, `Capable`, `ContextInjector`, `KnowledgeInjector`,
+  `Evals`, `Pool`, `Goal`, and `Tuner`, plus type aliases making the generated `kno.v1` messages the
+  domain types (ADR-0001). These carry a stability promise from 1.0.
+- `core/errs`: the `what failed → why → fix` error grammar, the four exit codes CI gates branch on,
+  and sentinels whose identity survives serialization — `errors.Is` matches on `Code`, so an error
+  rebuilt from the wire still compares equal to its sentinel.
+- `coretest`: the iterator conformance harness every adapter must pass.
 - `covercheck` and `godoccheck`, retiring the two gates that had reported `PEND` since the
   foundation landed. Coverage floors (85% on `core`/`stats`/`bridge`/`plugin`, 70% repo-wide) and
   the no-decrease ratchet are now enforced, as is godoc coverage on every exported symbol.
