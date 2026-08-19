@@ -194,12 +194,21 @@ $(call proto_bootstrap_check,generate); \
 	fi
 
 .PHONY: typecheck-proto
+# The breaking-change baseline is resolved inside the recipe rather than in a
+# make variable: '#' begins a comment in make's own syntax, so a `$(shell ...)`
+# containing '.git#ref=...' truncates mid-call. Recipe lines pass '#' through
+# to the shell untouched.
 typecheck-proto: $(BUF) ## buf lint + buf breaking against main
 	@if [ -f proto/PENDING ]; then \
 $(call proto_bootstrap_check,typecheck-proto); \
 	else \
 		$(BUF) lint; \
-		$(BUF) breaking --against '.git#branch=main'; \
+		if git rev-parse --verify --quiet origin/main >/dev/null 2>&1; then \
+			baseline='.git#ref=origin/main'; \
+		else \
+			baseline='.git#branch=main'; \
+		fi; \
+		$(BUF) breaking --against "$$baseline"; \
 		printf '\033[32m  OK  \033[0m proto lint + breaking clean\n'; \
 	fi
 

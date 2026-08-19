@@ -38,6 +38,12 @@ jobs:
           # the coverage ratchet compares against the committed baseline.
           fetch-depth: 0
 
+      - name: Fetch main for the proto breaking-change baseline
+        # A PR is checked out as a detached merge ref. buf breaking compares
+        # against main, so main must actually exist locally — otherwise the
+        # single most covenant-critical gate errors instead of running.
+        run: git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+
       - uses: actions/setup-go@v5
         id: go
         with:
