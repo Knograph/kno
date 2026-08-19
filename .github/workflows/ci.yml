@@ -20,7 +20,7 @@ env:
   # actual mechanism — not a grep over stdout, which would fire on any tool
   # banner that happened to contain the word SKIP.
   KNO_CI: "1"
-  GITLEAKS_VERSION: "8.28.0"
+  GITLEAKS_VERSION: "8.30.1"
 
 jobs:
   check:
@@ -66,12 +66,13 @@ jobs:
             macOS) asset="gitleaks_${GITLEAKS_VERSION}_darwin_arm64.tar.gz" ;;
             *) echo "::error::unsupported runner"; exit 1 ;;
           esac
+          sums="gitleaks_${GITLEAKS_VERSION}_checksums.txt"
           base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
           curl -sSfL -o "$asset" "$base/$asset"
-          curl -sSfL -o checksums.txt "$base/checksums.txt"
-          grep " $asset\$" checksums.txt | shasum -a 256 -c -
+          curl -sSfL -o "$sums" "$base/$sums"
+          grep " $asset\$" "$sums" | shasum -a 256 -c -
           sudo tar -xzf "$asset" -C /usr/local/bin gitleaks
-          rm -f "$asset" checksums.txt
+          rm -f "$asset" "$sums"
           gitleaks version
 
       - run: make tools
