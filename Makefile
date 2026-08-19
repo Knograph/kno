@@ -17,6 +17,15 @@ SHELL := /usr/bin/env bash
 .NOTPARALLEL:
 
 BIN        := $(CURDIR)/bin
+
+# Put the pinned tools ahead of everything on PATH for every recipe.
+#
+# buf resolves `local:` codegen plugins by name from $PATH, so without this it
+# silently picks up whatever protoc-gen-go happens to be in a developer's
+# ~/go/bin — or finds none at all in CI. That is the exact class of bug the
+# tools/ module exists to prevent: a green local run that quietly depends on
+# the machine it ran on.
+export PATH := $(CURDIR)/bin:$(PATH)
 TOOLS_MOD  := $(CURDIR)/tools
 COVERAGE   := coverage.out
 BASELINE   := .coverage-baseline
