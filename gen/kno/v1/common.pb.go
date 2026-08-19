@@ -180,6 +180,23 @@ const (
 	// and "the data was there but retrieval missed it" — context injection
 	// collapses the two.
 	InjectionMode_INJECTION_MODE_KNOWLEDGE InjectionMode = 2
+	// The Asset was in the training set of a fine-tune on a small PROXY model,
+	// and the delta was measured against that proxy.
+	//
+	// A third epistemic category, not a variant of the first two: nothing was
+	// injected at inference time. Proxy transfer is a well-validated selection
+	// signal, not a prediction of the production model's behavior, and a delta
+	// measured this way must be reported as such. It is also the only mode that
+	// yields an interference read — whether tuning on a group regresses the
+	// control slices — which in-context measurement categorically cannot give.
+	InjectionMode_INJECTION_MODE_PROXY_FINETUNE InjectionMode = 3
+	// The Asset was in the training set of a fine-tune on the user's ACTUAL
+	// target model, and the delta was measured against that tuned model on the
+	// untouched holdout.
+	//
+	// The most faithful measurement available, and the most expensive. This is
+	// the mode behind the final before/after ROI number.
+	InjectionMode_INJECTION_MODE_FINETUNE InjectionMode = 4
 )
 
 // Enum value maps for InjectionMode.
@@ -188,11 +205,15 @@ var (
 		0: "INJECTION_MODE_UNSPECIFIED",
 		1: "INJECTION_MODE_CONTEXT",
 		2: "INJECTION_MODE_KNOWLEDGE",
+		3: "INJECTION_MODE_PROXY_FINETUNE",
+		4: "INJECTION_MODE_FINETUNE",
 	}
 	InjectionMode_value = map[string]int32{
-		"INJECTION_MODE_UNSPECIFIED": 0,
-		"INJECTION_MODE_CONTEXT":     1,
-		"INJECTION_MODE_KNOWLEDGE":   2,
+		"INJECTION_MODE_UNSPECIFIED":    0,
+		"INJECTION_MODE_CONTEXT":        1,
+		"INJECTION_MODE_KNOWLEDGE":      2,
+		"INJECTION_MODE_PROXY_FINETUNE": 3,
+		"INJECTION_MODE_FINETUNE":       4,
 	}
 )
 
@@ -240,6 +261,10 @@ type CostVector struct {
 	AcquisitionUsdMicros int64 `protobuf:"varint,3,opt,name=acquisition_usd_micros,json=acquisitionUsdMicros,proto3" json:"acquisition_usd_micros,omitempty"`
 	// Whether this Asset goes stale and needs re-collection. A fact that expires
 	// is a maintenance liability a one-time token count does not capture.
+	//
+	// False is the default and means "not known to be stale", NOT "verified
+	// durable" — most adapters cannot detect staleness at all. Do not present
+	// this as a positive assertion of freshness.
 	Stale         bool `protobuf:"varint,4,opt,name=stale,proto3" json:"stale,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -591,11 +616,13 @@ const file_kno_v1_common_proto_rawDesc = "" +
 	"\x13DESTINATION_CONTEXT\x10\x01\x12\x1e\n" +
 	"\x1aDESTINATION_KNOWLEDGE_BASE\x10\x02\x12\x1a\n" +
 	"\x16DESTINATION_TUNING_SET\x10\x03\x12\x18\n" +
-	"\x14DESTINATION_REJECTED\x10\x04*i\n" +
+	"\x14DESTINATION_REJECTED\x10\x04*\xa9\x01\n" +
 	"\rInjectionMode\x12\x1e\n" +
 	"\x1aINJECTION_MODE_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16INJECTION_MODE_CONTEXT\x10\x01\x12\x1c\n" +
-	"\x18INJECTION_MODE_KNOWLEDGE\x10\x02B|\n" +
+	"\x18INJECTION_MODE_KNOWLEDGE\x10\x02\x12!\n" +
+	"\x1dINJECTION_MODE_PROXY_FINETUNE\x10\x03\x12\x1b\n" +
+	"\x17INJECTION_MODE_FINETUNE\x10\x04B|\n" +
 	"\n" +
 	"com.kno.v1B\vCommonProtoP\x01Z(github.com/knograph/kno/gen/kno/v1;knov1\xa2\x02\x03KXX\xaa\x02\x06Kno.V1\xca\x02\x06Kno\\V1\xe2\x02\x12Kno\\V1\\GPBMetadata\xea\x02\aKno::V1b\x06proto3"
 

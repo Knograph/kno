@@ -71,13 +71,20 @@ message Portfolio {
   // Total carrying cost of the selected set.
   CostVector total_cost = 5;
 
-  // Aggregate expected gain from the selected set, measured on the DEV slice.
-  // This is a selection-time estimate and is subject to the winner's curse;
-  // the honest number is Report.holdout_gain, which Validate produces.
-  double expected_gain = 6;
+  // Aggregate gain from the selected set as measured on the DEV slice.
+  //
+  // Named for what it is rather than for what a reader might hope it is: this
+  // is a selection-time estimate, inflated by the winner's curse, because the
+  // Assets in it were chosen partly for winning on this very slice. It is NOT
+  // a result. The honest number is Report.holdout_gain, produced by Validate
+  // against the untouched slice.
+  //
+  // An SDK user reaching for this field by autocomplete right after `select`
+  // should be stopped by its name, not only by this comment.
+  double dev_estimated_gain = 6;
 
-  // Confidence interval on expected_gain.
-  Interval expected_interval = 7;
+  // Confidence interval on dev_estimated_gain.
+  Interval dev_estimated_interval = 7;
 }
 
 // Budget is the constraint set a Portfolio was built under.
@@ -87,6 +94,13 @@ message Budget {
 
   // Maximum examples in a tuning set.
   int64 max_training_examples = 2;
+
+  // Maximum bytes written to the knowledge base.
+  //
+  // DESTINATION_KNOWLEDGE_BASE costs storage and retrieval rather than
+  // per-call tokens, so neither of the caps above bounds it. Without this,
+  // knowledge_base is the one destination a user cannot put a ceiling on.
+  int64 max_knowledge_base_bytes = 6;
 
   // Maximum spend for the run, in MICRO-USD.
   int64 max_cost_usd_micros = 3;

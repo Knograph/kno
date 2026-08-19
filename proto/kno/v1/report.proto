@@ -53,17 +53,28 @@ message Report {
   Portfolio portfolio = 5;
 
   // Baseline score before any Asset was added.
-  double baseline_score = 6;
+  //
+  // `optional` is load-bearing: without it a proto3 scalar has no presence, so
+  // "Baseline has not run" would be indistinguishable from "the baseline
+  // scored exactly zero". Check presence before reading.
+  optional double baseline_score = 6;
 
   // Score with the whole Portfolio applied, measured on the UNTOUCHED HOLDOUT.
   //
   // This is the only number that belongs in a slide. Portfolio.expected_gain
   // is a dev-slice estimate inflated by the winner's curse; this one is not.
-  // Absent until Validate has run.
-  double holdout_score = 7;
+  // Absent until Validate has run — and absent means ABSENT: this field is
+  // `optional`, so presence is tracked and a missing value cannot be read as
+  // a real score of zero.
+  optional double holdout_score = 7;
 
   // holdout_score - baseline_score.
-  double holdout_gain = 8;
+  //
+  // The single most consequential number this tool produces, and therefore the
+  // one whose absence must be impossible to misread. `optional` guarantees
+  // that a Report emitted after Select but before Validate reports NO gain,
+  // rather than a gain of zero.
+  optional double holdout_gain = 8;
 
   // Confidence interval on holdout_gain. ABSENT means Validate has not run;
   // never present holdout_gain without it.

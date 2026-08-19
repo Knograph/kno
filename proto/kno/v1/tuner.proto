@@ -9,13 +9,24 @@ enum JobStatus {
   // Unset.
   JOB_STATUS_UNSPECIFIED = 0;
 
-  // Submitted, not yet started.
+  // Submitted; the provider is checking the training file before queueing.
+  // OpenAI exposes this as a distinct state, and folding it into QUEUED would
+  // hide a real and common failure mode — malformed training data — behind a
+  // status that says nothing is wrong.
+  JOB_STATUS_VALIDATING_FILES = 6;
+
+  // Accepted and waiting to start.
   JOB_STATUS_QUEUED = 1;
 
   // Training.
   JOB_STATUS_RUNNING = 2;
 
-  // Finished; a tuned model is available.
+  // Training finished, but the model is not yet servable. Some providers have
+  // a deploy or activation step after training; conflating it with SUCCEEDED
+  // makes Kno report a model as ready before it can be invoked.
+  JOB_STATUS_DEPLOYING = 7;
+
+  // Finished, and the tuned model is servable.
   JOB_STATUS_SUCCEEDED = 3;
 
   // Failed. See JobState.error.
@@ -82,8 +93,9 @@ message JobState {
   // Where it stands.
   JobStatus status = 2;
 
-  // Progress 0..1 when the provider reports it.
-  double progress = 3;
+  // Progress 0..1 when the provider reports it. `optional`, because most do
+  // not: "not reported" must not read as "0% complete".
+  optional double progress = 3;
 
   // The tuned model, once SUCCEEDED. Usable directly as an agent ref for
   // post-tune validation against the same untouched holdout.

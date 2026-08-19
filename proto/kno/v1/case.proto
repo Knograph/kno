@@ -58,13 +58,65 @@ message Case {
   repeated Turn history = 8;
 }
 
+// Role is who produced a Turn.
+//
+// An enum rather than a free string because this is a small, closed, stable
+// set, and a string would let "assistant" and "Assistant" drift apart across
+// adapters with nothing to catch it. Changing a string field to an enum after
+// release is wire-breaking, so it is done now, while nothing consumes this.
+//
+// Contrast AgentRef.scheme, which is correctly a string: that set is genuinely
+// open, because any Ring-1 or Ring-2 adapter may introduce a new scheme.
+enum Role {
+  // Unset.
+  ROLE_UNSPECIFIED = 0;
+
+  // System or developer instruction.
+  ROLE_SYSTEM = 1;
+
+  // The end user.
+  ROLE_USER = 2;
+
+  // The agent.
+  ROLE_ASSISTANT = 3;
+
+  // A tool result returned to the agent.
+  ROLE_TOOL = 4;
+}
+
+// ToolCall is one tool invocation the agent made.
+//
+// Structured rather than an opaque string because Kind.BEHAVIOR names tool-use
+// patterns as one of the two things behavior Assets exist to capture, and
+// BEHAVIOR is the only Kind that faces the fine-tuning bridge. Measuring
+// improvement in tool use against ad-hoc per-adapter JSON blobs would undercut
+// the fidelity of exactly the measurement the bridge depends on.
+message ToolCall {
+  // Tool name as the agent called it.
+  string name = 1;
+
+  // Arguments as the agent supplied them, provider-formatted (typically JSON).
+  string arguments = 2;
+
+  // What the tool returned, when the adapter reports it.
+  string result = 3;
+
+  // Set when the call itself failed, as opposed to returning an unhelpful
+  // result. A failed tool call and a bad answer are different failure modes
+  // and route to different Assets.
+  string error = 4;
+}
+
 // Turn is one message in a conversation history.
 message Turn {
-  // "system", "user", "assistant", or "tool".
-  string role = 1;
+  // Who produced this Turn.
+  Role role = 1;
 
   // Message content.
   string content = 2;
+
+  // Tool calls made in this Turn, when the role is ROLE_ASSISTANT.
+  repeated ToolCall tool_calls = 3;
 }
 
 // Response is what an Agent returned for a Case.
@@ -90,7 +142,7 @@ message Response {
   int64 latency_ms = 6;
 
   // Tool calls the agent made, if the adapter reports them.
-  repeated string tool_calls = 7;
+  repeated ToolCall tool_calls = 7;
 
   // Set when the agent failed rather than answered. An errored Response is
   // still recorded: silently dropping failures biases every downstream number.

@@ -61,6 +61,16 @@ enum RejectionReason {
   // every reason above: it is a statement about the run, not about the Asset,
   // and silently merging it into NO_EFFECT would be a lie.
   REJECTION_REASON_BUDGET_EXHAUSTED = 7;
+
+  // Measurement was attempted and failed — a provider timeout, a judge error,
+  // a malformed response.
+  //
+  // Distinct from NO_EFFECT, which is a clean negative result, and from
+  // BUDGET_EXHAUSTED, which is a statement about the run. An error is not
+  // something the Asset did, and reporting it as one would make the rejection
+  // log dishonest in the direction that matters most: telling a user their
+  // data is worthless when the truth is that Kno failed to measure it.
+  REJECTION_REASON_MEASUREMENT_FAILED = 8;
 }
 
 // Valuation is an Asset's measured record: what it did, how sure we are, what
@@ -68,6 +78,13 @@ enum RejectionReason {
 message Valuation {
   // The Asset measured.
   string asset_id = 1;
+
+  // The run that produced this measurement, ULID-formatted.
+  //
+  // Valuations are a top-level addressable resource in the API, so they must
+  // be correlatable to their run without depending on the message that
+  // happens to embed them.
+  string run_id = 14;
 
   // Change in the Goal on the slices this Asset was routed to. Sign is
   // relative to the Goal's own direction.

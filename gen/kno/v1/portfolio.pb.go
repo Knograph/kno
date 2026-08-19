@@ -205,14 +205,21 @@ type Portfolio struct {
 	Budget *Budget `protobuf:"bytes,4,opt,name=budget,proto3" json:"budget,omitempty"`
 	// Total carrying cost of the selected set.
 	TotalCost *CostVector `protobuf:"bytes,5,opt,name=total_cost,json=totalCost,proto3" json:"total_cost,omitempty"`
-	// Aggregate expected gain from the selected set, measured on the DEV slice.
-	// This is a selection-time estimate and is subject to the winner's curse;
-	// the honest number is Report.holdout_gain, which Validate produces.
-	ExpectedGain float64 `protobuf:"fixed64,6,opt,name=expected_gain,json=expectedGain,proto3" json:"expected_gain,omitempty"`
-	// Confidence interval on expected_gain.
-	ExpectedInterval *Interval `protobuf:"bytes,7,opt,name=expected_interval,json=expectedInterval,proto3" json:"expected_interval,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Aggregate gain from the selected set as measured on the DEV slice.
+	//
+	// Named for what it is rather than for what a reader might hope it is: this
+	// is a selection-time estimate, inflated by the winner's curse, because the
+	// Assets in it were chosen partly for winning on this very slice. It is NOT
+	// a result. The honest number is Report.holdout_gain, produced by Validate
+	// against the untouched slice.
+	//
+	// An SDK user reaching for this field by autocomplete right after `select`
+	// should be stopped by its name, not only by this comment.
+	DevEstimatedGain float64 `protobuf:"fixed64,6,opt,name=dev_estimated_gain,json=devEstimatedGain,proto3" json:"dev_estimated_gain,omitempty"`
+	// Confidence interval on dev_estimated_gain.
+	DevEstimatedInterval *Interval `protobuf:"bytes,7,opt,name=dev_estimated_interval,json=devEstimatedInterval,proto3" json:"dev_estimated_interval,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *Portfolio) Reset() {
@@ -280,16 +287,16 @@ func (x *Portfolio) GetTotalCost() *CostVector {
 	return nil
 }
 
-func (x *Portfolio) GetExpectedGain() float64 {
+func (x *Portfolio) GetDevEstimatedGain() float64 {
 	if x != nil {
-		return x.ExpectedGain
+		return x.DevEstimatedGain
 	}
 	return 0
 }
 
-func (x *Portfolio) GetExpectedInterval() *Interval {
+func (x *Portfolio) GetDevEstimatedInterval() *Interval {
 	if x != nil {
-		return x.ExpectedInterval
+		return x.DevEstimatedInterval
 	}
 	return nil
 }
@@ -301,6 +308,12 @@ type Budget struct {
 	MaxContextTokens int64 `protobuf:"varint,1,opt,name=max_context_tokens,json=maxContextTokens,proto3" json:"max_context_tokens,omitempty"`
 	// Maximum examples in a tuning set.
 	MaxTrainingExamples int64 `protobuf:"varint,2,opt,name=max_training_examples,json=maxTrainingExamples,proto3" json:"max_training_examples,omitempty"`
+	// Maximum bytes written to the knowledge base.
+	//
+	// DESTINATION_KNOWLEDGE_BASE costs storage and retrieval rather than
+	// per-call tokens, so neither of the caps above bounds it. Without this,
+	// knowledge_base is the one destination a user cannot put a ceiling on.
+	MaxKnowledgeBaseBytes int64 `protobuf:"varint,6,opt,name=max_knowledge_base_bytes,json=maxKnowledgeBaseBytes,proto3" json:"max_knowledge_base_bytes,omitempty"`
 	// Maximum spend for the run, in MICRO-USD.
 	MaxCostUsdMicros int64 `protobuf:"varint,3,opt,name=max_cost_usd_micros,json=maxCostUsdMicros,proto3" json:"max_cost_usd_micros,omitempty"`
 	// Maximum LLM calls for the run. A hard ceiling independent of dollars,
@@ -357,6 +370,13 @@ func (x *Budget) GetMaxTrainingExamples() int64 {
 	return 0
 }
 
+func (x *Budget) GetMaxKnowledgeBaseBytes() int64 {
+	if x != nil {
+		return x.MaxKnowledgeBaseBytes
+	}
+	return 0
+}
+
 func (x *Budget) GetMaxCostUsdMicros() int64 {
 	if x != nil {
 		return x.MaxCostUsdMicros
@@ -393,19 +413,20 @@ const file_kno_v1_portfolio_proto_rawDesc = "" +
 	"\x06reason\x18\x02 \x01(\x0e2\x17.kno.v1.RejectionReasonR\x06reason\x127\n" +
 	"\x18redundant_with_asset_ids\x18\x03 \x03(\tR\x15redundantWithAssetIds\x12\x16\n" +
 	"\x06detail\x18\x04 \x01(\tR\x06detail\x12/\n" +
-	"\tvaluation\x18\x05 \x01(\v2\x11.kno.v1.ValuationR\tvaluation\"\xc4\x02\n" +
+	"\tvaluation\x18\x05 \x01(\v2\x11.kno.v1.ValuationR\tvaluation\"\xd6\x02\n" +
 	"\tPortfolio\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x122\n" +
 	"\bselected\x18\x02 \x03(\v2\x16.kno.v1.PortfolioEntryR\bselected\x12-\n" +
 	"\brejected\x18\x03 \x03(\v2\x11.kno.v1.RejectionR\brejected\x12&\n" +
 	"\x06budget\x18\x04 \x01(\v2\x0e.kno.v1.BudgetR\x06budget\x121\n" +
 	"\n" +
-	"total_cost\x18\x05 \x01(\v2\x12.kno.v1.CostVectorR\ttotalCost\x12#\n" +
-	"\rexpected_gain\x18\x06 \x01(\x01R\fexpectedGain\x12=\n" +
-	"\x11expected_interval\x18\a \x01(\v2\x10.kno.v1.IntervalR\x10expectedInterval\"\xd5\x01\n" +
+	"total_cost\x18\x05 \x01(\v2\x12.kno.v1.CostVectorR\ttotalCost\x12,\n" +
+	"\x12dev_estimated_gain\x18\x06 \x01(\x01R\x10devEstimatedGain\x12F\n" +
+	"\x16dev_estimated_interval\x18\a \x01(\v2\x10.kno.v1.IntervalR\x14devEstimatedInterval\"\x8e\x02\n" +
 	"\x06Budget\x12,\n" +
 	"\x12max_context_tokens\x18\x01 \x01(\x03R\x10maxContextTokens\x122\n" +
-	"\x15max_training_examples\x18\x02 \x01(\x03R\x13maxTrainingExamples\x12-\n" +
+	"\x15max_training_examples\x18\x02 \x01(\x03R\x13maxTrainingExamples\x127\n" +
+	"\x18max_knowledge_base_bytes\x18\x06 \x01(\x03R\x15maxKnowledgeBaseBytes\x12-\n" +
 	"\x13max_cost_usd_micros\x18\x03 \x01(\x03R\x10maxCostUsdMicros\x12\"\n" +
 	"\rmax_llm_calls\x18\x04 \x01(\x03R\vmaxLlmCalls\x12\x16\n" +
 	"\x06trials\x18\x05 \x01(\x05R\x06trialsB\x7f\n" +
@@ -445,7 +466,7 @@ var file_kno_v1_portfolio_proto_depIdxs = []int32{
 	1, // 5: kno.v1.Portfolio.rejected:type_name -> kno.v1.Rejection
 	3, // 6: kno.v1.Portfolio.budget:type_name -> kno.v1.Budget
 	7, // 7: kno.v1.Portfolio.total_cost:type_name -> kno.v1.CostVector
-	8, // 8: kno.v1.Portfolio.expected_interval:type_name -> kno.v1.Interval
+	8, // 8: kno.v1.Portfolio.dev_estimated_interval:type_name -> kno.v1.Interval
 	9, // [9:9] is the sub-list for method output_type
 	9, // [9:9] is the sub-list for method input_type
 	9, // [9:9] is the sub-list for extension type_name

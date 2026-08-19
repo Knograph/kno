@@ -51,6 +51,15 @@ const (
 	// every reason above: it is a statement about the run, not about the Asset,
 	// and silently merging it into NO_EFFECT would be a lie.
 	RejectionReason_REJECTION_REASON_BUDGET_EXHAUSTED RejectionReason = 7
+	// Measurement was attempted and failed — a provider timeout, a judge error,
+	// a malformed response.
+	//
+	// Distinct from NO_EFFECT, which is a clean negative result, and from
+	// BUDGET_EXHAUSTED, which is a statement about the run. An error is not
+	// something the Asset did, and reporting it as one would make the rejection
+	// log dishonest in the direction that matters most: telling a user their
+	// data is worthless when the truth is that Kno failed to measure it.
+	RejectionReason_REJECTION_REASON_MEASUREMENT_FAILED RejectionReason = 8
 )
 
 // Enum value maps for RejectionReason.
@@ -64,16 +73,18 @@ var (
 		5: "REJECTION_REASON_WRONG_MECHANISM",
 		6: "REJECTION_REASON_IRRELEVANT",
 		7: "REJECTION_REASON_BUDGET_EXHAUSTED",
+		8: "REJECTION_REASON_MEASUREMENT_FAILED",
 	}
 	RejectionReason_value = map[string]int32{
-		"REJECTION_REASON_UNSPECIFIED":      0,
-		"REJECTION_REASON_NO_EFFECT":        1,
-		"REJECTION_REASON_REGRESSION":       2,
-		"REJECTION_REASON_REDUNDANT":        3,
-		"REJECTION_REASON_COST_DOMINATED":   4,
-		"REJECTION_REASON_WRONG_MECHANISM":  5,
-		"REJECTION_REASON_IRRELEVANT":       6,
-		"REJECTION_REASON_BUDGET_EXHAUSTED": 7,
+		"REJECTION_REASON_UNSPECIFIED":        0,
+		"REJECTION_REASON_NO_EFFECT":          1,
+		"REJECTION_REASON_REGRESSION":         2,
+		"REJECTION_REASON_REDUNDANT":          3,
+		"REJECTION_REASON_COST_DOMINATED":     4,
+		"REJECTION_REASON_WRONG_MECHANISM":    5,
+		"REJECTION_REASON_IRRELEVANT":         6,
+		"REJECTION_REASON_BUDGET_EXHAUSTED":   7,
+		"REJECTION_REASON_MEASUREMENT_FAILED": 8,
 	}
 )
 
@@ -190,6 +201,12 @@ type Valuation struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The Asset measured.
 	AssetId string `protobuf:"bytes,1,opt,name=asset_id,json=assetId,proto3" json:"asset_id,omitempty"`
+	// The run that produced this measurement, ULID-formatted.
+	//
+	// Valuations are a top-level addressable resource in the API, so they must
+	// be correlatable to their run without depending on the message that
+	// happens to embed them.
+	RunId string `protobuf:"bytes,14,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
 	// Change in the Goal on the slices this Asset was routed to. Sign is
 	// relative to the Goal's own direction.
 	DeltaGoal float64 `protobuf:"fixed64,2,opt,name=delta_goal,json=deltaGoal,proto3" json:"delta_goal,omitempty"`
@@ -260,6 +277,13 @@ func (*Valuation) Descriptor() ([]byte, []int) {
 func (x *Valuation) GetAssetId() string {
 	if x != nil {
 		return x.AssetId
+	}
+	return ""
+}
+
+func (x *Valuation) GetRunId() string {
+	if x != nil {
+		return x.RunId
 	}
 	return ""
 }
@@ -357,9 +381,10 @@ const file_kno_v1_valuation_proto_rawDesc = "" +
 	"\x03low\x18\x01 \x01(\x01R\x03low\x12\x12\n" +
 	"\x04high\x18\x02 \x01(\x01R\x04high\x12\x14\n" +
 	"\x05level\x18\x03 \x01(\x01R\x05level\x12\x16\n" +
-	"\x06method\x18\x04 \x01(\tR\x06method\"\x83\x04\n" +
+	"\x06method\x18\x04 \x01(\tR\x06method\"\x9a\x04\n" +
 	"\tValuation\x12\x19\n" +
-	"\basset_id\x18\x01 \x01(\tR\aassetId\x12\x1d\n" +
+	"\basset_id\x18\x01 \x01(\tR\aassetId\x12\x15\n" +
+	"\x06run_id\x18\x0e \x01(\tR\x05runId\x12\x1d\n" +
 	"\n" +
 	"delta_goal\x18\x02 \x01(\x01R\tdeltaGoal\x127\n" +
 	"\x0edelta_interval\x18\x03 \x01(\v2\x10.kno.v1.IntervalR\rdeltaInterval\x12#\n" +
@@ -373,7 +398,7 @@ const file_kno_v1_valuation_proto_rawDesc = "" +
 	" \x01(\v2\x12.kno.v1.CostVectorR\x04cost\x12$\n" +
 	"\x0edelta_per_cost\x18\v \x01(\x01R\fdeltaPerCost\x12 \n" +
 	"\x04kind\x18\f \x01(\x0e2\f.kno.v1.KindR\x04kind\x12\x14\n" +
-	"\x05error\x18\r \x01(\tR\x05error*\xa7\x02\n" +
+	"\x05error\x18\r \x01(\tR\x05error*\xd0\x02\n" +
 	"\x0fRejectionReason\x12 \n" +
 	"\x1cREJECTION_REASON_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aREJECTION_REASON_NO_EFFECT\x10\x01\x12\x1f\n" +
@@ -382,7 +407,8 @@ const file_kno_v1_valuation_proto_rawDesc = "" +
 	"\x1fREJECTION_REASON_COST_DOMINATED\x10\x04\x12$\n" +
 	" REJECTION_REASON_WRONG_MECHANISM\x10\x05\x12\x1f\n" +
 	"\x1bREJECTION_REASON_IRRELEVANT\x10\x06\x12%\n" +
-	"!REJECTION_REASON_BUDGET_EXHAUSTED\x10\aB\x7f\n" +
+	"!REJECTION_REASON_BUDGET_EXHAUSTED\x10\a\x12'\n" +
+	"#REJECTION_REASON_MEASUREMENT_FAILED\x10\bB\x7f\n" +
 	"\n" +
 	"com.kno.v1B\x0eValuationProtoP\x01Z(github.com/knograph/kno/gen/kno/v1;knov1\xa2\x02\x03KXX\xaa\x02\x06Kno.V1\xca\x02\x06Kno\\V1\xe2\x02\x12Kno\\V1\\GPBMetadata\xea\x02\aKno::V1b\x06proto3"
 

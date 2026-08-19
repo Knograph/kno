@@ -134,15 +134,26 @@ type Report struct {
 	// The selected Portfolio with its full rejection log.
 	Portfolio *Portfolio `protobuf:"bytes,5,opt,name=portfolio,proto3" json:"portfolio,omitempty"`
 	// Baseline score before any Asset was added.
-	BaselineScore float64 `protobuf:"fixed64,6,opt,name=baseline_score,json=baselineScore,proto3" json:"baseline_score,omitempty"`
+	//
+	// `optional` is load-bearing: without it a proto3 scalar has no presence, so
+	// "Baseline has not run" would be indistinguishable from "the baseline
+	// scored exactly zero". Check presence before reading.
+	BaselineScore *float64 `protobuf:"fixed64,6,opt,name=baseline_score,json=baselineScore,proto3,oneof" json:"baseline_score,omitempty"`
 	// Score with the whole Portfolio applied, measured on the UNTOUCHED HOLDOUT.
 	//
 	// This is the only number that belongs in a slide. Portfolio.expected_gain
 	// is a dev-slice estimate inflated by the winner's curse; this one is not.
-	// Absent until Validate has run.
-	HoldoutScore float64 `protobuf:"fixed64,7,opt,name=holdout_score,json=holdoutScore,proto3" json:"holdout_score,omitempty"`
+	// Absent until Validate has run — and absent means ABSENT: this field is
+	// `optional`, so presence is tracked and a missing value cannot be read as
+	// a real score of zero.
+	HoldoutScore *float64 `protobuf:"fixed64,7,opt,name=holdout_score,json=holdoutScore,proto3,oneof" json:"holdout_score,omitempty"`
 	// holdout_score - baseline_score.
-	HoldoutGain float64 `protobuf:"fixed64,8,opt,name=holdout_gain,json=holdoutGain,proto3" json:"holdout_gain,omitempty"`
+	//
+	// The single most consequential number this tool produces, and therefore the
+	// one whose absence must be impossible to misread. `optional` guarantees
+	// that a Report emitted after Select but before Validate reports NO gain,
+	// rather than a gain of zero.
+	HoldoutGain *float64 `protobuf:"fixed64,8,opt,name=holdout_gain,json=holdoutGain,proto3,oneof" json:"holdout_gain,omitempty"`
 	// Confidence interval on holdout_gain. ABSENT means Validate has not run;
 	// never present holdout_gain without it.
 	HoldoutInterval *Interval `protobuf:"bytes,9,opt,name=holdout_interval,json=holdoutInterval,proto3" json:"holdout_interval,omitempty"`
@@ -239,22 +250,22 @@ func (x *Report) GetPortfolio() *Portfolio {
 }
 
 func (x *Report) GetBaselineScore() float64 {
-	if x != nil {
-		return x.BaselineScore
+	if x != nil && x.BaselineScore != nil {
+		return *x.BaselineScore
 	}
 	return 0
 }
 
 func (x *Report) GetHoldoutScore() float64 {
-	if x != nil {
-		return x.HoldoutScore
+	if x != nil && x.HoldoutScore != nil {
+		return *x.HoldoutScore
 	}
 	return 0
 }
 
 func (x *Report) GetHoldoutGain() float64 {
-	if x != nil {
-		return x.HoldoutGain
+	if x != nil && x.HoldoutGain != nil {
+		return *x.HoldoutGain
 	}
 	return 0
 }
@@ -398,17 +409,17 @@ const file_kno_v1_report_proto_rawDesc = "" +
 	"\bcase_ids\x18\x03 \x03(\tR\acaseIds\x12#\n" +
 	"\rfailure_share\x18\x04 \x01(\x01R\ffailureShare\x12&\n" +
 	"\x0erecommendation\x18\x05 \x01(\tR\x0erecommendation\x12.\n" +
-	"\x13attempted_asset_ids\x18\x06 \x03(\tR\x11attemptedAssetIds\"\xe5\x05\n" +
+	"\x13attempted_asset_ids\x18\x06 \x03(\tR\x11attemptedAssetIds\"\xaa\x06\n" +
 	"\x06Report\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x1d\n" +
 	"\n" +
 	"created_at\x18\x02 \x01(\tR\tcreatedAt\x12&\n" +
 	"\x05agent\x18\x03 \x01(\v2\x10.kno.v1.AgentRefR\x05agent\x12\x1b\n" +
 	"\tgoal_name\x18\x04 \x01(\tR\bgoalName\x12/\n" +
-	"\tportfolio\x18\x05 \x01(\v2\x11.kno.v1.PortfolioR\tportfolio\x12%\n" +
-	"\x0ebaseline_score\x18\x06 \x01(\x01R\rbaselineScore\x12#\n" +
-	"\rholdout_score\x18\a \x01(\x01R\fholdoutScore\x12!\n" +
-	"\fholdout_gain\x18\b \x01(\x01R\vholdoutGain\x12;\n" +
+	"\tportfolio\x18\x05 \x01(\v2\x11.kno.v1.PortfolioR\tportfolio\x12*\n" +
+	"\x0ebaseline_score\x18\x06 \x01(\x01H\x00R\rbaselineScore\x88\x01\x01\x12(\n" +
+	"\rholdout_score\x18\a \x01(\x01H\x01R\fholdoutScore\x88\x01\x01\x12&\n" +
+	"\fholdout_gain\x18\b \x01(\x01H\x02R\vholdoutGain\x88\x01\x01\x12;\n" +
 	"\x10holdout_interval\x18\t \x01(\v2\x10.kno.v1.IntervalR\x0fholdoutInterval\x12@\n" +
 	"\x1cinteraction_penalty_detected\x18\n" +
 	" \x01(\bR\x1ainteractionPenaltyDetected\x12D\n" +
@@ -418,7 +429,10 @@ const file_kno_v1_report_proto_rawDesc = "" +
 	"\x0ftotal_llm_calls\x18\x0e \x01(\x03R\rtotalLlmCalls\x12$\n" +
 	"\x0edev_case_count\x18\x0f \x01(\x05R\fdevCaseCount\x12,\n" +
 	"\x12holdout_case_count\x18\x10 \x01(\x05R\x10holdoutCaseCount\x12+\n" +
-	"\x11incomplete_reason\x18\x11 \x01(\tR\x10incompleteReason\"_\n" +
+	"\x11incomplete_reason\x18\x11 \x01(\tR\x10incompleteReasonB\x11\n" +
+	"\x0f_baseline_scoreB\x10\n" +
+	"\x0e_holdout_scoreB\x0f\n" +
+	"\r_holdout_gain\"_\n" +
 	"\tAssetPair\x12\x1c\n" +
 	"\n" +
 	"asset_id_a\x18\x01 \x01(\tR\bassetIdA\x12\x1c\n" +
@@ -470,6 +484,7 @@ func file_kno_v1_report_proto_init() {
 	file_kno_v1_common_proto_init()
 	file_kno_v1_portfolio_proto_init()
 	file_kno_v1_valuation_proto_init()
+	file_kno_v1_report_proto_msgTypes[1].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

@@ -27,11 +27,20 @@ type JobStatus int32
 const (
 	// Unset.
 	JobStatus_JOB_STATUS_UNSPECIFIED JobStatus = 0
-	// Submitted, not yet started.
+	// Submitted; the provider is checking the training file before queueing.
+	// OpenAI exposes this as a distinct state, and folding it into QUEUED would
+	// hide a real and common failure mode — malformed training data — behind a
+	// status that says nothing is wrong.
+	JobStatus_JOB_STATUS_VALIDATING_FILES JobStatus = 6
+	// Accepted and waiting to start.
 	JobStatus_JOB_STATUS_QUEUED JobStatus = 1
 	// Training.
 	JobStatus_JOB_STATUS_RUNNING JobStatus = 2
-	// Finished; a tuned model is available.
+	// Training finished, but the model is not yet servable. Some providers have
+	// a deploy or activation step after training; conflating it with SUCCEEDED
+	// makes Kno report a model as ready before it can be invoked.
+	JobStatus_JOB_STATUS_DEPLOYING JobStatus = 7
+	// Finished, and the tuned model is servable.
 	JobStatus_JOB_STATUS_SUCCEEDED JobStatus = 3
 	// Failed. See JobState.error.
 	JobStatus_JOB_STATUS_FAILED JobStatus = 4
@@ -43,19 +52,23 @@ const (
 var (
 	JobStatus_name = map[int32]string{
 		0: "JOB_STATUS_UNSPECIFIED",
+		6: "JOB_STATUS_VALIDATING_FILES",
 		1: "JOB_STATUS_QUEUED",
 		2: "JOB_STATUS_RUNNING",
+		7: "JOB_STATUS_DEPLOYING",
 		3: "JOB_STATUS_SUCCEEDED",
 		4: "JOB_STATUS_FAILED",
 		5: "JOB_STATUS_CANCELLED",
 	}
 	JobStatus_value = map[string]int32{
-		"JOB_STATUS_UNSPECIFIED": 0,
-		"JOB_STATUS_QUEUED":      1,
-		"JOB_STATUS_RUNNING":     2,
-		"JOB_STATUS_SUCCEEDED":   3,
-		"JOB_STATUS_FAILED":      4,
-		"JOB_STATUS_CANCELLED":   5,
+		"JOB_STATUS_UNSPECIFIED":      0,
+		"JOB_STATUS_VALIDATING_FILES": 6,
+		"JOB_STATUS_QUEUED":           1,
+		"JOB_STATUS_RUNNING":          2,
+		"JOB_STATUS_DEPLOYING":        7,
+		"JOB_STATUS_SUCCEEDED":        3,
+		"JOB_STATUS_FAILED":           4,
+		"JOB_STATUS_CANCELLED":        5,
 	}
 )
 
@@ -276,8 +289,9 @@ type JobState struct {
 	Ref *JobRef `protobuf:"bytes,1,opt,name=ref,proto3" json:"ref,omitempty"`
 	// Where it stands.
 	Status JobStatus `protobuf:"varint,2,opt,name=status,proto3,enum=kno.v1.JobStatus" json:"status,omitempty"`
-	// Progress 0..1 when the provider reports it.
-	Progress float64 `protobuf:"fixed64,3,opt,name=progress,proto3" json:"progress,omitempty"`
+	// Progress 0..1 when the provider reports it. `optional`, because most do
+	// not: "not reported" must not read as "0% complete".
+	Progress *float64 `protobuf:"fixed64,3,opt,name=progress,proto3,oneof" json:"progress,omitempty"`
 	// The tuned model, once SUCCEEDED. Usable directly as an agent ref for
 	// post-tune validation against the same untouched holdout.
 	TunedModel *AgentRef `protobuf:"bytes,4,opt,name=tuned_model,json=tunedModel,proto3" json:"tuned_model,omitempty"`
@@ -336,8 +350,8 @@ func (x *JobState) GetStatus() JobStatus {
 }
 
 func (x *JobState) GetProgress() float64 {
-	if x != nil {
-		return x.Progress
+	if x != nil && x.Progress != nil {
+		return *x.Progress
 	}
 	return 0
 }
@@ -381,19 +395,22 @@ const file_kno_v1_tuner_proto_rawDesc = "" +
 	"\x06JobRef\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1a\n" +
 	"\bprovider\x18\x02 \x01(\tR\bprovider\x12!\n" +
-	"\fsubmitted_at\x18\x03 \x01(\tR\vsubmittedAt\"\xf1\x01\n" +
+	"\fsubmitted_at\x18\x03 \x01(\tR\vsubmittedAt\"\x83\x02\n" +
 	"\bJobState\x12 \n" +
 	"\x03ref\x18\x01 \x01(\v2\x0e.kno.v1.JobRefR\x03ref\x12)\n" +
-	"\x06status\x18\x02 \x01(\x0e2\x11.kno.v1.JobStatusR\x06status\x12\x1a\n" +
-	"\bprogress\x18\x03 \x01(\x01R\bprogress\x121\n" +
+	"\x06status\x18\x02 \x01(\x0e2\x11.kno.v1.JobStatusR\x06status\x12\x1f\n" +
+	"\bprogress\x18\x03 \x01(\x01H\x00R\bprogress\x88\x01\x01\x121\n" +
 	"\vtuned_model\x18\x04 \x01(\v2\x10.kno.v1.AgentRefR\n" +
 	"tunedModel\x12\x14\n" +
 	"\x05error\x18\x05 \x01(\tR\x05error\x123\n" +
-	"\x16actual_cost_usd_micros\x18\x06 \x01(\x03R\x13actualCostUsdMicros*\xa1\x01\n" +
+	"\x16actual_cost_usd_micros\x18\x06 \x01(\x03R\x13actualCostUsdMicrosB\v\n" +
+	"\t_progress*\xdc\x01\n" +
 	"\tJobStatus\x12\x1a\n" +
-	"\x16JOB_STATUS_UNSPECIFIED\x10\x00\x12\x15\n" +
+	"\x16JOB_STATUS_UNSPECIFIED\x10\x00\x12\x1f\n" +
+	"\x1bJOB_STATUS_VALIDATING_FILES\x10\x06\x12\x15\n" +
 	"\x11JOB_STATUS_QUEUED\x10\x01\x12\x16\n" +
 	"\x12JOB_STATUS_RUNNING\x10\x02\x12\x18\n" +
+	"\x14JOB_STATUS_DEPLOYING\x10\a\x12\x18\n" +
 	"\x14JOB_STATUS_SUCCEEDED\x10\x03\x12\x15\n" +
 	"\x11JOB_STATUS_FAILED\x10\x04\x12\x18\n" +
 	"\x14JOB_STATUS_CANCELLED\x10\x05B{\n" +
@@ -440,6 +457,7 @@ func file_kno_v1_tuner_proto_init() {
 		return
 	}
 	file_kno_v1_common_proto_init()
+	file_kno_v1_tuner_proto_msgTypes[2].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

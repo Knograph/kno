@@ -1,6 +1,7 @@
 package schema_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -79,6 +80,7 @@ func TestMoneyIsAlwaysInt64MicroUSD(t *testing.T) {
 	t.Parallel()
 
 	checked := 0
+	var found []string
 	var checkMessage func(md protoreflect.MessageDescriptor)
 	checkMessage = func(md protoreflect.MessageDescriptor) {
 		fields := md.Fields()
@@ -89,6 +91,7 @@ func TestMoneyIsAlwaysInt64MicroUSD(t *testing.T) {
 				continue
 			}
 			checked++
+			found = append(found, string(md.FullName())+"."+name)
 			if f.Kind() != protoreflect.Int64Kind {
 				t.Errorf("%s.%s is %s; money must be int64 micro-USD",
 					md.FullName(), name, f.Kind())
@@ -111,8 +114,28 @@ func TestMoneyIsAlwaysInt64MicroUSD(t *testing.T) {
 		}
 	})
 
-	if checked == 0 {
-		t.Fatal("no money fields found — the schema lost its cost model, or this test is broken")
+	// Pin the exact set. A substring heuristic alone is evadable by naming: a
+	// `double storage_cost_micros` would simply never be examined, and the
+	// `checked` counter would be quietly one smaller. Registering the expected
+	// set means a new money field must be added here deliberately.
+	// protoregistry iteration order is not deterministic, so sort before
+	// comparing sets — otherwise this test is flaky, and a flaky gate gets
+	// disabled rather than fixed.
+	slices.Sort(found)
+	wantMoneyFields := []string{
+		"kno.v1.CostVector.acquisition_usd_micros",
+		"kno.v1.Response.cost_usd_micros",
+		"kno.v1.Valuation.measurement_cost_usd_micros",
+		"kno.v1.Budget.max_cost_usd_micros",
+		"kno.v1.Report.total_cost_usd_micros",
+		"kno.v1.TuningJob.estimated_cost_usd_micros",
+		"kno.v1.JobState.actual_cost_usd_micros",
+	}
+	slices.Sort(wantMoneyFields)
+	if diff := cmp.Diff(wantMoneyFields, found); diff != "" {
+		t.Errorf("the set of money fields changed (-want +got):\n%s\n"+
+			"If you added a money field, add it here too and confirm it is int64 "+
+			"micro-USD. If you removed one, say why in the PR.", diff)
 	}
 	t.Logf("checked %d money fields", checked)
 }
@@ -230,11 +253,137 @@ func TestReportCarriesHoldoutSeparately(t *testing.T) {
 	}
 
 	portfolio := (&knov1.Portfolio{}).ProtoReflect().Descriptor()
-	if portfolio.Fields().ByName("expected_gain") == nil {
-		t.Error("Portfolio is missing expected_gain")
+	if portfolio.Fields().ByName("dev_estimated_gain") == nil {
+		t.Error("Portfolio is missing dev_estimated_gain")
+	}
+	if portfolio.Fields().ByName("expected_gain") != nil {
+		t.Error("Portfolio carries expected_gain: the dev-slice estimate is named " +
+			"dev_estimated_gain so that autocomplete alone warns the reader it is " +
+			"inflated by the winner's curse and is not a result")
 	}
 	if portfolio.Fields().ByName("holdout_gain") != nil {
 		t.Error("Portfolio must NOT carry holdout_gain: the holdout number belongs " +
 			"to Report, produced by Validate, not to selection output")
+	}
+}
+
+// TestNumbersThatMayNotExistTrackPresence is the test that would have caught
+// the defect it now guards.
+//
+// Report.holdout_gain originally shipped as a bare proto3 double carrying the
+// comment "Absent until Validate has run". That was provably false: a proto3
+// scalar without `optional` has no presence, so a Report emitted after Select
+// but before Validate serialized holdout_gain as 0.0 — byte-identical to a
+// Report where Validate ran and the portfolio genuinely gained nothing.
+//
+// Those two things must never be confusable. This is the number the tool
+// exists to produce honestly, and CLAUDE.md prime directive 5 makes its
+// honesty a feature rather than a nicety.
+func TestNumbersThatMayNotExistTrackPresence(t *testing.T) {
+	t.Parallel()
+
+	mustHavePresence := map[string][]string{
+		"kno.v1.Report":   {"baseline_score", "holdout_score", "holdout_gain"},
+		"kno.v1.JobState": {"progress"},
+	}
+
+	for msgName, fieldNames := range mustHavePresence {
+		md, err := protoregistry.GlobalFiles.FindDescriptorByName(protoreflect.FullName(msgName))
+		if err != nil {
+			t.Fatalf("looking up %s: %v", msgName, err)
+		}
+		fields := md.(protoreflect.MessageDescriptor).Fields()
+		for _, fieldName := range fieldNames {
+			f := fields.ByName(protoreflect.Name(fieldName))
+			if f == nil {
+				t.Errorf("%s has no field %q", msgName, fieldName)
+				continue
+			}
+			if !f.HasPresence() {
+				t.Errorf("%s.%s does not track presence.\n"+
+					"Without `optional`, an unset value is indistinguishable from a real "+
+					"zero, so \"not computed yet\" reads as a measured result of zero.",
+					msgName, fieldName)
+			}
+		}
+	}
+}
+
+// TestUnsetHoldoutGainIsNotZero proves the property end to end on the wire,
+// rather than trusting the descriptor alone.
+func TestUnsetHoldoutGainIsNotZero(t *testing.T) {
+	t.Parallel()
+
+	beforeValidate := &knov1.Report{RunId: "01J0000000000000000000000C"}
+	validatedAtZero := &knov1.Report{
+		RunId:       "01J0000000000000000000000C",
+		HoldoutGain: proto.Float64(0),
+	}
+
+	roundTrip := func(r *knov1.Report) *knov1.Report {
+		t.Helper()
+		wire, err := proto.Marshal(r)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		var got knov1.Report
+		if err := proto.Unmarshal(wire, &got); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		return &got
+	}
+
+	gotBefore, gotValidated := roundTrip(beforeValidate), roundTrip(validatedAtZero)
+
+	if gotBefore.HoldoutGain != nil {
+		t.Errorf("holdout_gain is present before Validate ran: %v", gotBefore.GetHoldoutGain())
+	}
+	if gotValidated.HoldoutGain == nil {
+		t.Error("holdout_gain is absent after Validate measured a real gain of zero")
+	}
+	if gotValidated.GetHoldoutGain() != 0 {
+		t.Errorf("holdout_gain = %v, want 0", gotValidated.GetHoldoutGain())
+	}
+}
+
+// TestEveryDeltaHasAnIntervalField asserts that every reported delta has a
+// companion Interval field.
+//
+// Four such pairs exist, and the Debt Ledger originally named only one. This
+// enumerates them so the M1 work that adds construction-time enforcement has a
+// complete checklist rather than rediscovering three of them mid-implementation.
+func TestEveryDeltaHasAnIntervalField(t *testing.T) {
+	t.Parallel()
+
+	pairs := []struct{ message, delta, interval string }{
+		{"kno.v1.Valuation", "delta_goal", "delta_interval"},
+		{"kno.v1.Valuation", "delta_control", "control_interval"},
+		{"kno.v1.Portfolio", "dev_estimated_gain", "dev_estimated_interval"},
+		{"kno.v1.Report", "holdout_gain", "holdout_interval"},
+	}
+
+	for _, p := range pairs {
+		t.Run(p.message+"."+p.delta, func(t *testing.T) {
+			t.Parallel()
+
+			d, err := protoregistry.GlobalFiles.FindDescriptorByName(protoreflect.FullName(p.message))
+			if err != nil {
+				t.Fatalf("looking up %s: %v", p.message, err)
+			}
+			fields := d.(protoreflect.MessageDescriptor).Fields()
+
+			if fields.ByName(protoreflect.Name(p.delta)) == nil {
+				t.Fatalf("%s has no field %q", p.message, p.delta)
+			}
+			iv := fields.ByName(protoreflect.Name(p.interval))
+			if iv == nil {
+				t.Fatalf("%s reports %s with no companion %s", p.message, p.delta, p.interval)
+			}
+			if iv.Kind() != protoreflect.MessageKind ||
+				iv.Message().FullName() != "kno.v1.Interval" {
+				t.Errorf("%s.%s is %s, want a kno.v1.Interval message so its ABSENCE "+
+					"is representable", p.message, p.interval, iv.Kind())
+			}
+		})
 	}
 }

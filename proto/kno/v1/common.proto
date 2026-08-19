@@ -76,6 +76,25 @@ enum InjectionMode {
   // and "the data was there but retrieval missed it" — context injection
   // collapses the two.
   INJECTION_MODE_KNOWLEDGE = 2;
+
+  // The Asset was in the training set of a fine-tune on a small PROXY model,
+  // and the delta was measured against that proxy.
+  //
+  // A third epistemic category, not a variant of the first two: nothing was
+  // injected at inference time. Proxy transfer is a well-validated selection
+  // signal, not a prediction of the production model's behavior, and a delta
+  // measured this way must be reported as such. It is also the only mode that
+  // yields an interference read — whether tuning on a group regresses the
+  // control slices — which in-context measurement categorically cannot give.
+  INJECTION_MODE_PROXY_FINETUNE = 3;
+
+  // The Asset was in the training set of a fine-tune on the user's ACTUAL
+  // target model, and the delta was measured against that tuned model on the
+  // untouched holdout.
+  //
+  // The most faithful measurement available, and the most expensive. This is
+  // the mode behind the final before/after ROI number.
+  INJECTION_MODE_FINETUNE = 4;
 }
 
 // CostVector is what carrying an Asset costs. Every Asset has one, because the
@@ -97,6 +116,10 @@ message CostVector {
 
   // Whether this Asset goes stale and needs re-collection. A fact that expires
   // is a maintenance liability a one-time token count does not capture.
+  //
+  // False is the default and means "not known to be stale", NOT "verified
+  // durable" — most adapters cannot detect staleness at all. Do not present
+  // this as a positive assertion of freshness.
   bool stale = 4;
 }
 

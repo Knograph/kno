@@ -80,6 +80,75 @@ func (Split) EnumDescriptor() ([]byte, []int) {
 	return file_kno_v1_case_proto_rawDescGZIP(), []int{0}
 }
 
+// Role is who produced a Turn.
+//
+// An enum rather than a free string because this is a small, closed, stable
+// set, and a string would let "assistant" and "Assistant" drift apart across
+// adapters with nothing to catch it. Changing a string field to an enum after
+// release is wire-breaking, so it is done now, while nothing consumes this.
+//
+// Contrast AgentRef.scheme, which is correctly a string: that set is genuinely
+// open, because any Ring-1 or Ring-2 adapter may introduce a new scheme.
+type Role int32
+
+const (
+	// Unset.
+	Role_ROLE_UNSPECIFIED Role = 0
+	// System or developer instruction.
+	Role_ROLE_SYSTEM Role = 1
+	// The end user.
+	Role_ROLE_USER Role = 2
+	// The agent.
+	Role_ROLE_ASSISTANT Role = 3
+	// A tool result returned to the agent.
+	Role_ROLE_TOOL Role = 4
+)
+
+// Enum value maps for Role.
+var (
+	Role_name = map[int32]string{
+		0: "ROLE_UNSPECIFIED",
+		1: "ROLE_SYSTEM",
+		2: "ROLE_USER",
+		3: "ROLE_ASSISTANT",
+		4: "ROLE_TOOL",
+	}
+	Role_value = map[string]int32{
+		"ROLE_UNSPECIFIED": 0,
+		"ROLE_SYSTEM":      1,
+		"ROLE_USER":        2,
+		"ROLE_ASSISTANT":   3,
+		"ROLE_TOOL":        4,
+	}
+)
+
+func (x Role) Enum() *Role {
+	p := new(Role)
+	*p = x
+	return p
+}
+
+func (x Role) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (Role) Descriptor() protoreflect.EnumDescriptor {
+	return file_kno_v1_case_proto_enumTypes[1].Descriptor()
+}
+
+func (Role) Type() protoreflect.EnumType {
+	return &file_kno_v1_case_proto_enumTypes[1]
+}
+
+func (x Role) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use Role.Descriptor instead.
+func (Role) EnumDescriptor() ([]byte, []int) {
+	return file_kno_v1_case_proto_rawDescGZIP(), []int{1}
+}
+
 // Case is one scoreable eval interaction: an input, and either an expected
 // outcome or a rubric to judge against.
 //
@@ -198,20 +267,103 @@ func (x *Case) GetHistory() []*Turn {
 	return nil
 }
 
+// ToolCall is one tool invocation the agent made.
+//
+// Structured rather than an opaque string because Kind.BEHAVIOR names tool-use
+// patterns as one of the two things behavior Assets exist to capture, and
+// BEHAVIOR is the only Kind that faces the fine-tuning bridge. Measuring
+// improvement in tool use against ad-hoc per-adapter JSON blobs would undercut
+// the fidelity of exactly the measurement the bridge depends on.
+type ToolCall struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Tool name as the agent called it.
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// Arguments as the agent supplied them, provider-formatted (typically JSON).
+	Arguments string `protobuf:"bytes,2,opt,name=arguments,proto3" json:"arguments,omitempty"`
+	// What the tool returned, when the adapter reports it.
+	Result string `protobuf:"bytes,3,opt,name=result,proto3" json:"result,omitempty"`
+	// Set when the call itself failed, as opposed to returning an unhelpful
+	// result. A failed tool call and a bad answer are different failure modes
+	// and route to different Assets.
+	Error         string `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ToolCall) Reset() {
+	*x = ToolCall{}
+	mi := &file_kno_v1_case_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ToolCall) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ToolCall) ProtoMessage() {}
+
+func (x *ToolCall) ProtoReflect() protoreflect.Message {
+	mi := &file_kno_v1_case_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ToolCall.ProtoReflect.Descriptor instead.
+func (*ToolCall) Descriptor() ([]byte, []int) {
+	return file_kno_v1_case_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *ToolCall) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ToolCall) GetArguments() string {
+	if x != nil {
+		return x.Arguments
+	}
+	return ""
+}
+
+func (x *ToolCall) GetResult() string {
+	if x != nil {
+		return x.Result
+	}
+	return ""
+}
+
+func (x *ToolCall) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 // Turn is one message in a conversation history.
 type Turn struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// "system", "user", "assistant", or "tool".
-	Role string `protobuf:"bytes,1,opt,name=role,proto3" json:"role,omitempty"`
+	// Who produced this Turn.
+	Role Role `protobuf:"varint,1,opt,name=role,proto3,enum=kno.v1.Role" json:"role,omitempty"`
 	// Message content.
-	Content       string `protobuf:"bytes,2,opt,name=content,proto3" json:"content,omitempty"`
+	Content string `protobuf:"bytes,2,opt,name=content,proto3" json:"content,omitempty"`
+	// Tool calls made in this Turn, when the role is ROLE_ASSISTANT.
+	ToolCalls     []*ToolCall `protobuf:"bytes,3,rep,name=tool_calls,json=toolCalls,proto3" json:"tool_calls,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Turn) Reset() {
 	*x = Turn{}
-	mi := &file_kno_v1_case_proto_msgTypes[1]
+	mi := &file_kno_v1_case_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -223,7 +375,7 @@ func (x *Turn) String() string {
 func (*Turn) ProtoMessage() {}
 
 func (x *Turn) ProtoReflect() protoreflect.Message {
-	mi := &file_kno_v1_case_proto_msgTypes[1]
+	mi := &file_kno_v1_case_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -236,14 +388,14 @@ func (x *Turn) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Turn.ProtoReflect.Descriptor instead.
 func (*Turn) Descriptor() ([]byte, []int) {
-	return file_kno_v1_case_proto_rawDescGZIP(), []int{1}
+	return file_kno_v1_case_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *Turn) GetRole() string {
+func (x *Turn) GetRole() Role {
 	if x != nil {
 		return x.Role
 	}
-	return ""
+	return Role_ROLE_UNSPECIFIED
 }
 
 func (x *Turn) GetContent() string {
@@ -251,6 +403,13 @@ func (x *Turn) GetContent() string {
 		return x.Content
 	}
 	return ""
+}
+
+func (x *Turn) GetToolCalls() []*ToolCall {
+	if x != nil {
+		return x.ToolCalls
+	}
+	return nil
 }
 
 // Response is what an Agent returned for a Case.
@@ -271,7 +430,7 @@ type Response struct {
 	// Wall-clock latency.
 	LatencyMs int64 `protobuf:"varint,6,opt,name=latency_ms,json=latencyMs,proto3" json:"latency_ms,omitempty"`
 	// Tool calls the agent made, if the adapter reports them.
-	ToolCalls []string `protobuf:"bytes,7,rep,name=tool_calls,json=toolCalls,proto3" json:"tool_calls,omitempty"`
+	ToolCalls []*ToolCall `protobuf:"bytes,7,rep,name=tool_calls,json=toolCalls,proto3" json:"tool_calls,omitempty"`
 	// Set when the agent failed rather than answered. An errored Response is
 	// still recorded: silently dropping failures biases every downstream number.
 	Error         string `protobuf:"bytes,8,opt,name=error,proto3" json:"error,omitempty"`
@@ -281,7 +440,7 @@ type Response struct {
 
 func (x *Response) Reset() {
 	*x = Response{}
-	mi := &file_kno_v1_case_proto_msgTypes[2]
+	mi := &file_kno_v1_case_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -293,7 +452,7 @@ func (x *Response) String() string {
 func (*Response) ProtoMessage() {}
 
 func (x *Response) ProtoReflect() protoreflect.Message {
-	mi := &file_kno_v1_case_proto_msgTypes[2]
+	mi := &file_kno_v1_case_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -306,7 +465,7 @@ func (x *Response) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Response.ProtoReflect.Descriptor instead.
 func (*Response) Descriptor() ([]byte, []int) {
-	return file_kno_v1_case_proto_rawDescGZIP(), []int{2}
+	return file_kno_v1_case_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *Response) GetCaseId() string {
@@ -351,7 +510,7 @@ func (x *Response) GetLatencyMs() int64 {
 	return 0
 }
 
-func (x *Response) GetToolCalls() []string {
+func (x *Response) GetToolCalls() []*ToolCall {
 	if x != nil {
 		return x.ToolCalls
 	}
@@ -390,7 +549,7 @@ type Score struct {
 
 func (x *Score) Reset() {
 	*x = Score{}
-	mi := &file_kno_v1_case_proto_msgTypes[3]
+	mi := &file_kno_v1_case_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -402,7 +561,7 @@ func (x *Score) String() string {
 func (*Score) ProtoMessage() {}
 
 func (x *Score) ProtoReflect() protoreflect.Message {
-	mi := &file_kno_v1_case_proto_msgTypes[3]
+	mi := &file_kno_v1_case_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -415,7 +574,7 @@ func (x *Score) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Score.ProtoReflect.Descriptor instead.
 func (*Score) Descriptor() ([]byte, []int) {
-	return file_kno_v1_case_proto_rawDescGZIP(), []int{3}
+	return file_kno_v1_case_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *Score) GetCaseId() string {
@@ -475,10 +634,17 @@ const file_kno_v1_case_proto_rawDesc = "" +
 	"\n" +
 	"provenance\x18\a \x01(\v2\x12.kno.v1.ProvenanceR\n" +
 	"provenance\x12&\n" +
-	"\ahistory\x18\b \x03(\v2\f.kno.v1.TurnR\ahistory\"4\n" +
-	"\x04Turn\x12\x12\n" +
-	"\x04role\x18\x01 \x01(\tR\x04role\x12\x18\n" +
-	"\acontent\x18\x02 \x01(\tR\acontent\"\x89\x02\n" +
+	"\ahistory\x18\b \x03(\v2\f.kno.v1.TurnR\ahistory\"j\n" +
+	"\bToolCall\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
+	"\targuments\x18\x02 \x01(\tR\targuments\x12\x16\n" +
+	"\x06result\x18\x03 \x01(\tR\x06result\x12\x14\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\"s\n" +
+	"\x04Turn\x12 \n" +
+	"\x04role\x18\x01 \x01(\x0e2\f.kno.v1.RoleR\x04role\x12\x18\n" +
+	"\acontent\x18\x02 \x01(\tR\acontent\x12/\n" +
+	"\n" +
+	"tool_calls\x18\x03 \x03(\v2\x10.kno.v1.ToolCallR\ttoolCalls\"\x9b\x02\n" +
 	"\bResponse\x12\x17\n" +
 	"\acase_id\x18\x01 \x01(\tR\x06caseId\x12\x16\n" +
 	"\x06output\x18\x02 \x01(\tR\x06output\x12#\n" +
@@ -486,9 +652,9 @@ const file_kno_v1_case_proto_rawDesc = "" +
 	"\x11completion_tokens\x18\x04 \x01(\x03R\x10completionTokens\x12&\n" +
 	"\x0fcost_usd_micros\x18\x05 \x01(\x03R\rcostUsdMicros\x12\x1d\n" +
 	"\n" +
-	"latency_ms\x18\x06 \x01(\x03R\tlatencyMs\x12\x1d\n" +
+	"latency_ms\x18\x06 \x01(\x03R\tlatencyMs\x12/\n" +
 	"\n" +
-	"tool_calls\x18\a \x03(\tR\ttoolCalls\x12\x14\n" +
+	"tool_calls\x18\a \x03(\v2\x10.kno.v1.ToolCallR\ttoolCalls\x12\x14\n" +
 	"\x05error\x18\b \x01(\tR\x05error\"\x8b\x02\n" +
 	"\x05Score\x12\x17\n" +
 	"\acase_id\x18\x01 \x01(\tR\x06caseId\x12\x14\n" +
@@ -506,7 +672,13 @@ const file_kno_v1_case_proto_rawDesc = "" +
 	"\x05Split\x12\x15\n" +
 	"\x11SPLIT_UNSPECIFIED\x10\x00\x12\r\n" +
 	"\tSPLIT_DEV\x10\x01\x12\x11\n" +
-	"\rSPLIT_HOLDOUT\x10\x02Bz\n" +
+	"\rSPLIT_HOLDOUT\x10\x02*_\n" +
+	"\x04Role\x12\x14\n" +
+	"\x10ROLE_UNSPECIFIED\x10\x00\x12\x0f\n" +
+	"\vROLE_SYSTEM\x10\x01\x12\r\n" +
+	"\tROLE_USER\x10\x02\x12\x12\n" +
+	"\x0eROLE_ASSISTANT\x10\x03\x12\r\n" +
+	"\tROLE_TOOL\x10\x04Bz\n" +
 	"\n" +
 	"com.kno.v1B\tCaseProtoP\x01Z(github.com/knograph/kno/gen/kno/v1;knov1\xa2\x02\x03KXX\xaa\x02\x06Kno.V1\xca\x02\x06Kno\\V1\xe2\x02\x12Kno\\V1\\GPBMetadata\xea\x02\aKno::V1b\x06proto3"
 
@@ -522,27 +694,32 @@ func file_kno_v1_case_proto_rawDescGZIP() []byte {
 	return file_kno_v1_case_proto_rawDescData
 }
 
-var file_kno_v1_case_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_kno_v1_case_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_kno_v1_case_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_kno_v1_case_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_kno_v1_case_proto_goTypes = []any{
 	(Split)(0),         // 0: kno.v1.Split
-	(*Case)(nil),       // 1: kno.v1.Case
-	(*Turn)(nil),       // 2: kno.v1.Turn
-	(*Response)(nil),   // 3: kno.v1.Response
-	(*Score)(nil),      // 4: kno.v1.Score
-	nil,                // 5: kno.v1.Score.ComponentsEntry
-	(*Provenance)(nil), // 6: kno.v1.Provenance
+	(Role)(0),          // 1: kno.v1.Role
+	(*Case)(nil),       // 2: kno.v1.Case
+	(*ToolCall)(nil),   // 3: kno.v1.ToolCall
+	(*Turn)(nil),       // 4: kno.v1.Turn
+	(*Response)(nil),   // 5: kno.v1.Response
+	(*Score)(nil),      // 6: kno.v1.Score
+	nil,                // 7: kno.v1.Score.ComponentsEntry
+	(*Provenance)(nil), // 8: kno.v1.Provenance
 }
 var file_kno_v1_case_proto_depIdxs = []int32{
 	0, // 0: kno.v1.Case.split:type_name -> kno.v1.Split
-	6, // 1: kno.v1.Case.provenance:type_name -> kno.v1.Provenance
-	2, // 2: kno.v1.Case.history:type_name -> kno.v1.Turn
-	5, // 3: kno.v1.Score.components:type_name -> kno.v1.Score.ComponentsEntry
-	4, // [4:4] is the sub-list for method output_type
-	4, // [4:4] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	8, // 1: kno.v1.Case.provenance:type_name -> kno.v1.Provenance
+	4, // 2: kno.v1.Case.history:type_name -> kno.v1.Turn
+	1, // 3: kno.v1.Turn.role:type_name -> kno.v1.Role
+	3, // 4: kno.v1.Turn.tool_calls:type_name -> kno.v1.ToolCall
+	3, // 5: kno.v1.Response.tool_calls:type_name -> kno.v1.ToolCall
+	7, // 6: kno.v1.Score.components:type_name -> kno.v1.Score.ComponentsEntry
+	7, // [7:7] is the sub-list for method output_type
+	7, // [7:7] is the sub-list for method input_type
+	7, // [7:7] is the sub-list for extension type_name
+	7, // [7:7] is the sub-list for extension extendee
+	0, // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_kno_v1_case_proto_init() }
@@ -556,8 +733,8 @@ func file_kno_v1_case_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kno_v1_case_proto_rawDesc), len(file_kno_v1_case_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   5,
+			NumEnums:      2,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
