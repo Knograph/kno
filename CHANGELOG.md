@@ -24,6 +24,9 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
+- `stats/budget`: the spend guard. Every path that can call an LLM or a fine-tuning API goes
+  through it — estimate, authorize, settle or release — with reservations counted against the caps
+  while outstanding, so concurrent workers cannot each pass a check only one of them should.
 - The Ring-0 contracts in `core`: `Agent`, `Capable`, `ContextInjector`, `KnowledgeInjector`,
   `Evals`, `Pool`, `Goal`, and `Tuner`, plus type aliases making the generated `kno.v1` messages the
   domain types (ADR-0001). These carry a stability promise from 1.0.
