@@ -131,6 +131,13 @@ type Report struct {
 	Agent *AgentRef `protobuf:"bytes,3,opt,name=agent,proto3" json:"agent,omitempty"`
 	// The Goal optimized.
 	GoalName string `protobuf:"bytes,4,opt,name=goal_name,json=goalName,proto3" json:"goal_name,omitempty"`
+	// Which way is better for that Goal.
+	//
+	// Without this, the sign of holdout_gain is uninterpretable: a consumer
+	// cannot tell an improvement from a regression. Added alongside goal_name
+	// rather than replacing it with a richer message, because replacing a
+	// released field would be a breaking change for no gain.
+	GoalDirection Direction `protobuf:"varint,18,opt,name=goal_direction,json=goalDirection,proto3,enum=kno.v1.Direction" json:"goal_direction,omitempty"`
 	// The selected Portfolio with its full rejection log.
 	Portfolio *Portfolio `protobuf:"bytes,5,opt,name=portfolio,proto3" json:"portfolio,omitempty"`
 	// Baseline score before any Asset was added.
@@ -240,6 +247,13 @@ func (x *Report) GetGoalName() string {
 		return x.GoalName
 	}
 	return ""
+}
+
+func (x *Report) GetGoalDirection() Direction {
+	if x != nil {
+		return x.GoalDirection
+	}
+	return Direction_DIRECTION_UNSPECIFIED
 }
 
 func (x *Report) GetPortfolio() *Portfolio {
@@ -409,13 +423,14 @@ const file_kno_v1_report_proto_rawDesc = "" +
 	"\bcase_ids\x18\x03 \x03(\tR\acaseIds\x12#\n" +
 	"\rfailure_share\x18\x04 \x01(\x01R\ffailureShare\x12&\n" +
 	"\x0erecommendation\x18\x05 \x01(\tR\x0erecommendation\x12.\n" +
-	"\x13attempted_asset_ids\x18\x06 \x03(\tR\x11attemptedAssetIds\"\xaa\x06\n" +
+	"\x13attempted_asset_ids\x18\x06 \x03(\tR\x11attemptedAssetIds\"\xe4\x06\n" +
 	"\x06Report\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x1d\n" +
 	"\n" +
 	"created_at\x18\x02 \x01(\tR\tcreatedAt\x12&\n" +
 	"\x05agent\x18\x03 \x01(\v2\x10.kno.v1.AgentRefR\x05agent\x12\x1b\n" +
-	"\tgoal_name\x18\x04 \x01(\tR\bgoalName\x12/\n" +
+	"\tgoal_name\x18\x04 \x01(\tR\bgoalName\x128\n" +
+	"\x0egoal_direction\x18\x12 \x01(\x0e2\x11.kno.v1.DirectionR\rgoalDirection\x12/\n" +
 	"\tportfolio\x18\x05 \x01(\v2\x11.kno.v1.PortfolioR\tportfolio\x12*\n" +
 	"\x0ebaseline_score\x18\x06 \x01(\x01H\x00R\rbaselineScore\x88\x01\x01\x12(\n" +
 	"\rholdout_score\x18\a \x01(\x01H\x01R\fholdoutScore\x88\x01\x01\x12&\n" +
@@ -460,20 +475,22 @@ var file_kno_v1_report_proto_goTypes = []any{
 	(*Report)(nil),    // 1: kno.v1.Report
 	(*AssetPair)(nil), // 2: kno.v1.AssetPair
 	(*AgentRef)(nil),  // 3: kno.v1.AgentRef
-	(*Portfolio)(nil), // 4: kno.v1.Portfolio
-	(*Interval)(nil),  // 5: kno.v1.Interval
+	(Direction)(0),    // 4: kno.v1.Direction
+	(*Portfolio)(nil), // 5: kno.v1.Portfolio
+	(*Interval)(nil),  // 6: kno.v1.Interval
 }
 var file_kno_v1_report_proto_depIdxs = []int32{
 	3, // 0: kno.v1.Report.agent:type_name -> kno.v1.AgentRef
-	4, // 1: kno.v1.Report.portfolio:type_name -> kno.v1.Portfolio
-	5, // 2: kno.v1.Report.holdout_interval:type_name -> kno.v1.Interval
-	2, // 3: kno.v1.Report.suspect_interactions:type_name -> kno.v1.AssetPair
-	0, // 4: kno.v1.Report.gaps:type_name -> kno.v1.Gap
-	5, // [5:5] is the sub-list for method output_type
-	5, // [5:5] is the sub-list for method input_type
-	5, // [5:5] is the sub-list for extension type_name
-	5, // [5:5] is the sub-list for extension extendee
-	0, // [0:5] is the sub-list for field type_name
+	4, // 1: kno.v1.Report.goal_direction:type_name -> kno.v1.Direction
+	5, // 2: kno.v1.Report.portfolio:type_name -> kno.v1.Portfolio
+	6, // 3: kno.v1.Report.holdout_interval:type_name -> kno.v1.Interval
+	2, // 4: kno.v1.Report.suspect_interactions:type_name -> kno.v1.AssetPair
+	0, // 5: kno.v1.Report.gaps:type_name -> kno.v1.Gap
+	6, // [6:6] is the sub-list for method output_type
+	6, // [6:6] is the sub-list for method input_type
+	6, // [6:6] is the sub-list for extension type_name
+	6, // [6:6] is the sub-list for extension extendee
+	0, // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_kno_v1_report_proto_init() }

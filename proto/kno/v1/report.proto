@@ -49,6 +49,14 @@ message Report {
   // The Goal optimized.
   string goal_name = 4;
 
+  // Which way is better for that Goal.
+  //
+  // Without this, the sign of holdout_gain is uninterpretable: a consumer
+  // cannot tell an improvement from a regression. Added alongside goal_name
+  // rather than replacing it with a richer message, because replacing a
+  // released field would be a breaking change for no gain.
+  Direction goal_direction = 18;
+
   // The selected Portfolio with its full rejection log.
   Portfolio portfolio = 5;
 

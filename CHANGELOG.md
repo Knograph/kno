@@ -14,6 +14,10 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
+- `Direction` enum (`DIRECTION_MAXIMIZE` / `DIRECTION_MINIMIZE`) and `Report.goal_direction`.
+  `DESIGN.md` defines a Goal as having a direction and both `Score.value` and
+  `Valuation.delta_goal` document their sign as relative to it, but direction was represented
+  nowhere — so the sign of `holdout_gain`, the headline number, was uninterpretable.
 - Repository foundation: Go module, Apache-2.0 license, governance and community files, the quality
   gate machinery (`make check` and every gate `CLAUDE.md` requires), CI workflows, and the
   [Debt Ledger](docs/debt.md).
