@@ -1,0 +1,168 @@
+syntax = "proto3";
+
+// Package kno.v1 is the Kno contract: the schema source of truth from which
+// the Go engine, the API, the SDKs, and the plugin protocol are all generated.
+//
+// Comments in this package are the single source for the API reference and the
+// generated OpenAPI spec — handwritten API prose is forbidden, so a wrong
+// comment here is a documentation bug, not a code comment.
+//
+// Compatibility: pre-1.0, breaking changes are permitted with a CHANGELOG
+// notice and migration notes. From 1.0 the wire format is a covenant. Fields
+// are never renumbered; deletions become `reserved`.
+package kno.v1;
+
+// Kind is what an Asset fundamentally is, which decides how it can be valued
+// and where it belongs.
+//
+// The distinction is load-bearing rather than descriptive: fine-tuning is an
+// unreliable vehicle for knowledge (retention is inconsistent and staleness
+// cannot be patched) and the right vehicle for behavior. In-context learning
+// is the reverse. Routing on this field before measuring is what makes the
+// fine-tuning bridge tractable.
+enum Kind {
+  // Unset. Never treat this as a real classification: a silent zero would
+  // read as "knowledge" and route the Asset to the wrong destination.
+  KIND_UNSPECIFIED = 0;
+
+  // Facts, policies, documents, reference material. Valued by context or
+  // knowledge-base injection, where ICL measurement is faithful.
+  KIND_KNOWLEDGE = 1;
+
+  // Format, tone, tool-use patterns, reasoning demonstrations. The only kind
+  // that faces the fine-tuning bridge at all.
+  KIND_BEHAVIOR = 2;
+}
+
+// Destination is where a measured Asset belongs. Assigned by mechanism
+// routing, never by the user directly — though a user may override it.
+enum Destination {
+  // Unset. A silent zero would read as "context", shipping an Asset into every
+  // request's token budget without a measurement saying it earned that.
+  DESTINATION_UNSPECIFIED = 0;
+
+  // Carried in the prompt on every call. Recurring token cost.
+  DESTINATION_CONTEXT = 1;
+
+  // Written to a retrieval index. Cost is storage plus retrieval, not
+  // per-call tokens.
+  DESTINATION_KNOWLEDGE_BASE = 2;
+
+  // Included in a fine-tuning set. One-time training cost, no per-call tokens.
+  DESTINATION_TUNING_SET = 3;
+
+  // Measured and rejected. Carries a Rejection explaining why, so "include
+  // nothing new" is a first-class, defensible outcome.
+  DESTINATION_REJECTED = 4;
+}
+
+// InjectionMode records HOW a Valuation was measured. Every Valuation carries
+// one, because the two modes are not interchangeable and reporting them as if
+// they were is the most tempting dishonesty available to this tool.
+enum InjectionMode {
+  // Unset.
+  INJECTION_MODE_UNSPECIFIED = 0;
+
+  // The Asset was placed directly in the prompt, bypassing retrieval. This is
+  // an UPPER BOUND, not a deployment prediction: it measures what the Asset
+  // could contribute if retrieval were perfect. Reported as a bound, always.
+  INJECTION_MODE_CONTEXT = 1;
+
+  // The Asset was written into the agent's own knowledge index and reached
+  // through its real retriever. Deployment-faithful, and requires an Agent
+  // whose index Kno can write.
+  //
+  // Only this mode preserves the distinction between "the data was missing"
+  // and "the data was there but retrieval missed it" — context injection
+  // collapses the two.
+  INJECTION_MODE_KNOWLEDGE = 2;
+}
+
+// CostVector is what carrying an Asset costs. Every Asset has one, because the
+// ranking metric is Δgoal per unit cost, not raw Δgoal — a mediocre 200-token
+// Asset can and should out-rank a strong 8,000-token one.
+message CostVector {
+  // Tokens added to every request while this Asset is in context. Recurring.
+  int64 context_tokens = 1;
+
+  // Tokens contributed to a fine-tuning run. One-time.
+  int64 ft_tokens = 2;
+
+  // What it cost to acquire or label this Asset, in MICRO-USD (1e-6 USD).
+  //
+  // Money is int64 micro-USD everywhere in this schema, never a double.
+  // Floating-point dollars accumulate representation error across thousands of
+  // calls, and this project gates spending on these numbers.
+  int64 acquisition_usd_micros = 3;
+
+  // Whether this Asset goes stale and needs re-collection. A fact that expires
+  // is a maintenance liability a one-time token count does not capture.
+  bool stale = 4;
+}
+
+// Provenance is where something came from and how much to trust it. Attached
+// to exported Assets so a downstream pipeline can audit any row back to its
+// origin.
+message Provenance {
+  // Adapter that produced this, e.g. "jsonl", "mcp:notion", "transcripts".
+  string source = 1;
+
+  // Identifier within that source: a file path, a record ID, a URL.
+  string source_ref = 2;
+
+  // RFC 3339 timestamp of ingestion.
+  string ingested_at = 3;
+
+  // Set when the record was derived rather than authored — e.g. mined from a
+  // transcript where a human corrected the agent. Such labels are weak, and
+  // callers are entitled to know that.
+  bool derived = 4;
+
+  // Free-form note on derivation, e.g. "human correction at turn 4".
+  string derivation_note = 5;
+}
+
+// Capabilities is what an adapter can actually do. Injection is a capability,
+// not a requirement: the engine degrades per-adapter rather than refusing to
+// run, and the CLI prints this matrix at connect time so the degradation is
+// visible rather than silent.
+message Capabilities {
+  // The adapter can place an Asset in the prompt (INJECTION_MODE_CONTEXT).
+  bool context_inject = 1;
+
+  // The adapter exposes a writable knowledge index
+  // (INJECTION_MODE_KNOWLEDGE). Rarer, and the only path to a
+  // deployment-faithful number.
+  bool knowledge_write = 2;
+
+  // The adapter streams responses incrementally.
+  bool stream = 3;
+
+  // The adapter reports token usage, without which cost is estimated rather
+  // than measured.
+  bool token_counts = 4;
+
+  // Capability names this schema version does not model, for forward
+  // compatibility with adapters newer than the engine.
+  repeated string extensions = 5;
+}
+
+// AgentRef identifies an agent or model. One URI-ish scheme is used
+// identically in config, flags, the API, and the SDKs:
+//
+//	openai:gpt-4.1
+//	anthropic:claude-sonnet-4-6
+//	http://localhost:8000/v1
+//	tuned:<job-ref>
+//	exec:kno-agent-mybot
+message AgentRef {
+  // The reference exactly as the user wrote it. Kept verbatim so error
+  // messages can quote the user's own words back to them.
+  string ref = 1;
+
+  // Scheme, parsed from ref: "openai", "anthropic", "http", "tuned", "exec".
+  string scheme = 2;
+
+  // Everything after the scheme: a model name, URL, or job reference.
+  string target = 3;
+}

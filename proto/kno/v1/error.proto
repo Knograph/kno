@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package kno.v1;
+
+// Actionable is Kno's error grammar, on the wire.
+//
+// Every user-facing error answers three questions in order: what failed, why,
+// and the exact thing to do about it. This is the same struct the CLI renders
+// and the API serializes, so a terminal message and an SDK exception cannot
+// drift apart.
+message Actionable {
+  // Stable, machine-readable code, e.g. "AGENT_UNREACHABLE",
+  // "BUDGET_EXCEEDED", "HOLDOUT_SEALED". Stable across releases so CI can
+  // branch on it.
+  string code = 1;
+
+  // What failed, in one sentence, in the user's terms.
+  string message = 2;
+
+  // The exact command or config line that fixes it. Not advice — a thing to
+  // run or edit. An unreachable endpoint includes the curl that reproduces it.
+  string fix = 3;
+
+  // Link to the documentation page explaining this failure.
+  string docs_url = 4;
+
+  // The upstream error, verbatim, when this wraps one. Never paraphrased:
+  // paraphrasing a provider error is how people lose an afternoon.
+  string cause = 5;
+
+  // Process exit code the CLI will use. Meaningful codes let CI gate on the
+  // difference between "it broke" and "validation failed":
+  //   0 ok · 1 error · 2 budget-stopped · 3 validation-failed
+  int32 exit_code = 6;
+}

@@ -1,0 +1,123 @@
+syntax = "proto3";
+
+package kno.v1;
+
+import "kno/v1/common.proto";
+
+// Split says which half of the Evals a Case belongs to. This is structural,
+// not conventional, precisely because the guarantee it encodes is the one most
+// easily lost: selection without a holdout systematically inflates reported
+// gains, because Assets that win on the dev slice win partly by luck.
+enum Split {
+  // Unset. A Case with no Split must never be scored — an unassigned Case
+  // silently defaulting into dev is exactly how a holdout leaks.
+  SPLIT_UNSPECIFIED = 0;
+
+  // Used for measurement and selection. Read freely.
+  SPLIT_DEV = 1;
+
+  // Untouched until Validate. Nothing reads a holdout Case before then, and a
+  // canary test asserts it. This slice produces the only number you may put in
+  // a slide.
+  SPLIT_HOLDOUT = 2;
+}
+
+// Case is one scoreable eval interaction: an input, and either an expected
+// outcome or a rubric to judge against.
+//
+// Cases come from the Evals adapter — the exam. Assets come from the Pool —
+// the study material. They are deliberately separate concepts with separate
+// adapters.
+message Case {
+  // Stable identifier, ULID-formatted. Used to correlate traces, valuations,
+  // and reports across a run and between runs.
+  string id = 1;
+
+  // What the agent receives.
+  string input = 2;
+
+  // The expected outcome, when there is a deterministic one. Mutually
+  // usable with rubric: a Case may have both, either, or only a rubric.
+  string expected = 3;
+
+  // Natural-language criteria for a judge, when correctness is not exact-match.
+  string rubric = 4;
+
+  // Which half of the Evals this belongs to. Assigned at ingestion, never
+  // later — re-splitting mid-run is how a holdout stops being a holdout.
+  Split split = 5;
+
+  // Labels for slicing results: "billing", "refund", "tool-use". Failure
+  // clusters are reported in these terms.
+  repeated string tags = 6;
+
+  // Where this Case came from.
+  Provenance provenance = 7;
+
+  // Prior conversation turns, for multi-turn Cases. Empty for single-turn.
+  repeated Turn history = 8;
+}
+
+// Turn is one message in a conversation history.
+message Turn {
+  // "system", "user", "assistant", or "tool".
+  string role = 1;
+
+  // Message content.
+  string content = 2;
+}
+
+// Response is what an Agent returned for a Case.
+message Response {
+  // The Case this answers.
+  string case_id = 1;
+
+  // The agent's output.
+  string output = 2;
+
+  // Prompt tokens consumed. Zero when the adapter does not report usage — see
+  // Capabilities.token_counts before treating this as measured rather than
+  // absent.
+  int64 prompt_tokens = 3;
+
+  // Completion tokens produced.
+  int64 completion_tokens = 4;
+
+  // What this single invocation cost, in MICRO-USD.
+  int64 cost_usd_micros = 5;
+
+  // Wall-clock latency.
+  int64 latency_ms = 6;
+
+  // Tool calls the agent made, if the adapter reports them.
+  repeated string tool_calls = 7;
+
+  // Set when the agent failed rather than answered. An errored Response is
+  // still recorded: silently dropping failures biases every downstream number.
+  string error = 8;
+}
+
+// Score is the Goal's judgement of one Response.
+message Score {
+  // The Case scored.
+  string case_id = 1;
+
+  // The score itself. Direction is defined by the Goal, not assumed here —
+  // higher is not universally better.
+  double value = 2;
+
+  // Whether this counts as a pass, for Goals with a threshold.
+  bool passed = 3;
+
+  // Component scores for composite Goals, keyed by component name.
+  map<string, double> components = 4;
+
+  // The judge's stated reason. Retained because a number without a reason
+  // cannot be audited, and judges are the epistemic foundation here.
+  string rationale = 5;
+
+  // Which judge model produced this. The judge model defaults to something
+  // other than the agent model; recording it makes correlated blind spots
+  // detectable after the fact.
+  string judge_model = 6;
+}

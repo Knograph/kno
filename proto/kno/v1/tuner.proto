@@ -1,0 +1,99 @@
+syntax = "proto3";
+
+package kno.v1;
+
+import "kno/v1/common.proto";
+
+// JobStatus is where a fine-tuning job stands.
+enum JobStatus {
+  // Unset.
+  JOB_STATUS_UNSPECIFIED = 0;
+
+  // Submitted, not yet started.
+  JOB_STATUS_QUEUED = 1;
+
+  // Training.
+  JOB_STATUS_RUNNING = 2;
+
+  // Finished; a tuned model is available.
+  JOB_STATUS_SUCCEEDED = 3;
+
+  // Failed. See JobState.error.
+  JOB_STATUS_FAILED = 4;
+
+  // Cancelled by the user or by the budget guard.
+  JOB_STATUS_CANCELLED = 5;
+}
+
+// TuningJob is a fine-tuning run submitted to a hosted provider.
+//
+// Kno orchestrates these over HTTP through the Tuner interface — there is no
+// torch in the binary. That constraint is what makes proxy fine-tuning a
+// measurement rather than an infrastructure commitment.
+message TuningJob {
+  // Base model to tune, as an agent ref, e.g. "together:meta-llama/Llama-3-8b".
+  AgentRef base_model = 1;
+
+  // Assets in this training set.
+  repeated string asset_ids = 2;
+
+  // Training file contents, provider-formatted (typically OpenAI chat JSONL).
+  bytes training_data = 3;
+
+  // Training epochs. Absent means the provider default.
+  int32 epochs = 4;
+
+  // LoRA rank, when the provider supports parameter-efficient tuning. Proxy
+  // confirmation depends on this being cheap.
+  int32 lora_rank = 5;
+
+  // Suffix for the resulting model name, for traceability back to the run.
+  string suffix = 6;
+
+  // Which ablation group this job belongs to.
+  //
+  // The bridge fine-tunes cluster-in vs cluster-out rather than per Asset:
+  // leave-one-group-out over 6 clusters is ~7 runs, not 500. Per-Asset
+  // fine-tuning is not affordable and never was.
+  string ablation_group = 7;
+
+  // Estimated cost in MICRO-USD, produced before submission so the budget
+  // guard can authorize or refuse it. A job is never submitted without one.
+  int64 estimated_cost_usd_micros = 8;
+}
+
+// JobRef identifies a submitted job with its provider.
+message JobRef {
+  // Provider-assigned job identifier.
+  string id = 1;
+
+  // Which provider: "openai", "together", "fireworks".
+  string provider = 2;
+
+  // RFC 3339 submission timestamp.
+  string submitted_at = 3;
+}
+
+// JobState is a job's current status, as reported by the provider.
+message JobState {
+  // The job.
+  JobRef ref = 1;
+
+  // Where it stands.
+  JobStatus status = 2;
+
+  // Progress 0..1 when the provider reports it.
+  double progress = 3;
+
+  // The tuned model, once SUCCEEDED. Usable directly as an agent ref for
+  // post-tune validation against the same untouched holdout.
+  AgentRef tuned_model = 4;
+
+  // Provider error text when FAILED, verbatim — the user's error grammar
+  // requires quoting upstream errors rather than paraphrasing them.
+  string error = 5;
+
+  // Actual cost in MICRO-USD, once known. Compared against
+  // TuningJob.estimated_cost_usd_micros to keep estimates honest over time.
+  int64 actual_cost_usd_micros = 6;
+}

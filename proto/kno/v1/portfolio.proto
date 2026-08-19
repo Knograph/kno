@@ -1,0 +1,101 @@
+syntax = "proto3";
+
+package kno.v1;
+
+import "kno/v1/common.proto";
+import "kno/v1/valuation.proto";
+
+// PortfolioEntry is one selected Asset and the measurement that earned it a
+// place.
+message PortfolioEntry {
+  // The selected Asset.
+  string asset_id = 1;
+
+  // Where it goes.
+  Destination destination = 2;
+
+  // The measurement behind the decision.
+  Valuation valuation = 3;
+
+  // Selection order. Portfolio construction is greedy on delta-per-cost, so
+  // rank is informative about marginal contribution, not just a row number.
+  int32 rank = 4;
+}
+
+// Rejection is one excluded Asset and why.
+//
+// The reason is an enum PLUS references, because DESIGN.md's Select stage
+// requires parametrized reasons: "redundant_with:<id>" is not expressible by a
+// bare enum, and a rejection log that cannot say WHICH Asset something
+// duplicated is not actionable.
+message Rejection {
+  // The excluded Asset.
+  string asset_id = 1;
+
+  // Why it was excluded.
+  RejectionReason reason = 2;
+
+  // Set when reason is REJECTION_REASON_REDUNDANT: the already-selected Assets
+  // this one duplicates.
+  repeated string redundant_with_asset_ids = 3;
+
+  // Human-readable elaboration for the report, e.g. "delta 0.004, CI
+  // [-0.011, 0.019] crosses zero".
+  string detail = 4;
+
+  // The measurement, when one was taken. Absent for
+  // REJECTION_REASON_IRRELEVANT and REJECTION_REASON_BUDGET_EXHAUSTED, where
+  // no measurement happened — and the absence is itself the honest answer.
+  Valuation valuation = 5;
+}
+
+// Portfolio is the selected subset of Assets, chosen under budget, with the
+// rejection log that justifies every exclusion.
+//
+// "Include nothing new" is a legal, first-class outcome: an empty selected
+// list with a full rejection log is a complete, useful answer.
+message Portfolio {
+  // The run that produced this.
+  string run_id = 1;
+
+  // Selected Assets, in selection order.
+  repeated PortfolioEntry selected = 2;
+
+  // Every excluded Asset, with its reason. Never truncated — the rejection log
+  // is a deliverable, not diagnostics.
+  repeated Rejection rejected = 3;
+
+  // Budget constraints this Portfolio was built under.
+  Budget budget = 4;
+
+  // Total carrying cost of the selected set.
+  CostVector total_cost = 5;
+
+  // Aggregate expected gain from the selected set, measured on the DEV slice.
+  // This is a selection-time estimate and is subject to the winner's curse;
+  // the honest number is Report.holdout_gain, which Validate produces.
+  double expected_gain = 6;
+
+  // Confidence interval on expected_gain.
+  Interval expected_interval = 7;
+}
+
+// Budget is the constraint set a Portfolio was built under.
+message Budget {
+  // Maximum tokens the selected context may add per call.
+  int64 max_context_tokens = 1;
+
+  // Maximum examples in a tuning set.
+  int64 max_training_examples = 2;
+
+  // Maximum spend for the run, in MICRO-USD.
+  int64 max_cost_usd_micros = 3;
+
+  // Maximum LLM calls for the run. A hard ceiling independent of dollars,
+  // because rate limits and time are also budgets.
+  int64 max_llm_calls = 4;
+
+  // Repeated trials per measurement. Fewer trials is cheaper and widens every
+  // confidence interval — the tradeoff is explicit rather than hidden.
+  int32 trials = 5;
+}

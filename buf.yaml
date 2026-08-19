@@ -4,6 +4,16 @@ modules:
 lint:
   use:
     - STANDARD
+    # Proto comments are the SINGLE source for the API reference and the
+    # generated OpenAPI spec — handwritten API prose is forbidden — so an
+    # undocumented field ships as an undocumented field of the public API.
+    # Enforced here rather than in a Go test because protoc-gen-go strips
+    # SourceCodeInfo, leaving comments invisible at runtime.
+    - COMMENTS
+  except:
+    # Requiring a comment on every enum VALUE as well as the enum itself is the
+    # one COMMENTS rule that reliably produces noise rather than documentation.
+    - COMMENT_ENUM_VALUE
   enum_zero_value_suffix: _UNSPECIFIED
 breaking:
   use:
