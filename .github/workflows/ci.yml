@@ -44,7 +44,7 @@ jobs:
         # single most covenant-critical gate errors instead of running.
         run: git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         id: go
         with:
           go-version-file: go.mod
