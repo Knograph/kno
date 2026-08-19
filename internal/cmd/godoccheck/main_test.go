@@ -239,3 +239,33 @@ func TestWalkCleanTreeIsSilent(t *testing.T) {
 		t.Errorf("want no findings on a clean tree, got %+v", got)
 	}
 }
+
+// TestUnexportedMethodOnExportedTypeIsNotPublicAPI guards a bug this tool
+// shipped with: it reported every unexported method on an exported type.
+//
+// The check was applied to the qualified name "Guard.reserve", which starts
+// with the type's capital letter and therefore looks exported. Visibility is
+// decided by the method identifier alone.
+func TestUnexportedMethodOnExportedTypeIsNotPublicAPI(t *testing.T) {
+	t.Parallel()
+
+	src := `package p
+// Guard guards.
+type Guard struct{}
+func (g *Guard) reserve() {}
+func (g *Guard) Authorize() {}
+`
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "x.go", src, parser.ParseComments|parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parsing: %v", err)
+	}
+
+	got := inspect(fset, file)
+	if len(got) != 1 {
+		t.Fatalf("want exactly 1 finding (the exported Authorize), got %d: %+v", len(got), got)
+	}
+	if got[0].name != "Guard.Authorize" {
+		t.Errorf("flagged %q; only the exported method is public API", got[0].name)
+	}
+}

@@ -108,8 +108,12 @@ func walk(root string) ([]finding, error) {
 
 func inspect(fset *token.FileSet, file *ast.File) []finding {
 	var out []finding
-	report := func(pos token.Pos, kind, name string, doc *ast.CommentGroup) {
-		if !ast.IsExported(name) || doc != nil {
+	// exportedName is the identifier whose case decides visibility. For a
+	// method that is the method name, NOT the qualified "Type.Method" string —
+	// checking the qualified form reports every unexported method on an
+	// exported type, because the string starts with the type's capital letter.
+	report := func(pos token.Pos, kind, name, exportedName string, doc *ast.CommentGroup) {
+		if !ast.IsExported(exportedName) || doc != nil {
 			return
 		}
 		out = append(out, finding{pos: fset.Position(pos).String(), kind: kind, name: name})
@@ -122,14 +126,15 @@ func inspect(fset *token.FileSet, file *ast.File) []finding {
 			name := d.Name.Name
 			if d.Recv != nil && len(d.Recv.List) > 0 {
 				kind = "method"
-				name = receiverName(d.Recv.List[0].Type) + "." + name
-				// An unexported receiver's methods are not part of the public
-				// API even when the method name is capitalized.
-				if !ast.IsExported(strings.TrimPrefix(receiverName(d.Recv.List[0].Type), "*")) {
+				recv := receiverName(d.Recv.List[0].Type)
+				name = recv + "." + d.Name.Name
+				// An unexported receiver's methods are not public API even when
+				// the method name is capitalized.
+				if !ast.IsExported(recv) {
 					continue
 				}
 			}
-			report(d.Pos(), kind, name, d.Doc)
+			report(d.Pos(), kind, name, d.Name.Name, d.Doc)
 
 		case *ast.GenDecl:
 			for _, spec := range d.Specs {
@@ -141,14 +146,14 @@ func inspect(fset *token.FileSet, file *ast.File) []finding {
 						// GenDecl when it is not part of a parenthesized block.
 						doc = d.Doc
 					}
-					report(sp.Pos(), "type", sp.Name.Name, doc)
+					report(sp.Pos(), "type", sp.Name.Name, sp.Name.Name, doc)
 				case *ast.ValueSpec:
 					for _, n := range sp.Names {
 						doc := sp.Doc
 						if doc == nil {
 							doc = d.Doc
 						}
-						report(n.Pos(), "value", n.Name, doc)
+						report(n.Pos(), "value", n.Name, n.Name, doc)
 					}
 				}
 			}
