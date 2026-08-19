@@ -9,7 +9,20 @@
 # See docs/plans/2026-08-18-repo-foundation.md.
 
 SHELL := /usr/bin/env bash
+
+# .SHELLFLAGS requires GNU Make >= 3.82. macOS still ships 3.81, which IGNORES
+# it silently — so every recipe there ran under a plain `-c` with no `set -e`
+# and no `pipefail`. A recipe line that failed mid-way then reported the exit
+# status of its LAST command, which is how `buf breaking` could print
+# violations and still be followed by "OK ... clean".
+#
+# It is set for newer make, but nothing may depend on it: every multi-command
+# recipe below starts with an explicit `set -euo pipefail` so the safety is a
+# property of the recipe, not of the make version that happens to be installed.
 .SHELLFLAGS := -euo pipefail -c
+
+# Prefix for any recipe line that chains commands. Not optional.
+SAFE := set -euo pipefail;
 .DEFAULT_GOAL := check
 
 # The gate ordering IS the design (cheapest failure first). Parallel make would
@@ -124,7 +137,7 @@ test: ## Unit tests (-race, -shuffle=on) + fixture integration + coverage + secr
 
 .PHONY: test-integration
 test-integration: ## Adapter tests against RECORDED FIXTURES; never live APIs
-	@if [ -n "$${KNO_LIVE_TESTS:-}" ]; then \
+	@$(SAFE) if [ -n "$${KNO_LIVE_TESTS:-}" ]; then \
 		printf '\033[31m FAIL \033[0m test-integration: KNO_LIVE_TESTS is set. This target is the fixture path and must never spend money. Use `make test-live`.\n'; \
 		exit 1; \
 	fi
@@ -134,11 +147,11 @@ test-integration: ## Adapter tests against RECORDED FIXTURES; never live APIs
 # always an explicit choice. Nightly CI calls this one.
 .PHONY: test-live
 test-live: ## Integration tests against LIVE providers. Spends real money.
-	@if [ -z "$${KNO_MAX_COST_USD:-}" ]; then \
+	@$(SAFE) if [ -z "$${KNO_MAX_COST_USD:-}" ]; then \
 		printf '\033[31m FAIL \033[0m test-live: refusing to run without KNO_MAX_COST_USD set.\n'; \
 		exit 1; \
 	fi
-	@if ! grep -rqs 'KNO_MAX_COST_USD' --include='*.go' .; then \
+	@$(SAFE) if ! grep -rqs 'KNO_MAX_COST_USD' --include='*.go' .; then \
 		printf '\033[31m FAIL \033[0m test-live: KNO_MAX_COST_USD is set but NO CODE READS IT.\n'; \
 		printf '        The budget guard (stats/budget) does not exist yet, so this cap is\n'; \
 		printf '        not enforced by anything. Refusing to spend. See docs/debt.md#11.\n'; \
@@ -148,7 +161,7 @@ test-live: ## Integration tests against LIVE providers. Spends real money.
 
 .PHONY: coverage-check
 coverage-check: ## Enforce coverage floors and the no-decrease ratchet
-	@if [ -x $(BIN)/covercheck ]; then \
+	@$(SAFE) if [ -x $(BIN)/covercheck ]; then \
 		$(BIN)/covercheck -profile=$(COVERAGE) -baseline=$(BASELINE); \
 	else \
 		$(call pending,coverage ratchet,M0c (feat/ring0-surface)); \
@@ -160,7 +173,7 @@ update-coverage-baseline: test ## Regenerate .coverage-baseline (review the diff
 
 .PHONY: secrets-scan
 secrets-scan: ## gitleaks over BOTH the working tree and git history
-	@if ! command -v gitleaks >/dev/null 2>&1; then \
+	@$(SAFE) if ! command -v gitleaks >/dev/null 2>&1; then \
 		$(call skip_missing,gitleaks,secrets scan); \
 	else \
 		gitleaks dir . --no-banner --redact --exit-code 1; \
@@ -196,7 +209,7 @@ endef
 
 .PHONY: generate
 generate: $(BUF) ## Regenerate code from proto (output is checked in)
-	@if [ -f proto/PENDING ]; then \
+	@$(SAFE) if [ -f proto/PENDING ]; then \
 $(call proto_bootstrap_check,generate); \
 	else \
 		$(BUF) generate; \
@@ -208,7 +221,7 @@ $(call proto_bootstrap_check,generate); \
 # containing '.git#ref=...' truncates mid-call. Recipe lines pass '#' through
 # to the shell untouched.
 typecheck-proto: $(BUF) ## buf lint + buf breaking against main
-	@if [ -f proto/PENDING ]; then \
+	@$(SAFE) if [ -f proto/PENDING ]; then \
 $(call proto_bootstrap_check,typecheck-proto); \
 	else \
 		$(BUF) lint; \
@@ -234,7 +247,7 @@ $(call proto_bootstrap_check,typecheck-proto); \
 
 .PHONY: generate-check
 generate-check: $(BUF) ## Fail if regenerating from proto would change anything
-	@if [ -f proto/PENDING ]; then \
+	@$(SAFE) if [ -f proto/PENDING ]; then \
 		$(call pending,generate-check,M0b (feat/proto-contract)); \
 	else \
 		before=$$(find gen -type f -print0 2>/dev/null | sort -z | xargs -0 shasum -a 256 2>/dev/null | shasum -a 256); \
@@ -264,7 +277,7 @@ vuln: $(GOVULNCHK) ## govulncheck over the shipping module
 # them, so it starts working the moment the first one appears.
 .PHONY: fuzz-short
 fuzz-short: ## 30s fuzz on parsers
-	@found=0; \
+	@$(SAFE) found=0; \
 	for pkg in $$(go list ./... 2>/dev/null); do \
 		targets=$$(go test -list 'Fuzz.*' $$pkg 2>/dev/null | grep '^Fuzz' || true); \
 		for target in $$targets; do \
@@ -283,7 +296,7 @@ fuzz-short: ## 30s fuzz on parsers
 # not a surprise.
 .PHONY: bench-diff
 bench-diff: ## Tripwire: fails once benchmarks exist, until the gate is implemented
-	@if grep -rql '^func Benchmark' --include='*_test.go' . 2>/dev/null; then \
+	@$(SAFE) if grep -rql '^func Benchmark' --include='*_test.go' . 2>/dev/null; then \
 		printf '\033[31m FAIL \033[0m benchmarks exist but bench-diff is unimplemented.\n'; \
 		printf '        Repay docs/debt.md#3: implement the >10%% regression gate.\n'; \
 		exit 1; \
@@ -295,7 +308,7 @@ bench-diff: ## Tripwire: fails once benchmarks exist, until the gate is implemen
 
 .PHONY: docs
 docs: ## Regenerate OpenAPI, check godoc coverage, verify links
-	@if [ -x $(BIN)/godoccheck ]; then \
+	@$(SAFE) if [ -x $(BIN)/godoccheck ]; then \
 		$(BIN)/godoccheck ./...; \
 	else \
 		$(call pending,godoc coverage,M0c (feat/ring0-surface)); \

@@ -15,6 +15,12 @@ make tools     # installs pinned build tools into ./bin
 make check     # runs every gate CI runs on a PR
 ```
 
+**macOS note:** the stock `make` is GNU Make 3.81, which predates `.SHELLFLAGS`
+and ignores it silently. Every multi-command recipe therefore sets `set -euo
+pipefail` itself — if you add one, start it with `$(SAFE)`. Without that, a
+recipe reports the exit status of its *last* command, so a failing gate in the
+middle passes.
+
 `make check` is the only command you need to remember.
 
 ## Before you write code
