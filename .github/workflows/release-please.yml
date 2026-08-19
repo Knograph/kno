@@ -3,6 +3,11 @@ name: Release Please
 on:
   push:
     branches: [main]
+  # Manually triggerable. This workflow failed on three consecutive pushes to
+  # main for a reason unrelated to any commit (an org policy blocking Actions
+  # from opening pull requests), and with no dispatch trigger the only way to
+  # retest the fix was to re-run a historical job.
+  workflow_dispatch:
 
 permissions:
   contents: write

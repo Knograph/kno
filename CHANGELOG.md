@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 [Semantic Versioning](https://semver.org/). Entries are derived from
 [Conventional Commits](https://www.conventionalcommits.org/) by release-please.
 
+Version policy: releases stay in the `0.x` series until 1.0 is a deliberate decision. `feat:`
+bumps the patch and a breaking change bumps the minor, so reaching 1.0 requires someone to choose
+it rather than a tool defaulting into it.
+
 **Pre-1.0 compatibility:** minor bumps may break, with notice here and migration notes. After 1.0,
 the proto schema, the plugin protocol, exit codes, the `kno.yaml` schema, and the public Go API are
 covenants — breaking any of them requires a major version.
