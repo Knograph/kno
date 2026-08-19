@@ -127,6 +127,13 @@ linters:
       - path: '(^|/)tui/'
         linters: [forbidigo]
 
+      # internal/cmd/* are standalone build tools invoked by the Makefile, not
+      # part of the engine. Their output IS their interface — `make` reads it —
+      # and they must not depend on the engine's logger. Same rationale as
+      # tui/, scoped to internal/ so it can never cover shipping code.
+      - path: '(^|/)internal/cmd/'
+        linters: [forbidigo]
+
       # Tests may print diagnostics. This exclusion is scoped by `text` to the
       # print rules ONLY — it must never take reflect.DeepEqual down with it,
       # which is the single place that ban actually matters.
