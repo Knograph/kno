@@ -53,7 +53,7 @@ jobs:
             tools/go.sum
 
       - name: Cache tool binaries
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: bin
           # Keyed on the Go version too: a toolchain bump must not restore
