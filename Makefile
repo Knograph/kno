@@ -204,12 +204,23 @@ $(call proto_bootstrap_check,typecheck-proto); \
 	else \
 		$(BUF) lint; \
 		if git rev-parse --verify --quiet origin/main >/dev/null 2>&1; then \
-			baseline='.git#ref=origin/main'; \
+			baseref=origin/main; baseline='.git#ref=origin/main'; \
 		else \
-			baseline='.git#branch=main'; \
+			baseref=main; baseline='.git#branch=main'; \
 		fi; \
-		$(BUF) breaking --against "$$baseline"; \
-		printf '\033[32m  OK  \033[0m proto lint + breaking clean\n'; \
+		if [ -z "$$(git log "$$baseref" --oneline -- '*.proto' 2>/dev/null | head -1)" ]; then \
+			printf '\033[34m PEND \033[0m buf breaking: %s has never contained a .proto file.\n' "$$baseref"; \
+			printf '        This is the commit that establishes the baseline. buf errors on an\n'; \
+			printf '        empty baseline rather than reporting zero changes, so there is\n'; \
+			printf '        nothing to compare against yet.\n'; \
+			printf '        Self-retiring: the moment %s contains a .proto, this branch is\n' "$$baseref"; \
+			printf '        unreachable forever. It keys on the HISTORY of the baseline, not on\n'; \
+			printf '        the presence of a directory, so emptying or renaming proto/ later\n'; \
+			printf '        cannot resurrect it.\n'; \
+		else \
+			$(BUF) breaking --against "$$baseline"; \
+			printf '\033[32m  OK  \033[0m proto lint + breaking clean\n'; \
+		fi; \
 	fi
 
 .PHONY: generate-check
