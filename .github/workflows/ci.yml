@@ -32,7 +32,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # buf breaking --against '.git#branch=main' needs real history, and
           # the coverage ratchet compares against the committed baseline.
@@ -44,7 +44,7 @@ jobs:
         # single most covenant-critical gate errors instead of running.
         run: git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         id: go
         with:
           go-version-file: go.mod
@@ -53,7 +53,7 @@ jobs:
             tools/go.sum
 
       - name: Cache tool binaries
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: bin
           # Keyed on go.mod as well as tools/go.sum, because go.mod carries the
@@ -66,7 +66,7 @@ jobs:
 
       - name: Cache gitleaks
         id: gitleaks-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/kno-gitleaks
           key: ${{ runner.os }}-gitleaks-${{ env.GITLEAKS_VERSION }}
@@ -113,7 +113,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Manifest and config parse
         run: |
           set -euo pipefail
