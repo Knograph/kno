@@ -1,4 +1,6 @@
 # Coverage baseline. Regenerate with `make update-coverage-baseline`.
 # Coverage may not decrease against these numbers. Review diffs like code.
+core/errs 92.3
+coretest 83.8
 internal/cmd/covercheck 83.9
 internal/cmd/godoccheck 73.7

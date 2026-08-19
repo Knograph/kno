@@ -68,6 +68,20 @@ These exist because breaking them produces bugs that are expensive, silent, or d
 4. **Proto and plugin-protocol changes are breaking until proven otherwise.** Schema compatibility
    is a security boundary.
 5. **Every bug fix ships with the test that would have caught it.** No test, no fix.
+6. **The iterator contract is binding on every adapter.** `Evals.Cases` and `Pool.Assets` return
+   `iter.Seq2`, and four rules come with it:
+   - **A yielded error is fatal.** The consumer stops. If your source has malformed records, handle
+     them internally and report counts via `Provenance` — never yield a skippable error. This is one
+     rule rather than two on purpose: if one adapter skipped bad records and another halted, the
+     denominator behind every confidence interval would vary by adapter, invisibly.
+   - **Defer cleanup *inside* the iterator closure.** Early `break` is legal and expected; cleanup
+     registered outside the closure will not run.
+   - **Check `ctx.Err()` before each yield.** `iter.Seq2` carries no cancellation of its own, and a
+     producer that ignores it keeps spending after the user hits Ctrl-C.
+   - **Yielded values are borrowed for one iteration.** Clone before retaining or mutating.
+
+   Prove it by calling `coretest.ConformIterator` in your adapter's tests, and
+   `coretest.CleanupProbe` for the resource-cleanup half the harness cannot observe from outside.
 
 ## Quality gates
 
