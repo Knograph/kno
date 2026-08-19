@@ -341,3 +341,105 @@ func TestReservationsCountAgainstRemaining(t *testing.T) {
 		t.Errorf("remaining = %d, want 1000 after release", got)
 	}
 }
+
+// TestResumeDoesNotForgetSpend is the test that would have caught a P0.
+//
+// The Guard is in-memory, so a process that dies takes its accounting with it.
+// Before Restore existed, `kno baseline --resume` constructed a fresh Guard
+// reporting zero spent no matter what the killed run had actually spent — so a
+// run that had already consumed most of its cap could consume nearly all of it
+// again. Up to twice the intended spend across one kill/resume cycle, silently,
+// which is exactly the failure CLAUDE.md's fourth prime directive names.
+//
+// This simulates the cycle: spend against a cap, discard the Guard as a crash
+// would, rebuild it, and assert the rebuilt Guard refuses what the original
+// would have refused.
+func TestResumeDoesNotForgetSpend(t *testing.T) {
+	t.Parallel()
+
+	const limit = int64(1_000_000) // $1.00
+
+	// First process: spends $0.90 of a $1.00 cap.
+	first := budget.New(budget.Limits{MaxCostUSDMicros: limit}, nil, 0)
+	res, err := first.Authorize(context.Background(), budget.Estimate{CostUSDMicros: 900_000})
+	if err != nil {
+		t.Fatalf("authorize: %v", err)
+	}
+	res.Settle(budget.Spend{CostUSDMicros: 900_000})
+
+	persisted := first.Spent() // what the store would hold for this run
+
+	// The process dies here. Everything in `first` is gone.
+
+	// Second process: same limits, fresh Guard, reseeded from the store.
+	second := budget.New(budget.Limits{MaxCostUSDMicros: limit}, nil, 0)
+	second.Restore(persisted)
+
+	if got := second.Spent().CostUSDMicros; got != 900_000 {
+		t.Fatalf("restored spend = %d, want 900000", got)
+	}
+	if got := second.Remaining().CostUSDMicros; got != 100_000 {
+		t.Errorf("remaining = %d, want 100000 after restoring prior spend", got)
+	}
+
+	// The whole point: an operation that fits within a FRESH guard's cap must
+	// still be refused, because the money is already gone.
+	if _, err := second.Authorize(context.Background(), budget.Estimate{CostUSDMicros: 900_000}); err == nil {
+		t.Error("the resumed run authorized a second $0.90 against a $1.00 cap; " +
+			"total spend would be $1.80 for a run capped at $1.00")
+	} else if !errors.Is(err, errs.ErrBudgetExceeded) {
+		t.Errorf("got %v, want ErrBudgetExceeded", err)
+	}
+
+	// And what genuinely fits still proceeds.
+	ok, err := second.Authorize(context.Background(), budget.Estimate{CostUSDMicros: 100_000})
+	if err != nil {
+		t.Errorf("an operation within the remaining budget was refused: %v", err)
+	} else {
+		ok.Release()
+	}
+}
+
+// TestRestoreIsAdditive covers reseeding a Guard that has already been used,
+// and the multi-dimension case.
+func TestRestoreIsAdditive(t *testing.T) {
+	t.Parallel()
+
+	g := budget.New(budget.Limits{}, nil, 0)
+	g.Restore(budget.Spend{Calls: 3, CostUSDMicros: 500, Tokens: 90})
+	g.Restore(budget.Spend{Calls: 2, CostUSDMicros: 250, Tokens: 10})
+
+	got := g.Spent()
+	if got.Calls != 5 || got.CostUSDMicros != 750 || got.Tokens != 100 {
+		t.Errorf("Spent = %+v, want {Calls:5 CostUSDMicros:750 Tokens:100}", got)
+	}
+}
+
+// TestRestoreIsSafeUnderConcurrency guards the accounting under -race, since
+// Restore mutates the same state Authorize reads.
+func TestRestoreIsSafeUnderConcurrency(t *testing.T) {
+	t.Parallel()
+
+	g := budget.New(budget.Limits{MaxLLMCalls: 1_000}, nil, 0)
+
+	var wg sync.WaitGroup
+	for range 64 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			g.Restore(budget.Spend{Calls: 1})
+		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if res, err := g.Authorize(context.Background(), budget.Estimate{Calls: 1}); err == nil {
+				res.Settle(budget.Spend{Calls: 1})
+			}
+		}()
+	}
+	wg.Wait()
+
+	if got := g.Spent().Calls; got < 64 {
+		t.Errorf("spent = %d, want at least the 64 restored calls", got)
+	}
+}

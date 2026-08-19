@@ -22,6 +22,13 @@ covenants — breaking any of them requires a major version.
   in the standard library, reachable from `covercheck`. `GOTOOLCHAIN` is pinned in the Makefile so
   the toolchain is as reproducible as every other tool.
 
+### Fixed
+
+- `budget.Guard` had no persistence, so a resumed run started at zero spent regardless of what the
+  killed run had actually spent — a run near its cap could authorize nearly the whole cap a second
+  time, for up to twice the intended spend across one kill/resume cycle. `Guard.Restore` reseeds
+  settled spend from the store, which is the only thing that outlives the process.
+
 ### Added
 
 - `stats/budget`: the spend guard. Every path that can call an LLM or a fine-tuning API goes

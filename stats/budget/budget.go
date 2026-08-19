@@ -346,6 +346,34 @@ func (g *Guard) remainingLocked() Remaining {
 	return rem
 }
 
+// Restore reseeds settled spend from durable storage.
+//
+// The Guard is in-memory, so a process that dies takes its accounting with it.
+// Without this, `--resume` would construct a fresh Guard reporting zero spent
+// no matter how much the killed run actually spent, and a run near its cap
+// could authorize nearly the whole cap a second time — up to twice the
+// intended spend across one kill/resume cycle. That is the silent overspend
+// CLAUDE.md's fourth prime directive exists to prevent.
+//
+// Callers reconstruct spent by summing what was PERSISTED for the run, because
+// the store is the only thing that outlives the process. Restore is additive,
+// so it composes with a partially-used Guard, and it must be called before any
+// Authorize — restoring afterwards would let an already-authorized operation
+// slip under a cap it should have been measured against.
+//
+// It deliberately does not restore reservations. An outstanding reservation
+// belongs to an operation whose process is gone; its work either completed and
+// was persisted (and is therefore counted in spent) or it did not happen. See
+// docs/debt.md#20 for the window this cannot observe.
+func (g *Guard) Restore(spent Spend) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	g.spent.Calls += spent.Calls
+	g.spent.CostUSDMicros += spent.CostUSDMicros
+	g.spent.Tokens += spent.Tokens
+}
+
 // Spent reports what has actually been settled, excluding outstanding
 // reservations. This is the number a report shows.
 func (g *Guard) Spent() Spend {
