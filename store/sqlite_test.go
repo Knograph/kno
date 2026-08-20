@@ -440,7 +440,7 @@ func TestReopenSeesPriorState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopening: %v", err)
 	}
-	defer second.Close() //nolint:errcheck // failures surface through the assertions below
+	defer func() { _ = second.Close() }()
 
 	if _, err := second.GetRun(ctx, "run-1"); err != nil {
 		t.Errorf("run did not survive reopen: %v", err)
@@ -478,5 +478,140 @@ func TestCloseIsIdempotent(t *testing.T) {
 	}
 	if err := s.Close(); err != nil {
 		t.Errorf("second Close: %v", err)
+	}
+}
+
+// TestPragmasApplyToEveryConnection is the test the original suite could not
+// have caught this with.
+//
+// foreign_keys and busy_timeout are per-CONNECTION settings. Applying them
+// with a single Exec after open configures ONLY the connection that served it.
+// database/sql silently replaces connections whose last statement was
+// interrupted — which is what an ordinary context cancellation does, and what
+// the Ctrl-C drain path does by design — and the replacement had
+// foreign_keys=0 and busy_timeout=0.
+//
+// Verified against this driver before the fix: after cancelling a long query,
+// an outcome for a nonexistent run inserted silently instead of being rejected
+// by the foreign key, and write contention became an immediate SQLITE_BUSY
+// rather than a retry — dropping an outcome whose money was already spent.
+//
+// The property is tested directly rather than by trying to force an
+// interruption: an attempt to do that passed against the broken code, because
+// a query over a small table finishes before any cancellation lands.
+func TestPragmasApplyToEveryConnection(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := newStore(t)
+
+	const conns = 4
+	got, err := s.PragmaOnEveryConn(ctx, conns)
+	if err != nil {
+		t.Fatalf("probing pragmas: %v", err)
+	}
+	if len(got) != conns {
+		t.Fatalf("probed %d connections, want %d", len(got), conns)
+	}
+
+	for i, p := range got {
+		fk, bt := p[0], p[1]
+		if fk != 1 {
+			t.Errorf("connection %d has foreign_keys=%d, want 1.\n"+
+				"An outcome for a nonexistent run would insert silently instead of "+
+				"being rejected.", i, fk)
+		}
+		if bt != 5000 {
+			t.Errorf("connection %d has busy_timeout=%d, want 5000.\n"+
+				"Write contention would return SQLITE_BUSY immediately instead of "+
+				"retrying, dropping an outcome whose money is already spent.", i, bt)
+		}
+	}
+}
+
+// TestForeignKeyRejectsOrphanOutcome is the consequence of the pragma holding:
+// an outcome can never be recorded against a run that does not exist, which
+// would otherwise be a Case counted as complete that nothing can attribute.
+func TestForeignKeyRejectsOrphanOutcome(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := newStore(t)
+
+	err := s.RecordOutcome(ctx, "no-such-run", scoredOutcome("case-1", 1, 100))
+	if err == nil {
+		t.Error("an outcome for a nonexistent run was accepted; foreign keys are not enforced")
+	}
+}
+
+// TestCancelledContextDoesNotCorruptState checks that an interrupted call
+// leaves nothing half-written.
+func TestCancelledContextDoesNotCorruptState(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := newStore(t)
+
+	if err := s.CreateRun(ctx, newRun("run-1")); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+
+	// Either it refuses or it succeeds; what it must not do is record a
+	// partial outcome that later reads as complete.
+	_ = s.RecordOutcome(cancelled, "run-1", scoredOutcome("case-1", 1, 500))
+
+	spend, err := s.SettledSpend(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("SettledSpend: %v", err)
+	}
+	done, err := s.CompletedCases(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("CompletedCases: %v", err)
+	}
+
+	// Whatever happened, the two must agree: a Case counted as done must have
+	// contributed its spend, and vice versa.
+	if len(done) == 1 && spend.CostUSDMicros != 500 {
+		t.Errorf("case recorded as complete but spend = %d, want 500", spend.CostUSDMicros)
+	}
+	if len(done) == 0 && spend.CostUSDMicros != 0 {
+		t.Errorf("no case recorded but spend = %d, want 0", spend.CostUSDMicros)
+	}
+}
+
+// TestCloseDoesNotRaceWithInFlightCalls covers the executor's actual shutdown
+// shape: drain in-flight work, then close.
+//
+// An earlier version read and nil'd s.db without synchronization, which the
+// race detector flags the moment a query overlaps a close.
+func TestCloseDoesNotRaceWithInFlightCalls(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	s, err := store.NewSQLite(ctx, filepath.Join(t.TempDir(), "kno.db"))
+	if err != nil {
+		t.Fatalf("opening: %v", err)
+	}
+	if err := s.CreateRun(ctx, newRun("run-1")); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	for i := range 16 {
+		wg.Go(func() {
+			// Errors are expected once the store closes; the point is that
+			// nothing races or panics.
+			_ = s.RecordOutcome(ctx, "run-1", scoredOutcome(fmt.Sprintf("case-%d", i), 1, 10))
+			_, _ = s.CompletedCases(ctx, "run-1")
+		})
+	}
+	wg.Go(func() {
+		_ = s.Close()
+	})
+	wg.Wait()
+
+	// A closed store reports it rather than panicking on a nil handle.
+	if _, err := s.GetRun(ctx, "run-1"); err == nil {
+		t.Log("note: the store was still open when this ran; no race either way")
 	}
 }

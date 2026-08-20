@@ -21,9 +21,10 @@ var (
 // Store is durable state for a run.
 //
 // The interface is deliberately narrow and says nothing about how writes are
-// serialized. The SQLite implementation funnels them through a single
-// goroutine because SQLite has exactly one writer; a Postgres backend must not
-// inherit that constraint merely because SQLite was written first.
+// serialized, so a Postgres backend inherits no constraint from SQLite having
+// been written first. The SQLite implementation relies on WAL — one writer
+// alongside many readers — rather than funnelling writes through a goroutine
+// of its own.
 //
 // Traces are customer data. Response.output may contain end-user conversation
 // content, so this package is the only one that handles it, no query result is
@@ -57,7 +58,7 @@ type Store interface {
 	//
 	// Resume uses this to skip finished work. It loads the full set into
 	// memory — see docs/debt.md#22 for the bound and why the alternative, a
-	// query per Case through the single writer, is worse.
+	// query per Case, is worse.
 	CompletedCases(ctx context.Context, runID string) (map[string]struct{}, error)
 
 	// SettledSpend sums what a run actually spent, for reseeding the budget
@@ -80,7 +81,9 @@ type Store interface {
 	// defeat the gap detection Event.sequence exists for.
 	MaxEventSequence(ctx context.Context, runID string) (int64, error)
 
-	// Close releases resources. Safe to call more than once.
+	// Close releases resources. Safe to call more than once, and safe to call
+	// while other calls are in flight — those return an error rather than
+	// racing, which is what the executor's drain-then-close shutdown needs.
 	Close() error
 }
 
