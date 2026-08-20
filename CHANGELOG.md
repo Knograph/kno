@@ -31,6 +31,13 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
+- `Run` and the event spine (`run.proto`, `event.proto`). The event stream is the single spine the
+  TUI, logs, and API all render, and it carries IDs and metrics only — conversation content is
+  structurally unrepresentable, enforced by a schema test rather than by reviewer vigilance.
+  `CaseErrored` is a distinct payload from `CaseScored`, so a live view and the persisted result
+  cannot disagree about the sample. Events use `EventError` rather than `Actionable`, because
+  `Actionable.cause` carries upstream provider errors verbatim and providers echo request content
+  in them. Retires debt 2.
 - `stats/budget`: the spend guard. Every path that can call an LLM or a fine-tuning API goes
   through it — estimate, authorize, settle or release — with reservations counted against the caps
   while outstanding, so concurrent workers cannot each pass a check only one of them should.

@@ -1,0 +1,254 @@
+syntax = "proto3";
+
+package kno.v1;
+
+import "kno/v1/common.proto";
+import "kno/v1/portfolio.proto";
+import "kno/v1/run.proto";
+
+// Event is one thing that happened during a Run.
+//
+// The event stream is the single spine: the engine emits these, the TUI
+// renders them, the API streams them, and the logs record them. New
+// user-visible state means a new event type, never a side channel — otherwise
+// the three surfaces drift and each shows a different version of the run.
+//
+// EVENTS CARRY IDS AND METRICS, NEVER CONTENT. No Case input, no Response
+// output, no Asset content. CLAUDE.md forbids conversation content in
+// telemetry and in logs above DEBUG, and this stream feeds all three
+// consumers, so content is made unrepresentable here rather than left to each
+// producer to remember to omit. A live view identifies work by id, tags, and
+// title — which is what those fields are for.
+message Event {
+  // The Run this belongs to.
+  string run_id = 1;
+
+  // RFC 3339 timestamp.
+  string emitted_at = 2;
+
+  // Monotonic per Run, starting at 1.
+  //
+  // A consumer that sees a gap knows it lost events, rather than silently
+  // under-reporting. This matters most for a CI job parsing --json output:
+  // without it, dropped events look like work that never happened.
+  //
+  // ACROSS RESUME: a resumed Run continues from max(sequence) already recorded
+  // for that run_id, plus one. It does NOT restart at 1 — that would make
+  // events from before and after the interruption collide on the same number,
+  // silently defeating the gap detection this field exists for, in exactly the
+  // case (a long run that got interrupted) where a consumer most needs it.
+  int64 sequence = 3;
+
+  // What happened.
+  oneof payload {
+    // The Run opened.
+    RunStarted run_started = 10;
+
+    // A Case produced a Score.
+    CaseScored case_scored = 11;
+
+    // A Case failed to produce one.
+    CaseErrored case_errored = 12;
+
+    // Periodic heartbeat.
+    StageProgress stage_progress = 13;
+
+    // Money was settled.
+    SpendRecorded spend_recorded = 14;
+
+    // The Run closed.
+    RunFinished run_finished = 15;
+  }
+}
+
+// EventError is a failure as it appears ON THE EVENT STREAM.
+//
+// Deliberately NOT Actionable. Actionable carries `cause` — the upstream error
+// verbatim, never paraphrased, which is the right call for a message a user
+// reads in their own terminal. But a provider rejecting an oversized or
+// malformed prompt routinely echoes request content back in its error body,
+// and the event stream is logged, rendered, and streamed over SSE. Reusing
+// Actionable here would make the content rule depend on every provider's
+// choice of error text.
+//
+// The code is stable and machine-readable, so a consumer can still branch on
+// what happened. The verbatim cause stays in the store, where trace content
+// already lives under the same handling rules, and in the terminal error the
+// user sees directly.
+message EventError {
+  // Stable, machine-readable code, e.g. "AGENT_UNREACHABLE". Matches
+  // Actionable.code so a consumer can correlate the two.
+  string code = 1;
+
+  // What failed, in one sentence, written by Kno rather than echoed from a
+  // provider.
+  string message = 2;
+
+  // Process exit code this failure would produce.
+  int32 exit_code = 3;
+}
+
+// RunStarted opens a Run. Always sequence 1.
+message RunStarted {
+  // Which stage is starting.
+  Stage stage = 1;
+
+  // The agent being measured.
+  AgentRef agent = 2;
+
+  // The Goal, and which way is better for it.
+  string goal_name = 3;
+
+  // Which way is better for it. A renderer needs this to color a delta
+  // honestly rather than assuming higher is good.
+  Direction goal_direction = 4;
+
+  // Total Cases this Run intends to attempt, so a consumer can render
+  // progress. Zero when the source cannot report a count without consuming it
+  // — a streaming source must not be drained just to draw a progress bar.
+  int32 total_cases = 5;
+
+  // The caps this Run will execute under.
+  Budget budget = 6;
+}
+
+// CaseScored reports one Case that produced a Score.
+message CaseScored {
+  // The Case. An identifier, never its input.
+  string case_id = 1;
+
+  // The score value. Interpret its sign against the Run's goal_direction.
+  double score = 2;
+
+  // Whether it counted as a pass, for Goals with a threshold.
+  bool passed = 3;
+
+  // What this Case cost, in micro-USD.
+  int64 cost_usd_micros = 4;
+
+  // Wall-clock latency of the agent call.
+  int64 latency_ms = 5;
+}
+
+// CaseErrored reports one Case the agent failed to answer.
+//
+// Deliberately a separate payload from CaseScored rather than a CaseScored
+// with an error field. An errored Case is not a scored Case, and the live view
+// and the persisted result must agree about the sample — if a consumer counted
+// errors as scores, its denominator would differ from the Report's, and every
+// delta computed from either would be measured against a different population.
+message CaseErrored {
+  // The Case that failed.
+  string case_id = 1;
+
+  // What went wrong. EventError rather than Actionable: see EventError.
+  EventError error = 2;
+
+  // Whether the executor will retry this Case.
+  //
+  // COUNTING RULE: only a CaseErrored with will_retry = false is TERMINAL and
+  // counts toward errored. A retried Case contributes exactly one outcome to
+  // the totals — whichever terminal event it ends on — so a Case that fails
+  // twice and then succeeds counts as one scored Case and zero errored ones.
+  //
+  // Without this rule, a Case retried twice would add 2 to errored and 1 to
+  // scored, putting one Case on both sides of the very distinction these two
+  // payloads exist to preserve, and inflating attempted past the real Case
+  // count.
+  //
+  // Spend is counted differently and deliberately: every attempt takes its own
+  // budget reservation and settles its own cost, so a retried Case contributes
+  // its failed attempts' cost too. One outcome, several charges.
+  bool will_retry = 3;
+
+  // What the failed attempt still cost. Often zero when the provider rejected
+  // the call outright, but not always.
+  int64 cost_usd_micros = 4;
+}
+
+// StageProgress is a periodic heartbeat.
+//
+// Emitted on an interval rather than per Case, so a 1M-Case run does not
+// produce 1M progress events on top of its 1M outcome events.
+message StageProgress {
+  // Which stage is running.
+  Stage stage = 1;
+
+  // Cases attempted so far, and of those, how many scored and how many
+  // errored. attempted = scored + errored.
+  // Cases with a TERMINAL outcome so far. attempted = scored + errored; a Case
+  // still being retried is not yet counted. See CaseErrored.will_retry.
+  int32 attempted = 2;
+
+  // Of those, how many produced a Score.
+  int32 scored = 3;
+
+  // Of those, how many terminally failed to answer.
+  int32 errored = 4;
+
+  // Total Cases intended, matching RunStarted.total_cases. Zero when unknown.
+  int32 total_cases = 5;
+
+  // Throughput, for the ETA a dashboard shows.
+  double cases_per_second = 6;
+}
+
+// SpendRecorded reports settled spend.
+//
+// Emitted as money is actually spent, not as it is estimated, so a dashboard's
+// spend meter cannot run ahead of reality and alarm a user about money that
+// was never charged.
+message SpendRecorded {
+  // Cumulative settled spend for the Run.
+  int64 total_cost_usd_micros = 1;
+
+  // Cumulative provider calls.
+  int64 total_calls = 2;
+
+  // Cumulative tokens, reported but never capped.
+  int64 total_tokens = 3;
+
+  // Remaining headroom against the caps, counting outstanding reservations as
+  // already consumed. Absent when the Run is uncapped.
+  optional int64 remaining_cost_usd_micros = 4;
+
+  // Remaining provider calls before the cap. Absent when uncapped.
+  optional int64 remaining_calls = 5;
+}
+
+// RunFinished closes a Run. Always the last event.
+message RunFinished {
+  // How it ended.
+  RunStatus status = 1;
+
+  // Why the result should not be trusted as a clean reference, if it should
+  // not be.
+  string incomplete_reason = 2;
+
+  // Final counts. attempted = scored + errored.
+  // Cases with a terminal outcome. attempted = scored + errored, counting each
+  // Case once regardless of how many times it was retried.
+  int32 attempted = 3;
+
+  // Of those, how many produced a Score. This is the denominator behind
+  // aggregate_score.
+  int32 scored = 4;
+
+  // Of those, how many terminally failed to answer. Excluded from
+  // aggregate_score.
+  int32 errored = 5;
+
+  // The aggregate score over SCORED Cases only.
+  //
+  // Optional because a Run that scored nothing has no mean, and a zero here
+  // would be indistinguishable from a genuine mean of zero — the same
+  // distinction Interval exists to preserve elsewhere in this schema.
+  optional double aggregate_score = 6;
+
+  // Total settled spend.
+  int64 total_cost_usd_micros = 7;
+
+  // The failure, when status is RUN_STATUS_FAILED. EventError rather than
+  // Actionable: see EventError.
+  EventError error = 8;
+}
