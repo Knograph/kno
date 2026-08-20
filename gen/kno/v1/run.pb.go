@@ -194,14 +194,23 @@ type Run struct {
 	// Why the result should not be trusted as a clean reference, when it should
 	// not be. Empty on a healthy Run.
 	IncompleteReason string `protobuf:"bytes,10,opt,name=incomplete_reason,json=incompleteReason,proto3" json:"incomplete_reason,omitempty"`
-	// Fingerprint of the inputs: eval source content, goal, agent ref,
-	// split_seed, holdout_frac.
+	// Fingerprint over all resume-relevant inputs: eval source content, goal
+	// name and direction, agent ref, split_seed, and holdout_frac.
 	//
-	// A resume whose fingerprint differs from the checkpoint's is refused with
-	// ErrCheckpointStale, because continuing would mix results computed against
-	// different inputs into one run — which looks like one measurement and is
-	// not.
+	// A resume whose fingerprint differs is refused with ErrCheckpointStale,
+	// because continuing would mix results computed against different inputs
+	// into one Run — which looks like one measurement and is not.
 	InputFingerprint string `protobuf:"bytes,11,opt,name=input_fingerprint,json=inputFingerprint,proto3" json:"input_fingerprint,omitempty"`
+	// Content hash of the eval source alone.
+	//
+	// Recorded separately because the combined fingerprint can only say
+	// "something changed". Every other input is already a discrete field on this
+	// message, so with this one the CLI can name exactly which input moved —
+	// which is the difference between "the checkpoint does not match" and "your
+	// evals file changed since this run started". CLAUDE.md's error grammar
+	// requires what failed, why, and the fix; a single opaque hash can only
+	// deliver the first.
+	EvalContentHash string `protobuf:"bytes,21,opt,name=eval_content_hash,json=evalContentHash,proto3" json:"eval_content_hash,omitempty"`
 	// Optional salt for the dev/holdout split. Empty by default, and empty is
 	// the right default: the split is keyed on Case ID alone so that adding
 	// Cases never moves the ones already there. Changing this deliberately
@@ -348,6 +357,13 @@ func (x *Run) GetInputFingerprint() string {
 	return ""
 }
 
+func (x *Run) GetEvalContentHash() string {
+	if x != nil {
+		return x.EvalContentHash
+	}
+	return ""
+}
+
 func (x *Run) GetSplitSeed() string {
 	if x != nil {
 		return x.SplitSeed
@@ -415,7 +431,7 @@ var File_kno_v1_run_proto protoreflect.FileDescriptor
 
 const file_kno_v1_run_proto_rawDesc = "" +
 	"\n" +
-	"\x10kno/v1/run.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/portfolio.proto\"\xc0\x06\n" +
+	"\x10kno/v1/run.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/portfolio.proto\"\xec\x06\n" +
 	"\x03Run\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12#\n" +
 	"\x05stage\x18\x02 \x01(\x0e2\r.kno.v1.StageR\x05stage\x12\x1d\n" +
@@ -430,7 +446,8 @@ const file_kno_v1_run_proto_rawDesc = "" +
 	"\x06status\x18\t \x01(\x0e2\x11.kno.v1.RunStatusR\x06status\x12+\n" +
 	"\x11incomplete_reason\x18\n" +
 	" \x01(\tR\x10incompleteReason\x12+\n" +
-	"\x11input_fingerprint\x18\v \x01(\tR\x10inputFingerprint\x12\x1d\n" +
+	"\x11input_fingerprint\x18\v \x01(\tR\x10inputFingerprint\x12*\n" +
+	"\x11eval_content_hash\x18\x15 \x01(\tR\x0fevalContentHash\x12\x1d\n" +
 	"\n" +
 	"split_seed\x18\f \x01(\tR\tsplitSeed\x12!\n" +
 	"\fholdout_frac\x18\r \x01(\x01R\vholdoutFrac\x12$\n" +

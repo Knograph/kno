@@ -3,7 +3,6 @@ syntax = "proto3";
 package kno.v1;
 
 import "kno/v1/common.proto";
-import "kno/v1/error.proto";
 import "kno/v1/portfolio.proto";
 import "kno/v1/run.proto";
 
@@ -32,6 +31,12 @@ message Event {
   // A consumer that sees a gap knows it lost events, rather than silently
   // under-reporting. This matters most for a CI job parsing --json output:
   // without it, dropped events look like work that never happened.
+  //
+  // ACROSS RESUME: a resumed Run continues from max(sequence) already recorded
+  // for that run_id, plus one. It does NOT restart at 1 — that would make
+  // events from before and after the interruption collide on the same number,
+  // silently defeating the gap detection this field exists for, in exactly the
+  // case (a long run that got interrupted) where a consumer most needs it.
   int64 sequence = 3;
 
   // What happened.
@@ -54,6 +59,33 @@ message Event {
     // The Run closed.
     RunFinished run_finished = 15;
   }
+}
+
+// EventError is a failure as it appears ON THE EVENT STREAM.
+//
+// Deliberately NOT Actionable. Actionable carries `cause` — the upstream error
+// verbatim, never paraphrased, which is the right call for a message a user
+// reads in their own terminal. But a provider rejecting an oversized or
+// malformed prompt routinely echoes request content back in its error body,
+// and the event stream is logged, rendered, and streamed over SSE. Reusing
+// Actionable here would make the content rule depend on every provider's
+// choice of error text.
+//
+// The code is stable and machine-readable, so a consumer can still branch on
+// what happened. The verbatim cause stays in the store, where trace content
+// already lives under the same handling rules, and in the terminal error the
+// user sees directly.
+message EventError {
+  // Stable, machine-readable code, e.g. "AGENT_UNREACHABLE". Matches
+  // Actionable.code so a consumer can correlate the two.
+  string code = 1;
+
+  // What failed, in one sentence, written by Kno rather than echoed from a
+  // provider.
+  string message = 2;
+
+  // Process exit code this failure would produce.
+  int32 exit_code = 3;
 }
 
 // RunStarted opens a Run. Always sequence 1.
@@ -109,12 +141,24 @@ message CaseErrored {
   // The Case that failed.
   string case_id = 1;
 
-  // What went wrong, in the CLI's error grammar.
-  Actionable error = 2;
+  // What went wrong. EventError rather than Actionable: see EventError.
+  EventError error = 2;
 
-  // Whether the executor will retry. A retry is a new provider call and takes
-  // a new budget reservation, so a consumer counting spend must not treat a
-  // retried Case as free.
+  // Whether the executor will retry this Case.
+  //
+  // COUNTING RULE: only a CaseErrored with will_retry = false is TERMINAL and
+  // counts toward errored. A retried Case contributes exactly one outcome to
+  // the totals — whichever terminal event it ends on — so a Case that fails
+  // twice and then succeeds counts as one scored Case and zero errored ones.
+  //
+  // Without this rule, a Case retried twice would add 2 to errored and 1 to
+  // scored, putting one Case on both sides of the very distinction these two
+  // payloads exist to preserve, and inflating attempted past the real Case
+  // count.
+  //
+  // Spend is counted differently and deliberately: every attempt takes its own
+  // budget reservation and settles its own cost, so a retried Case contributes
+  // its failed attempts' cost too. One outcome, several charges.
   bool will_retry = 3;
 
   // What the failed attempt still cost. Often zero when the provider rejected
@@ -132,16 +176,18 @@ message StageProgress {
 
   // Cases attempted so far, and of those, how many scored and how many
   // errored. attempted = scored + errored.
+  // Cases with a TERMINAL outcome so far. attempted = scored + errored; a Case
+  // still being retried is not yet counted. See CaseErrored.will_retry.
   int32 attempted = 2;
 
   // Of those, how many produced a Score.
   int32 scored = 3;
 
-  // Of those, how many failed to answer.
+  // Of those, how many terminally failed to answer.
   int32 errored = 4;
 
-  // Total intended, mirroring RunStarted.total_cases. Zero when unknown.
-  int32 total = 5;
+  // Total Cases intended, matching RunStarted.total_cases. Zero when unknown.
+  int32 total_cases = 5;
 
   // Throughput, for the ETA a dashboard shows.
   double cases_per_second = 6;
@@ -180,13 +226,16 @@ message RunFinished {
   string incomplete_reason = 2;
 
   // Final counts. attempted = scored + errored.
+  // Cases with a terminal outcome. attempted = scored + errored, counting each
+  // Case once regardless of how many times it was retried.
   int32 attempted = 3;
 
   // Of those, how many produced a Score. This is the denominator behind
   // aggregate_score.
   int32 scored = 4;
 
-  // Of those, how many failed to answer. Excluded from aggregate_score.
+  // Of those, how many terminally failed to answer. Excluded from
+  // aggregate_score.
   int32 errored = 5;
 
   // The aggregate score over SCORED Cases only.
@@ -199,6 +248,7 @@ message RunFinished {
   // Total settled spend.
   int64 total_cost_usd_micros = 7;
 
-  // The failure, when status is RUN_STATUS_FAILED.
-  Actionable error = 8;
+  // The failure, when status is RUN_STATUS_FAILED. EventError rather than
+  // Actionable: see EventError.
+  EventError error = 8;
 }

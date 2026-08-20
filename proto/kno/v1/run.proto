@@ -99,14 +99,24 @@ message Run {
   // not be. Empty on a healthy Run.
   string incomplete_reason = 10;
 
-  // Fingerprint of the inputs: eval source content, goal, agent ref,
-  // split_seed, holdout_frac.
+  // Fingerprint over all resume-relevant inputs: eval source content, goal
+  // name and direction, agent ref, split_seed, and holdout_frac.
   //
-  // A resume whose fingerprint differs from the checkpoint's is refused with
-  // ErrCheckpointStale, because continuing would mix results computed against
-  // different inputs into one run — which looks like one measurement and is
-  // not.
+  // A resume whose fingerprint differs is refused with ErrCheckpointStale,
+  // because continuing would mix results computed against different inputs
+  // into one Run — which looks like one measurement and is not.
   string input_fingerprint = 11;
+
+  // Content hash of the eval source alone.
+  //
+  // Recorded separately because the combined fingerprint can only say
+  // "something changed". Every other input is already a discrete field on this
+  // message, so with this one the CLI can name exactly which input moved —
+  // which is the difference between "the checkpoint does not match" and "your
+  // evals file changed since this run started". CLAUDE.md's error grammar
+  // requires what failed, why, and the fix; a single opaque hash can only
+  // deliver the first.
+  string eval_content_hash = 21;
 
   // Optional salt for the dev/holdout split. Empty by default, and empty is
   // the right default: the split is keyed on Case ID alone so that adding

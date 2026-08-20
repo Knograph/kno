@@ -45,6 +45,12 @@ type Event struct {
 	// A consumer that sees a gap knows it lost events, rather than silently
 	// under-reporting. This matters most for a CI job parsing --json output:
 	// without it, dropped events look like work that never happened.
+	//
+	// ACROSS RESUME: a resumed Run continues from max(sequence) already recorded
+	// for that run_id, plus one. It does NOT restart at 1 — that would make
+	// events from before and after the interruption collide on the same number,
+	// silently defeating the gap detection this field exists for, in exactly the
+	// case (a long run that got interrupted) where a consumer most needs it.
 	Sequence int64 `protobuf:"varint,3,opt,name=sequence,proto3" json:"sequence,omitempty"`
 	// What happened.
 	//
@@ -219,6 +225,85 @@ func (*Event_SpendRecorded) isEvent_Payload() {}
 
 func (*Event_RunFinished) isEvent_Payload() {}
 
+// EventError is a failure as it appears ON THE EVENT STREAM.
+//
+// Deliberately NOT Actionable. Actionable carries `cause` — the upstream error
+// verbatim, never paraphrased, which is the right call for a message a user
+// reads in their own terminal. But a provider rejecting an oversized or
+// malformed prompt routinely echoes request content back in its error body,
+// and the event stream is logged, rendered, and streamed over SSE. Reusing
+// Actionable here would make the content rule depend on every provider's
+// choice of error text.
+//
+// The code is stable and machine-readable, so a consumer can still branch on
+// what happened. The verbatim cause stays in the store, where trace content
+// already lives under the same handling rules, and in the terminal error the
+// user sees directly.
+type EventError struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Stable, machine-readable code, e.g. "AGENT_UNREACHABLE". Matches
+	// Actionable.code so a consumer can correlate the two.
+	Code string `protobuf:"bytes,1,opt,name=code,proto3" json:"code,omitempty"`
+	// What failed, in one sentence, written by Kno rather than echoed from a
+	// provider.
+	Message string `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	// Process exit code this failure would produce.
+	ExitCode      int32 `protobuf:"varint,3,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EventError) Reset() {
+	*x = EventError{}
+	mi := &file_kno_v1_event_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EventError) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EventError) ProtoMessage() {}
+
+func (x *EventError) ProtoReflect() protoreflect.Message {
+	mi := &file_kno_v1_event_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EventError.ProtoReflect.Descriptor instead.
+func (*EventError) Descriptor() ([]byte, []int) {
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *EventError) GetCode() string {
+	if x != nil {
+		return x.Code
+	}
+	return ""
+}
+
+func (x *EventError) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+func (x *EventError) GetExitCode() int32 {
+	if x != nil {
+		return x.ExitCode
+	}
+	return 0
+}
+
 // RunStarted opens a Run. Always sequence 1.
 type RunStarted struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -243,7 +328,7 @@ type RunStarted struct {
 
 func (x *RunStarted) Reset() {
 	*x = RunStarted{}
-	mi := &file_kno_v1_event_proto_msgTypes[1]
+	mi := &file_kno_v1_event_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -255,7 +340,7 @@ func (x *RunStarted) String() string {
 func (*RunStarted) ProtoMessage() {}
 
 func (x *RunStarted) ProtoReflect() protoreflect.Message {
-	mi := &file_kno_v1_event_proto_msgTypes[1]
+	mi := &file_kno_v1_event_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -268,7 +353,7 @@ func (x *RunStarted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunStarted.ProtoReflect.Descriptor instead.
 func (*RunStarted) Descriptor() ([]byte, []int) {
-	return file_kno_v1_event_proto_rawDescGZIP(), []int{1}
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *RunStarted) GetStage() Stage {
@@ -332,7 +417,7 @@ type CaseScored struct {
 
 func (x *CaseScored) Reset() {
 	*x = CaseScored{}
-	mi := &file_kno_v1_event_proto_msgTypes[2]
+	mi := &file_kno_v1_event_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -344,7 +429,7 @@ func (x *CaseScored) String() string {
 func (*CaseScored) ProtoMessage() {}
 
 func (x *CaseScored) ProtoReflect() protoreflect.Message {
-	mi := &file_kno_v1_event_proto_msgTypes[2]
+	mi := &file_kno_v1_event_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -357,7 +442,7 @@ func (x *CaseScored) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CaseScored.ProtoReflect.Descriptor instead.
 func (*CaseScored) Descriptor() ([]byte, []int) {
-	return file_kno_v1_event_proto_rawDescGZIP(), []int{2}
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *CaseScored) GetCaseId() string {
@@ -406,11 +491,23 @@ type CaseErrored struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The Case that failed.
 	CaseId string `protobuf:"bytes,1,opt,name=case_id,json=caseId,proto3" json:"case_id,omitempty"`
-	// What went wrong, in the CLI's error grammar.
-	Error *Actionable `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
-	// Whether the executor will retry. A retry is a new provider call and takes
-	// a new budget reservation, so a consumer counting spend must not treat a
-	// retried Case as free.
+	// What went wrong. EventError rather than Actionable: see EventError.
+	Error *EventError `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	// Whether the executor will retry this Case.
+	//
+	// COUNTING RULE: only a CaseErrored with will_retry = false is TERMINAL and
+	// counts toward errored. A retried Case contributes exactly one outcome to
+	// the totals — whichever terminal event it ends on — so a Case that fails
+	// twice and then succeeds counts as one scored Case and zero errored ones.
+	//
+	// Without this rule, a Case retried twice would add 2 to errored and 1 to
+	// scored, putting one Case on both sides of the very distinction these two
+	// payloads exist to preserve, and inflating attempted past the real Case
+	// count.
+	//
+	// Spend is counted differently and deliberately: every attempt takes its own
+	// budget reservation and settles its own cost, so a retried Case contributes
+	// its failed attempts' cost too. One outcome, several charges.
 	WillRetry bool `protobuf:"varint,3,opt,name=will_retry,json=willRetry,proto3" json:"will_retry,omitempty"`
 	// What the failed attempt still cost. Often zero when the provider rejected
 	// the call outright, but not always.
@@ -421,7 +518,7 @@ type CaseErrored struct {
 
 func (x *CaseErrored) Reset() {
 	*x = CaseErrored{}
-	mi := &file_kno_v1_event_proto_msgTypes[3]
+	mi := &file_kno_v1_event_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -433,7 +530,7 @@ func (x *CaseErrored) String() string {
 func (*CaseErrored) ProtoMessage() {}
 
 func (x *CaseErrored) ProtoReflect() protoreflect.Message {
-	mi := &file_kno_v1_event_proto_msgTypes[3]
+	mi := &file_kno_v1_event_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -446,7 +543,7 @@ func (x *CaseErrored) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CaseErrored.ProtoReflect.Descriptor instead.
 func (*CaseErrored) Descriptor() ([]byte, []int) {
-	return file_kno_v1_event_proto_rawDescGZIP(), []int{3}
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *CaseErrored) GetCaseId() string {
@@ -456,7 +553,7 @@ func (x *CaseErrored) GetCaseId() string {
 	return ""
 }
 
-func (x *CaseErrored) GetError() *Actionable {
+func (x *CaseErrored) GetError() *EventError {
 	if x != nil {
 		return x.Error
 	}
@@ -487,13 +584,15 @@ type StageProgress struct {
 	Stage Stage `protobuf:"varint,1,opt,name=stage,proto3,enum=kno.v1.Stage" json:"stage,omitempty"`
 	// Cases attempted so far, and of those, how many scored and how many
 	// errored. attempted = scored + errored.
+	// Cases with a TERMINAL outcome so far. attempted = scored + errored; a Case
+	// still being retried is not yet counted. See CaseErrored.will_retry.
 	Attempted int32 `protobuf:"varint,2,opt,name=attempted,proto3" json:"attempted,omitempty"`
 	// Of those, how many produced a Score.
 	Scored int32 `protobuf:"varint,3,opt,name=scored,proto3" json:"scored,omitempty"`
-	// Of those, how many failed to answer.
+	// Of those, how many terminally failed to answer.
 	Errored int32 `protobuf:"varint,4,opt,name=errored,proto3" json:"errored,omitempty"`
-	// Total intended, mirroring RunStarted.total_cases. Zero when unknown.
-	Total int32 `protobuf:"varint,5,opt,name=total,proto3" json:"total,omitempty"`
+	// Total Cases intended, matching RunStarted.total_cases. Zero when unknown.
+	TotalCases int32 `protobuf:"varint,5,opt,name=total_cases,json=totalCases,proto3" json:"total_cases,omitempty"`
 	// Throughput, for the ETA a dashboard shows.
 	CasesPerSecond float64 `protobuf:"fixed64,6,opt,name=cases_per_second,json=casesPerSecond,proto3" json:"cases_per_second,omitempty"`
 	unknownFields  protoimpl.UnknownFields
@@ -502,7 +601,7 @@ type StageProgress struct {
 
 func (x *StageProgress) Reset() {
 	*x = StageProgress{}
-	mi := &file_kno_v1_event_proto_msgTypes[4]
+	mi := &file_kno_v1_event_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -514,7 +613,7 @@ func (x *StageProgress) String() string {
 func (*StageProgress) ProtoMessage() {}
 
 func (x *StageProgress) ProtoReflect() protoreflect.Message {
-	mi := &file_kno_v1_event_proto_msgTypes[4]
+	mi := &file_kno_v1_event_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -527,7 +626,7 @@ func (x *StageProgress) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StageProgress.ProtoReflect.Descriptor instead.
 func (*StageProgress) Descriptor() ([]byte, []int) {
-	return file_kno_v1_event_proto_rawDescGZIP(), []int{4}
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *StageProgress) GetStage() Stage {
@@ -558,9 +657,9 @@ func (x *StageProgress) GetErrored() int32 {
 	return 0
 }
 
-func (x *StageProgress) GetTotal() int32 {
+func (x *StageProgress) GetTotalCases() int32 {
 	if x != nil {
-		return x.Total
+		return x.TotalCases
 	}
 	return 0
 }
@@ -596,7 +695,7 @@ type SpendRecorded struct {
 
 func (x *SpendRecorded) Reset() {
 	*x = SpendRecorded{}
-	mi := &file_kno_v1_event_proto_msgTypes[5]
+	mi := &file_kno_v1_event_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -608,7 +707,7 @@ func (x *SpendRecorded) String() string {
 func (*SpendRecorded) ProtoMessage() {}
 
 func (x *SpendRecorded) ProtoReflect() protoreflect.Message {
-	mi := &file_kno_v1_event_proto_msgTypes[5]
+	mi := &file_kno_v1_event_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -621,7 +720,7 @@ func (x *SpendRecorded) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SpendRecorded.ProtoReflect.Descriptor instead.
 func (*SpendRecorded) Descriptor() ([]byte, []int) {
-	return file_kno_v1_event_proto_rawDescGZIP(), []int{5}
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *SpendRecorded) GetTotalCostUsdMicros() int64 {
@@ -668,11 +767,14 @@ type RunFinished struct {
 	// not be.
 	IncompleteReason string `protobuf:"bytes,2,opt,name=incomplete_reason,json=incompleteReason,proto3" json:"incomplete_reason,omitempty"`
 	// Final counts. attempted = scored + errored.
+	// Cases with a terminal outcome. attempted = scored + errored, counting each
+	// Case once regardless of how many times it was retried.
 	Attempted int32 `protobuf:"varint,3,opt,name=attempted,proto3" json:"attempted,omitempty"`
 	// Of those, how many produced a Score. This is the denominator behind
 	// aggregate_score.
 	Scored int32 `protobuf:"varint,4,opt,name=scored,proto3" json:"scored,omitempty"`
-	// Of those, how many failed to answer. Excluded from aggregate_score.
+	// Of those, how many terminally failed to answer. Excluded from
+	// aggregate_score.
 	Errored int32 `protobuf:"varint,5,opt,name=errored,proto3" json:"errored,omitempty"`
 	// The aggregate score over SCORED Cases only.
 	//
@@ -682,15 +784,16 @@ type RunFinished struct {
 	AggregateScore *float64 `protobuf:"fixed64,6,opt,name=aggregate_score,json=aggregateScore,proto3,oneof" json:"aggregate_score,omitempty"`
 	// Total settled spend.
 	TotalCostUsdMicros int64 `protobuf:"varint,7,opt,name=total_cost_usd_micros,json=totalCostUsdMicros,proto3" json:"total_cost_usd_micros,omitempty"`
-	// The failure, when status is RUN_STATUS_FAILED.
-	Error         *Actionable `protobuf:"bytes,8,opt,name=error,proto3" json:"error,omitempty"`
+	// The failure, when status is RUN_STATUS_FAILED. EventError rather than
+	// Actionable: see EventError.
+	Error         *EventError `protobuf:"bytes,8,opt,name=error,proto3" json:"error,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RunFinished) Reset() {
 	*x = RunFinished{}
-	mi := &file_kno_v1_event_proto_msgTypes[6]
+	mi := &file_kno_v1_event_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -702,7 +805,7 @@ func (x *RunFinished) String() string {
 func (*RunFinished) ProtoMessage() {}
 
 func (x *RunFinished) ProtoReflect() protoreflect.Message {
-	mi := &file_kno_v1_event_proto_msgTypes[6]
+	mi := &file_kno_v1_event_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -715,7 +818,7 @@ func (x *RunFinished) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunFinished.ProtoReflect.Descriptor instead.
 func (*RunFinished) Descriptor() ([]byte, []int) {
-	return file_kno_v1_event_proto_rawDescGZIP(), []int{6}
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *RunFinished) GetStatus() RunStatus {
@@ -767,7 +870,7 @@ func (x *RunFinished) GetTotalCostUsdMicros() int64 {
 	return 0
 }
 
-func (x *RunFinished) GetError() *Actionable {
+func (x *RunFinished) GetError() *EventError {
 	if x != nil {
 		return x.Error
 	}
@@ -778,7 +881,7 @@ var File_kno_v1_event_proto protoreflect.FileDescriptor
 
 const file_kno_v1_event_proto_rawDesc = "" +
 	"\n" +
-	"\x12kno/v1/event.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x12kno/v1/error.proto\x1a\x16kno/v1/portfolio.proto\x1a\x10kno/v1/run.proto\"\xc6\x03\n" +
+	"\x12kno/v1/event.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/portfolio.proto\x1a\x10kno/v1/run.proto\"\xc6\x03\n" +
 	"\x05Event\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x1d\n" +
 	"\n" +
@@ -793,7 +896,12 @@ const file_kno_v1_event_proto_rawDesc = "" +
 	"\x0estage_progress\x18\r \x01(\v2\x15.kno.v1.StageProgressH\x00R\rstageProgress\x12>\n" +
 	"\x0espend_recorded\x18\x0e \x01(\v2\x15.kno.v1.SpendRecordedH\x00R\rspendRecorded\x128\n" +
 	"\frun_finished\x18\x0f \x01(\v2\x13.kno.v1.RunFinishedH\x00R\vrunFinishedB\t\n" +
-	"\apayload\"\xf9\x01\n" +
+	"\apayload\"W\n" +
+	"\n" +
+	"EventError\x12\x12\n" +
+	"\x04code\x18\x01 \x01(\tR\x04code\x12\x18\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\x12\x1b\n" +
+	"\texit_code\x18\x03 \x01(\x05R\bexitCode\"\xf9\x01\n" +
 	"\n" +
 	"RunStarted\x12#\n" +
 	"\x05stage\x18\x01 \x01(\x0e2\r.kno.v1.StageR\x05stage\x12&\n" +
@@ -813,16 +921,17 @@ const file_kno_v1_event_proto_rawDesc = "" +
 	"latency_ms\x18\x05 \x01(\x03R\tlatencyMs\"\x97\x01\n" +
 	"\vCaseErrored\x12\x17\n" +
 	"\acase_id\x18\x01 \x01(\tR\x06caseId\x12(\n" +
-	"\x05error\x18\x02 \x01(\v2\x12.kno.v1.ActionableR\x05error\x12\x1d\n" +
+	"\x05error\x18\x02 \x01(\v2\x12.kno.v1.EventErrorR\x05error\x12\x1d\n" +
 	"\n" +
 	"will_retry\x18\x03 \x01(\bR\twillRetry\x12&\n" +
-	"\x0fcost_usd_micros\x18\x04 \x01(\x03R\rcostUsdMicros\"\xc4\x01\n" +
+	"\x0fcost_usd_micros\x18\x04 \x01(\x03R\rcostUsdMicros\"\xcf\x01\n" +
 	"\rStageProgress\x12#\n" +
 	"\x05stage\x18\x01 \x01(\x0e2\r.kno.v1.StageR\x05stage\x12\x1c\n" +
 	"\tattempted\x18\x02 \x01(\x05R\tattempted\x12\x16\n" +
 	"\x06scored\x18\x03 \x01(\x05R\x06scored\x12\x18\n" +
-	"\aerrored\x18\x04 \x01(\x05R\aerrored\x12\x14\n" +
-	"\x05total\x18\x05 \x01(\x05R\x05total\x12(\n" +
+	"\aerrored\x18\x04 \x01(\x05R\aerrored\x12\x1f\n" +
+	"\vtotal_cases\x18\x05 \x01(\x05R\n" +
+	"totalCases\x12(\n" +
 	"\x10cases_per_second\x18\x06 \x01(\x01R\x0ecasesPerSecond\"\xa6\x02\n" +
 	"\rSpendRecorded\x121\n" +
 	"\x15total_cost_usd_micros\x18\x01 \x01(\x03R\x12totalCostUsdMicros\x12\x1f\n" +
@@ -841,7 +950,7 @@ const file_kno_v1_event_proto_rawDesc = "" +
 	"\aerrored\x18\x05 \x01(\x05R\aerrored\x12,\n" +
 	"\x0faggregate_score\x18\x06 \x01(\x01H\x00R\x0eaggregateScore\x88\x01\x01\x121\n" +
 	"\x15total_cost_usd_micros\x18\a \x01(\x03R\x12totalCostUsdMicros\x12(\n" +
-	"\x05error\x18\b \x01(\v2\x12.kno.v1.ActionableR\x05errorB\x12\n" +
+	"\x05error\x18\b \x01(\v2\x12.kno.v1.EventErrorR\x05errorB\x12\n" +
 	"\x10_aggregate_scoreB{\n" +
 	"\n" +
 	"com.kno.v1B\n" +
@@ -859,37 +968,37 @@ func file_kno_v1_event_proto_rawDescGZIP() []byte {
 	return file_kno_v1_event_proto_rawDescData
 }
 
-var file_kno_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_kno_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_kno_v1_event_proto_goTypes = []any{
 	(*Event)(nil),         // 0: kno.v1.Event
-	(*RunStarted)(nil),    // 1: kno.v1.RunStarted
-	(*CaseScored)(nil),    // 2: kno.v1.CaseScored
-	(*CaseErrored)(nil),   // 3: kno.v1.CaseErrored
-	(*StageProgress)(nil), // 4: kno.v1.StageProgress
-	(*SpendRecorded)(nil), // 5: kno.v1.SpendRecorded
-	(*RunFinished)(nil),   // 6: kno.v1.RunFinished
-	(Stage)(0),            // 7: kno.v1.Stage
-	(*AgentRef)(nil),      // 8: kno.v1.AgentRef
-	(Direction)(0),        // 9: kno.v1.Direction
-	(*Budget)(nil),        // 10: kno.v1.Budget
-	(*Actionable)(nil),    // 11: kno.v1.Actionable
+	(*EventError)(nil),    // 1: kno.v1.EventError
+	(*RunStarted)(nil),    // 2: kno.v1.RunStarted
+	(*CaseScored)(nil),    // 3: kno.v1.CaseScored
+	(*CaseErrored)(nil),   // 4: kno.v1.CaseErrored
+	(*StageProgress)(nil), // 5: kno.v1.StageProgress
+	(*SpendRecorded)(nil), // 6: kno.v1.SpendRecorded
+	(*RunFinished)(nil),   // 7: kno.v1.RunFinished
+	(Stage)(0),            // 8: kno.v1.Stage
+	(*AgentRef)(nil),      // 9: kno.v1.AgentRef
+	(Direction)(0),        // 10: kno.v1.Direction
+	(*Budget)(nil),        // 11: kno.v1.Budget
 	(RunStatus)(0),        // 12: kno.v1.RunStatus
 }
 var file_kno_v1_event_proto_depIdxs = []int32{
-	1,  // 0: kno.v1.Event.run_started:type_name -> kno.v1.RunStarted
-	2,  // 1: kno.v1.Event.case_scored:type_name -> kno.v1.CaseScored
-	3,  // 2: kno.v1.Event.case_errored:type_name -> kno.v1.CaseErrored
-	4,  // 3: kno.v1.Event.stage_progress:type_name -> kno.v1.StageProgress
-	5,  // 4: kno.v1.Event.spend_recorded:type_name -> kno.v1.SpendRecorded
-	6,  // 5: kno.v1.Event.run_finished:type_name -> kno.v1.RunFinished
-	7,  // 6: kno.v1.RunStarted.stage:type_name -> kno.v1.Stage
-	8,  // 7: kno.v1.RunStarted.agent:type_name -> kno.v1.AgentRef
-	9,  // 8: kno.v1.RunStarted.goal_direction:type_name -> kno.v1.Direction
-	10, // 9: kno.v1.RunStarted.budget:type_name -> kno.v1.Budget
-	11, // 10: kno.v1.CaseErrored.error:type_name -> kno.v1.Actionable
-	7,  // 11: kno.v1.StageProgress.stage:type_name -> kno.v1.Stage
+	2,  // 0: kno.v1.Event.run_started:type_name -> kno.v1.RunStarted
+	3,  // 1: kno.v1.Event.case_scored:type_name -> kno.v1.CaseScored
+	4,  // 2: kno.v1.Event.case_errored:type_name -> kno.v1.CaseErrored
+	5,  // 3: kno.v1.Event.stage_progress:type_name -> kno.v1.StageProgress
+	6,  // 4: kno.v1.Event.spend_recorded:type_name -> kno.v1.SpendRecorded
+	7,  // 5: kno.v1.Event.run_finished:type_name -> kno.v1.RunFinished
+	8,  // 6: kno.v1.RunStarted.stage:type_name -> kno.v1.Stage
+	9,  // 7: kno.v1.RunStarted.agent:type_name -> kno.v1.AgentRef
+	10, // 8: kno.v1.RunStarted.goal_direction:type_name -> kno.v1.Direction
+	11, // 9: kno.v1.RunStarted.budget:type_name -> kno.v1.Budget
+	1,  // 10: kno.v1.CaseErrored.error:type_name -> kno.v1.EventError
+	8,  // 11: kno.v1.StageProgress.stage:type_name -> kno.v1.Stage
 	12, // 12: kno.v1.RunFinished.status:type_name -> kno.v1.RunStatus
-	11, // 13: kno.v1.RunFinished.error:type_name -> kno.v1.Actionable
+	1,  // 13: kno.v1.RunFinished.error:type_name -> kno.v1.EventError
 	14, // [14:14] is the sub-list for method output_type
 	14, // [14:14] is the sub-list for method input_type
 	14, // [14:14] is the sub-list for extension type_name
@@ -903,7 +1012,6 @@ func file_kno_v1_event_proto_init() {
 		return
 	}
 	file_kno_v1_common_proto_init()
-	file_kno_v1_error_proto_init()
 	file_kno_v1_portfolio_proto_init()
 	file_kno_v1_run_proto_init()
 	file_kno_v1_event_proto_msgTypes[0].OneofWrappers = []any{
@@ -914,15 +1022,15 @@ func file_kno_v1_event_proto_init() {
 		(*Event_SpendRecorded)(nil),
 		(*Event_RunFinished)(nil),
 	}
-	file_kno_v1_event_proto_msgTypes[5].OneofWrappers = []any{}
 	file_kno_v1_event_proto_msgTypes[6].OneofWrappers = []any{}
+	file_kno_v1_event_proto_msgTypes[7].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kno_v1_event_proto_rawDesc), len(file_kno_v1_event_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   8,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

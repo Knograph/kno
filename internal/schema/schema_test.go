@@ -453,7 +453,20 @@ func TestEventsCannotCarryConversationContent(t *testing.T) {
 	forbiddenMessages := map[string]bool{
 		"kno.v1.Case": true, "kno.v1.Response": true,
 		"kno.v1.Asset": true, "kno.v1.Turn": true, "kno.v1.ToolCall": true,
+		// Actionable carries `cause` — the upstream provider error VERBATIM,
+		// never paraphrased. That is correct for a message the user reads in
+		// their own terminal, and wrong for a stream that is logged and
+		// streamed: a provider rejecting an oversized or malformed prompt
+		// routinely echoes request content back in its error body. Events use
+		// EventError, which has no cause.
+		//
+		// This entry was added after Phase-3 review found the leak. The
+		// original forbidden set listed only the obvious content carriers, and
+		// the walk passed clean through Event -> CaseErrored -> Actionable.
+		"kno.v1.Actionable": true,
 	}
+	// Field names that carry text written by someone other than Kno.
+	forbiddenFields["cause"] = true
 
 	eventDesc, err := protoregistry.GlobalFiles.FindDescriptorByName("kno.v1.Event")
 	if err != nil {
