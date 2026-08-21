@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -31,6 +32,10 @@ type Agent struct {
 
 	calls       atomic.Int64
 	rateLimited atomic.Int64
+
+	// attempted records which Cases have been seen, so ThrottleFirstAttempt is
+	// per Case rather than per global call.
+	attempted sync.Map
 }
 
 // Options configures the fake.
@@ -47,6 +52,15 @@ type Options struct {
 
 	// FailEvery makes every Nth call fail. Zero disables it.
 	FailEvery int
+
+	// ThrottleFirstAttempt makes the FIRST attempt at each Case return
+	// ErrRateLimited, so a retry recovers it.
+	//
+	// Deterministic per Case, unlike RateLimitEvery, which counts global calls
+	// — under concurrency that lets a Case's retries land on the same multiple
+	// and be throttled repeatedly, which makes a retry test flaky rather than
+	// meaningful.
+	ThrottleFirstAttempt bool
 
 	// RateLimitEvery makes every Nth call return ErrRateLimited. Zero disables
 	// it.
@@ -78,6 +92,14 @@ func (a *Agent) Invoke(ctx context.Context, c *core.Case) (*core.Response, error
 	}
 
 	n := a.calls.Add(1)
+
+	if a.opts.ThrottleFirstAttempt {
+		if _, seen := a.attempted.LoadOrStore(c.GetId(), true); !seen {
+			a.rateLimited.Add(1)
+			return nil, errs.ErrRateLimited.Wrap(
+				fmt.Errorf("fake: throttled the first attempt at %s", c.GetId()))
+		}
+	}
 
 	if a.opts.RateLimitEvery > 0 && n%int64(a.opts.RateLimitEvery) == 0 {
 		a.rateLimited.Add(1)

@@ -561,8 +561,10 @@ func TestRateLimitsAreRetriedNotRecordedAsFailures(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	// Every 3rd call is throttled, so retries are needed but always succeed.
-	h := newHarness(t, 20, 5, fake.Options{RateLimitEvery: 3})
+	// Every Case is throttled once, so every Case needs a retry and every
+	// retry succeeds. Deterministic under concurrency, unlike a global
+	// every-Nth-call counter, whose retries can land on the same multiple.
+	h := newHarness(t, 20, 5, fake.Options{ThrottleFirstAttempt: true})
 	h.opts.RetryBackoff = time.Millisecond // keep the test fast
 
 	res, err := core.Baseline(ctx, h.evals, h.opts)
@@ -584,8 +586,9 @@ func TestRateLimitsAreRetriedNotRecordedAsFailures(t *testing.T) {
 		t.Error("ordinary throttling marked the baseline unusable")
 	}
 
-	// Retries are real provider calls and must consume call budget.
-	if h.agent.Calls() <= 20 {
+	// Retries are real provider calls and must consume call budget: 20 Cases,
+	// each throttled once, is 40 calls.
+	if h.agent.Calls() != 40 {
 		t.Errorf("the agent was called %d times for 20 Cases; retries were not "+
 			"counted as calls", h.agent.Calls())
 	}
