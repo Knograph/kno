@@ -67,15 +67,20 @@ covenants — breaking any of them requires a major version.
     input/output pair. Both target providers price cached input differently, and a two-field model
     settles a cache read at full input price — a systematic overstatement in the direction a user
     notices as divergence from their invoice.
-  - `Sampling` on `Run`: temperature, seed, and `max_output_tokens`, all optional so that "the
-    adapter's default" is distinguishable from a deliberate zero. `max_output_tokens` is recorded
-    because it is load-bearing twice — the output term of every cost prediction *and* the
-    truncation threshold.
-  - `Capabilities.sampling_params`: whether an adapter accepts temperature at all. Assuming it does
+  - `Generation` on `Run`: temperature, `top_p`, seed, and `max_output_tokens`, all optional so
+    that "the adapter's default" is distinguishable from a deliberate zero. `max_output_tokens` is
+    recorded because it is load-bearing twice — the output term of every cost prediction *and* the
+    truncation threshold. Named `Generation`, not `Sampling`, on the precedent DESIGN.md set when
+    it rejected `bootstrap`: in a tool that reports confidence intervals, "sampling" already means
+    something else.
+  - `Run.pricing_table_version`: which dated table produced this Run's cost figures, so a report
+    can say the spend number is reported usage at a dated price rather than an invoice.
+  - `Capabilities.generation_params`: whether an adapter accepts temperature at all. Assuming it does
     breaks reasoning models, which reject any non-default temperature with a 400 — every Case would
     error and the run would report "too many cases errored" while naming nothing about the cause.
   - `Response` gains `cached_tokens`, `usage_estimated`, `refused`, `stop_reason`, `resolved_model`,
-    and `backend_id`. A refusal is scored *and* recorded: an account whose safety settings refuse
+    and `provider_build_id` (not `backend_id` — `store/` already uses "backend" for a Store
+    implementation). A refusal is scored *and* recorded: an account whose safety settings refuse
     every Case would otherwise produce 100% scored Cases, an aggregate of 0.000, and a clean error
     rate — a usable-looking baseline for a run in which the agent was never measured. A
     `STOP_REASON_LENGTH` response is a well-formed 200 with a truncated answer, which would
@@ -84,7 +89,12 @@ covenants — breaking any of them requires a major version.
     adapter reaches every OpenAI-compatible provider. Parsed into its own field because the
     security rules key on the host.
   - `CaseExecution` on `Run` (see ADR-0004), and four event payloads: `RunResumed`,
-    `RetryAttempted`, `RateLimitWaiting`, `SettlementOvershoot`.
+    `RetryAttempted`, `RateLimitWaiting`, `SettlementOvershoot`. `RetryAttempted.reason` is an
+    enum rather than a string, so "never provider text on the event stream" is a wire constraint
+    rather than a comment nothing enforces.
+  - A second schema gate, `TestRateFieldsAreDistinguishableFromAmounts`: `Price`'s fields are
+    micro-USD *per million tokens*, and the existing money gate would happily certify one being
+    summed into a cost accumulator — a silent factor of 1e6.
 - **ADR-0004**: per-run observations live in a submessage derived from persisted rows, not from
   in-memory counters. Settles the open design question the M2 plan's third adversarial review
   raised and the plan deliberately left open rather than answering in prose.

@@ -492,7 +492,7 @@ type Capabilities struct {
 	// The adapter reports token usage, without which cost is estimated rather
 	// than measured.
 	TokenCounts bool `protobuf:"varint,4,opt,name=token_counts,json=tokenCounts,proto3" json:"token_counts,omitempty"`
-	// The adapter accepts sampling parameters (temperature, top_p, seed).
+	// The adapter accepts generation parameters (temperature, top_p, seed).
 	//
 	// Not universal, and assuming it is breaks a whole model class: reasoning
 	// models reject any non-default temperature with a 400, and Anthropic
@@ -500,7 +500,7 @@ type Capabilities struct {
 	// would 400 every Case, trip error_rate_exceeded, and tell the user "too
 	// many cases errored for this to be a usable baseline" — naming nothing
 	// about the actual cause.
-	SamplingParams bool `protobuf:"varint,6,opt,name=sampling_params,json=samplingParams,proto3" json:"sampling_params,omitempty"`
+	GenerationParams bool `protobuf:"varint,6,opt,name=generation_params,json=generationParams,proto3" json:"generation_params,omitempty"`
 	// Capability names this schema version does not model, for forward
 	// compatibility with adapters newer than the engine.
 	Extensions    []string `protobuf:"bytes,5,rep,name=extensions,proto3" json:"extensions,omitempty"`
@@ -566,9 +566,9 @@ func (x *Capabilities) GetTokenCounts() bool {
 	return false
 }
 
-func (x *Capabilities) GetSamplingParams() bool {
+func (x *Capabilities) GetGenerationParams() bool {
 	if x != nil {
-		return x.SamplingParams
+		return x.GenerationParams
 	}
 	return false
 }
@@ -582,6 +582,12 @@ func (x *Capabilities) GetExtensions() []string {
 
 // Price is what one model costs, per million tokens, in MICRO-USD.
 //
+// Not referenced by any other message yet, deliberately: the pricing table is
+// engine-side data (M2-5), keyed by (scheme, model), and Run records only
+// which dated version of it produced its figures — see
+// Run.pricing_table_version. The type is defined here so the table, the
+// adapters, and any future API expose one shape rather than three.
+//
 // A vector rather than an input/output pair: both target providers price
 // cached input differently from fresh input — Anthropic bills cache writes
 // above base input and cache reads far below it, OpenAI discounts cached
@@ -591,14 +597,14 @@ func (x *Capabilities) GetExtensions() []string {
 type Price struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Fresh input tokens.
-	InputPerMtokUsdMicros int64 `protobuf:"varint,1,opt,name=input_per_mtok_usd_micros,json=inputPerMtokUsdMicros,proto3" json:"input_per_mtok_usd_micros,omitempty"`
+	InputPerMtokUsdMicros *int64 `protobuf:"varint,1,opt,name=input_per_mtok_usd_micros,json=inputPerMtokUsdMicros,proto3,oneof" json:"input_per_mtok_usd_micros,omitempty"`
 	// Input tokens served from the provider's cache.
-	CachedInputPerMtokUsdMicros int64 `protobuf:"varint,2,opt,name=cached_input_per_mtok_usd_micros,json=cachedInputPerMtokUsdMicros,proto3" json:"cached_input_per_mtok_usd_micros,omitempty"`
+	CachedInputPerMtokUsdMicros *int64 `protobuf:"varint,2,opt,name=cached_input_per_mtok_usd_micros,json=cachedInputPerMtokUsdMicros,proto3,oneof" json:"cached_input_per_mtok_usd_micros,omitempty"`
 	// Input tokens written to the provider's cache, where that is billed
 	// separately and above the base input rate.
-	CacheWritePerMtokUsdMicros int64 `protobuf:"varint,3,opt,name=cache_write_per_mtok_usd_micros,json=cacheWritePerMtokUsdMicros,proto3" json:"cache_write_per_mtok_usd_micros,omitempty"`
+	CacheWritePerMtokUsdMicros *int64 `protobuf:"varint,3,opt,name=cache_write_per_mtok_usd_micros,json=cacheWritePerMtokUsdMicros,proto3,oneof" json:"cache_write_per_mtok_usd_micros,omitempty"`
 	// Output tokens.
-	OutputPerMtokUsdMicros int64 `protobuf:"varint,4,opt,name=output_per_mtok_usd_micros,json=outputPerMtokUsdMicros,proto3" json:"output_per_mtok_usd_micros,omitempty"`
+	OutputPerMtokUsdMicros *int64 `protobuf:"varint,4,opt,name=output_per_mtok_usd_micros,json=outputPerMtokUsdMicros,proto3,oneof" json:"output_per_mtok_usd_micros,omitempty"`
 	unknownFields          protoimpl.UnknownFields
 	sizeCache              protoimpl.SizeCache
 }
@@ -634,75 +640,90 @@ func (*Price) Descriptor() ([]byte, []int) {
 }
 
 func (x *Price) GetInputPerMtokUsdMicros() int64 {
-	if x != nil {
-		return x.InputPerMtokUsdMicros
+	if x != nil && x.InputPerMtokUsdMicros != nil {
+		return *x.InputPerMtokUsdMicros
 	}
 	return 0
 }
 
 func (x *Price) GetCachedInputPerMtokUsdMicros() int64 {
-	if x != nil {
-		return x.CachedInputPerMtokUsdMicros
+	if x != nil && x.CachedInputPerMtokUsdMicros != nil {
+		return *x.CachedInputPerMtokUsdMicros
 	}
 	return 0
 }
 
 func (x *Price) GetCacheWritePerMtokUsdMicros() int64 {
-	if x != nil {
-		return x.CacheWritePerMtokUsdMicros
+	if x != nil && x.CacheWritePerMtokUsdMicros != nil {
+		return *x.CacheWritePerMtokUsdMicros
 	}
 	return 0
 }
 
 func (x *Price) GetOutputPerMtokUsdMicros() int64 {
-	if x != nil {
-		return x.OutputPerMtokUsdMicros
+	if x != nil && x.OutputPerMtokUsdMicros != nil {
+		return *x.OutputPerMtokUsdMicros
 	}
 	return 0
 }
 
-// Sampling is the generation configuration a Run executed under.
+// Generation is the decoding configuration a Run executed under.
+//
+// NOT called Sampling. DESIGN.md rejects `bootstrap` for the cold-start
+// command because "in a tool that computes confidence intervals, 'bootstrap'
+// collides head-on with statistical resampling" — and `sampling` collides the
+// same way. docs/what-the-numbers-mean.md already uses it statistically:
+// "sampling variation across your eval set". stats/ will import this type.
 //
 // Recorded because a baseline is the reference every later delta is measured
 // against, and an unpinned temperature makes two runs over the same evals and
 // the same model produce different references. Every field is optional: unset
 // means "the adapter's default was used", which is NOT the same as a
 // deliberate zero, and the distinction decides whether a resume is comparable.
-type Sampling struct {
+type Generation struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Zero for a reproducible measurement, where the adapter reports
-	// Capabilities.sampling_params.
+	// Capabilities.generation_params.
 	Temperature *float64 `protobuf:"fixed64,1,opt,name=temperature,proto3,oneof" json:"temperature,omitempty"`
 	// Provider-side determinism hint, where supported. Not a guarantee: no
 	// hosted model is deterministic across a silent version bump.
 	Seed *int64 `protobuf:"varint,2,opt,name=seed,proto3,oneof" json:"seed,omitempty"`
+	// Nucleus sampling cutoff, where the adapter accepts it. Recorded for the
+	// same reason as temperature: an unpinned top_p makes two runs over the same
+	// evals and the same model produce different references.
+	TopP *float64 `protobuf:"fixed64,4,opt,name=top_p,json=topP,proto3,oneof" json:"top_p,omitempty"`
 	// Ceiling on generated tokens.
 	//
 	// Load-bearing twice over, which is why it is recorded rather than assumed:
 	// it is the output term of every cost prediction, AND the threshold at which
 	// a response is truncated. Raising it to stop truncating inflates every
-	// reservation; lowering it to loosen the cap truncates more answers. It is
-	// part of input_fingerprint so a resume under a different ceiling is
-	// refused rather than silently mixed.
+	// reservation; lowering it to loosen the cap truncates more answers.
+	//
+	// It is NOT yet covered by Run.input_fingerprint. Today that fingerprint is
+	// the eval content hash and nothing else, so a resume under a different
+	// ceiling is accepted and mixes Cases truncated at one limit with Cases
+	// complete at another. M2-6 folds this field in and refuses such a resume;
+	// until then Run.generation records the LAST process's configuration, not
+	// necessarily the one every Case ran under.
 	MaxOutputTokens *int64 `protobuf:"varint,3,opt,name=max_output_tokens,json=maxOutputTokens,proto3,oneof" json:"max_output_tokens,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
 
-func (x *Sampling) Reset() {
-	*x = Sampling{}
+func (x *Generation) Reset() {
+	*x = Generation{}
 	mi := &file_kno_v1_common_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *Sampling) String() string {
+func (x *Generation) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*Sampling) ProtoMessage() {}
+func (*Generation) ProtoMessage() {}
 
-func (x *Sampling) ProtoReflect() protoreflect.Message {
+func (x *Generation) ProtoReflect() protoreflect.Message {
 	mi := &file_kno_v1_common_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -714,26 +735,33 @@ func (x *Sampling) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use Sampling.ProtoReflect.Descriptor instead.
-func (*Sampling) Descriptor() ([]byte, []int) {
+// Deprecated: Use Generation.ProtoReflect.Descriptor instead.
+func (*Generation) Descriptor() ([]byte, []int) {
 	return file_kno_v1_common_proto_rawDescGZIP(), []int{4}
 }
 
-func (x *Sampling) GetTemperature() float64 {
+func (x *Generation) GetTemperature() float64 {
 	if x != nil && x.Temperature != nil {
 		return *x.Temperature
 	}
 	return 0
 }
 
-func (x *Sampling) GetSeed() int64 {
+func (x *Generation) GetSeed() int64 {
 	if x != nil && x.Seed != nil {
 		return *x.Seed
 	}
 	return 0
 }
 
-func (x *Sampling) GetMaxOutputTokens() int64 {
+func (x *Generation) GetTopP() float64 {
+	if x != nil && x.TopP != nil {
+		return *x.TopP
+	}
+	return 0
+}
+
+func (x *Generation) GetMaxOutputTokens() int64 {
 	if x != nil && x.MaxOutputTokens != nil {
 		return *x.MaxOutputTokens
 	}
@@ -759,8 +787,14 @@ func (x *Sampling) GetMaxOutputTokens() int64 {
 // explicitly, and a key bound to one host is never sent to another.
 type AgentRef struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The reference exactly as the user wrote it. Kept verbatim so error
-	// messages can quote the user's own words back to them.
+	// The reference exactly as the user wrote it, MINUS any credential.
+	//
+	// Kept verbatim so error messages can quote the user's own words back to
+	// them — but this field is persisted on Run, emitted on RunStarted, and
+	// rendered in --json and logs. A user who typed
+	// `openai:m@https://sk-abc@host/v1` would otherwise put their key in all
+	// four. The parser strips URL userinfo before constructing this; it does not
+	// trust the caller to have done so.
 	Ref string `protobuf:"bytes,1,opt,name=ref,proto3" json:"ref,omitempty"`
 	// Scheme, parsed from ref: "openai", "anthropic", "http", "tuned", "exec".
 	Scheme string `protobuf:"bytes,2,opt,name=scheme,proto3" json:"scheme,omitempty"`
@@ -774,6 +808,10 @@ type AgentRef struct {
 	// security rules key on it: plain HTTP, loopback, RFC1918 and link-local
 	// destinations are refused or gated here, and credential selection is keyed
 	// on this host.
+	//
+	// Never contains userinfo. A URL carrying `user:pass@` is refused at parse
+	// rather than sanitized, because a credential the user embedded is still a
+	// credential and this value is persisted, streamed, and logged.
 	BaseUrl       string `protobuf:"bytes,4,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -856,27 +894,34 @@ const file_kno_v1_common_proto_rawDesc = "" +
 	"\vingested_at\x18\x03 \x01(\tR\n" +
 	"ingestedAt\x12\x18\n" +
 	"\aderived\x18\x04 \x01(\bR\aderived\x12'\n" +
-	"\x0fderivation_note\x18\x05 \x01(\tR\x0ederivationNote\"\xe2\x01\n" +
+	"\x0fderivation_note\x18\x05 \x01(\tR\x0ederivationNote\"\xe6\x01\n" +
 	"\fCapabilities\x12%\n" +
 	"\x0econtext_inject\x18\x01 \x01(\bR\rcontextInject\x12'\n" +
 	"\x0fknowledge_write\x18\x02 \x01(\bR\x0eknowledgeWrite\x12\x16\n" +
 	"\x06stream\x18\x03 \x01(\bR\x06stream\x12!\n" +
-	"\ftoken_counts\x18\x04 \x01(\bR\vtokenCounts\x12'\n" +
-	"\x0fsampling_params\x18\x06 \x01(\bR\x0esamplingParams\x12\x1e\n" +
+	"\ftoken_counts\x18\x04 \x01(\bR\vtokenCounts\x12+\n" +
+	"\x11generation_params\x18\x06 \x01(\bR\x10generationParams\x12\x1e\n" +
 	"\n" +
 	"extensions\x18\x05 \x03(\tR\n" +
-	"extensions\"\x89\x02\n" +
-	"\x05Price\x128\n" +
-	"\x19input_per_mtok_usd_micros\x18\x01 \x01(\x03R\x15inputPerMtokUsdMicros\x12E\n" +
-	" cached_input_per_mtok_usd_micros\x18\x02 \x01(\x03R\x1bcachedInputPerMtokUsdMicros\x12C\n" +
-	"\x1fcache_write_per_mtok_usd_micros\x18\x03 \x01(\x03R\x1acacheWritePerMtokUsdMicros\x12:\n" +
-	"\x1aoutput_per_mtok_usd_micros\x18\x04 \x01(\x03R\x16outputPerMtokUsdMicros\"\xaa\x01\n" +
-	"\bSampling\x12%\n" +
+	"extensions\"\xa3\x03\n" +
+	"\x05Price\x12=\n" +
+	"\x19input_per_mtok_usd_micros\x18\x01 \x01(\x03H\x00R\x15inputPerMtokUsdMicros\x88\x01\x01\x12J\n" +
+	" cached_input_per_mtok_usd_micros\x18\x02 \x01(\x03H\x01R\x1bcachedInputPerMtokUsdMicros\x88\x01\x01\x12H\n" +
+	"\x1fcache_write_per_mtok_usd_micros\x18\x03 \x01(\x03H\x02R\x1acacheWritePerMtokUsdMicros\x88\x01\x01\x12?\n" +
+	"\x1aoutput_per_mtok_usd_micros\x18\x04 \x01(\x03H\x03R\x16outputPerMtokUsdMicros\x88\x01\x01B\x1c\n" +
+	"\x1a_input_per_mtok_usd_microsB#\n" +
+	"!_cached_input_per_mtok_usd_microsB\"\n" +
+	" _cache_write_per_mtok_usd_microsB\x1d\n" +
+	"\x1b_output_per_mtok_usd_micros\"\xd0\x01\n" +
+	"\n" +
+	"Generation\x12%\n" +
 	"\vtemperature\x18\x01 \x01(\x01H\x00R\vtemperature\x88\x01\x01\x12\x17\n" +
-	"\x04seed\x18\x02 \x01(\x03H\x01R\x04seed\x88\x01\x01\x12/\n" +
-	"\x11max_output_tokens\x18\x03 \x01(\x03H\x02R\x0fmaxOutputTokens\x88\x01\x01B\x0e\n" +
+	"\x04seed\x18\x02 \x01(\x03H\x01R\x04seed\x88\x01\x01\x12\x18\n" +
+	"\x05top_p\x18\x04 \x01(\x01H\x02R\x04topP\x88\x01\x01\x12/\n" +
+	"\x11max_output_tokens\x18\x03 \x01(\x03H\x03R\x0fmaxOutputTokens\x88\x01\x01B\x0e\n" +
 	"\f_temperatureB\a\n" +
-	"\x05_seedB\x14\n" +
+	"\x05_seedB\b\n" +
+	"\x06_top_pB\x14\n" +
 	"\x12_max_output_tokens\"g\n" +
 	"\bAgentRef\x12\x10\n" +
 	"\x03ref\x18\x01 \x01(\tR\x03ref\x12\x16\n" +
@@ -929,7 +974,7 @@ var file_kno_v1_common_proto_goTypes = []any{
 	(*Provenance)(nil),   // 5: kno.v1.Provenance
 	(*Capabilities)(nil), // 6: kno.v1.Capabilities
 	(*Price)(nil),        // 7: kno.v1.Price
-	(*Sampling)(nil),     // 8: kno.v1.Sampling
+	(*Generation)(nil),   // 8: kno.v1.Generation
 	(*AgentRef)(nil),     // 9: kno.v1.AgentRef
 }
 var file_kno_v1_common_proto_depIdxs = []int32{
@@ -945,6 +990,7 @@ func file_kno_v1_common_proto_init() {
 	if File_kno_v1_common_proto != nil {
 		return
 	}
+	file_kno_v1_common_proto_msgTypes[3].OneofWrappers = []any{}
 	file_kno_v1_common_proto_msgTypes[4].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

@@ -21,6 +21,73 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// RetryReason is why an attempt is being retried.
+//
+// Closed set, deliberately. Only transient conditions belong here: a permanent
+// failure must not be retried, because every attempt takes its own budget
+// reservation and settles its own call against the caps.
+type RetryReason int32
+
+const (
+	// Unset. An emitter that cannot classify must not retry.
+	RetryReason_RETRY_REASON_UNSPECIFIED RetryReason = 0
+	// The provider asked us to slow down.
+	RetryReason_RETRY_REASON_RATE_LIMITED RetryReason = 1
+	// A transport-level failure with no evidence the provider processed the
+	// request — a stale pooled connection, a reset before any bytes were
+	// written.
+	RetryReason_RETRY_REASON_TRANSPORT_TRANSIENT RetryReason = 2
+	// The provider returned a 5xx.
+	RetryReason_RETRY_REASON_PROVIDER_UNAVAILABLE RetryReason = 3
+	// The request timed out before a response began.
+	RetryReason_RETRY_REASON_TIMEOUT RetryReason = 4
+)
+
+// Enum value maps for RetryReason.
+var (
+	RetryReason_name = map[int32]string{
+		0: "RETRY_REASON_UNSPECIFIED",
+		1: "RETRY_REASON_RATE_LIMITED",
+		2: "RETRY_REASON_TRANSPORT_TRANSIENT",
+		3: "RETRY_REASON_PROVIDER_UNAVAILABLE",
+		4: "RETRY_REASON_TIMEOUT",
+	}
+	RetryReason_value = map[string]int32{
+		"RETRY_REASON_UNSPECIFIED":          0,
+		"RETRY_REASON_RATE_LIMITED":         1,
+		"RETRY_REASON_TRANSPORT_TRANSIENT":  2,
+		"RETRY_REASON_PROVIDER_UNAVAILABLE": 3,
+		"RETRY_REASON_TIMEOUT":              4,
+	}
+)
+
+func (x RetryReason) Enum() *RetryReason {
+	p := new(RetryReason)
+	*p = x
+	return p
+}
+
+func (x RetryReason) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (RetryReason) Descriptor() protoreflect.EnumDescriptor {
+	return file_kno_v1_event_proto_enumTypes[0].Descriptor()
+}
+
+func (RetryReason) Type() protoreflect.EnumType {
+	return &file_kno_v1_event_proto_enumTypes[0]
+}
+
+func (x RetryReason) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use RetryReason.Descriptor instead.
+func (RetryReason) EnumDescriptor() ([]byte, []int) {
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{0}
+}
+
 // Event is one thing that happened during a Run.
 //
 // The event stream is the single spine: the engine emits these, the TUI
@@ -953,10 +1020,15 @@ func (x *RunFinished) GetError() *EventError {
 // correctly either way; one watching live does not. That is docs/debt.md#29.
 type RunResumed struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Cases already recorded before this process started. Progress begins here,
-	// not at zero.
+	// Cases already recorded before this process started.
+	//
+	// Two coordinate systems, and mixing them is the misrender this message
+	// exists to prevent. OVERALL progress runs already_completed..total_cases.
+	// SESSION progress runs 0..remaining. Do not pair a numerator from one with
+	// a denominator from the other: 28 done of 40, resumed, is "28 of 40"
+	// overall or "0 of 12" this session — never "28 of 12".
 	AlreadyCompleted int32 `protobuf:"varint,1,opt,name=already_completed,json=alreadyCompleted,proto3" json:"already_completed,omitempty"`
-	// Cases left to attempt. This is the denominator a live view should use.
+	// Cases left to attempt. The denominator for SESSION progress only.
 	Remaining int32 `protobuf:"varint,2,opt,name=remaining,proto3" json:"remaining,omitempty"`
 	// Total Cases the Run intends to attempt across all of its lives, so a
 	// consumer can render both "12 of 40 this session" and "40 of 40 overall".
@@ -1052,9 +1124,17 @@ type RetryAttempted struct {
 	CaseId string `protobuf:"bytes,1,opt,name=case_id,json=caseId,proto3" json:"case_id,omitempty"`
 	// Which attempt this is, 1-based. The first attempt does not emit.
 	AttemptOrdinal int32 `protobuf:"varint,2,opt,name=attempt_ordinal,json=attemptOrdinal,proto3" json:"attempt_ordinal,omitempty"`
-	// Why the previous attempt failed, as an error Code — never provider text,
-	// which can contain trace content.
-	ReasonCode string `protobuf:"bytes,3,opt,name=reason_code,json=reasonCode,proto3" json:"reason_code,omitempty"`
+	// Why the previous attempt failed.
+	//
+	// An enum, not a string. The previous draft took a string and asserted in a
+	// comment that it would never carry provider text — an assertion nothing
+	// enforced. The natural implementation of an emitter is
+	// `ReasonCode: err.Error()`, and a provider 400 that echoes an oversized
+	// prompt would then land in the events table, in --json, in SSE, and in log
+	// lines. No gate catches that: not the schema shape test, not gitleaks, not
+	// lint. This message is fourteen lines away from EventError, which exists
+	// for exactly this reason.
+	Reason RetryReason `protobuf:"varint,3,opt,name=reason,proto3,enum=kno.v1.RetryReason" json:"reason,omitempty"`
 	// How long before this attempt was made.
 	BackoffMs int64 `protobuf:"varint,4,opt,name=backoff_ms,json=backoffMs,proto3" json:"backoff_ms,omitempty"`
 	// What remains of the Case's retry budget. Retry is bounded by time as well
@@ -1110,11 +1190,11 @@ func (x *RetryAttempted) GetAttemptOrdinal() int32 {
 	return 0
 }
 
-func (x *RetryAttempted) GetReasonCode() string {
+func (x *RetryAttempted) GetReason() RetryReason {
 	if x != nil {
-		return x.ReasonCode
+		return x.Reason
 	}
-	return ""
+	return RetryReason_RETRY_REASON_UNSPECIFIED
 }
 
 func (x *RetryAttempted) GetBackoffMs() int64 {
@@ -1143,8 +1223,11 @@ type RateLimitWaiting struct {
 	// Set when the provider asked for this wait, via Retry-After. Unset means
 	// the client-side limiter chose it.
 	ProviderRequested bool `protobuf:"varint,2,opt,name=provider_requested,json=providerRequested,proto3" json:"provider_requested,omitempty"`
-	// The host being waited on. Rate limits are per-host, and a run against two
-	// providers should say which one is throttling.
+	// The host being waited on, as `host` or `host:port` — NEVER a full URL.
+	//
+	// Rate limits are per-host, and a run against two providers should say which
+	// one is throttling. A URL would carry a path, a query, and potentially
+	// userinfo onto a stream that is persisted and logged.
 	Host          string `protobuf:"bytes,3,opt,name=host,proto3" json:"host,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1370,12 +1453,11 @@ const file_kno_v1_event_proto_rawDesc = "" +
 	"\vtotal_cases\x18\x03 \x01(\x05R\n" +
 	"totalCases\x127\n" +
 	"\x18restored_cost_usd_micros\x18\x04 \x01(\x03R\x15restoredCostUsdMicros\x12%\n" +
-	"\x0erestored_calls\x18\x05 \x01(\x03R\rrestoredCalls\"\xcd\x01\n" +
+	"\x0erestored_calls\x18\x05 \x01(\x03R\rrestoredCalls\"\xd9\x01\n" +
 	"\x0eRetryAttempted\x12\x17\n" +
 	"\acase_id\x18\x01 \x01(\tR\x06caseId\x12'\n" +
-	"\x0fattempt_ordinal\x18\x02 \x01(\x05R\x0eattemptOrdinal\x12\x1f\n" +
-	"\vreason_code\x18\x03 \x01(\tR\n" +
-	"reasonCode\x12\x1d\n" +
+	"\x0fattempt_ordinal\x18\x02 \x01(\x05R\x0eattemptOrdinal\x12+\n" +
+	"\x06reason\x18\x03 \x01(\x0e2\x13.kno.v1.RetryReasonR\x06reason\x12\x1d\n" +
 	"\n" +
 	"backoff_ms\x18\x04 \x01(\x03R\tbackoffMs\x129\n" +
 	"\x19retry_budget_remaining_ms\x18\x05 \x01(\x03R\x16retryBudgetRemainingMs\"n\n" +
@@ -1387,7 +1469,13 @@ const file_kno_v1_event_proto_rawDesc = "" +
 	"\acase_id\x18\x01 \x01(\tR\x06caseId\x12.\n" +
 	"\x13reserved_usd_micros\x18\x02 \x01(\x03R\x11reservedUsdMicros\x12,\n" +
 	"\x12settled_usd_micros\x18\x03 \x01(\x03R\x10settledUsdMicros\x12E\n" +
-	"\x1fcumulative_overshoot_usd_micros\x18\x04 \x01(\x03R\x1ccumulativeOvershootUsdMicrosB{\n" +
+	"\x1fcumulative_overshoot_usd_micros\x18\x04 \x01(\x03R\x1ccumulativeOvershootUsdMicros*\xb1\x01\n" +
+	"\vRetryReason\x12\x1c\n" +
+	"\x18RETRY_REASON_UNSPECIFIED\x10\x00\x12\x1d\n" +
+	"\x19RETRY_REASON_RATE_LIMITED\x10\x01\x12$\n" +
+	" RETRY_REASON_TRANSPORT_TRANSIENT\x10\x02\x12%\n" +
+	"!RETRY_REASON_PROVIDER_UNAVAILABLE\x10\x03\x12\x18\n" +
+	"\x14RETRY_REASON_TIMEOUT\x10\x04B{\n" +
 	"\n" +
 	"com.kno.v1B\n" +
 	"EventProtoP\x01Z(github.com/knograph/kno/gen/kno/v1;knov1\xa2\x02\x03KXX\xaa\x02\x06Kno.V1\xca\x02\x06Kno\\V1\xe2\x02\x12Kno\\V1\\GPBMetadata\xea\x02\aKno::V1b\x06proto3"
@@ -1404,50 +1492,53 @@ func file_kno_v1_event_proto_rawDescGZIP() []byte {
 	return file_kno_v1_event_proto_rawDescData
 }
 
+var file_kno_v1_event_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_kno_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_kno_v1_event_proto_goTypes = []any{
-	(*Event)(nil),               // 0: kno.v1.Event
-	(*EventError)(nil),          // 1: kno.v1.EventError
-	(*RunStarted)(nil),          // 2: kno.v1.RunStarted
-	(*CaseScored)(nil),          // 3: kno.v1.CaseScored
-	(*CaseErrored)(nil),         // 4: kno.v1.CaseErrored
-	(*StageProgress)(nil),       // 5: kno.v1.StageProgress
-	(*SpendRecorded)(nil),       // 6: kno.v1.SpendRecorded
-	(*RunFinished)(nil),         // 7: kno.v1.RunFinished
-	(*RunResumed)(nil),          // 8: kno.v1.RunResumed
-	(*RetryAttempted)(nil),      // 9: kno.v1.RetryAttempted
-	(*RateLimitWaiting)(nil),    // 10: kno.v1.RateLimitWaiting
-	(*SettlementOvershoot)(nil), // 11: kno.v1.SettlementOvershoot
-	(Stage)(0),                  // 12: kno.v1.Stage
-	(*AgentRef)(nil),            // 13: kno.v1.AgentRef
-	(Direction)(0),              // 14: kno.v1.Direction
-	(*Budget)(nil),              // 15: kno.v1.Budget
-	(RunStatus)(0),              // 16: kno.v1.RunStatus
+	(RetryReason)(0),            // 0: kno.v1.RetryReason
+	(*Event)(nil),               // 1: kno.v1.Event
+	(*EventError)(nil),          // 2: kno.v1.EventError
+	(*RunStarted)(nil),          // 3: kno.v1.RunStarted
+	(*CaseScored)(nil),          // 4: kno.v1.CaseScored
+	(*CaseErrored)(nil),         // 5: kno.v1.CaseErrored
+	(*StageProgress)(nil),       // 6: kno.v1.StageProgress
+	(*SpendRecorded)(nil),       // 7: kno.v1.SpendRecorded
+	(*RunFinished)(nil),         // 8: kno.v1.RunFinished
+	(*RunResumed)(nil),          // 9: kno.v1.RunResumed
+	(*RetryAttempted)(nil),      // 10: kno.v1.RetryAttempted
+	(*RateLimitWaiting)(nil),    // 11: kno.v1.RateLimitWaiting
+	(*SettlementOvershoot)(nil), // 12: kno.v1.SettlementOvershoot
+	(Stage)(0),                  // 13: kno.v1.Stage
+	(*AgentRef)(nil),            // 14: kno.v1.AgentRef
+	(Direction)(0),              // 15: kno.v1.Direction
+	(*Budget)(nil),              // 16: kno.v1.Budget
+	(RunStatus)(0),              // 17: kno.v1.RunStatus
 }
 var file_kno_v1_event_proto_depIdxs = []int32{
-	2,  // 0: kno.v1.Event.run_started:type_name -> kno.v1.RunStarted
-	3,  // 1: kno.v1.Event.case_scored:type_name -> kno.v1.CaseScored
-	4,  // 2: kno.v1.Event.case_errored:type_name -> kno.v1.CaseErrored
-	5,  // 3: kno.v1.Event.stage_progress:type_name -> kno.v1.StageProgress
-	6,  // 4: kno.v1.Event.spend_recorded:type_name -> kno.v1.SpendRecorded
-	7,  // 5: kno.v1.Event.run_finished:type_name -> kno.v1.RunFinished
-	8,  // 6: kno.v1.Event.run_resumed:type_name -> kno.v1.RunResumed
-	9,  // 7: kno.v1.Event.retry_attempted:type_name -> kno.v1.RetryAttempted
-	10, // 8: kno.v1.Event.rate_limit_waiting:type_name -> kno.v1.RateLimitWaiting
-	11, // 9: kno.v1.Event.settlement_overshoot:type_name -> kno.v1.SettlementOvershoot
-	12, // 10: kno.v1.RunStarted.stage:type_name -> kno.v1.Stage
-	13, // 11: kno.v1.RunStarted.agent:type_name -> kno.v1.AgentRef
-	14, // 12: kno.v1.RunStarted.goal_direction:type_name -> kno.v1.Direction
-	15, // 13: kno.v1.RunStarted.budget:type_name -> kno.v1.Budget
-	1,  // 14: kno.v1.CaseErrored.error:type_name -> kno.v1.EventError
-	12, // 15: kno.v1.StageProgress.stage:type_name -> kno.v1.Stage
-	16, // 16: kno.v1.RunFinished.status:type_name -> kno.v1.RunStatus
-	1,  // 17: kno.v1.RunFinished.error:type_name -> kno.v1.EventError
-	18, // [18:18] is the sub-list for method output_type
-	18, // [18:18] is the sub-list for method input_type
-	18, // [18:18] is the sub-list for extension type_name
-	18, // [18:18] is the sub-list for extension extendee
-	0,  // [0:18] is the sub-list for field type_name
+	3,  // 0: kno.v1.Event.run_started:type_name -> kno.v1.RunStarted
+	4,  // 1: kno.v1.Event.case_scored:type_name -> kno.v1.CaseScored
+	5,  // 2: kno.v1.Event.case_errored:type_name -> kno.v1.CaseErrored
+	6,  // 3: kno.v1.Event.stage_progress:type_name -> kno.v1.StageProgress
+	7,  // 4: kno.v1.Event.spend_recorded:type_name -> kno.v1.SpendRecorded
+	8,  // 5: kno.v1.Event.run_finished:type_name -> kno.v1.RunFinished
+	9,  // 6: kno.v1.Event.run_resumed:type_name -> kno.v1.RunResumed
+	10, // 7: kno.v1.Event.retry_attempted:type_name -> kno.v1.RetryAttempted
+	11, // 8: kno.v1.Event.rate_limit_waiting:type_name -> kno.v1.RateLimitWaiting
+	12, // 9: kno.v1.Event.settlement_overshoot:type_name -> kno.v1.SettlementOvershoot
+	13, // 10: kno.v1.RunStarted.stage:type_name -> kno.v1.Stage
+	14, // 11: kno.v1.RunStarted.agent:type_name -> kno.v1.AgentRef
+	15, // 12: kno.v1.RunStarted.goal_direction:type_name -> kno.v1.Direction
+	16, // 13: kno.v1.RunStarted.budget:type_name -> kno.v1.Budget
+	2,  // 14: kno.v1.CaseErrored.error:type_name -> kno.v1.EventError
+	13, // 15: kno.v1.StageProgress.stage:type_name -> kno.v1.Stage
+	17, // 16: kno.v1.RunFinished.status:type_name -> kno.v1.RunStatus
+	2,  // 17: kno.v1.RunFinished.error:type_name -> kno.v1.EventError
+	0,  // 18: kno.v1.RetryAttempted.reason:type_name -> kno.v1.RetryReason
+	19, // [19:19] is the sub-list for method output_type
+	19, // [19:19] is the sub-list for method input_type
+	19, // [19:19] is the sub-list for extension type_name
+	19, // [19:19] is the sub-list for extension extendee
+	0,  // [0:19] is the sub-list for field type_name
 }
 
 func init() { file_kno_v1_event_proto_init() }
@@ -1477,13 +1568,14 @@ func file_kno_v1_event_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kno_v1_event_proto_rawDesc), len(file_kno_v1_event_proto_rawDesc)),
-			NumEnums:      0,
+			NumEnums:      1,
 			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_kno_v1_event_proto_goTypes,
 		DependencyIndexes: file_kno_v1_event_proto_depIdxs,
+		EnumInfos:         file_kno_v1_event_proto_enumTypes,
 		MessageInfos:      file_kno_v1_event_proto_msgTypes,
 	}.Build()
 	File_kno_v1_event_proto = out.File

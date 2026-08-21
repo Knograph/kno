@@ -164,15 +164,27 @@ message Run {
 
   // Facts about a Run that executed Cases. Absent for a stage that does not.
   //
+  // NOT POPULATED YET. Nothing writes this before M2-10; read the five flat
+  // counters above until then. Said here because this comment is the source
+  // for the published API reference, and a consumer seeing an absent
+  // case_execution on every baseline Run would otherwise conclude the Run
+  // executed no Cases — the inverted form of the exact ambiguity this message
+  // exists to remove.
+  //
   // See ADR-0004. This is the presence-carrying replacement for the five flat
   // counters above, which stay until their writer and reader migrate.
   optional CaseExecution case_execution = 22;
 
-  // The generation configuration this Run executed under.
+  // The decoding configuration this Run executed under.
   //
   // Part of what makes a baseline comparable to itself. Absent for a stage
   // that invokes no agent.
-  optional Sampling sampling = 23;
+  //
+  // Records the LAST process's configuration. Run.input_fingerprint does not
+  // yet cover these values (M2-6), so a resume under a different ceiling is
+  // currently accepted and this field cannot prove every Case ran under what
+  // it reports.
+  optional Generation generation = 23;
 
   // Which dated pricing table produced this Run's cost figures.
   //
@@ -238,11 +250,10 @@ message CaseExecution {
   // different builds. A set makes the mixture visible where a
   // first-writer-wins scalar hides it.
   //
-  // Deliberately NOT called a fingerprint. Run.input_fingerprint already means
-  // "the hash whose mismatch refuses a resume", and a second, unrelated
-  // "fingerprint" on the same message is exactly the vocabulary drift the
-  // project forbids.
-  repeated string observed_backends = 9;
+  // Deliberately NOT called a fingerprint: Run.input_fingerprint already means
+  // "the hash whose mismatch refuses a resume". Deliberately NOT called a
+  // backend either: store/ already uses that word for a Store implementation.
+  repeated string observed_provider_builds = 9;
 
   // The models the provider reported as actually answering. More than one
   // means an alias moved mid-Run.

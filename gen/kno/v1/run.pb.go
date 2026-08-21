@@ -248,14 +248,26 @@ type Run struct {
 	ErrorRateExceeded bool `protobuf:"varint,20,opt,name=error_rate_exceeded,json=errorRateExceeded,proto3" json:"error_rate_exceeded,omitempty"`
 	// Facts about a Run that executed Cases. Absent for a stage that does not.
 	//
+	// NOT POPULATED YET. Nothing writes this before M2-10; read the five flat
+	// counters above until then. Said here because this comment is the source
+	// for the published API reference, and a consumer seeing an absent
+	// case_execution on every baseline Run would otherwise conclude the Run
+	// executed no Cases — the inverted form of the exact ambiguity this message
+	// exists to remove.
+	//
 	// See ADR-0004. This is the presence-carrying replacement for the five flat
 	// counters above, which stay until their writer and reader migrate.
 	CaseExecution *CaseExecution `protobuf:"bytes,22,opt,name=case_execution,json=caseExecution,proto3,oneof" json:"case_execution,omitempty"`
-	// The generation configuration this Run executed under.
+	// The decoding configuration this Run executed under.
 	//
 	// Part of what makes a baseline comparable to itself. Absent for a stage
 	// that invokes no agent.
-	Sampling *Sampling `protobuf:"bytes,23,opt,name=sampling,proto3,oneof" json:"sampling,omitempty"`
+	//
+	// Records the LAST process's configuration. Run.input_fingerprint does not
+	// yet cover these values (M2-6), so a resume under a different ceiling is
+	// currently accepted and this field cannot prove every Case ran under what
+	// it reports.
+	Generation *Generation `protobuf:"bytes,23,opt,name=generation,proto3,oneof" json:"generation,omitempty"`
 	// Which dated pricing table produced this Run's cost figures.
 	//
 	// Prices are a versioned table rather than a runtime lookup — a pricing
@@ -452,9 +464,9 @@ func (x *Run) GetCaseExecution() *CaseExecution {
 	return nil
 }
 
-func (x *Run) GetSampling() *Sampling {
+func (x *Run) GetGeneration() *Generation {
 	if x != nil {
-		return x.Sampling
+		return x.Generation
 	}
 	return nil
 }
@@ -513,11 +525,10 @@ type CaseExecution struct {
 	// different builds. A set makes the mixture visible where a
 	// first-writer-wins scalar hides it.
 	//
-	// Deliberately NOT called a fingerprint. Run.input_fingerprint already means
-	// "the hash whose mismatch refuses a resume", and a second, unrelated
-	// "fingerprint" on the same message is exactly the vocabulary drift the
-	// project forbids.
-	ObservedBackends []string `protobuf:"bytes,9,rep,name=observed_backends,json=observedBackends,proto3" json:"observed_backends,omitempty"`
+	// Deliberately NOT called a fingerprint: Run.input_fingerprint already means
+	// "the hash whose mismatch refuses a resume". Deliberately NOT called a
+	// backend either: store/ already uses that word for a Store implementation.
+	ObservedProviderBuilds []string `protobuf:"bytes,9,rep,name=observed_provider_builds,json=observedProviderBuilds,proto3" json:"observed_provider_builds,omitempty"`
 	// The models the provider reported as actually answering. More than one
 	// means an alias moved mid-Run.
 	ResolvedModels []string `protobuf:"bytes,10,rep,name=resolved_models,json=resolvedModels,proto3" json:"resolved_models,omitempty"`
@@ -611,9 +622,9 @@ func (x *CaseExecution) GetUsageEstimatedCaseCount() int32 {
 	return 0
 }
 
-func (x *CaseExecution) GetObservedBackends() []string {
+func (x *CaseExecution) GetObservedProviderBuilds() []string {
 	if x != nil {
-		return x.ObservedBackends
+		return x.ObservedProviderBuilds
 	}
 	return nil
 }
@@ -629,7 +640,7 @@ var File_kno_v1_run_proto protoreflect.FileDescriptor
 
 const file_kno_v1_run_proto_rawDesc = "" +
 	"\n" +
-	"\x10kno/v1/run.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/portfolio.proto\"\xb6\b\n" +
+	"\x10kno/v1/run.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/portfolio.proto\"\xbe\b\n" +
 	"\x03Run\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12#\n" +
 	"\x05stage\x18\x02 \x01(\x0e2\r.kno.v1.StageR\x05stage\x12\x1d\n" +
@@ -656,12 +667,14 @@ const file_kno_v1_run_proto_rawDesc = "" +
 	"\x12errored_case_count\x18\x12 \x01(\x05R\x10erroredCaseCount\x121\n" +
 	"\x14holdout_underpowered\x18\x13 \x01(\bR\x13holdoutUnderpowered\x12.\n" +
 	"\x13error_rate_exceeded\x18\x14 \x01(\bR\x11errorRateExceeded\x12A\n" +
-	"\x0ecase_execution\x18\x16 \x01(\v2\x15.kno.v1.CaseExecutionH\x01R\rcaseExecution\x88\x01\x01\x121\n" +
-	"\bsampling\x18\x17 \x01(\v2\x10.kno.v1.SamplingH\x02R\bsampling\x88\x01\x01\x122\n" +
+	"\x0ecase_execution\x18\x16 \x01(\v2\x15.kno.v1.CaseExecutionH\x01R\rcaseExecution\x88\x01\x01\x127\n" +
+	"\n" +
+	"generation\x18\x17 \x01(\v2\x12.kno.v1.GenerationH\x02R\n" +
+	"generation\x88\x01\x01\x122\n" +
 	"\x15pricing_table_version\x18\x18 \x01(\tR\x13pricingTableVersionB\x0e\n" +
 	"\f_finished_atB\x11\n" +
-	"\x0f_case_executionB\v\n" +
-	"\t_sampling\"\xe2\x03\n" +
+	"\x0f_case_executionB\r\n" +
+	"\v_generation\"\xef\x03\n" +
 	"\rCaseExecution\x12$\n" +
 	"\x0edev_case_count\x18\x01 \x01(\x05R\fdevCaseCount\x12,\n" +
 	"\x12holdout_case_count\x18\x02 \x01(\x05R\x10holdoutCaseCount\x120\n" +
@@ -670,8 +683,8 @@ const file_kno_v1_run_proto_rawDesc = "" +
 	"\x12errored_case_count\x18\x05 \x01(\x05R\x10erroredCaseCount\x12,\n" +
 	"\x12refused_case_count\x18\x06 \x01(\x05R\x10refusedCaseCount\x120\n" +
 	"\x14truncated_case_count\x18\a \x01(\x05R\x12truncatedCaseCount\x12;\n" +
-	"\x1ausage_estimated_case_count\x18\b \x01(\x05R\x17usageEstimatedCaseCount\x12+\n" +
-	"\x11observed_backends\x18\t \x03(\tR\x10observedBackends\x12'\n" +
+	"\x1ausage_estimated_case_count\x18\b \x01(\x05R\x17usageEstimatedCaseCount\x128\n" +
+	"\x18observed_provider_builds\x18\t \x03(\tR\x16observedProviderBuilds\x12'\n" +
 	"\x0fresolved_models\x18\n" +
 	" \x03(\tR\x0eresolvedModels*{\n" +
 	"\x05Stage\x12\x15\n" +
@@ -713,7 +726,7 @@ var file_kno_v1_run_proto_goTypes = []any{
 	(*AgentRef)(nil),      // 4: kno.v1.AgentRef
 	(Direction)(0),        // 5: kno.v1.Direction
 	(*Budget)(nil),        // 6: kno.v1.Budget
-	(*Sampling)(nil),      // 7: kno.v1.Sampling
+	(*Generation)(nil),    // 7: kno.v1.Generation
 }
 var file_kno_v1_run_proto_depIdxs = []int32{
 	0, // 0: kno.v1.Run.stage:type_name -> kno.v1.Stage
@@ -722,7 +735,7 @@ var file_kno_v1_run_proto_depIdxs = []int32{
 	6, // 3: kno.v1.Run.budget:type_name -> kno.v1.Budget
 	1, // 4: kno.v1.Run.status:type_name -> kno.v1.RunStatus
 	3, // 5: kno.v1.Run.case_execution:type_name -> kno.v1.CaseExecution
-	7, // 6: kno.v1.Run.sampling:type_name -> kno.v1.Sampling
+	7, // 6: kno.v1.Run.generation:type_name -> kno.v1.Generation
 	7, // [7:7] is the sub-list for method output_type
 	7, // [7:7] is the sub-list for method input_type
 	7, // [7:7] is the sub-list for extension type_name

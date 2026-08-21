@@ -272,11 +272,16 @@ message RunFinished {
 // backward on every resume. A consumer replaying full history reconstructs
 // correctly either way; one watching live does not. That is docs/debt.md#29.
 message RunResumed {
-  // Cases already recorded before this process started. Progress begins here,
-  // not at zero.
+  // Cases already recorded before this process started.
+  //
+  // Two coordinate systems, and mixing them is the misrender this message
+  // exists to prevent. OVERALL progress runs already_completed..total_cases.
+  // SESSION progress runs 0..remaining. Do not pair a numerator from one with
+  // a denominator from the other: 28 done of 40, resumed, is "28 of 40"
+  // overall or "0 of 12" this session — never "28 of 12".
   int32 already_completed = 1;
 
-  // Cases left to attempt. This is the denominator a live view should use.
+  // Cases left to attempt. The denominator for SESSION progress only.
   int32 remaining = 2;
 
   // Total Cases the Run intends to attempt across all of its lives, so a
@@ -309,9 +314,17 @@ message RetryAttempted {
   // Which attempt this is, 1-based. The first attempt does not emit.
   int32 attempt_ordinal = 2;
 
-  // Why the previous attempt failed, as an error Code — never provider text,
-  // which can contain trace content.
-  string reason_code = 3;
+  // Why the previous attempt failed.
+  //
+  // An enum, not a string. The previous draft took a string and asserted in a
+  // comment that it would never carry provider text — an assertion nothing
+  // enforced. The natural implementation of an emitter is
+  // `ReasonCode: err.Error()`, and a provider 400 that echoes an oversized
+  // prompt would then land in the events table, in --json, in SSE, and in log
+  // lines. No gate catches that: not the schema shape test, not gitleaks, not
+  // lint. This message is fourteen lines away from EventError, which exists
+  // for exactly this reason.
+  RetryReason reason = 3;
 
   // How long before this attempt was made.
   int64 backoff_ms = 4;
@@ -336,8 +349,11 @@ message RateLimitWaiting {
   // the client-side limiter chose it.
   bool provider_requested = 2;
 
-  // The host being waited on. Rate limits are per-host, and a run against two
-  // providers should say which one is throttling.
+  // The host being waited on, as `host` or `host:port` — NEVER a full URL.
+  //
+  // Rate limits are per-host, and a run against two providers should say which
+  // one is throttling. A URL would carry a path, a query, and potentially
+  // userinfo onto a stream that is persisted and logged.
   string host = 3;
 }
 
@@ -363,4 +379,28 @@ message SettlementOvershoot {
 
   // Cumulative spend beyond the cap, or zero while still within it.
   int64 cumulative_overshoot_usd_micros = 4;
+}
+
+// RetryReason is why an attempt is being retried.
+//
+// Closed set, deliberately. Only transient conditions belong here: a permanent
+// failure must not be retried, because every attempt takes its own budget
+// reservation and settles its own call against the caps.
+enum RetryReason {
+  // Unset. An emitter that cannot classify must not retry.
+  RETRY_REASON_UNSPECIFIED = 0;
+
+  // The provider asked us to slow down.
+  RETRY_REASON_RATE_LIMITED = 1;
+
+  // A transport-level failure with no evidence the provider processed the
+  // request — a stale pooled connection, a reset before any bytes were
+  // written.
+  RETRY_REASON_TRANSPORT_TRANSIENT = 2;
+
+  // The provider returned a 5xx.
+  RETRY_REASON_PROVIDER_UNAVAILABLE = 3;
+
+  // The request timed out before a response began.
+  RETRY_REASON_TIMEOUT = 4;
 }

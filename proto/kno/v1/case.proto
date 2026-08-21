@@ -176,6 +176,13 @@ message Response {
   // It must also survive to later stages: refusals are provider policy and
   // are not deterministic, so a refusal present in a baseline and absent in a
   // later run reads as improvement attributable to an injected Asset.
+  //
+  // THIS FIELD IS AUTHORITATIVE for the run-level refusal count, and every
+  // adapter must set it. stop_reason may or may not also say
+  // STOP_REASON_CONTENT_FILTER — OpenAI reports finish_reason "content_filter"
+  // while Anthropic reports stop_reason "refusal", so leaving the count to be
+  // derived from stop_reason would make it depend on which adapter ran. The
+  // adapter conformance suite asserts this.
   bool refused = 11;
 
   // Why generation stopped, where the provider reports it.
@@ -192,10 +199,14 @@ message Response {
   // An opaque identifier for the provider-side build that answered, where one
   // is reported (OpenAI calls it system_fingerprint).
   //
+  // Not called a "backend": store/store.go already uses that word for a Store
+  // implementation ("a Postgres backend inherits no constraint from SQLite"),
+  // and docs/debt.md#24 uses it the same way. One word, one meaning.
+  //
   // Recorded and reported, never used to refuse a resume: it changes whenever
   // the provider's backend config changes, routinely and with no model change,
   // and refusing on it would cost the user a full re-run for a false positive.
-  string backend_id = 14;
+  string provider_build_id = 14;
 }
 
 // StopReason is why generation ended.
@@ -217,7 +228,11 @@ enum StopReason {
   // The model emitted a tool call.
   STOP_REASON_TOOL_CALL = 3;
 
-  // The provider's content filter stopped it. Pairs with Response.refused.
+  // The provider's content filter stopped it.
+  //
+  // An adapter that can report this MUST also set Response.refused, which is
+  // the authoritative field. Not every provider expresses a refusal this way,
+  // so the converse does not hold.
   STOP_REASON_CONTENT_FILTER = 4;
 }
 

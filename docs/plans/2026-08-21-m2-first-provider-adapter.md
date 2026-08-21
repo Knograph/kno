@@ -197,7 +197,7 @@ against the real guard confirms it:
 real hold the figure is 95.3% at concurrency 8 and **80.5% at concurrency 32**.
 
 Three arithmetic claims in this lineage have now failed measurement, the third made while
-correcting the second. So the number is no longer prose: `stats/budget/throughput_bench_test.go`
+correcting the second. So the number is no longer prose: `stats/budget/throughput_test.go`
 asserts it, **as a bound rather than a count** — the exact figure varies with scheduling by more
 than a point, and a test pinned to `2455` would be flaky on arrival (M-3).
 
@@ -529,8 +529,11 @@ number lives in a column; the blob keeps only what is genuinely trace content (`
 `judge_model`). Purge nulls `response_proto` and `score_proto`; M2-9 sums the column, which purge
 never touches. **The same reasoning applies to the fields §5 adds (M-8):** the refusal flag,
 truncation/stop-reason, and `usage_estimated` all live *inside* `Response`, which purge nulls — and
-§6 requires the refusal flag survive so M3's Value stage can exclude refused Cases. So `refused` and
-`truncated` become columns too, in the same migration. The test entry 25 explicitly requires — *"asserting `CompletedCases` is unchanged by
+§6 requires the refusal flag survive so M3's Value stage can exclude refused Cases. So the migration
+adds a column per fact: `score_value`, `score_passed`, `refused`, `truncated`, `usage_estimated`,
+`provider_build_id`, `resolved_model`. An earlier draft listed only the first four, which
+[ADR-0004](../adr/0004-per-run-observations.md) contradicted — the Phase-3 review of M2-0 caught the
+two documents disagreeing about the same migration. The test entry 25 explicitly requires — *"asserting `CompletedCases` is unchanged by
 a purge"* — is extended to assert `SettledSpend` **and the aggregate** are unchanged too.
 
 ### 2.9 Fixtures are customer data, and scrubbing is the wrong shape
@@ -582,7 +585,7 @@ quantile estimator on top of its current 657 lines (M-j).
 
 | PR | Scope | Depends on | Repays |
 |---|---|---|---|
-| M2-0 | **Settles §10a's open decision (M-7)**, with an ADR. Proto: agent-ref grammar, price vector, refusal/truncation/usage-estimated flags, resolved-model + fingerprint fields, retry/rate-limit/overshoot **events**, `RunResumed` payload, `BaselineDetail` submessage | — | 26 (partly), 29 (partly) |
+| M2-0 | **Settles §10a's open decision (M-7)**, with an ADR. Proto: agent-ref grammar, price vector, refusal/truncation/usage-estimated flags, resolved-model and provider-build fields, retry/rate-limit/overshoot **events**, `RunResumed` payload, `CaseExecution` submessage (ADR-0004) | — | 26 (partly), 29 (partly) |
 | M2-1 | `store`: `PRAGMA user_version` migration; `score_value`/`score_passed`/`refused`/`truncated` columns; backfill from `score_proto`; **`kno purge`** (`store` + `cli`, nulling blobs only) | M2-0 | 25 |
 | M2-2 | `core.Predictor` optional Ring-0 interface; `Guard.Overshoot`; `budget` naming | M2-0 | — |
 | M2-3 | `internal/transport`: rate limiter, `GetBody` pinning + round-trip counter, redirect refusal, explicit per-host key binding, private-address rules, timeouts, redaction, OTel spans, `goleak.VerifyTestMain` | M2-0 | 18 (partly) |
@@ -850,7 +853,7 @@ accepted" when it was not (M-14, H-4). Both are corrected.
    spent regardless. `Guard.Overshoot()` makes the breach visible where `remainingLocked`'s
    `max(0, …)` currently hides it. §10 row.
 2. **Headroom forfeiture**, `N × pessimistic`, **measured** at 4.7% of a $5.00 cap at concurrency 8
-   and 19.5% at concurrency 32 (`stats/budget/throughput_bench_test.go`). Mitigated by the
+   and 19.5% at concurrency 32 (`stats/budget/throughput_test.go`). Mitigated by the
    feasibility check at `f = 0.25`; stated in `docs/mental-model.md` rather than left to be
    discovered. §10 row.
 3. **The dark-spend window** (`docs/debt.md#20`) is only partly closable. M2 investigates, M3
@@ -980,7 +983,7 @@ Each round fixed the previous round's findings and introduced new ones **of the 
 
 Two countermeasures, both now in the repo rather than in prose:
 
-- **Every quantitative claim ships the test that produced it.** `stats/budget/throughput_bench_test.go`
+- **Every quantitative claim ships the test that produced it.** `stats/budget/throughput_test.go`
   asserts the forfeiture as a **bound**, not a count — three runs at concurrency 8 spread by more
   than a point, so a test pinned to `2455` would be flaky on arrival (M-3).
 - **The review documents are in-repo**, so ID coverage is mechanically checkable.

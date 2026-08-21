@@ -166,7 +166,11 @@ const (
 	StopReason_STOP_REASON_LENGTH StopReason = 2
 	// The model emitted a tool call.
 	StopReason_STOP_REASON_TOOL_CALL StopReason = 3
-	// The provider's content filter stopped it. Pairs with Response.refused.
+	// The provider's content filter stopped it.
+	//
+	// An adapter that can report this MUST also set Response.refused, which is
+	// the authoritative field. Not every provider expresses a refusal this way,
+	// so the converse does not hold.
 	StopReason_STOP_REASON_CONTENT_FILTER StopReason = 4
 )
 
@@ -526,6 +530,13 @@ type Response struct {
 	// It must also survive to later stages: refusals are provider policy and
 	// are not deterministic, so a refusal present in a baseline and absent in a
 	// later run reads as improvement attributable to an injected Asset.
+	//
+	// THIS FIELD IS AUTHORITATIVE for the run-level refusal count, and every
+	// adapter must set it. stop_reason may or may not also say
+	// STOP_REASON_CONTENT_FILTER — OpenAI reports finish_reason "content_filter"
+	// while Anthropic reports stop_reason "refusal", so leaving the count to be
+	// derived from stop_reason would make it depend on which adapter ran. The
+	// adapter conformance suite asserts this.
 	Refused bool `protobuf:"varint,11,opt,name=refused,proto3" json:"refused,omitempty"`
 	// Why generation stopped, where the provider reports it.
 	StopReason StopReason `protobuf:"varint,12,opt,name=stop_reason,json=stopReason,proto3,enum=kno.v1.StopReason" json:"stop_reason,omitempty"`
@@ -539,12 +550,16 @@ type Response struct {
 	// An opaque identifier for the provider-side build that answered, where one
 	// is reported (OpenAI calls it system_fingerprint).
 	//
+	// Not called a "backend": store/store.go already uses that word for a Store
+	// implementation ("a Postgres backend inherits no constraint from SQLite"),
+	// and docs/debt.md#24 uses it the same way. One word, one meaning.
+	//
 	// Recorded and reported, never used to refuse a resume: it changes whenever
 	// the provider's backend config changes, routinely and with no model change,
 	// and refusing on it would cost the user a full re-run for a false positive.
-	BackendId     string `protobuf:"bytes,14,opt,name=backend_id,json=backendId,proto3" json:"backend_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	ProviderBuildId string `protobuf:"bytes,14,opt,name=provider_build_id,json=providerBuildId,proto3" json:"provider_build_id,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *Response) Reset() {
@@ -668,9 +683,9 @@ func (x *Response) GetResolvedModel() string {
 	return ""
 }
 
-func (x *Response) GetBackendId() string {
+func (x *Response) GetProviderBuildId() string {
 	if x != nil {
-		return x.BackendId
+		return x.ProviderBuildId
 	}
 	return ""
 }
@@ -795,7 +810,7 @@ const file_kno_v1_case_proto_rawDesc = "" +
 	"\x04role\x18\x01 \x01(\x0e2\f.kno.v1.RoleR\x04role\x12\x18\n" +
 	"\acontent\x18\x02 \x01(\tR\acontent\x12/\n" +
 	"\n" +
-	"tool_calls\x18\x03 \x03(\v2\x10.kno.v1.ToolCallR\ttoolCalls\"\xfe\x03\n" +
+	"tool_calls\x18\x03 \x03(\v2\x10.kno.v1.ToolCallR\ttoolCalls\"\x8b\x04\n" +
 	"\bResponse\x12\x17\n" +
 	"\acase_id\x18\x01 \x01(\tR\x06caseId\x12\x16\n" +
 	"\x06output\x18\x02 \x01(\tR\x06output\x12#\n" +
@@ -813,9 +828,8 @@ const file_kno_v1_case_proto_rawDesc = "" +
 	"\arefused\x18\v \x01(\bR\arefused\x123\n" +
 	"\vstop_reason\x18\f \x01(\x0e2\x12.kno.v1.StopReasonR\n" +
 	"stopReason\x12%\n" +
-	"\x0eresolved_model\x18\r \x01(\tR\rresolvedModel\x12\x1d\n" +
-	"\n" +
-	"backend_id\x18\x0e \x01(\tR\tbackendId\"\x8b\x02\n" +
+	"\x0eresolved_model\x18\r \x01(\tR\rresolvedModel\x12*\n" +
+	"\x11provider_build_id\x18\x0e \x01(\tR\x0fproviderBuildId\"\x8b\x02\n" +
 	"\x05Score\x12\x17\n" +
 	"\acase_id\x18\x01 \x01(\tR\x06caseId\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\x01R\x05value\x12\x16\n" +

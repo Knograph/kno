@@ -185,7 +185,7 @@ message Capabilities {
   // than measured.
   bool token_counts = 4;
 
-  // The adapter accepts sampling parameters (temperature, top_p, seed).
+  // The adapter accepts generation parameters (temperature, top_p, seed).
   //
   // Not universal, and assuming it is breaks a whole model class: reasoning
   // models reject any non-default temperature with a 400, and Anthropic
@@ -193,7 +193,7 @@ message Capabilities {
   // would 400 every Case, trip error_rate_exceeded, and tell the user "too
   // many cases errored for this to be a usable baseline" — naming nothing
   // about the actual cause.
-  bool sampling_params = 6;
+  bool generation_params = 6;
 
   // Capability names this schema version does not model, for forward
   // compatibility with adapters newer than the engine.
@@ -202,6 +202,12 @@ message Capabilities {
 
 // Price is what one model costs, per million tokens, in MICRO-USD.
 //
+// Not referenced by any other message yet, deliberately: the pricing table is
+// engine-side data (M2-5), keyed by (scheme, model), and Run records only
+// which dated version of it produced its figures — see
+// Run.pricing_table_version. The type is defined here so the table, the
+// adapters, and any future API expose one shape rather than three.
+//
 // A vector rather than an input/output pair: both target providers price
 // cached input differently from fresh input — Anthropic bills cache writes
 // above base input and cache reads far below it, OpenAI discounts cached
@@ -209,44 +215,72 @@ message Capabilities {
 // overstates spend systematically, in the direction the user notices as
 // divergence from their invoice.
 message Price {
+  // Every rate is optional, and the distinction is load-bearing in the
+  // expensive direction: unset means "this provider does not bill this
+  // separately", a zero means "it is free". OpenAI bills no separate cache
+  // write; Anthropic bills it at 1.25x input. Without presence, a table row
+  // whose author simply forgot a rate is indistinguishable from one where the
+  // rate genuinely does not apply, and the settlement path under-charges the
+  // guard — the direction prime directive 4 calls a P0.
+  //
+  // Declared optional NOW because it cannot be added later: adding `optional`
+  // is a cardinality change `buf breaking` correctly refuses. That is
+  // docs/debt.md#26, which this same milestone repays.
+
   // Fresh input tokens.
-  int64 input_per_mtok_usd_micros = 1;
+  optional int64 input_per_mtok_usd_micros = 1;
 
   // Input tokens served from the provider's cache.
-  int64 cached_input_per_mtok_usd_micros = 2;
+  optional int64 cached_input_per_mtok_usd_micros = 2;
 
   // Input tokens written to the provider's cache, where that is billed
   // separately and above the base input rate.
-  int64 cache_write_per_mtok_usd_micros = 3;
+  optional int64 cache_write_per_mtok_usd_micros = 3;
 
   // Output tokens.
-  int64 output_per_mtok_usd_micros = 4;
+  optional int64 output_per_mtok_usd_micros = 4;
 }
 
-// Sampling is the generation configuration a Run executed under.
+// Generation is the decoding configuration a Run executed under.
+//
+// NOT called Sampling. DESIGN.md rejects `bootstrap` for the cold-start
+// command because "in a tool that computes confidence intervals, 'bootstrap'
+// collides head-on with statistical resampling" — and `sampling` collides the
+// same way. docs/what-the-numbers-mean.md already uses it statistically:
+// "sampling variation across your eval set". stats/ will import this type.
 //
 // Recorded because a baseline is the reference every later delta is measured
 // against, and an unpinned temperature makes two runs over the same evals and
 // the same model produce different references. Every field is optional: unset
 // means "the adapter's default was used", which is NOT the same as a
 // deliberate zero, and the distinction decides whether a resume is comparable.
-message Sampling {
+message Generation {
   // Zero for a reproducible measurement, where the adapter reports
-  // Capabilities.sampling_params.
+  // Capabilities.generation_params.
   optional double temperature = 1;
 
   // Provider-side determinism hint, where supported. Not a guarantee: no
   // hosted model is deterministic across a silent version bump.
   optional int64 seed = 2;
 
+  // Nucleus sampling cutoff, where the adapter accepts it. Recorded for the
+  // same reason as temperature: an unpinned top_p makes two runs over the same
+  // evals and the same model produce different references.
+  optional double top_p = 4;
+
   // Ceiling on generated tokens.
   //
   // Load-bearing twice over, which is why it is recorded rather than assumed:
   // it is the output term of every cost prediction, AND the threshold at which
   // a response is truncated. Raising it to stop truncating inflates every
-  // reservation; lowering it to loosen the cap truncates more answers. It is
-  // part of input_fingerprint so a resume under a different ceiling is
-  // refused rather than silently mixed.
+  // reservation; lowering it to loosen the cap truncates more answers.
+  //
+  // It is NOT yet covered by Run.input_fingerprint. Today that fingerprint is
+  // the eval content hash and nothing else, so a resume under a different
+  // ceiling is accepted and mixes Cases truncated at one limit with Cases
+  // complete at another. M2-6 folds this field in and refuses such a resume;
+  // until then Run.generation records the LAST process's configuration, not
+  // necessarily the one every Case ran under.
   optional int64 max_output_tokens = 3;
 }
 
@@ -268,8 +302,14 @@ message Sampling {
 // A base URL does not carry a credential with it. The key is bound to a host
 // explicitly, and a key bound to one host is never sent to another.
 message AgentRef {
-  // The reference exactly as the user wrote it. Kept verbatim so error
-  // messages can quote the user's own words back to them.
+  // The reference exactly as the user wrote it, MINUS any credential.
+  //
+  // Kept verbatim so error messages can quote the user's own words back to
+  // them — but this field is persisted on Run, emitted on RunStarted, and
+  // rendered in --json and logs. A user who typed
+  // `openai:m@https://sk-abc@host/v1` would otherwise put their key in all
+  // four. The parser strips URL userinfo before constructing this; it does not
+  // trust the caller to have done so.
   string ref = 1;
 
   // Scheme, parsed from ref: "openai", "anthropic", "http", "tuned", "exec".
@@ -286,5 +326,9 @@ message AgentRef {
   // security rules key on it: plain HTTP, loopback, RFC1918 and link-local
   // destinations are refused or gated here, and credential selection is keyed
   // on this host.
+  //
+  // Never contains userinfo. A URL carrying `user:pass@` is refused at parse
+  // rather than sanitized, because a credential the user embedded is still a
+  // credential and this value is persisted, streamed, and logged.
   string base_url = 4;
 }
