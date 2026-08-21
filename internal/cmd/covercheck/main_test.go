@@ -402,3 +402,64 @@ func TestRatchetToleratesBaselineRounding(t *testing.T) {
 		t.Error("a real coverage decrease passed the ratchet")
 	}
 }
+
+// TestRatchetToleratesSchedulingJitterButNotRot.
+//
+// Coverage for packages with concurrent code varies between runs: which paths
+// a scheduler takes differs under -race and -shuffle, so the same commit can
+// measure 84.1% and then 83.4%. Without a tolerance this gate fails randomly,
+// and a randomly-failing gate gets deleted rather than fixed.
+//
+// The tolerance must be small enough that real rot still fails.
+func TestRatchetToleratesSchedulingJitterButNotRot(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		baseline   string
+		covered    int64
+		total      int64
+		wantFailed bool
+	}{
+		{
+			name:     "jitter of half a point is tolerated",
+			baseline: "internal/thing 84.1\n",
+			covered:  836, total: 1000, // 83.6%
+		},
+		{
+			name:     "jitter at the edge of the tolerance is tolerated",
+			baseline: "internal/thing 84.1\n",
+			covered:  831, total: 1000, // 83.1%
+		},
+		{
+			name:     "a real regression still fails",
+			baseline: "internal/thing 84.1\n",
+			covered:  700, total: 1000, // 70.0%, well past jitter
+			wantFailed: true,
+		},
+		{
+			name:     "an improvement passes",
+			baseline: "internal/thing 84.1\n",
+			covered:  950, total: 1000,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join(t.TempDir(), "baseline")
+			if err := os.WriteFile(path, []byte(tc.baseline), 0o600); err != nil {
+				t.Fatalf("writing baseline: %v", err)
+			}
+			pkgs := []pkgCoverage{{
+				path: "internal/thing", covered: tc.covered, total: tc.total,
+				inProfile: true, hasCode: true,
+			}}
+			if got := check(path, pkgs); got != tc.wantFailed {
+				t.Errorf("check failed = %v, want %v (%.1f%% against an 84.1%% baseline)",
+					got, tc.wantFailed, float64(tc.covered)/float64(tc.total)*100)
+			}
+		})
+	}
+}

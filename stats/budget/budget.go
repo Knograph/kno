@@ -257,7 +257,14 @@ func (g *Guard) askOnce(ctx context.Context, est Estimate, rem Remaining) (bool,
 
 	ok, err := g.confirm(ctx, est, rem)
 	if err != nil {
-		return false, fmt.Errorf("confirming spend: %w", err)
+		// A run that cannot obtain consent must STOP, not fail each operation
+		// in turn. Wrapping as ErrBudgetExceeded is what makes it stop: the
+		// caller treats that as fatal, so a --json run with nobody to answer
+		// halts once instead of erroring every Case with the same prompt it
+		// cannot show.
+		return false, errs.ErrBudgetExceeded.
+			WithFix("pass --yes to proceed without confirmation").
+			Wrap(fmt.Errorf("confirming spend: %w", err))
 	}
 	if ok {
 		g.mu.Lock()
@@ -267,11 +274,38 @@ func (g *Guard) askOnce(ctx context.Context, est Estimate, rem Remaining) (bool,
 	return ok, nil
 }
 
+// denied explains WHICH cap stopped the run.
+//
+// Naming both dimensions when only one binds reads as noise — an operation
+// refused by a call cap reported "needs $0.000000 and 1 call(s)", which tells
+// the user nothing about what to change. CLAUDE.md's grammar requires the why
+// to be specific enough that the fix follows from it.
 func (g *Guard) denied(est Estimate, rem Remaining) error {
-	return errs.ErrBudgetExceeded.Wrap(fmt.Errorf(
-		"operation needs %s and %d call(s); %s and %d call(s) remain",
-		formatUSD(est.CostUSDMicros), est.Calls,
-		formatUSD(rem.CostUSDMicros), rem.LLMCalls))
+	g.mu.Lock()
+	costCapped := g.limits.MaxCostUSDMicros > 0
+	callCapped := g.limits.MaxLLMCalls > 0
+	g.mu.Unlock()
+
+	costBinds := costCapped && est.CostUSDMicros > rem.CostUSDMicros
+	callBinds := callCapped && est.Calls > rem.LLMCalls
+
+	switch {
+	case costBinds && callBinds:
+		return errs.ErrBudgetExceeded.Wrap(fmt.Errorf(
+			"the next operation needs %s and %d call(s), but only %s and %d call(s) remain",
+			formatUSD(est.CostUSDMicros), est.Calls,
+			formatUSD(rem.CostUSDMicros), rem.LLMCalls))
+	case callBinds:
+		return errs.ErrBudgetExceeded.
+			WithFix("raise --max-calls, or re-run with --resume to continue where it stopped").
+			Wrap(fmt.Errorf("the call limit is spent: %d of %d used",
+				g.Spent().Calls, g.Limits().MaxLLMCalls))
+	default:
+		return errs.ErrBudgetExceeded.
+			WithFix("raise --max-cost-usd, or re-run with --resume to continue where it stopped").
+			Wrap(fmt.Errorf("the cost limit is spent: %s of %s used",
+				formatUSD(g.Spent().CostUSDMicros), formatUSD(g.Limits().MaxCostUSDMicros)))
+	}
 }
 
 // Settle converts the reservation into recorded spend.
@@ -388,12 +422,11 @@ func (g *Guard) Spent() Spend {
 // formatUSD renders micro-USD as dollars for error messages only. Never use it
 // for arithmetic; the whole point of micro-USD is to avoid float math.
 func formatUSD(micros int64) string {
-	return fmt.Sprintf("$%d.%06d", micros/1_000_000, abs(micros%1_000_000))
-}
-
-func abs(v int64) int64 {
-	if v < 0 {
-		return -v
+	sign := ""
+	if micros < 0 {
+		sign, micros = "-", -micros
 	}
-	return v
+	// Cents, not micro-dollars. Six decimal places in a user-facing message is
+	// precision nobody reads and everybody has to parse past.
+	return fmt.Sprintf("%s$%d.%02d", sign, micros/1_000_000, (micros%1_000_000)/10_000)
 }

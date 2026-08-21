@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"iter"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -505,8 +506,15 @@ func TestCancelledRunIsInterruptedNotFailed(t *testing.T) {
 	if got := res.Run.GetStatus(); got != knov1.RunStatus_RUN_STATUS_INTERRUPTED {
 		t.Errorf("status = %v, want INTERRUPTED — resumable, not broken", got)
 	}
-	if got := errs.ExitCodeOf(err); got == errs.ExitValidationFailed {
-		t.Errorf("exit code = %d; an interruption must not read as a validation failure", got)
+	// Asserting "not 3" was too weak: it passed while an interruption exited 1,
+	// indistinguishable from a broken build. An interrupted run has its own code.
+	if got := errs.ExitCodeOf(err); got != errs.ExitInterrupted {
+		t.Errorf("exit code = %d, want %d; exiting %d would report a Ctrl-C the same "+
+			"way as a broken build", got, errs.ExitInterrupted, errs.ExitError)
+	}
+	if !errors.Is(err, errs.ErrInterrupted) {
+		t.Errorf("a cancelled run does not carry ErrInterrupted, so nothing "+
+			"downstream can tell it apart from a failure: %v", err)
 	}
 
 	// The run record survived the cancellation that ended it: a Run left in
@@ -932,8 +940,13 @@ func TestCostCapWithoutAnEstimateIsRefused(t *testing.T) {
 		t.Fatal("a cost cap with no estimate was accepted; the cap would only be " +
 			"enforced after the money was spent")
 	}
-	if !contains(err.Error(), "EstCostPerCallUSDMicros") {
+	// Named in the user's terms, not the field's: this is reachable from the
+	// command line, so it carries the grammar rather than a Go identifier.
+	if !contains(err.Error(), "per-call cost estimate") {
 		t.Errorf("error = %q, want it to name the missing estimate", err)
+	}
+	if !contains(err.Error(), "--cost-per-call-usd") {
+		t.Errorf("error = %q, want the fix to name the flag that resolves it", err)
 	}
 
 	// A call cap alone needs no cost estimate.
@@ -1061,5 +1074,126 @@ func TestDeadlineIsClassifiedAsAnInterruption(t *testing.T) {
 	}
 	if !res.Run.GetErrorRateExceeded() {
 		t.Error("a run where every Case timed out was not marked unusable")
+	}
+}
+
+// TestResumeRefusesAChangedGoalOrAgent.
+//
+// A Phase-3 review found that only InputFingerprint was compared, and the
+// fingerprint the CLI builds covers the eval file and the split — not the Goal
+// and not the Agent. So resuming with a different agent was accepted, and Cases
+// scored under two different agents blended into one AggregateScore presented
+// as a single homogeneous number. That is the corrupted-reference failure
+// prime directive 5 exists to prevent, and it is silent.
+func TestResumeRefusesAChangedGoalOrAgent(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	tests := []struct {
+		name   string
+		mutate func(o *core.BaselineOptions)
+		names  string
+	}{
+		{
+			name:   "a different agent",
+			mutate: func(o *core.BaselineOptions) { o.AgentRef = &knov1.AgentRef{Ref: "other:model", Scheme: "other"} },
+			names:  "agent",
+		},
+		{
+			name:   "a different goal",
+			mutate: func(o *core.BaselineOptions) { o.GoalName = "some-other-goal" },
+			names:  "goal",
+		},
+		{
+			name:   "a different eval source",
+			mutate: func(o *core.BaselineOptions) { o.InputFingerprint = "fp-2" },
+			names:  "inputs",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			h := newHarness(t, 20, 5, fake.Options{})
+			if _, err := core.Baseline(ctx, h.evals, h.opts); err != nil {
+				t.Fatalf("first run: %v", err)
+			}
+
+			opts := h.opts
+			opts.Resume = true
+			tc.mutate(&opts)
+
+			_, err := core.Baseline(ctx, h.evals, opts)
+			if !errors.Is(err, errs.ErrCheckpointStale) {
+				t.Fatalf("resuming with %s was accepted (err = %v); results measured "+
+					"under two configurations would be averaged into one number", tc.name, err)
+			}
+			if !strings.Contains(err.Error(), tc.names) {
+				t.Errorf("the refusal does not name what changed (%q):\n%s", tc.names, err)
+			}
+			if !strings.Contains(err.Error(), "fix:") {
+				t.Errorf("the refusal does not name a fix:\n%s", err)
+			}
+		})
+	}
+}
+
+// TestResumeAcceptsAnUnchangedConfiguration guards the test above from being
+// satisfied by a check that refuses everything.
+func TestResumeAcceptsAnUnchangedConfiguration(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	h := newHarness(t, 20, 5, fake.Options{})
+	if _, err := core.Baseline(ctx, h.evals, h.opts); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+
+	opts := h.opts
+	opts.Resume = true
+	if _, err := core.Baseline(ctx, h.evals, opts); err != nil {
+		t.Fatalf("resuming an unchanged run was refused: %v", err)
+	}
+}
+
+// TestTheEngineRefusesARunThatCanNeverBeValidated.
+//
+// docs/mental-model.md says Kno enforces the dev/holdout rule rather than
+// documenting it. It was enforced only in cli/, so any other caller — the API,
+// the TUI, a plugin — could run against an empty holdout and get no refusal at
+// all. The guarantee has to live in the stage.
+func TestTheEngineRefusesARunThatCanNeverBeValidated(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	tests := []struct {
+		name    string
+		dev     int
+		holdout int
+		frag    string
+	}{
+		{name: "no holdout", dev: 20, holdout: 0, frag: "holdout"},
+		{name: "no dev cases", dev: 0, holdout: 20, frag: "dev"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			h := newHarness(t, 20, 5, fake.Options{})
+			opts := h.opts
+			opts.DevCases = tc.dev
+			opts.HoldoutCases = tc.holdout
+
+			_, err := core.Baseline(ctx, h.evals, opts)
+			if !errors.Is(err, errs.ErrInvalidInput) {
+				t.Fatalf("the engine accepted a run with dev=%d holdout=%d (err = %v)",
+					tc.dev, tc.holdout, err)
+			}
+			if !strings.Contains(err.Error(), tc.frag) {
+				t.Errorf("the refusal does not say which side was empty:\n%s", err)
+			}
+		})
 	}
 }

@@ -60,6 +60,10 @@ linters:
             # and presence rules. Scoped to format.go under adapters/ so it
             # cannot spread to code that touches kno.v1 types.
             - "!**/adapters/**/format.go"
+            # The CLI's --json contract. Same reasoning: a hand-written output
+            # shape aimed at a jq pipeline, not a kno.v1 type. Scoped to the
+            # one file so it cannot spread.
+            - "!**/cli/jsonreport.go"
           deny:
             - pkg: encoding/json
               desc: >-
@@ -131,6 +135,13 @@ linters:
       # tui/ is the one package allowed to write to the terminal directly —
       # that is its entire job. Everything else routes through the logger.
       - path: '(^|/)tui/'
+        linters: [forbidigo]
+
+      # cmd/* is the process entry point. Binding os.Stdout and os.Stderr is
+      # precisely its job — everything downstream takes an io.Writer, which is
+      # what makes the CLI testable without spawning a subprocess. Scoped to
+      # the binary's main package so it cannot cover engine code.
+      - path: '(^|/)cmd/'
         linters: [forbidigo]
 
       # internal/cmd/* are standalone build tools invoked by the Makefile, not

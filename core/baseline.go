@@ -79,6 +79,14 @@ type BaselineOptions struct {
 	HoldoutFrac float64
 
 	// DevCases and HoldoutCases are the counts from ingestion.
+	//
+	// DEBT(docs/debt.md#28): the CALLER owns their accuracy. The stage checks
+	// only that neither is zero — a run with nothing in dev measures nothing,
+	// and a run with no holdout can never be validated. It does not verify the
+	// numbers against what the sealed source actually yields, because counting
+	// would mean consuming the iterator a second time. A caller whose split
+	// computation is wrong produces a Run and an event stream that misreport
+	// their own denominator, and nothing here will notice.
 	DevCases     int
 	HoldoutCases int
 
@@ -155,6 +163,13 @@ type BaselineResult struct {
 
 	// Stats is what the executor did.
 	Stats executor.Stats
+
+	// Spent is what the run actually cost, settled.
+	//
+	// Carried here rather than on the Run because it is the guard's number,
+	// not the schema's — and a caller reporting spend should read what the
+	// guard settled rather than re-deriving it from stored outcomes.
+	Spent budget.Spend
 }
 
 // Baseline runs the agent over the dev Cases and scores each Response.
@@ -218,9 +233,9 @@ func Baseline(
 		// 36 more would report 36 — losing the Cases the first run paid for and
 		// understating the denominator behind every later delta.
 		//
-		// The mean is seeded alongside, from the scored count and the outcomes
-		// already recorded, so the aggregate spans the whole run rather than
-		// the tail of it.
+		// DEBT(docs/debt.md#27): only the COUNTS are seeded. The mean is not,
+		// so a resumed run's AggregateScore is the mean over the Cases this
+		// process scored, not over the whole run.
 		priorScored, priorErrored, err := opts.Store.OutcomeCounts(ctx, opts.RunID)
 		if err != nil {
 			return nil, fmt.Errorf("loading prior outcome counts: %w", err)
@@ -266,11 +281,29 @@ func (o BaselineOptions) validate(evals *SealedEvals) error {
 		// The guard cannot refuse what it was not told about. A dollar cap
 		// with a zero estimate is only discovered at settlement, after the
 		// money is spent — which already caused a real overshoot once.
-		return errors.New("core: a run with a cost cap needs EstCostPerCallUSDMicros, " +
-			"or the cap is only enforced after the money is spent")
+		// User-reachable, unlike the nil-field cases above, so it carries the
+		// grammar: what failed, why, and the flag to pass.
+		return errs.ErrInvalidInput.WithFix(
+			"pass --cost-per-call-usd alongside --max-cost-usd").
+			Wrap(errors.New("a run with a cost cap needs a per-call cost estimate, " +
+				"or the cap is only enforced after the money is spent"))
 	case o.Goal.Direction() == knov1.Direction_DIRECTION_UNSPECIFIED:
 		return errors.New("core: the goal must report a direction, or the sign of every " +
 			"number this run produces is uninterpretable")
+	case o.DevCases <= 0:
+		// A run with nothing in dev measures nothing. Checked here rather than
+		// only at the CLI edge: the rule is a property of the stage, not of one
+		// front end, and api/tui/plugins call this same function.
+		return errs.ErrInvalidInput.WithFix(
+			"add Cases, or lower the holdout fraction").
+			Wrap(errors.New("no Cases landed in dev, leaving nothing to measure"))
+	case o.HoldoutCases <= 0:
+		// The refusal DESIGN.md advertises as an engine property. A run that
+		// can never produce a holdout number is not a run: every later stage
+		// would compute against a reference with no honest confirmation.
+		return errs.ErrInvalidInput.WithFix(
+			"add Cases, or raise the holdout fraction").
+			Wrap(errors.New("no Cases landed in the holdout, so this run can never be validated"))
 	}
 	return nil
 }
@@ -282,9 +315,8 @@ func (o BaselineOptions) openRun(ctx context.Context) (*knov1.Run, error) {
 		if err != nil {
 			return nil, fmt.Errorf("loading run %s: %w", o.RunID, err)
 		}
-		if run.GetInputFingerprint() != o.InputFingerprint {
-			return nil, errs.ErrCheckpointStale.WithFix(o.staleFix(run)).
-				Wrap(fmt.Errorf("run %s was recorded against different inputs", o.RunID))
+		if err := o.checkResumable(run); err != nil {
+			return nil, err
 		}
 		return run, nil
 	}
@@ -311,6 +343,38 @@ func (o BaselineOptions) openRun(ctx context.Context) (*knov1.Run, error) {
 	return run, nil
 }
 
+// checkResumable refuses a resume whose measurement configuration differs from
+// the one recorded.
+//
+// InputFingerprint is supplied by the caller and covers the caller's inputs;
+// core cannot assume it covers the Goal or the Agent, and the one caller that
+// exists today does not fold them in. So the recorded fields are compared
+// directly rather than by a convention every future caller has to remember.
+//
+// Without this, `--run-id r --agent A` followed by `--run-id r --resume --agent
+// B` silently blends Cases scored under two different agents into one
+// AggregateScore and presents it as a single homogeneous number — the
+// corrupted-reference failure prime directive 5 exists to prevent.
+func (o BaselineOptions) checkResumable(run *knov1.Run) error {
+	var changed string
+	switch {
+	case run.GetInputFingerprint() != o.InputFingerprint:
+		changed = "different inputs"
+	case run.GetGoalName() != o.GoalName:
+		changed = fmt.Sprintf("a different goal (recorded %q, now %q)", run.GetGoalName(), o.GoalName)
+	case run.GetGoalDirection() != o.Goal.Direction():
+		changed = fmt.Sprintf("a different goal direction (recorded %v, now %v)",
+			run.GetGoalDirection(), o.Goal.Direction())
+	case run.GetAgent().GetRef() != o.AgentRef.GetRef():
+		changed = fmt.Sprintf("a different agent (recorded %q, now %q)",
+			run.GetAgent().GetRef(), o.AgentRef.GetRef())
+	default:
+		return nil
+	}
+	return errs.ErrCheckpointStale.WithFix(o.staleFix(run)).
+		Wrap(fmt.Errorf("run %s was recorded against %s", o.RunID, changed))
+}
+
 // staleFix names which input changed, rather than only that something did.
 func (o BaselineOptions) staleFix(run *knov1.Run) string {
 	if run.GetEvalContentHash() != o.EvalContentHash {
@@ -318,7 +382,7 @@ func (o BaselineOptions) staleFix(run *knov1.Run) string {
 			"or restore the original file"
 	}
 	return "the goal, agent, or split configuration changed since this run started; " +
-		"re-run without --resume"
+		"re-run without --resume, or restore the setting it was recorded against"
 }
 
 // workFunc invokes the agent under the budget guard and scores the response.
@@ -485,6 +549,12 @@ func (o BaselineOptions) closeRun(
 	scored, errored := agg.counts()
 	attempted := scored + errored
 
+	// Classify before anything reads runErr. A bare context.Canceled leaving
+	// this package exits 1, indistinguishable from a broken build — and a
+	// scheduled run killed by a pod eviction is not a broken build. Wrapping
+	// keeps the chain, so errors.Is(err, context.Canceled) still answers.
+	runErr = classifyRunErr(runErr)
+
 	run.Status = statusFor(runErr)
 	run.FinishedAt = proto.String(o.now().Format(time.RFC3339))
 	// DEBT(docs/debt.md#26): these do not track presence, so a stage that does
@@ -507,7 +577,12 @@ func (o BaselineOptions) closeRun(
 		}
 	}
 
-	result := &BaselineResult{Run: run, Stats: stats, AggregateScore: agg.mean()}
+	result := &BaselineResult{
+		Run:            run,
+		Stats:          stats,
+		AggregateScore: agg.mean(),
+		Spent:          o.Guard.Spent(),
+	}
 
 	// Recording how the run ended must survive the cancellation that ended it:
 	// on Ctrl-C the caller's context is precisely the one that died, and a Run
@@ -526,6 +601,21 @@ func (o BaselineOptions) closeRun(
 //
 // The distinction matters to CI: a budget stop means the run did what it was
 // told and can continue, while a failure means something is broken.
+// classifyRunErr gives a run-ending error the CLI grammar and an exit code
+// chosen deliberately, rather than the unclassified default.
+func classifyRunErr(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, errs.ErrInterrupted):
+		return err
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return errs.ErrInterrupted.Wrap(err)
+	default:
+		return err
+	}
+}
+
 func statusFor(err error) knov1.RunStatus {
 	switch {
 	case err == nil:

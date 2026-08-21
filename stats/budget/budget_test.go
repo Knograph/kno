@@ -3,6 +3,7 @@ package budget_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -456,5 +457,89 @@ func TestLimitsAreReadable(t *testing.T) {
 	}
 	if got := budget.New(budget.Limits{}, nil, 0).Limits(); got != (budget.Limits{}) {
 		t.Errorf("Limits = %+v, want the zero value for an uncapped guard", got)
+	}
+}
+
+// TestDenialNamesTheCapThatBound.
+//
+// An earlier version reported both dimensions whichever one bound, so an
+// operation refused by a call cap read "needs $0.000000 and 1 call(s)" —
+// micro-dollar precision nobody reads, about a limit that was not the problem.
+// CLAUDE.md's grammar requires the why to be specific enough that the fix
+// follows from it.
+func TestDenialNamesTheCapThatBound(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		limits  budget.Limits
+		est     budget.Estimate
+		want    string
+		wantFix string
+	}{
+		{
+			name:    "call cap",
+			limits:  budget.Limits{MaxLLMCalls: 1},
+			est:     budget.Estimate{Calls: 2},
+			want:    "call limit is spent",
+			wantFix: "--max-calls",
+		},
+		{
+			name:    "cost cap",
+			limits:  budget.Limits{MaxCostUSDMicros: 1_000},
+			est:     budget.Estimate{Calls: 1, CostUSDMicros: 5_000},
+			want:    "cost limit is spent",
+			wantFix: "--max-cost-usd",
+		},
+		{
+			name:   "both caps bind",
+			limits: budget.Limits{MaxLLMCalls: 1, MaxCostUSDMicros: 1_000},
+			est:    budget.Estimate{Calls: 2, CostUSDMicros: 5_000},
+			want:   "the next operation needs",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			g := budget.New(tc.limits, nil, 0)
+			_, err := g.Authorize(context.Background(), tc.est)
+			if err == nil {
+				t.Fatal("the operation was authorized")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error = %q, want it to mention %q", err, tc.want)
+			}
+			if tc.wantFix != "" && !strings.Contains(err.Error(), tc.wantFix) {
+				t.Errorf("error = %q, want the fix to name %q", err, tc.wantFix)
+			}
+			// Never micro-dollar precision in a user-facing message.
+			if strings.Contains(err.Error(), ".000000") {
+				t.Errorf("error reports six decimal places: %q", err)
+			}
+		})
+	}
+}
+
+// TestConsentFailureStopsTheRun.
+//
+// A run that cannot obtain consent must halt once, not fail every operation in
+// turn with a prompt it cannot show.
+func TestConsentFailureStopsTheRun(t *testing.T) {
+	t.Parallel()
+
+	cannotAsk := func(context.Context, budget.Estimate, budget.Remaining) (bool, error) {
+		return false, errors.New("no terminal to prompt on")
+	}
+	g := budget.New(budget.Limits{}, cannotAsk, 1_000)
+
+	_, err := g.Authorize(context.Background(), budget.Estimate{CostUSDMicros: 5_000})
+	if !errors.Is(err, errs.ErrBudgetExceeded) {
+		t.Errorf("error = %v, want ErrBudgetExceeded so the caller stops rather than "+
+			"failing each operation", err)
+	}
+	if !strings.Contains(err.Error(), "--yes") {
+		t.Errorf("error = %q, want it to name how to proceed", err)
 	}
 }

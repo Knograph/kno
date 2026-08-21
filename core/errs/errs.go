@@ -25,6 +25,15 @@ const (
 	// ExitValidationFailed means the portfolio did not hold up against the
 	// holdout. This is the code a deploy gate should block on.
 	ExitValidationFailed = 3
+
+	// ExitInterrupted means a signal or a deadline ended the run before it
+	// finished. Like ExitBudgetStopped, the run is resumable and nothing is
+	// wrong with the data.
+	//
+	// It is distinct from ExitError because they call for opposite responses:
+	// a pod eviction or a Ctrl-C should be retried, and a broken build should
+	// not. Reporting both as 1 trains people to ignore 1.
+	ExitInterrupted = 4
 )
 
 // Sentinels. Compare with errors.Is, never with ==: an Actionable rebuilt from
@@ -65,6 +74,29 @@ var (
 		Message:  "the checkpoint does not match the current evals, pool, or goal",
 		Fix:      "re-run without --resume to start a fresh run",
 		ExitCode: ExitError,
+	}
+
+	// ErrInvalidInput means the user gave the command something it cannot use
+	// — a missing file, a malformed record, an unknown adapter name.
+	//
+	// Distinct from a run failure: nothing was attempted and nothing was
+	// spent, so the fix is always to change the input rather than to resume.
+	ErrInvalidInput = &Actionable{
+		Code:     "INVALID_INPUT",
+		Message:  "the command cannot use the input it was given",
+		Fix:      "check the flags and files named above",
+		ExitCode: ExitError,
+	}
+
+	// ErrInterrupted means a signal or a deadline ended the run early.
+	//
+	// Wraps the underlying context error, so errors.Is(err, context.Canceled)
+	// still answers truthfully for callers that care which one it was.
+	ErrInterrupted = &Actionable{
+		Code:     "INTERRUPTED",
+		Message:  "the run was interrupted before it finished",
+		Fix:      "re-run with --resume to continue; nothing already recorded will be paid for twice",
+		ExitCode: ExitInterrupted,
 	}
 
 	// ErrRateLimited means a provider asked us to slow down. Transient: the
