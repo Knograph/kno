@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -439,5 +440,220 @@ func TestResultsRecordSuccessAndFailureDistinctly(t *testing.T) {
 	}
 	if bad.Done() {
 		t.Error("a result carrying an error reports itself as done")
+	}
+}
+
+// TestCancellationDoesNotDropPaidForResults is the regression test for the
+// most damaging bug this package had.
+//
+// Workers used to send results through a select on the shutdown context. Once
+// cancelled, that raced a ready-forever Done channel against a sink busy
+// writing to disk, so on Ctrl-C most in-flight results were thrown away. Each
+// one is work already performed and money already spent, and a result that
+// never reaches the sink is never in CompletedCases — so a resumed run pays
+// for it a second time.
+//
+// Every item a worker completes must reach the sink, cancelled or not.
+func TestCancellationDoesNotDropPaidForResults(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	var (
+		mu        sync.Mutex
+		recorded  []executor.Result[output]
+		completed atomic.Int64
+	)
+
+	work := func(_ context.Context, c *core.Case) (*output, error) {
+		// Every call here represents money spent, regardless of cancellation.
+		n := completed.Add(1)
+		if n == 25 {
+			cancel()
+		}
+		return &output{id: c.GetId()}, nil
+	}
+
+	// A sink slow enough that a worker's send would lose a select race.
+	sink := func(_ context.Context, r executor.Result[output]) error {
+		time.Sleep(200 * time.Microsecond)
+		mu.Lock()
+		defer mu.Unlock()
+		recorded = append(recorded, r)
+		return nil
+	}
+
+	stats, err := executor.Run(ctx, staticCases(100_000), work, sink,
+		executor.Options{Concurrency: 8})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+
+	mu.Lock()
+	got := len(recorded)
+	mu.Unlock()
+
+	if int64(got) != completed.Load() {
+		t.Errorf("work completed %d items but only %d were recorded; %d paid-for "+
+			"results were dropped and a resumed run would pay for them again",
+			completed.Load(), got, completed.Load()-int64(got))
+	}
+	if stats.Recorded() != got {
+		t.Errorf("stats report %d recorded, sink saw %d", stats.Recorded(), got)
+	}
+}
+
+// TestStatsPartitionDispatched pins the invariant M1-5 uses to compute the
+// Run's case counts.
+//
+// Dispatched was previously incremented before the handoff, so an item that
+// lost the race to shutdown counted as dispatched without ever reaching a
+// worker — and dropped results counted as dispatched without ever being
+// recorded. Either way the denominator behind every later delta was wrong.
+func TestStatsPartitionDispatched(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var completed atomic.Int64
+
+	work := func(ctx context.Context, c *core.Case) (*output, error) {
+		if completed.Add(1) == 30 {
+			cancel()
+		}
+		return echoWork(ctx, c)
+	}
+
+	var mu sync.Mutex
+	var got []executor.Result[output]
+	stats, _ := executor.Run(ctx, staticCases(50_000), work,
+		collectSink(&mu, &got), executor.Options{Concurrency: 8})
+
+	if stats.Dispatched != stats.Recorded() {
+		t.Errorf("stats = %+v: Dispatched (%d) != Succeeded+Failed (%d); a caller "+
+			"computing case counts from these would report a denominator that "+
+			"never happened", stats, stats.Dispatched, stats.Recorded())
+	}
+}
+
+// TestIsFatalStopsTheRun covers the path M1-5 needs for budget exhaustion.
+//
+// Without it, a budget-exhausted run dispatches every remaining item only to
+// have each denied — completing with thousands of failures instead of stopping
+// as budget-stopped and resumable.
+func TestIsFatalStopsTheRun(t *testing.T) {
+	t.Parallel()
+
+	errBudget := errors.New("budget exceeded")
+	var attempts atomic.Int64
+
+	work := func(ctx context.Context, c *core.Case) (*output, error) {
+		if attempts.Add(1) > 20 {
+			return nil, errBudget
+		}
+		return echoWork(ctx, c)
+	}
+
+	var mu sync.Mutex
+	var got []executor.Result[output]
+	stats, err := executor.Run(context.Background(), staticCases(100_000), work,
+		collectSink(&mu, &got), executor.Options{
+			Concurrency: 4,
+			IsFatal:     func(err error) bool { return errors.Is(err, errBudget) },
+		})
+
+	if !errors.Is(err, errBudget) {
+		t.Errorf("error = %v, want the fatal work error so the caller can report "+
+			"budget-stopped rather than failed", err)
+	}
+	if stats.Dispatched > 5_000 {
+		t.Errorf("dispatched %d items after the budget was exhausted", stats.Dispatched)
+	}
+	// The item that triggered the stop is still recorded: it happened.
+	if stats.Recorded() != stats.Dispatched {
+		t.Errorf("stats = %+v: the fatal item's own result was not recorded", stats)
+	}
+}
+
+// TestSinkPanicDoesNotKillTheProcess.
+//
+// The sink runs on its own goroutine, so an unrecovered panic there cannot be
+// caught by any recover in the caller's goroutine — it would take the process
+// down mid-run, losing every in-flight result. That the test binary survives
+// to make this assertion is itself the assertion.
+func TestSinkPanicDoesNotKillTheProcess(t *testing.T) {
+	t.Parallel()
+
+	var recorded atomic.Int64
+	sink := func(_ context.Context, _ executor.Result[output]) error {
+		if recorded.Add(1) == 5 {
+			panic("nil map write in the sink")
+		}
+		return nil
+	}
+
+	_, err := executor.Run(context.Background(), staticCases(1_000), echoWork,
+		sink, executor.Options{Concurrency: 4})
+	if err == nil {
+		t.Error("a panicking sink completed without error")
+	}
+	if !strings.Contains(err.Error(), "panic") {
+		t.Errorf("error = %v, want it to name the panic", err)
+	}
+}
+
+// TestBrokenSinkIsNotCalledAgain: nothing in SinkFunc's contract says it must
+// tolerate being called after it fails, and the run is ending regardless.
+func TestBrokenSinkIsNotCalledAgain(t *testing.T) {
+	t.Parallel()
+
+	wantErr := errors.New("disk full")
+	var calls atomic.Int64
+
+	sink := func(_ context.Context, _ executor.Result[output]) error {
+		if calls.Add(1) >= 5 {
+			return wantErr
+		}
+		return nil
+	}
+
+	_, err := executor.Run(context.Background(), staticCases(10_000), echoWork,
+		sink, executor.Options{Concurrency: 4})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want the sink failure", err)
+	}
+	if got := calls.Load(); got > 5 {
+		t.Errorf("the sink was called %d times, want it abandoned after its first failure", got)
+	}
+}
+
+// TestSinkRecordsAfterCallerCancellation: recording must survive the very
+// cancellation it exists to preserve results through.
+func TestSinkRecordsAfterCallerCancellation(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var sawDeadContext atomic.Bool
+
+	work := func(ctx context.Context, c *core.Case) (*output, error) {
+		cancel()
+		return echoWork(ctx, c)
+	}
+	// A context-respecting sink, as any store-backed one is.
+	sink := func(ctx context.Context, _ executor.Result[output]) error {
+		if ctx.Err() != nil {
+			sawDeadContext.Store(true)
+			return ctx.Err()
+		}
+		return nil
+	}
+
+	if _, err := executor.Run(ctx, staticCases(200), work, sink,
+		executor.Options{Concurrency: 2}); !errors.Is(err, context.Canceled) {
+		t.Logf("run ended with: %v", err)
+	}
+
+	if sawDeadContext.Load() {
+		t.Error("the sink was handed an already-cancelled context; on Ctrl-C it " +
+			"would refuse to record the results it exists to preserve")
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"iter"
 	"runtime"
 	"sync"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -48,6 +49,30 @@ type Options struct {
 	// This is how resume avoids paying twice. It is consulted in the producer,
 	// before any work is dispatched, so a skipped item costs nothing.
 	Skip func(caseID string) bool
+
+	// IsFatal reports whether a work error ends the whole run rather than just
+	// that item. Nil means every work error is per-item.
+	//
+	// Without this there is no path from a WorkFunc to shutdown, and a
+	// budget-exhausted run would dispatch every remaining item only to have
+	// each one denied — completing with thousands of failures instead of
+	// stopping as budget-stopped and resumable. The caller decides which
+	// errors qualify, so this package needs no knowledge of the budget guard.
+	IsFatal func(error) bool
+
+	// RecordGrace bounds how long result recording may continue after the
+	// caller's context is cancelled. Zero means a sensible default.
+	//
+	// Recording outlives cancellation on purpose — the money is already spent —
+	// but not indefinitely, or a hung sink would make Ctrl-C unbounded.
+	RecordGrace time.Duration
+}
+
+func (o Options) recordGrace() time.Duration {
+	if o.RecordGrace > 0 {
+		return o.RecordGrace
+	}
+	return 30 * time.Second
 }
 
 func (o Options) concurrency() int {
@@ -84,10 +109,19 @@ type Stats struct {
 	// Skipped is the number recognized as already complete.
 	Skipped int
 
-	// Succeeded and Failed partition Dispatched, once the run is over.
+	// Succeeded and Failed count DURABLY RECORDED outcomes, and partition
+	// Dispatched once the run is over.
+	//
+	// Counted after the sink accepts them, not when work finishes, so they
+	// describe outcomes that survive the process. A result the sink rejected
+	// is neither, and the run ends with an error saying so — reporting it as
+	// succeeded would tell a resumed run that an unrecorded item was done.
 	Succeeded int
 	Failed    int
 }
+
+// Recorded returns the number of outcomes durably persisted.
+func (s Stats) Recorded() int { return s.Succeeded + s.Failed }
 
 // Run executes work over items, recording each result through sink.
 //
@@ -120,9 +154,22 @@ type Stats struct {
 //     already in flight. Those items' work is already paid for; discarding
 //     their results would spend money and record nothing.
 //
-//   - Worker panics are recovered at the worker boundary and recorded as
-//     failures. A panic in one item must not take down a run that has spent
-//     money on hundreds of others.
+//   - Worker AND sink panics are recovered. A panic in one item must not take
+//     down a run that has spent money on hundreds of others, and a panic on
+//     the sink goroutine would be worse still: no caller's recover can reach
+//     another goroutine, so it would kill the process mid-run.
+//
+//   - A completed result is ALWAYS delivered to the sink, even during
+//     shutdown. The work is already paid for, and a result that never reaches
+//     the sink is one a resumed run pays for again.
+//
+//   - Recording outlives the caller's cancellation, under a bounded grace
+//     period. On Ctrl-C the caller's context is precisely the one that died,
+//     so recording through it would drop the results it is meant to preserve.
+//
+// A sink that blocks forever will stall a run for RecordGrace and then be
+// abandoned; a sink that blocks and ignores its context will stall it
+// indefinitely, which is the caller's responsibility to avoid.
 func Run[T any](
 	ctx context.Context,
 	items iter.Seq2[*core.Case, error],
@@ -159,10 +206,49 @@ func Run[T any](
 
 	// Sink: one goroutine, so implementations need no locking and results are
 	// recorded in completion order.
+	// Recording outcomes must outlive the caller's cancellation: the money is
+	// already spent either way. The grace period bounds how long a hung sink
+	// can delay shutdown.
+	recordCtx, recordCancel := context.WithTimeout(context.WithoutCancel(ctx), opts.recordGrace())
+	defer recordCancel()
+
+	sinkBroken := false
 	sinkDone := make(chan struct{})
 	go func() {
+		// #5: the sink is caller-supplied code doing serialization and I/O,
+		// exactly as fallible as the work function. An unrecovered panic in
+		// THIS goroutine cannot be caught by the CLI's top-level recover — it
+		// takes the process down mid-run, losing every in-flight result.
+		defer func() {
+			if r := recover(); r != nil {
+				fail(fmt.Errorf("panic recording results: %T", r))
+			}
+		}()
 		defer close(sinkDone)
 		for r := range results {
+			if sinkBroken {
+				// A sink that has already failed is not asked again. Nothing
+				// in SinkFunc's contract says it must tolerate being called
+				// after returning an error, and the run is ending regardless.
+				// Draining continues so workers are never left blocked.
+				continue
+			}
+
+			// recordCtx deliberately does NOT inherit the caller's
+			// cancellation. On Ctrl-C the caller's context is the thing that
+			// died, so passing it here would ask a store to persist results
+			// while handing it an already-dead context — losing exactly the
+			// record resume depends on. Values are preserved; only the
+			// cancellation is dropped, under its own bounded deadline so a
+			// hung sink cannot make shutdown unbounded.
+			if err := recordOne(recordCtx, sink, r); err != nil {
+				sinkBroken = true
+				fail(fmt.Errorf("recording result for %s: %w", r.Item.GetId(), err))
+				continue
+			}
+
+			// Counted only once durably recorded, so Succeeded and Failed
+			// describe outcomes that actually survive the process.
 			mu.Lock()
 			if r.Done() {
 				stats.Succeeded++
@@ -170,14 +256,6 @@ func Run[T any](
 				stats.Failed++
 			}
 			mu.Unlock()
-
-			// The sink records outcomes for work already performed, so it uses
-			// the CALLER's context rather than runCtx. Using runCtx would mean
-			// a cancellation raced the recording of results whose money is
-			// already spent — losing exactly the record resume depends on.
-			if err := sink(ctx, r); err != nil {
-				fail(fmt.Errorf("recording result for %s: %w", r.Item.GetId(), err))
-			}
 		}
 	}()
 
@@ -187,11 +265,27 @@ func Run[T any](
 		workers.Go(func() {
 			for c := range cases {
 				value, err := runOne(runCtx, work, c)
-				select {
-				case results <- Result[T]{Item: c, Value: value, Err: err}:
-				case <-runCtx.Done():
-					// Shutting down. The result is dropped deliberately: the
-					// sink is closing, and a send here would block forever.
+
+				// UNCONDITIONAL send. An earlier version selected on
+				// runCtx.Done() here, which was the most damaging bug in this
+				// package: once cancelled, that select raced a ready-forever
+				// Done channel against a sink that is momentarily busy writing
+				// to disk, so on Ctrl-C most in-flight results were thrown
+				// away. Each one is work already performed and money already
+				// spent, and a result that never reaches the sink is never in
+				// CompletedCases — so a resumed run pays for it again.
+				//
+				// This cannot block indefinitely: the sink drains `results`
+				// until it is closed, and it is closed only after every worker
+				// has returned.
+				results <- Result[T]{Item: c, Value: value, Err: err}
+
+				if opts.IsFatal != nil && err != nil && opts.IsFatal(err) {
+					// The work reported something that ends the run rather than
+					// just this item — budget exhaustion being the case M1-5
+					// needs. The result above is already on its way to the
+					// sink; this stops new work from being dispatched.
+					fail(err)
 					return
 				}
 			}
@@ -212,15 +306,13 @@ func Run[T any](
 				return nil // shutting down; not this loop's error to report
 			}
 
-			mu.Lock()
-			skip := opts.Skip != nil && opts.Skip(c.GetId())
-			if skip {
+			// Skip runs outside the lock: resume's implementation consults a
+			// store, and holding the sink's mutex across that would serialize
+			// every result's accounting behind it.
+			if opts.Skip != nil && opts.Skip(c.GetId()) {
+				mu.Lock()
 				stats.Skipped++
-			} else {
-				stats.Dispatched++
-			}
-			mu.Unlock()
-			if skip {
+				mu.Unlock()
 				continue
 			}
 
@@ -233,6 +325,14 @@ func Run[T any](
 
 			select {
 			case cases <- clone:
+				// Counted AFTER the handoff. Counting before it meant an item
+				// that lost the race to shutdown was reported as dispatched
+				// despite never reaching a worker, breaking the
+				// Dispatched == Succeeded + Failed invariant M1-5 uses to
+				// compute the Run's case counts.
+				mu.Lock()
+				stats.Dispatched++
+				mu.Unlock()
 			case <-runCtx.Done():
 				return nil
 			}
@@ -265,6 +365,21 @@ func Run[T any](
 	return stats, nil
 }
 
+// recordOne calls the sink, converting a panic into an error.
+//
+// A panic here would otherwise escape on the sink goroutine, where no caller's
+// recover can reach it, and take the process down mid-run.
+func recordOne[T any](ctx context.Context, sink SinkFunc[T], r Result[T]) (err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			// %T, not %v: a panic value is arbitrary and may embed prompt or
+			// response content, and this error is persisted.
+			err = fmt.Errorf("panic in sink: %T", p)
+		}
+	}()
+	return sink(ctx, r)
+}
+
 // runOne executes a single item, converting a panic into an error.
 //
 // A panic in one item's work must not take down a run that has already spent
@@ -273,9 +388,13 @@ func Run[T any](
 // rather than fatal to the whole run.
 func runOne[T any](ctx context.Context, work WorkFunc[T], c *core.Case) (value *T, err error) {
 	defer func() {
-		if r := recover(); r != nil {
+		if p := recover(); p != nil {
 			value = nil
-			err = fmt.Errorf("panic executing case %s: %v", c.GetId(), r)
+			// %T rather than %v. A panic value is arbitrary — it may embed a
+			// prompt, a response, or a formatted assertion containing either —
+			// and this error is persisted as Outcome.Err, which store.go
+			// requires to be a code rather than verbatim content.
+			err = fmt.Errorf("panic executing case %s: %T", c.GetId(), p)
 		}
 	}()
 	return work(ctx, c)
