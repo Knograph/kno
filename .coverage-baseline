@@ -9,6 +9,7 @@
 #
 # Regenerate with `make update-coverage-baseline` on linux. Doing it elsewhere
 # raises the floor above what CI can meet -- the Makefile target says so.
+adapters/agent/agentref 94.0
 adapters/agent/fake 0.0
 adapters/agent/internal/transport 88.0
 adapters/evals/jsonl 92.2

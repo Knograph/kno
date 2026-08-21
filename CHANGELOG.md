@@ -18,6 +18,9 @@ covenants — breaking any of them requires a major version.
 
 ### Changed
 
+- A malformed `--agent` now exits with `INVALID_INPUT` rather than `CAPABILITY_UNSUPPORTED`. Both
+  exit 1, so no CI gate changes, but the message now distinguishes a typo from a provider this
+  build has no adapter for.
 - Go toolchain bumped to `go1.25.13`. Making the first real HTTP call turned seven standard-library
   advisories from unreachable into reachable — `crypto/x509`, `net/http`, and `golang.org/x/net/idna`
   — and `govulncheck` failed the build for them. Working exactly as intended.
@@ -27,6 +30,21 @@ covenants — breaking any of them requires a major version.
 
 ### Fixed
 
+- A budget stop lost the Cases that were in flight when it landed. The drain cancels them mid-call,
+  and each was recorded as terminally errored — which marks it complete, so `--resume` skipped it
+  forever and the run reported a smaller denominator than it measured, with nothing saying why.
+  Measured at concurrency 8 with a 50ms agent: two lost Cases on every run, and a resumed run
+  scoring 51 of 52. CI surfaced it as an intermittent CLI failure; it was not intermittent, just
+  timing-dependent, and the CLI's fake agent has no latency.
+
+  A Case cancelled *by* the shutdown is now left unrecorded so the resume picks it up, exactly like
+  a budget-refused one. A per-Case provider timeout against a healthy run is still recorded — the
+  distinction matters, and collapsing it would hide a broken provider behind a shrinking
+  denominator.
+- `make fuzz-short` is now bounded by **executions rather than wall-clock**. `-fuzztime=30s` failed
+  intermittently on both CI runners with "context deadline exceeded" — the fuzzing coordinator
+  timing out on a worker as the deadline lands, not a failing input. A count also makes the gate do
+  the same work everywhere, so "passes locally" and "passes in CI" stop meaning different things.
 - Two `kno` processes opening the same database at the same moment could fail to start with a raw
   `SQLITE_BUSY`. Creating a database converts its journal to WAL, which needs an exclusive lock,
   and the process that loses that race is told the database is locked rather than made to wait —
@@ -72,6 +90,29 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
+- **`adapters/agent/agentref`**, the parser for `scheme:target[@base-url]` — one grammar for flags,
+  `kno.yaml`, the API, and the SDKs. Parsing is separate from resolution, so a typo and an
+  unsupported provider produce different errors rather than the same one.
+  - The scheme ends at the **first** colon, because a model name may contain its own: Ollama spells
+    them `llama3:8b`, OpenRouter spells them `vendor/model:free`.
+  - The base URL begins at the first `@` whose remainder starts `http://` or `https://`, matched
+    case-insensitively and after trimming — not the first `@` (which breaks `openai:my-model@v2`)
+    and not the last (which breaks `openai:m@https://user:pass@host/v1`, splitting *inside* the
+    credential and hiding it from the check meant to catch it). A post-condition that does not
+    depend on the split being right refuses a URL in the model slot outright, because when the
+    split misses, the whole URL is reconstructed into `AgentRef.Ref`.
+  - `AgentRef.Ref` is **canonical, not verbatim**: the scheme and the base URL's host are
+    lowercased, a default port and trailing slashes dropped, whitespace trimmed. `Ref` is what a
+    resume compares, and stored byte-for-byte two spellings of one agent read as two — telling the
+    user the agent changed and pointing them at a setting they never altered.
+  - A base URL carrying userinfo, a fragment, or a query is refused. `AgentRef.Ref` is persisted on
+    the Run, emitted on `RunStarted`, and rendered in `--json` and logs, so a credential there would
+    reach all four.
+- **The repository's first fuzz target**, `FuzzParse` — `make fuzz-short` now runs instead of
+  reporting PEND, repaying part of `docs/debt.md#4`. It asserts invariants rather than absence of
+  panics, and found **five** real defects: a base URL carrying a fragment, and four in the
+  canonicalization added during review — a host rewrite that produced an unparseable URL, IPv6
+  brackets dropped, and a trailing-slash trim that was not idempotent.
 - **`adapters/agent/internal/transport`**, the shared HTTP layer every provider adapter will sit
   on. It owns what must be identical across adapters and is dangerous to reimplement: which hosts a
   request may reach, which credential may travel there, how rate limits are honored, and what an

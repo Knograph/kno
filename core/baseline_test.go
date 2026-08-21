@@ -1497,3 +1497,71 @@ func (f *fixedEstimate) Invoke(ctx context.Context, c *core.Case) (*core.Respons
 func (f *fixedEstimate) Estimate(context.Context, *core.Case) (budget.Estimate, error) {
 	return f.est, nil
 }
+
+// TestABudgetStopDoesNotLoseInFlightCases.
+//
+// A budget stop drains the workers, and a Case cancelled mid-call has no result
+// to record. Recording it as terminally errored marks it complete, so a resume
+// SKIPS it — and the run reports a smaller denominator than it measured, with
+// nothing saying why.
+//
+// Measured before the fix, at concurrency 8 with a 50ms agent: two errored
+// Cases on every single run, and a resumed run scoring 51 of 52. CI caught it
+// as an intermittent CLI failure. It was not intermittent — the CLI's fake has
+// no latency, so the window is narrow locally and wide on a loaded runner.
+func TestABudgetStopDoesNotLoseInFlightCases(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const devCases = 40
+
+	h := newHarness(t, devCases, 10, fake.Options{
+		// Latency is what puts calls in flight when the stop lands. Without it
+		// the drain finds nothing running and the bug cannot appear.
+		Latency:              50 * time.Millisecond,
+		CostPerCallUSDMicros: 1_000,
+	})
+	h.opts.Guard = budget.New(budget.Limits{MaxLLMCalls: 10}, nil, 0)
+	h.opts.Concurrency = 8
+
+	res, err := core.Baseline(ctx, h.evals, h.opts)
+	if !errors.Is(err, errs.ErrBudgetExceeded) {
+		t.Fatalf("error = %v, want ErrBudgetExceeded", err)
+	}
+
+	if got := res.Run.GetErroredCaseCount(); got != 0 {
+		t.Errorf("%d Case(s) were recorded as errored by the shutdown that "+
+			"stopped them; each one is skipped forever on resume", got)
+	}
+
+	// Every recorded Case really produced a Score. Anything else is a Case the
+	// resume will skip without having measured it.
+	done, err := h.store.CompletedCases(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("CompletedCases: %v", err)
+	}
+	scored, errored, err := h.store.OutcomeCounts(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("OutcomeCounts: %v", err)
+	}
+	if errored != 0 {
+		t.Errorf("the store holds %d errored outcome(s) from a resumable stop", errored)
+	}
+	if len(done) != scored {
+		t.Errorf("%d Cases are marked complete but only %d scored", len(done), scored)
+	}
+
+	// And the resume finishes the job: every dev Case ends up scored.
+	opts := h.opts
+	opts.Resume = true
+	opts.Guard = budget.New(budget.Limits{MaxLLMCalls: 1_000}, nil, 0)
+
+	resumed, err := core.Baseline(ctx, h.evals, opts)
+	if err != nil {
+		t.Fatalf("resumed run: %v", err)
+	}
+	if got := int(resumed.Run.GetScoredCaseCount()); got != devCases {
+		t.Errorf("the completed run scored %d of %d dev Cases; the ones the "+
+			"budget stop cancelled were never re-attempted", got, devCases)
+	}
+}

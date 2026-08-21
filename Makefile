@@ -75,7 +75,17 @@ GOTESTFLAGS := -race -shuffle=on
 GOTESTEXTRA ?=
 
 # 30s in the PR gate; nightly overrides to a longer run.
-FUZZTIME ?= 30s
+# Measured in EXECUTIONS, not wall-clock.
+#
+# `-fuzztime=30s` failed intermittently on both CI runners with "context
+# deadline exceeded" — the fuzzing coordinator timing out on a worker as the
+# deadline lands, not a failing input. A gate that fails for reasons unrelated
+# to the code is a gate that gets deleted.
+#
+# A count also makes the gate do the same WORK everywhere. Under a time budget
+# a fast laptop explores several times more than a loaded CI runner, so "passes
+# locally" and "passes in CI" meant different things.
+FUZZTIME ?= 300000x
 
 # Set in CI. Turns every "tool missing" warning into a hard failure, so an
 # absent binary can never silently disable a gate where it counts.
@@ -320,12 +330,12 @@ vuln: $(GOVULNCHK) ## govulncheck over the shipping module
 
 ## ─── Fuzz & bench ───────────────────────────────────────────────────────────
 
-# DEBT(docs/debt.md#4): there are no fuzz targets yet. When they land, they
-# must cover the parsers CLAUDE.md names — plugin handshake, NDJSON frames,
-# agent-ref, kno.yaml. This target discovers targets rather than hardcoding
-# them, so it starts working the moment the first one appears.
+# DEBT(docs/debt.md#4): the agent-ref parser has a target; the plugin handshake,
+# NDJSON frame, and kno.yaml parsers do not exist yet and must land with theirs.
+# This target discovers targets rather than hardcoding them, so each one starts
+# running the moment it appears.
 .PHONY: fuzz-short
-fuzz-short: ## 30s fuzz on parsers
+fuzz-short: ## Bounded fuzz on parsers (executions, not wall-clock)
 	@$(SAFE) found=0; \
 	for pkg in $$(go list ./... 2>/dev/null); do \
 		targets=$$(go test -list 'Fuzz.*' $$pkg 2>/dev/null | grep '^Fuzz' || true); \
