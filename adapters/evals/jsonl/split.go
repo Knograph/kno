@@ -65,6 +65,15 @@ type SplitCounts struct {
 
 	// Holdout is the number held back for Validate.
 	Holdout int
+
+	// HoldoutFrac is the fraction that produced this division.
+	//
+	// Carried so that guidance can be computed against the fraction the user
+	// actually configured. An earlier version derived it from the package
+	// default, which meant a user running at 0.05 was told they needed 6 Cases
+	// when the true answer was 21 — a fix that does not fix, which CLAUDE.md's
+	// error grammar exists to prevent.
+	HoldoutFrac float64
 }
 
 // Total returns the number of Cases seen.
@@ -86,9 +95,13 @@ func (c SplitCounts) Validate() error {
 		return fmt.Errorf("the eval set is empty")
 	}
 	if c.Holdout == 0 {
+		frac := c.HoldoutFrac
+		if frac <= 0 {
+			frac = DefaultHoldoutFrac
+		}
 		return fmt.Errorf(
-			"all %d Cases landed in dev, leaving no holdout; %d or more Cases are needed "+
-				"for a holdout at the configured fraction", c.Total(), minCasesFor(DefaultHoldoutFrac))
+			"all %d Cases landed in dev, leaving no holdout; at a holdout fraction of %.2f, "+
+				"roughly %d or more Cases are needed", c.Total(), frac, minCasesFor(frac))
 	}
 	if c.Dev == 0 {
 		return fmt.Errorf("all %d Cases landed in the holdout, leaving nothing to measure against", c.Total())

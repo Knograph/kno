@@ -42,10 +42,14 @@ func Seal(e Evals) *SealedEvals {
 
 // Cases yields the dev Cases.
 //
-// It honors the same contract as Evals.Cases — a yielded error is fatal,
-// cleanup is deferred inside the closure, ctx is checked before each yield,
-// and values are borrowed for one iteration — and adds one rule: a Case whose
-// Split is anything other than SPLIT_DEV is not yielded.
+// It preserves the Evals.Cases contract and adds one rule: a Case whose Split
+// is anything other than SPLIT_DEV is not yielded.
+//
+// The seal filters; it does not independently enforce the rest of the
+// contract. Cancellation checks, cleanup-inside-the-closure, and the borrow
+// rule remain the inner producer's obligations, and a non-conformant producer
+// stays non-conformant through the seal. coretest.ConformIterator is what
+// holds adapters to those; this type holds them to the split.
 //
 // An unassigned Split (SPLIT_UNSPECIFIED) is filtered out too, and that is not
 // an accident. A Case with no split has not been through ingestion, and

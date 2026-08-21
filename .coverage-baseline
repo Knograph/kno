@@ -1,6 +1,6 @@
 # Coverage baseline. Regenerate with `make update-coverage-baseline`.
 # Coverage may not decrease against these numbers. Review diffs like code.
-adapters/evals/jsonl 90.7
+adapters/evals/jsonl 92.2
 core 93.3
 core/errs 92.3
 coretest 83.8

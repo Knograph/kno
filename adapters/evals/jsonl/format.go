@@ -14,7 +14,10 @@
 
 package jsonl
 
-import "encoding/json"
+import (
+	"bytes"
+	"encoding/json"
+)
 
 // record is the on-disk shape of one Case.
 //
@@ -25,17 +28,27 @@ import "encoding/json"
 // letting a file declare its own holdout would let a user put a Case wherever
 // produced the number they wanted.
 type record struct {
-	ID       string            `json:"id"`
-	Input    string            `json:"input"`
-	Expected string            `json:"expected,omitempty"`
-	Rubric   string            `json:"rubric,omitempty"`
-	Tags     []string          `json:"tags,omitempty"`
-	Metadata map[string]string `json:"metadata,omitempty"`
+	ID       string   `json:"id"`
+	Input    string   `json:"input"`
+	Expected string   `json:"expected,omitempty"`
+	Rubric   string   `json:"rubric,omitempty"`
+	Tags     []string `json:"tags,omitempty"`
 }
 
 // decode parses one line into a record.
+//
+// Unknown fields are rejected rather than ignored. An earlier version declared
+// a `metadata` field that was decoded and then silently discarded — a user
+// writing it got no error, no warning, and no data. Failing closed matches the
+// rest of this adapter: a file the user should fix is not a file to quietly
+// reinterpret.
 func decode(line []byte) (record, error) {
+	dec := json.NewDecoder(bytes.NewReader(line))
+	dec.DisallowUnknownFields()
+
 	var rec record
-	err := json.Unmarshal(line, &rec)
-	return rec, err //nolint:wrapcheck // the caller adds file and line context
+	if err := dec.Decode(&rec); err != nil {
+		return record{}, err //nolint:wrapcheck // the caller adds file and line context
+	}
+	return rec, nil
 }

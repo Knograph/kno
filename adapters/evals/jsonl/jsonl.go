@@ -123,7 +123,20 @@ func (e *Evals) Cases(ctx context.Context) (iter.Seq2[*core.Case, error], error)
 				return
 			}
 			if rec.ID == "" {
-				rec.ID = fmt.Sprintf("%s:%d", e.opts.Path, line)
+				// Fatal, not defaulted. An earlier version filled this in with
+				// "path:line", which made the split depend on file POSITION —
+				// so inserting a line, reordering, or renaming the file
+				// silently reclassified every Case after it. A Case scored and
+				// reported as dev on Monday would become untouched holdout on
+				// Tuesday, which is the precise failure the split's own doc
+				// comment rejects a per-run salt for.
+				//
+				// The format already treats a missing input as fatal. An ID is
+				// no less load-bearing: the split is keyed on it.
+				yield(nil, fmt.Errorf(
+					"%s line %d: case has no id, and the dev/holdout split is keyed on it; "+
+						"give every case a stable id", e.opts.Path, line))
+				return
 			}
 			if rec.Input == "" {
 				yield(nil, fmt.Errorf("%s line %d: case %q has no input", e.opts.Path, line, rec.ID))
@@ -175,7 +188,7 @@ func (e *Evals) CountSplits(ctx context.Context) (SplitCounts, error) {
 		return SplitCounts{}, err
 	}
 
-	var counts SplitCounts
+	counts := SplitCounts{HoldoutFrac: e.opts.holdoutFrac()}
 	for c, err := range seq {
 		if err != nil {
 			return SplitCounts{}, err
@@ -209,6 +222,12 @@ func (e *Evals) ContentHash(ctx context.Context) (string, error) {
 	// The split configuration is part of the fingerprint, because changing
 	// either input reclassifies Cases without the file itself changing.
 	_, _ = h.Write(fingerprintSplit(e.opts.SplitSeed, e.opts.holdoutFrac()))
+	// The path too. Case IDs are now required, so a rename no longer changes
+	// any split — but a resume that silently switched to a different file of
+	// identical content would still be measuring a different run than it
+	// thinks, and saying so costs nothing.
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(e.opts.Path))
 
 	return hex.EncodeToString(h.Sum(nil)), nil
 }

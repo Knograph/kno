@@ -6,6 +6,7 @@ import (
 	"iter"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -125,6 +126,8 @@ func TestMalformedRecordIsFatal(t *testing.T) {
 		{"invalid json", `{"id":"c2","input":`, "line 2"},
 		{"missing input", `{"id":"c2"}`, "no input"},
 		{"duplicate id", `{"id":"c1","input":"again"}`, "duplicate case id"},
+		{"missing id", `{"input":"no id here"}`, "has no id"},
+		{"unknown field", `{"id":"c2","input":"x","difficulty":"hard"}`, "unknown field"},
 	}
 
 	for _, tc := range tests {
@@ -547,4 +550,178 @@ func sameSplits(a, b map[string]knov1.Split) bool {
 		}
 	}
 	return true
+}
+
+// TestMissingIDIsFatalNotPositional is the regression test for a leak that
+// reached a PR.
+//
+// An earlier version defaulted an absent id to "path:line". Because the split
+// is keyed on the id, that made a Case's half depend on its POSITION in the
+// file — so inserting a line, reordering, or renaming reclassified every Case
+// after it. A Case scored and reported as dev on one run would become
+// untouched holdout on the next, which is the exact failure split.go's own
+// comment rejects a per-run salt for.
+//
+// The fix is to refuse the file. This proves the refusal, and proves the
+// scenario that used to break: identical Cases at different line offsets get
+// identical splits.
+func TestMissingIDIsFatalNotPositional(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a case without an id is refused", func(t *testing.T) {
+		t.Parallel()
+
+		path := writeCases(t, `{"input":"anonymous"}`)
+		ev, err := jsonl.New(jsonl.Options{Path: path})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		seq, err := ev.Cases(context.Background())
+		if err != nil {
+			t.Fatalf("Cases: %v", err)
+		}
+
+		var gotErr error
+		for _, err := range seq {
+			if err != nil {
+				gotErr = err
+				break
+			}
+		}
+		if gotErr == nil {
+			t.Fatal("a Case with no id was accepted; its split would come from its line number")
+		}
+		if !strings.Contains(gotErr.Error(), "split is keyed on it") {
+			t.Errorf("error = %q, want it to explain why an id is required", gotErr)
+		}
+	})
+
+	t.Run("line position never decides a split", func(t *testing.T) {
+		t.Parallel()
+
+		// The same Cases, shifted by unrelated lines above them.
+		compact := writeCases(t, caseLine("keep-1", "a"), caseLine("keep-2", "b"))
+		padded := writeCases(t,
+			caseLine("filler-1", "x"), caseLine("filler-2", "y"), caseLine("filler-3", "z"),
+			caseLine("keep-1", "a"), caseLine("keep-2", "b"))
+
+		before, after := splitMapFor(t, compact), splitMapFor(t, padded)
+		for _, id := range []string{"keep-1", "keep-2"} {
+			if before[id] != after[id] {
+				t.Errorf("case %s moved from %v to %v when unrelated lines were inserted above it",
+					id, before[id], after[id])
+			}
+		}
+	})
+}
+
+// TestRenamingTheFileDoesNotMoveCases covers the other half of the same defect.
+//
+// The auto-generated id embedded the file path, so a rename changed every
+// split — while ContentHash reported no change at all, because the bytes were
+// identical. A resumed run would have proceeded believing nothing had moved.
+func TestRenamingTheFileDoesNotMoveCases(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	dir := t.TempDir()
+	body := caseLine("c1", "one") + "\n" + caseLine("c2", "two") + "\n"
+
+	first := filepath.Join(dir, "before.jsonl")
+	second := filepath.Join(dir, "after.jsonl")
+	for _, p := range []string{first, second} {
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatalf("writing %s: %v", p, err)
+		}
+	}
+
+	if a, b := splitMapFor(t, first), splitMapFor(t, second); !sameSplits(a, b) {
+		t.Error("identical Cases in differently-named files landed in different splits")
+	}
+
+	// The path still participates in the fingerprint: a resume that switched
+	// files of identical content is measuring a different run than it thinks.
+	evA, _ := jsonl.New(jsonl.Options{Path: first})
+	evB, _ := jsonl.New(jsonl.Options{Path: second})
+	hashA, err := evA.ContentHash(ctx)
+	if err != nil {
+		t.Fatalf("ContentHash: %v", err)
+	}
+	hashB, err := evB.ContentHash(ctx)
+	if err != nil {
+		t.Fatalf("ContentHash: %v", err)
+	}
+	if hashA == hashB {
+		t.Error("two different files hashed identically; a resume could silently switch sources")
+	}
+}
+
+// TestSplitDistributesSharedPrefixIDs guards the ID shapes real users have.
+//
+// ULIDs share a time prefix and sequential ids share everything but a short
+// suffix. FNV-1a diffuses per byte, so a shared prefix is where a weak hash
+// would skew — and a skewed split means a holdout that is not representative
+// of the dev set it is meant to validate against.
+//
+// The tolerance is scaled to the binomial standard deviation rather than being
+// a round number: at n=4000, p=0.2 the expected deviation is ~0.6 points, so
+// four sigma is ~2.5 points. A looser bound would let a real skew pass.
+func TestSplitDistributesSharedPrefixIDs(t *testing.T) {
+	t.Parallel()
+
+	shapes := map[string]func(int) string{
+		"ulid-like":   func(i int) string { return fmt.Sprintf("01JBQ8Z3XK9YV2NPQR%06d", i) },
+		"path-like":   func(i int) string { return fmt.Sprintf("evals/regression/suite.jsonl:%d", i) },
+		"uuid-like":   func(i int) string { return fmt.Sprintf("3f2504e0-4f89-11d3-9a0c-%012d", i) },
+		"long-common": func(i int) string { return strings.Repeat("prefix-", 8) + strconv.Itoa(i) },
+	}
+
+	const (
+		n         = 4000
+		frac      = 0.2
+		tolerance = 0.025 // ~4 sigma at this n and p
+	)
+
+	for name, makeID := range shapes {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			lines := make([]string, 0, n)
+			for i := range n {
+				lines = append(lines, caseLine(makeID(i), "q"))
+			}
+			ev, err := jsonl.New(jsonl.Options{Path: writeCases(t, lines...), HoldoutFrac: frac})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			counts, err := ev.CountSplits(context.Background())
+			if err != nil {
+				t.Fatalf("CountSplits: %v", err)
+			}
+
+			got := float64(counts.Holdout) / float64(counts.Total())
+			if diff := got - frac; diff > tolerance || diff < -tolerance {
+				t.Errorf("holdout fraction %.4f for %s ids, want %.2f ± %.3f (%d of %d)",
+					got, name, frac, tolerance, counts.Holdout, counts.Total())
+			}
+		})
+	}
+}
+
+// TestValidateGuidanceUsesTheConfiguredFraction: an error whose fix does not
+// fix is worse than no fix, and CLAUDE.md's error grammar requires the real
+// one.
+func TestValidateGuidanceUsesTheConfiguredFraction(t *testing.T) {
+	t.Parallel()
+
+	err := jsonl.SplitCounts{Dev: 12, Holdout: 0, HoldoutFrac: 0.05}.Validate()
+	if err == nil {
+		t.Fatal("a zero-case holdout was accepted")
+	}
+	if !strings.Contains(err.Error(), "0.05") {
+		t.Errorf("error = %q, want it to name the configured fraction rather than the default", err)
+	}
+	if strings.Contains(err.Error(), "roughly 6 ") {
+		t.Error("the guidance was computed from the default fraction, not the configured one")
+	}
 }
