@@ -132,3 +132,48 @@ func TestLimiterHonorsCancellation(t *testing.T) {
 		t.Errorf("waited %v after cancellation", d)
 	}
 }
+
+// TestAnExtendedHoldReachesAWaiterAlreadyWaiting.
+//
+// Close's contract is that it extends rather than replaces, so two workers both
+// receiving a 429 cannot shorten each other's wait. That held for a worker
+// arriving after the extension and not for one already waiting: Wait armed a
+// single timer for the hold as it stood at entry, so the extension reached
+// nobody and the waiter resumed into a provider still refusing.
+func TestAnExtendedHoldReachesAWaiterAlreadyWaiting(t *testing.T) {
+	t.Parallel()
+
+	l := transport.NewLimiter()
+	l.Close("api.example.com", 60*time.Millisecond)
+
+	// Extend while the waiter is mid-wait.
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		l.Close("api.example.com", time.Hour)
+	}()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+	defer cancel()
+
+	if _, err := l.Wait(ctx, "api.example.com"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err = %v; the waiter resumed on the original hold and never saw "+
+			"the extension, so it went back to a provider that was still refusing", err)
+	}
+}
+
+// TestReportedWaitIsWhatActuallyElapsed: a caller renders this as "waiting on a
+// rate limit", so it has to be the real figure, not the one computed at entry.
+func TestReportedWaitIsWhatActuallyElapsed(t *testing.T) {
+	t.Parallel()
+
+	l := transport.NewLimiter()
+	l.Close("api.example.com", 40*time.Millisecond)
+
+	waited, err := l.Wait(t.Context(), "api.example.com")
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if waited < 30*time.Millisecond {
+		t.Errorf("reported %v for a 40ms hold", waited)
+	}
+}

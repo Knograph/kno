@@ -36,6 +36,11 @@ type Destination struct {
 
 	// keyHeader names the header the credential travels in.
 	keyHeader string
+
+	// policy is retained so the address rules can be reapplied at dial time,
+	// against the address the resolver produced rather than the one the user
+	// typed.
+	policy Policy
 }
 
 // Policy is what a caller has opted into.
@@ -76,7 +81,13 @@ var (
 func NewDestination(rawURL, key, keyHeader string, p Policy) (*Destination, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %q is not a URL: %w", ErrRefusedDestination, rawURL, err)
+		// Neither the URL nor the parse error is echoed. A malformed URL can
+		// still carry a credential — "https://user:sk-secret@host:notaport/v1"
+		// fails to parse, and both %q and url.Parse's own message would quote
+		// it back, twice. This is the one error path in the package that can
+		// hold a secret, and RedactURL cannot help because the value did not
+		// parse.
+		return nil, fmt.Errorf("%w: the base URL could not be parsed", ErrRefusedDestination)
 	}
 
 	// Userinfo never travels. A user who typed https://sk-abc@host/v1 has put a
@@ -114,7 +125,7 @@ func NewDestination(rawURL, key, keyHeader string, p Policy) (*Destination, erro
 			ErrKeyBinding)
 	}
 
-	return &Destination{base: u, host: u.Host, key: key, keyHeader: keyHeader}, nil
+	return &Destination{base: u, host: u.Host, key: key, keyHeader: keyHeader, policy: p}, nil
 }
 
 // Host reports the host[:port] this destination is bound to.
@@ -129,6 +140,19 @@ func (d *Destination) Host() string { return d.host }
 func checkAddress(hostname string, p Policy) error {
 	ip := net.ParseIP(hostname)
 	if ip == nil {
+		// A name that is not a canonical IP literal but is also not a plausible
+		// DNS name is a spelling of an address chosen to slip past this check.
+		// net.ParseIP rejects 127.1, 2130706433, and 0x7f.1; the resolver
+		// accepts all three as 127.0.0.1. No provider is spelled that way.
+		//
+		// This is a readable refusal at configuration time. It is NOT the
+		// enforcement — checkResolved is, because a name resolves at dial time
+		// and can resolve differently than it did here.
+		if !plausibleDNSName(hostname) {
+			return fmt.Errorf("%w: %q is neither a hostname nor a canonical IP "+
+				"address; non-canonical forms like 127.1 or 2130706433 resolve to "+
+				"addresses this refuses to reach", ErrRefusedDestination, hostname)
+		}
 		return nil
 	}
 
@@ -150,6 +174,60 @@ func checkAddress(hostname string, p Policy) error {
 			"internal service, and Kno stores what comes back", ErrRefusedDestination, ip)
 	}
 	return nil
+}
+
+// plausibleDNSName reports whether h looks like a hostname rather than an
+// address in disguise.
+//
+// Deliberately strict about the last label: a DNS TLD cannot be all digits or
+// start with one, which is exactly what the numeric IP spellings look like.
+func plausibleDNSName(h string) bool {
+	if h == "" || len(h) > 253 {
+		return false
+	}
+	labels := strings.Split(h, ".")
+	last := labels[len(labels)-1]
+	if last == "" && len(labels) > 1 { // trailing dot
+		labels = labels[:len(labels)-1]
+		last = labels[len(labels)-1]
+	}
+	if last == "" {
+		return false
+	}
+	// A TLD is alphabetic (or punycode, which starts "xn--").
+	for _, r := range last {
+		if r >= '0' && r <= '9' {
+			return false
+		}
+	}
+	for _, l := range labels {
+		if l == "" {
+			return false
+		}
+		for _, r := range l {
+			isOK := r == '-' || r == '_' ||
+				(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
+			if !isOK {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// checkResolved applies the address policy to an address the resolver actually
+// produced.
+//
+// This is the enforcement. The configuration-time check reads a URL the user
+// typed; this reads where the connection is about to go, which is the only
+// thing that cannot be spelled around. A hostname resolving to
+// 169.254.169.254 is refused here even though it looked like an ordinary name.
+func (d *Destination) checkResolved(addr string) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	return checkAddress(host, d.policy)
 }
 
 // authorize attaches the credential bound to this destination.
@@ -193,8 +271,20 @@ func sameHost(a, b string) bool {
 // Rather than enumerate which headers are safe, this refuses the redirect. An
 // API endpoint has no legitimate reason to send a request somewhere else.
 func (d *Destination) CheckRedirect(req *http.Request, via []*http.Request) error {
-	if len(via) >= maxRedirects {
-		return fmt.Errorf("%w: stopped after %d redirects", ErrRefusedDestination, maxRedirects)
+	// Redirects are refused outright, same host or not.
+	//
+	// Cross-host is the credential case. Same-host is refused for a different
+	// reason: the request body cannot survive one. GetBody is cleared so
+	// net/http cannot silently replay a request (see newRequest), and without
+	// it a 307/308 arrives back as the ANSWER — an empty body with no error,
+	// which an adapter reads as a broken provider — while a 302 is followed as
+	// a bodyless GET, so the provider receives a request that is not the one
+	// the Case describes. Both are worse than a refusal that says what
+	// happened.
+	if len(via) > 0 {
+		return fmt.Errorf("%w: %s redirected to %s. An API endpoint has no reason "+
+			"to redirect a request, and the body cannot follow one",
+			ErrRefusedDestination, d.host, req.URL.Host)
 	}
 	if !sameHost(req.URL.Host, d.host) {
 		return fmt.Errorf("%w: %s redirected to %s, and a credential bound to the "+

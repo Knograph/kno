@@ -168,3 +168,64 @@ func TestRateLimitClosesTheHostForAsLongAsAsked(t *testing.T) {
 		t.Errorf("err = %v; the limiter did not hold the host after a 429", err)
 	}
 }
+
+// TestABare429StillClosesTheGate.
+//
+// A 429 with no Retry-After is common. Treating "no header" as "no wait" leaves
+// the limiter open and hammers a provider that just refused.
+func TestABare429StillClosesTheGate(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	t.Cleanup(srv.Close)
+
+	c := localClient(t, srv)
+	resp, err := c.Do(t.Context(), http.MethodPost, "/chat", []byte(`{}`))
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	if resp.RetryAfter <= 0 {
+		t.Fatal("a bare 429 produced no hold")
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := c.Do(ctx, http.MethodPost, "/chat", []byte(`{}`)); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err = %v; the host was not held after a bare 429", err)
+	}
+}
+
+// TestAnOversizedBodyDoesNotDiscardTheRateLimitSignal.
+//
+// A throttling gateway answering 429 with a verbose HTML error page would
+// otherwise have its signal thrown away by the size refusal — defeating the
+// limiter at exactly the moment it is needed.
+func TestAnOversizedBodyDoesNotDiscardTheRateLimitSignal(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "2")
+		w.WriteHeader(http.StatusTooManyRequests)
+		for range 50 {
+			if _, err := w.Write(make([]byte, 1024)); err != nil {
+				return
+			}
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c := localClient(t, srv, func(o *transport.Options) { o.MaxResponseBytes = 2048 })
+	_, err := c.Do(t.Context(), http.MethodPost, "/chat", []byte(`{}`))
+	if !errors.Is(err, transport.ErrResponseTooLarge) {
+		t.Fatalf("err = %v, want ErrResponseTooLarge", err)
+	}
+
+	// The limiter still learned about the 429.
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := c.Do(ctx, http.MethodPost, "/chat", []byte(`{}`)); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("err = %v; the 429 was discarded along with the oversized body", err)
+	}
+}

@@ -81,7 +81,9 @@ covenants — breaking any of them requires a major version.
     filtered, because Go's `net/http` strips only `Authorization`, `WWW-Authenticate`, `Cookie`,
     and `Cookie2` on a cross-domain redirect — and **not `x-api-key`**, which is how Anthropic
     authenticates.
-  - **Key bindings are explicit, never derived**: `--key-env api.groq.com=GROQ_API_KEY`. A derived
+  - **Key bindings are explicit, never derived** — a host is bound to the *name* of an environment
+    variable, so the key itself never appears in a flag. (The CLI flag that exposes this lands with
+    the adapters.) A derived
     scheme is not injective — env var names permit only `[A-Za-z0-9_]`, so `api.groq.com` and the
     typosquat `api-groq.com` would collapse to one variable. A scheme's default applies only to
     that scheme's own host, so pointing an `openai:` model at Groq does not mail the user's OpenAI
@@ -94,7 +96,13 @@ covenants — breaking any of them requires a major version.
   - **The transport does not retry, and that is enforced rather than asserted.** `Request.GetBody`
     is cleared, because `net/http` replays a request on a reused connection when it is set — which
     an `Idempotency-Key` (see `docs/debt.md#20`) would turn on silently. A replay is invisible at
-    the server, so the test asserts the invariant on the request itself.
+    the server, so the test asserts the invariant on the request itself. Because the body cannot
+    survive a redirect once `GetBody` is nil, **all** redirects are refused — a 307 would otherwise
+    return as an empty-bodied answer with no error, and a 302 would deliver a bodyless GET.
+  - **Private-address rules are enforced against the RESOLVED address**, in the dialer, not against
+    the URL as typed. `net.ParseIP` rejects `127.1`, `2130706433`, and `0x7f.1` while the resolver
+    accepts all three as loopback, and any hostname can be pointed at link-local. Checking only the
+    typed URL was bypassable by spelling.
   - `Retry-After` is honored in both RFC 9110 forms and clamped, so a misconfigured gateway cannot
     hang a run for a day.
 - **`core.Estimator`**, an optional Ring-0 interface: an adapter can price a Case before the call

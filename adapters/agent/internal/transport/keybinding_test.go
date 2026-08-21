@@ -126,3 +126,78 @@ func TestAPortDoesNotChangeWhoIsOnTheOtherEnd(t *testing.T) {
 		t.Errorf("localhost:8000 resolved to %q, want the localhost binding", got)
 	}
 }
+
+// TestAPortInABindingDoesNotSilentlyDisableIt.
+//
+// ParseKeyBindings keyed the map with the port and Resolve looked up without
+// it, so a binding written with a port never resolved — no error, no
+// credential. And the "bound twice" refusal, whose whole point is that argv
+// order must not decide which key goes where, was bypassed by adding ":443" to
+// one of the two.
+func TestAPortInABindingDoesNotSilentlyDisableIt(t *testing.T) {
+	t.Setenv("LOCAL_KEY", "local")
+
+	b, err := transport.ParseKeyBindings([]string{"localhost:8000=LOCAL_KEY"})
+	if err != nil {
+		t.Fatalf("ParseKeyBindings: %v", err)
+	}
+	for _, host := range []string{"localhost:8000", "localhost", "localhost:9999"} {
+		if got, _ := b.Resolve(host, "", ""); got != "local" {
+			t.Errorf("Resolve(%q) = %q, want the binding to apply", host, got)
+		}
+	}
+
+	// The same host with and without a port is one host, and binding it twice
+	// is refused rather than resolved by argument order.
+	if _, err := transport.ParseKeyBindings([]string{
+		"api.example.com=A_KEY", "api.example.com:443=B_KEY",
+	}); err == nil {
+		t.Error("the same host bound twice with different ports was accepted; " +
+			"which key applied would depend on argv order")
+	}
+}
+
+// TestRealProviderKeyShapesAreCaughtAsSecrets.
+//
+// The length-based version tested the wrong thing in both directions: its
+// 40-character threshold sat just above the most common real key length, so
+// every key below was accepted as a variable NAME and left in argv, shell
+// history, and ps output.
+func TestRealProviderKeyShapesAreCaughtAsSecrets(t *testing.T) {
+	t.Parallel()
+
+	// Real prefixes and real lengths, with deliberately non-random bodies: the
+	// property under test is the SHAPE, and a high-entropy body would trip the
+	// repository's own secret scanner on a file that contains no secret.
+	keys := map[string]string{
+		"Groq":        "gsk_" + strings.Repeat("EXAMPLE", 5),
+		"Gemini":      "AIzaSy" + strings.Repeat("EXAMPLE", 5),
+		"HuggingFace": "hf_" + strings.Repeat("EXAMPLE", 5),
+		"Azure":       "0000" + strings.Repeat("EXAMPLE", 4),
+		"Replicate":   "r8_" + strings.Repeat("EXAMPLE", 5),
+	}
+	for provider, key := range keys {
+		if _, err := transport.ParseKeyBindings([]string{"api.example.com=" + key}); err == nil {
+			t.Errorf("a %s key was accepted as an environment variable name, so it "+
+				"would sit in argv and ps output", provider)
+		}
+	}
+}
+
+// TestLegitimateVariableNamesAreNotRejected: the heuristic must not cost a user
+// a working configuration to catch a mistake they did not make.
+func TestLegitimateVariableNamesAreNotRejected(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{
+		"OPENAI_API_KEY",
+		"GROQ_API_KEY",
+		"KNO_OPENAI_COMPATIBLE_PRODUCTION_API_KEY_US",
+		"_INTERNAL",
+		"KEY2",
+	} {
+		if _, err := transport.ParseKeyBindings([]string{"api.example.com=" + name}); err != nil {
+			t.Errorf("rejected the legitimate variable name %s: %v", name, err)
+		}
+	}
+}

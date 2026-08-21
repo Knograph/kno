@@ -84,28 +84,45 @@ func NewLimiter() *Limiter {
 
 // Wait blocks until host may be used, or ctx ends.
 //
-// Returns how long it waited, so a caller can emit the "waiting on a rate
-// limit" signal rather than looking frozen — a run backing off and a run hung
-// are indistinguishable from the outside, and only one of them is a problem.
+// Returns how long it ACTUALLY waited, so a caller can emit the "waiting on a
+// rate limit" signal rather than looking frozen — a run backing off and a run
+// hung are indistinguishable from the outside, and only one of them is a
+// problem. Reporting the wait as computed at entry would understate it whenever
+// the hold was extended mid-wait.
 func (l *Limiter) Wait(ctx context.Context, host string) (time.Duration, error) {
-	l.mu.Lock()
-	until, ok := l.until[normalizeHost(host)]
-	now := l.now()
-	l.mu.Unlock()
+	h := normalizeHost(host)
+	start := l.now()
+	blocked := false
 
-	if !ok || !until.After(now) {
-		return 0, nil
-	}
+	// A loop, not a single timer. Arming one timer for the hold as it stood at
+	// entry means a second worker's 429 — which legitimately EXTENDS the hold —
+	// never reaches anyone already waiting, and they resume into a provider
+	// that is still refusing. Re-reading after each wake is what makes Close's
+	// "extends rather than replaces" true for waiters as well as arrivals.
+	for {
+		l.mu.Lock()
+		until, ok := l.until[h]
+		now := l.now()
+		l.mu.Unlock()
 
-	d := until.Sub(now)
-	timer := time.NewTimer(d)
-	defer timer.Stop()
+		if !ok || !until.After(now) {
+			if !blocked {
+				// Never held. Report zero rather than the nanoseconds this
+				// bookkeeping took: a caller turns a non-zero value into
+				// "waiting on a rate limit", and that would be a lie.
+				return 0, nil
+			}
+			return l.now().Sub(start), nil
+		}
+		blocked = true
 
-	select {
-	case <-ctx.Done():
-		return 0, ctx.Err()
-	case <-timer.C:
-		return d, nil
+		timer := time.NewTimer(until.Sub(now))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return 0, ctx.Err()
+		case <-timer.C:
+		}
 	}
 }
 
