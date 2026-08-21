@@ -198,8 +198,21 @@ test-live: ## Integration tests against LIVE providers. Spends real money.
 coverage-check: ## Enforce coverage floors and the no-decrease ratchet
 	@go run ./internal/cmd/covercheck -profile=$(COVERAGE) -baseline=$(BASELINE)
 
+# The baseline must be the LOWEST reading across the platforms CI runs, not
+# whichever one the maintainer happens to be sitting at. Coverage of concurrent
+# code is platform-dependent -- executor measures 96.0% on darwin and 94.9% on
+# linux for the same commit, every test passing on both -- so a baseline written
+# on darwin fails linux forever, and a gate that always fails gets disabled.
 .PHONY: update-coverage-baseline
-update-coverage-baseline: test ## Regenerate .coverage-baseline (review the diff like code)
+update-coverage-baseline: test ## Regenerate .coverage-baseline (linux only; review the diff like code)
+	@$(SAFE) if [ "$$(go env GOOS)" != "linux" ]; then \
+		printf '\033[31m FAIL \033[0m update-coverage-baseline: refusing to write a baseline on %s.\n' "$$(go env GOOS)"; \
+		printf '        Coverage of concurrent code is platform-dependent, and this file is the\n'; \
+		printf '        floor across every platform CI runs. Writing it here would raise the floor\n'; \
+		printf '        above what the linux job can meet, failing CI on every later PR.\n'; \
+		printf '        Take the numbers from a CI run, or run this in a linux container.\n'; \
+		exit 1; \
+	fi
 	@go run ./internal/cmd/covercheck -profile=$(COVERAGE) -baseline=$(BASELINE) -write
 
 .PHONY: secrets-scan

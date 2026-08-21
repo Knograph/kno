@@ -1,15 +1,24 @@
-# Coverage baseline. Regenerate with `make update-coverage-baseline`.
-# Coverage may not decrease against these numbers. Review diffs like code.
+# Coverage baseline. Coverage may not decrease against these numbers.
+# Review diffs like code.
+#
+# These are the LOWEST reading across the platforms CI runs, not one
+# platform's measurement. Coverage of concurrent code is platform-dependent:
+# the same commit measures 96.0% for executor on darwin and 94.9% on linux,
+# with every test passing on both. A baseline taken from the higher platform
+# fails the lower one forever, which is how a real gate becomes a disabled one.
+#
+# Regenerate with `make update-coverage-baseline` on linux. Doing it elsewhere
+# raises the floor above what CI can meet -- the Makefile target says so.
 adapters/agent/fake 0.0
 adapters/evals/jsonl 92.2
 cli 84.1
 cmd/kno 0.0
-core 96.8
+core 96.1
 core/errs 92.3
 coretest 83.8
-executor 96.0
+executor 94.9
 goal/exactmatch 0.0
 internal/cmd/covercheck 83.9
 internal/cmd/godoccheck 74.0
-stats/budget 96.3
+stats/budget 95.4
 store 83.1
