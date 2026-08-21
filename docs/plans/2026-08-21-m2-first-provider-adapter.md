@@ -582,7 +582,7 @@ quantile estimator on top of its current 657 lines (M-j).
 
 | PR | Scope | Depends on | Repays |
 |---|---|---|---|
-| M2-0 | Proto: agent-ref grammar, price vector, refusal/truncation/usage-estimated flags, resolved-model + fingerprint fields, retry/rate-limit/overshoot **events**, `RunResumed` payload, `BaselineDetail` submessage | — | 26 (partly), 29 (partly) |
+| M2-0 | **Settles §10a's open decision (M-7)**, with an ADR. Proto: agent-ref grammar, price vector, refusal/truncation/usage-estimated flags, resolved-model + fingerprint fields, retry/rate-limit/overshoot **events**, `RunResumed` payload, `BaselineDetail` submessage | — | 26 (partly), 29 (partly) |
 | M2-1 | `store`: `PRAGMA user_version` migration; `score_value`/`score_passed`/`refused`/`truncated` columns; backfill from `score_proto`; **`kno purge`** (`store` + `cli`, nulling blobs only) | M2-0 | 25 |
 | M2-2 | `core.Predictor` optional Ring-0 interface; `Guard.Overshoot`; `budget` naming | M2-0 | — |
 | M2-3 | `internal/transport`: rate limiter, `GetBody` pinning + round-trip counter, redirect refusal, explicit per-host key binding, private-address rules, timeouts, redaction, OTel spans, `goleak.VerifyTestMain` | M2-0 | 18 (partly) |
@@ -858,6 +858,45 @@ accepted" when it was not (M-14, H-4). Both are corrected.
 4. **Cross-process rate-limit coordination** is out of scope. §10 row, trigger `kno serve` (v0.3).
 5. **Streaming is not implemented.** §10 row.
 6. **Approximate token counting.** §10 row, with the divergence check that makes its trigger real.
+
+## 10a. Open decision, to be settled in M2-0
+
+**Pass three's M-7 is unresolved, and this plan does not resolve it.** Recorded here rather than
+patched over, because three drafts of this document have now demonstrated that a design question
+answered in prose gets answered wrongly.
+
+**The question: where do per-run observations accumulate?**
+
+M2 wants four things "on the `Run`" that nothing today can produce:
+
+- the **set** of `system_fingerprint` values observed (§2.5 says a set; §5 lists a singular field —
+  the plan contradicts itself, which is the tell that the question was never settled);
+- the refusal count (§6);
+- the truncation count (§6);
+- the usage-estimated count (§2.3).
+
+None has anywhere to live. `Run` is written twice — at `openRun`, before any Response exists, and
+at `closeRun`. The only cross-worker state is `core/baseline_events.go`'s `aggregator`, which
+carries `sum`, `scored`, `errored`, `seq`, and the two resume-seeded priors. Adding four
+observation channels to it is a real design change, not a field.
+
+Separately: `Run` already has `input_fingerprint`, documented at `run.proto:105-108` as the hash
+whose mismatch refuses a resume. Adding `system_fingerprint` puts two unrelated meanings of
+"fingerprint" on one message — the vocabulary drift prime directive 2 forbids.
+
+**Options, none chosen here:**
+
+| | Approach | Cost |
+|---|---|---|
+| A | Extend `aggregator` with the four channels; `closeRun` writes them | Grows the one piece of shared mutable state in the stage; `core/baseline.go` is already 657 lines against a ~400 soft cap |
+| B | A `RunObservations` submessage on `Run`, accumulated in the store rather than in memory — the counts are already per-outcome columns after §2.9a's migration, so `closeRun` could aggregate with SQL | One more query at close; keeps `aggregator` untouched; the numbers survive a crash because they are already persisted |
+| C | Emit them only as events, never on `Run` | Cheapest; a consumer that did not replay full history cannot see them, and `--json` cannot report them |
+
+**B looks right** — the per-outcome columns exist anyway, and deriving a run-level number from
+persisted rows rather than from in-memory counters is what fixed debt 27. But it is a proto and
+store decision, so **M2-0 settles it and records the choice in an ADR**, and this row stays open
+until then. On the naming collision, `resolved_model` and `backend_fingerprint` avoid reusing
+"fingerprint" for the resume hash; M2-0 picks the names.
 
 ## 11a. DESIGN.md conflicts, flagged rather than resolved
 
