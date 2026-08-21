@@ -79,6 +79,14 @@ type BaselineOptions struct {
 	HoldoutFrac float64
 
 	// DevCases and HoldoutCases are the counts from ingestion.
+	//
+	// DEBT(docs/debt.md#28): the CALLER owns their accuracy. The stage checks
+	// only that neither is zero — a run with nothing in dev measures nothing,
+	// and a run with no holdout can never be validated. It does not verify the
+	// numbers against what the sealed source actually yields, because counting
+	// would mean consuming the iterator a second time. A caller whose split
+	// computation is wrong produces a Run and an event stream that misreport
+	// their own denominator, and nothing here will notice.
 	DevCases     int
 	HoldoutCases int
 
