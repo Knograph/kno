@@ -73,9 +73,23 @@ type ContextInjector interface {
 type Estimator interface {
 	// Estimate reports the most one Invoke of c could cost.
 	//
+	// It MUST be local: arithmetic over a pricing table the adapter already
+	// holds. It must not call the provider. This runs BEFORE the budget guard
+	// authorizes anything, so a network call here spends money outside the
+	// guard entirely — the one thing prime directive 4 forbids — and a slow one
+	// blocks a worker while holding no reservation. The engine bounds the call
+	// with a timeout, but a timeout cannot un-spend a request already sent.
+	//
+	// Calls must be exactly 1. One Invoke settles as one provider call, so
+	// reserving more would reserve N and settle 1, and the call cap would drift
+	// by (N-1) for every Case. An adapter whose single Invoke really does make
+	// several provider requests needs the settlement side to carry that too;
+	// until it does, the engine refuses the Case rather than mis-count it.
+	//
 	// An error means the cost is unknown, which is NOT the same as zero: a zero
-	// estimate makes a dollar cap unenforceable. A caller with a cost cap must
-	// refuse the run rather than substitute one.
+	// estimate makes a dollar cap unenforceable, so the engine treats a
+	// zero-cost answer under a cost cap exactly as it treats an error. Report
+	// the error; do not invent a cheap number.
 	Estimate(ctx context.Context, c *Case) (budget.Estimate, error)
 }
 

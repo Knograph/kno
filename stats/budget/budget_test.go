@@ -609,3 +609,66 @@ func TestOvershootIsZeroWithinTheCapAndWithoutOne(t *testing.T) {
 		}
 	})
 }
+
+// TestAuthorizeRejectsAnEstimateItCannotTreatAsACeiling.
+//
+// A negative value does not under-reserve, it CREDITS the budget: fitsLocked
+// sums reservations, so a -$5.00 reservation hands $5.00 of phantom headroom to
+// every other concurrent worker. Measured before the check existed: a $1.00 cap
+// reporting $6.00 remaining and settling $5.00, and a cap of 2 calls
+// authorizing 60 more.
+//
+// The check lives in Authorize because that is the choke point every spend path
+// shares. cli/baseline.go already refuses a negative --cost-per-call-usd for
+// this reason; when core.Estimator moved the number from a validated flag to
+// adapter code, the defense had to move with it.
+func TestAuthorizeRejectsAnEstimateItCannotTreatAsACeiling(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	tests := []struct {
+		name string
+		est  budget.Estimate
+	}{
+		{"negative cost", budget.Estimate{Calls: 1, CostUSDMicros: -5_000_000}},
+		{"negative calls", budget.Estimate{Calls: -100}},
+		{"negative tokens", budget.Estimate{Calls: 1, Tokens: -1}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			g := budget.New(budget.Limits{MaxCostUSDMicros: 1_000_000, MaxLLMCalls: 2}, nil, 0)
+			res, err := g.Authorize(ctx, tc.est)
+			if err == nil {
+				t.Fatalf("authorized %+v", tc.est)
+			}
+			if !errors.Is(err, budget.ErrInvalidEstimate) {
+				t.Errorf("err = %v, want ErrInvalidEstimate", err)
+			}
+			if res != nil {
+				t.Error("a rejected estimate returned a reservation")
+			}
+			// And no headroom moved.
+			if got := g.Remaining().CostUSDMicros; got != 1_000_000 {
+				t.Errorf("Remaining = %d after a rejected estimate, want the full "+
+					"cap; the guard consumed or credited budget for a call it "+
+					"refused to authorize", got)
+			}
+		})
+	}
+}
+
+// TestAuthorizeAcceptsAZeroCostEstimate: the guard does not decide policy about
+// zero. A call cap alone is a legitimate configuration with no cost to report,
+// and refusing here would break it. Whether a zero cost is acceptable under a
+// DOLLAR cap is the caller's rule, enforced in core.
+func TestAuthorizeAcceptsAZeroCostEstimate(t *testing.T) {
+	t.Parallel()
+
+	g := budget.New(budget.Limits{MaxLLMCalls: 5}, nil, 0)
+	if _, err := g.Authorize(context.Background(), budget.Estimate{Calls: 1}); err != nil {
+		t.Fatalf("a zero-cost estimate under a call-only cap was refused: %v", err)
+	}
+}
