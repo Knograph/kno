@@ -31,6 +31,12 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
+- `core.Seal` and `SealedEvals`: the holdout seal, as a distinct type. A stage that requires a
+  sealed source cannot be handed a raw adapter — forgetting to seal is a compile error rather than
+  a review lapse. Unassigned splits are filtered out too, since treating "unknown" as "dev" is how
+  a holdout leaks one Case at a time.
+- `adapters/evals/jsonl`: the first Ring-1 adapter. Reads Cases from JSON Lines, assigns the
+  dev/holdout split deterministically at ingestion, and passes `coretest.ConformIterator`.
 - `Run` and the event spine (`run.proto`, `event.proto`). The event stream is the single spine the
   TUI, logs, and API all render, and it carries IDs and metrics only — conversation content is
   structurally unrepresentable, enforced by a schema test rather than by reviewer vigilance.

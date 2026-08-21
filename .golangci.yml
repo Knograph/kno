@@ -54,6 +54,12 @@ linters:
           list-mode: lax
           files:
             - "!**/api/jsonenvelope*.go"
+            # Adapter file-format parsers. These decode user-authored formats
+            # into plain Go structs; no kno.v1 type is involved, and protojson
+            # would force the on-disk format to mirror the proto's field names
+            # and presence rules. Scoped to format.go under adapters/ so it
+            # cannot spread to code that touches kno.v1 types.
+            - "!**/adapters/**/format.go"
           deny:
             - pkg: encoding/json
               desc: >-
