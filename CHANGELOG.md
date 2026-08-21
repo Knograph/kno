@@ -31,6 +31,10 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
+- `executor`: a bounded worker pool with a written shutdown protocol. Cases are cloned in the
+  producer before dispatch, so a source reusing its buffer cannot be read by a worker mid-rewrite
+  — the borrow contract becoming enforcement rather than documentation. A fatal source error
+  drains in-flight work rather than discarding results already paid for.
 - `core.Seal` and `SealedEvals`: the holdout seal, as a distinct type. A stage that requires a
   sealed source cannot be handed a raw adapter — forgetting to seal is a compile error rather than
   a review lapse. Unassigned splits are filtered out too, since treating "unknown" as "dev" is how
