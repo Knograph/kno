@@ -58,6 +58,18 @@ message Event {
 
     // The Run closed.
     RunFinished run_finished = 15;
+
+    // The Run picked up where an interrupted one stopped.
+    RunResumed run_resumed = 16;
+
+    // A Case is being retried.
+    RetryAttempted retry_attempted = 17;
+
+    // The run is waiting out a provider rate limit.
+    RateLimitWaiting rate_limit_waiting = 18;
+
+    // Settled cost exceeded what was authorized for it.
+    SettlementOvershoot settlement_overshoot = 19;
   }
 }
 
@@ -251,4 +263,144 @@ message RunFinished {
   // The failure, when status is RUN_STATUS_FAILED. EventError rather than
   // Actionable: see EventError.
   EventError error = 8;
+}
+
+// RunResumed reports that a Run continued from a checkpoint.
+//
+// Without this, a resumed Run emits a second RunStarted carrying the ORIGINAL
+// total, so any live view that resets progress on RunStarted visibly jumps
+// backward on every resume. A consumer replaying full history reconstructs
+// correctly either way; one watching live does not. That is docs/debt.md#29.
+message RunResumed {
+  // Cases already recorded before this process started.
+  //
+  // Two coordinate systems, and mixing them is the misrender this message
+  // exists to prevent. OVERALL progress runs already_completed..total_cases.
+  // SESSION progress runs 0..remaining. Do not pair a numerator from one with
+  // a denominator from the other: 28 done of 40, resumed, is "28 of 40"
+  // overall or "0 of 12" this session — never "28 of 12".
+  int32 already_completed = 1;
+
+  // Cases left to attempt. The denominator for SESSION progress only.
+  int32 remaining = 2;
+
+  // Total Cases the Run intends to attempt across all of its lives, so a
+  // consumer can render both "12 of 40 this session" and "40 of 40 overall".
+  int32 total_cases = 3;
+
+  // Spend reconstructed from disk and restored to the guard.
+  //
+  // Carried because a resumed Run that believed it had spent nothing could
+  // consume its cap a second time, and a consumer should be able to see that
+  // it did not.
+  int64 restored_cost_usd_micros = 4;
+
+  // Calls likewise.
+  int64 restored_calls = 5;
+}
+
+// RetryAttempted reports one retried attempt at a Case.
+//
+// Emitted rather than logged because a retry is user-visible state: a run that
+// appears frozen is usually a run backing off, and a user with no signal
+// assumes it hung.
+//
+// Every attempt takes its own budget reservation and settles its own call, so
+// a retry is not free and is not hidden from the caps.
+message RetryAttempted {
+  // Which Case.
+  string case_id = 1;
+
+  // Which attempt this is, 1-based. The first attempt does not emit.
+  int32 attempt_ordinal = 2;
+
+  // Why the previous attempt failed.
+  //
+  // An enum, not a string. The previous draft took a string and asserted in a
+  // comment that it would never carry provider text — an assertion nothing
+  // enforced. The natural implementation of an emitter is
+  // `ReasonCode: err.Error()`, and a provider 400 that echoes an oversized
+  // prompt would then land in the events table, in --json, in SSE, and in log
+  // lines. No gate catches that: not the schema shape test, not gitleaks, not
+  // lint. This message is fourteen lines away from EventError, which exists
+  // for exactly this reason.
+  RetryReason reason = 3;
+
+  // How long before this attempt was made.
+  int64 backoff_ms = 4;
+
+  // What remains of the Case's retry budget. Retry is bounded by time as well
+  // as by attempts: a pure time bound lets one Case consume dozens of calls
+  // against a call cap, and a pure attempt bound gives a 1.5-second window
+  // against provider rate limits measured in minutes.
+  int64 retry_budget_remaining_ms = 5;
+}
+
+// RateLimitWaiting reports that the run is deliberately idle.
+//
+// This is the difference between "hung" and "obeying Retry-After". Emitted for
+// both the provider's own signal and the client-side limiter, because from the
+// user's side they look identical and only one of them is the provider's fault.
+message RateLimitWaiting {
+  // How long the wait is expected to last.
+  int64 wait_ms = 1;
+
+  // Set when the provider asked for this wait, via Retry-After. Unset means
+  // the client-side limiter chose it.
+  bool provider_requested = 2;
+
+  // The host being waited on, as `host` or `host:port` — NEVER a full URL.
+  //
+  // Rate limits are per-host, and a run against two providers should say which
+  // one is throttling. A URL would carry a path, a query, and potentially
+  // userinfo onto a stream that is persisted and logged.
+  string host = 3;
+}
+
+// SettlementOvershoot reports that a call cost more than was authorized.
+//
+// Observability, not enforcement: by settlement the money is spent, and the
+// guard already refuses every subsequent authorization once spend reaches the
+// cap. What this exists for is that Guard.Remaining clamps at zero, so a cap
+// that has been exceeded is otherwise indistinguishable from one exactly
+// consumed.
+//
+// A cap of C bounds spend at C + the sum of under-predictions across the calls
+// in flight when it binds. This event is how that sum stops being invisible.
+message SettlementOvershoot {
+  // Which Case.
+  string case_id = 1;
+
+  // What was authorized, in MICRO-USD.
+  int64 reserved_usd_micros = 2;
+
+  // What it actually cost.
+  int64 settled_usd_micros = 3;
+
+  // Cumulative spend beyond the cap, or zero while still within it.
+  int64 cumulative_overshoot_usd_micros = 4;
+}
+
+// RetryReason is why an attempt is being retried.
+//
+// Closed set, deliberately. Only transient conditions belong here: a permanent
+// failure must not be retried, because every attempt takes its own budget
+// reservation and settles its own call against the caps.
+enum RetryReason {
+  // Unset. An emitter that cannot classify must not retry.
+  RETRY_REASON_UNSPECIFIED = 0;
+
+  // The provider asked us to slow down.
+  RETRY_REASON_RATE_LIMITED = 1;
+
+  // A transport-level failure with no evidence the provider processed the
+  // request — a stale pooled connection, a reset before any bytes were
+  // written.
+  RETRY_REASON_TRANSPORT_TRANSIENT = 2;
+
+  // The provider returned a 5xx.
+  RETRY_REASON_PROVIDER_UNAVAILABLE = 3;
+
+  // The request timed out before a response began.
+  RETRY_REASON_TIMEOUT = 4;
 }

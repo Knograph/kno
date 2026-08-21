@@ -136,6 +136,23 @@ func TestMoneyIsAlwaysInt64MicroUSD(t *testing.T) {
 		"kno.v1.CaseErrored.cost_usd_micros",
 		"kno.v1.SpendRecorded.total_cost_usd_micros",
 		"kno.v1.SpendRecorded.remaining_cost_usd_micros",
+		// M2-0: the price vector. These are RATES -- micro-USD per MILLION
+		// tokens -- not amounts. They are held to the same int64 rule because
+		// the float ban applies to anything money-shaped, but summing one into
+		// a cost accumulator is off by 1e6. The `_per_mtok_` infix is what
+		// separates them, and TestRateFieldsAreDistinguishableFromAmounts
+		// enforces that separation rather than leaving it to a reader.
+		"kno.v1.Price.input_per_mtok_usd_micros",
+		"kno.v1.Price.cached_input_per_mtok_usd_micros",
+		"kno.v1.Price.cache_write_per_mtok_usd_micros",
+		"kno.v1.Price.output_per_mtok_usd_micros",
+		// M2-0: resume and overshoot. Spend restored from disk is money that
+		// crosses the wire, and the overshoot fields exist precisely because
+		// Guard.Remaining clamps at zero and hides a breached cap.
+		"kno.v1.RunResumed.restored_cost_usd_micros",
+		"kno.v1.SettlementOvershoot.reserved_usd_micros",
+		"kno.v1.SettlementOvershoot.settled_usd_micros",
+		"kno.v1.SettlementOvershoot.cumulative_overshoot_usd_micros",
 		"kno.v1.RunFinished.total_cost_usd_micros",
 	}
 	slices.Sort(wantMoneyFields)
@@ -608,6 +625,78 @@ func TestRunStatusSeparatesBudgetStopFromFailure(t *testing.T) {
 	} {
 		if values.ByName(protoreflect.Name(want)) == nil {
 			t.Errorf("RunStatus is missing %s", want)
+		}
+	}
+}
+
+// TestRateFieldsAreDistinguishableFromAmounts.
+//
+// The money test above certifies every `usd` field as int64 micro-USD so the
+// unit is impossible to misread at a call site. M2-0 introduced the first
+// fields that are micro-USD *per million tokens* — rates, not amounts — and
+// the Phase-3 review pointed out that the test built to prevent unit confusion
+// was now signing off on a 1e6 error: `price.GetOutputPerMtokUsdMicros()`
+// added into a `cost_usd_micros` accumulator type-checks and passes every
+// gate.
+//
+// A comment cannot stop that. This asserts the naming convention that makes
+// the two kinds distinguishable mechanically: a rate carries `_per_<unit>_`
+// before the currency suffix, and an amount never does.
+func TestRateFieldsAreDistinguishableFromAmounts(t *testing.T) {
+	t.Parallel()
+
+	// Rates, by full name. Adding one is deliberate, exactly as for amounts.
+	wantRates := map[string]bool{
+		"kno.v1.Price.input_per_mtok_usd_micros":        true,
+		"kno.v1.Price.cached_input_per_mtok_usd_micros": true,
+		"kno.v1.Price.cache_write_per_mtok_usd_micros":  true,
+		"kno.v1.Price.output_per_mtok_usd_micros":       true,
+	}
+
+	seen := map[string]bool{}
+	var check func(md protoreflect.MessageDescriptor)
+	check = func(md protoreflect.MessageDescriptor) {
+		fields := md.Fields()
+		for i := range fields.Len() {
+			f := fields.Get(i)
+			name := string(f.Name())
+			if !strings.Contains(name, "usd") {
+				continue
+			}
+			full := string(md.FullName()) + "." + name
+			isRate := strings.Contains(name, "_per_")
+
+			if isRate && !wantRates[full] {
+				t.Errorf("%s looks like a rate (it contains _per_) but is not registered as one. "+
+					"A rate summed into a cost accumulator is off by its denominator; register it "+
+					"here so that mistake is a test failure rather than a silent 1e6", full)
+			}
+			if !isRate && wantRates[full] {
+				t.Errorf("%s is registered as a rate but its name does not say so. A rate must "+
+					"carry _per_<unit>_ before the currency suffix, or a call site cannot tell "+
+					"it from an amount", full)
+			}
+			if isRate {
+				seen[full] = true
+			}
+		}
+		nested := md.Messages()
+		for i := range nested.Len() {
+			check(nested.Get(i))
+		}
+	}
+
+	rangeKnoFiles(func(fd protoreflect.FileDescriptor) {
+		msgs := fd.Messages()
+		for i := range msgs.Len() {
+			check(msgs.Get(i))
+		}
+	})
+
+	for full := range wantRates {
+		if !seen[full] {
+			t.Errorf("%s is registered as a rate but no longer exists in the schema; "+
+				"remove it here and say why in the PR", full)
 		}
 	}
 }

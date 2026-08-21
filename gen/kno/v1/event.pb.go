@@ -21,6 +21,73 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// RetryReason is why an attempt is being retried.
+//
+// Closed set, deliberately. Only transient conditions belong here: a permanent
+// failure must not be retried, because every attempt takes its own budget
+// reservation and settles its own call against the caps.
+type RetryReason int32
+
+const (
+	// Unset. An emitter that cannot classify must not retry.
+	RetryReason_RETRY_REASON_UNSPECIFIED RetryReason = 0
+	// The provider asked us to slow down.
+	RetryReason_RETRY_REASON_RATE_LIMITED RetryReason = 1
+	// A transport-level failure with no evidence the provider processed the
+	// request — a stale pooled connection, a reset before any bytes were
+	// written.
+	RetryReason_RETRY_REASON_TRANSPORT_TRANSIENT RetryReason = 2
+	// The provider returned a 5xx.
+	RetryReason_RETRY_REASON_PROVIDER_UNAVAILABLE RetryReason = 3
+	// The request timed out before a response began.
+	RetryReason_RETRY_REASON_TIMEOUT RetryReason = 4
+)
+
+// Enum value maps for RetryReason.
+var (
+	RetryReason_name = map[int32]string{
+		0: "RETRY_REASON_UNSPECIFIED",
+		1: "RETRY_REASON_RATE_LIMITED",
+		2: "RETRY_REASON_TRANSPORT_TRANSIENT",
+		3: "RETRY_REASON_PROVIDER_UNAVAILABLE",
+		4: "RETRY_REASON_TIMEOUT",
+	}
+	RetryReason_value = map[string]int32{
+		"RETRY_REASON_UNSPECIFIED":          0,
+		"RETRY_REASON_RATE_LIMITED":         1,
+		"RETRY_REASON_TRANSPORT_TRANSIENT":  2,
+		"RETRY_REASON_PROVIDER_UNAVAILABLE": 3,
+		"RETRY_REASON_TIMEOUT":              4,
+	}
+)
+
+func (x RetryReason) Enum() *RetryReason {
+	p := new(RetryReason)
+	*p = x
+	return p
+}
+
+func (x RetryReason) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (RetryReason) Descriptor() protoreflect.EnumDescriptor {
+	return file_kno_v1_event_proto_enumTypes[0].Descriptor()
+}
+
+func (RetryReason) Type() protoreflect.EnumType {
+	return &file_kno_v1_event_proto_enumTypes[0]
+}
+
+func (x RetryReason) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use RetryReason.Descriptor instead.
+func (RetryReason) EnumDescriptor() ([]byte, []int) {
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{0}
+}
+
 // Event is one thing that happened during a Run.
 //
 // The event stream is the single spine: the engine emits these, the TUI
@@ -62,6 +129,10 @@ type Event struct {
 	//	*Event_StageProgress
 	//	*Event_SpendRecorded
 	//	*Event_RunFinished
+	//	*Event_RunResumed
+	//	*Event_RetryAttempted
+	//	*Event_RateLimitWaiting
+	//	*Event_SettlementOvershoot
 	Payload       isEvent_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -179,6 +250,42 @@ func (x *Event) GetRunFinished() *RunFinished {
 	return nil
 }
 
+func (x *Event) GetRunResumed() *RunResumed {
+	if x != nil {
+		if x, ok := x.Payload.(*Event_RunResumed); ok {
+			return x.RunResumed
+		}
+	}
+	return nil
+}
+
+func (x *Event) GetRetryAttempted() *RetryAttempted {
+	if x != nil {
+		if x, ok := x.Payload.(*Event_RetryAttempted); ok {
+			return x.RetryAttempted
+		}
+	}
+	return nil
+}
+
+func (x *Event) GetRateLimitWaiting() *RateLimitWaiting {
+	if x != nil {
+		if x, ok := x.Payload.(*Event_RateLimitWaiting); ok {
+			return x.RateLimitWaiting
+		}
+	}
+	return nil
+}
+
+func (x *Event) GetSettlementOvershoot() *SettlementOvershoot {
+	if x != nil {
+		if x, ok := x.Payload.(*Event_SettlementOvershoot); ok {
+			return x.SettlementOvershoot
+		}
+	}
+	return nil
+}
+
 type isEvent_Payload interface {
 	isEvent_Payload()
 }
@@ -213,6 +320,26 @@ type Event_RunFinished struct {
 	RunFinished *RunFinished `protobuf:"bytes,15,opt,name=run_finished,json=runFinished,proto3,oneof"`
 }
 
+type Event_RunResumed struct {
+	// The Run picked up where an interrupted one stopped.
+	RunResumed *RunResumed `protobuf:"bytes,16,opt,name=run_resumed,json=runResumed,proto3,oneof"`
+}
+
+type Event_RetryAttempted struct {
+	// A Case is being retried.
+	RetryAttempted *RetryAttempted `protobuf:"bytes,17,opt,name=retry_attempted,json=retryAttempted,proto3,oneof"`
+}
+
+type Event_RateLimitWaiting struct {
+	// The run is waiting out a provider rate limit.
+	RateLimitWaiting *RateLimitWaiting `protobuf:"bytes,18,opt,name=rate_limit_waiting,json=rateLimitWaiting,proto3,oneof"`
+}
+
+type Event_SettlementOvershoot struct {
+	// Settled cost exceeded what was authorized for it.
+	SettlementOvershoot *SettlementOvershoot `protobuf:"bytes,19,opt,name=settlement_overshoot,json=settlementOvershoot,proto3,oneof"`
+}
+
 func (*Event_RunStarted) isEvent_Payload() {}
 
 func (*Event_CaseScored) isEvent_Payload() {}
@@ -224,6 +351,14 @@ func (*Event_StageProgress) isEvent_Payload() {}
 func (*Event_SpendRecorded) isEvent_Payload() {}
 
 func (*Event_RunFinished) isEvent_Payload() {}
+
+func (*Event_RunResumed) isEvent_Payload() {}
+
+func (*Event_RetryAttempted) isEvent_Payload() {}
+
+func (*Event_RateLimitWaiting) isEvent_Payload() {}
+
+func (*Event_SettlementOvershoot) isEvent_Payload() {}
 
 // EventError is a failure as it appears ON THE EVENT STREAM.
 //
@@ -877,11 +1012,365 @@ func (x *RunFinished) GetError() *EventError {
 	return nil
 }
 
+// RunResumed reports that a Run continued from a checkpoint.
+//
+// Without this, a resumed Run emits a second RunStarted carrying the ORIGINAL
+// total, so any live view that resets progress on RunStarted visibly jumps
+// backward on every resume. A consumer replaying full history reconstructs
+// correctly either way; one watching live does not. That is docs/debt.md#29.
+type RunResumed struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Cases already recorded before this process started.
+	//
+	// Two coordinate systems, and mixing them is the misrender this message
+	// exists to prevent. OVERALL progress runs already_completed..total_cases.
+	// SESSION progress runs 0..remaining. Do not pair a numerator from one with
+	// a denominator from the other: 28 done of 40, resumed, is "28 of 40"
+	// overall or "0 of 12" this session — never "28 of 12".
+	AlreadyCompleted int32 `protobuf:"varint,1,opt,name=already_completed,json=alreadyCompleted,proto3" json:"already_completed,omitempty"`
+	// Cases left to attempt. The denominator for SESSION progress only.
+	Remaining int32 `protobuf:"varint,2,opt,name=remaining,proto3" json:"remaining,omitempty"`
+	// Total Cases the Run intends to attempt across all of its lives, so a
+	// consumer can render both "12 of 40 this session" and "40 of 40 overall".
+	TotalCases int32 `protobuf:"varint,3,opt,name=total_cases,json=totalCases,proto3" json:"total_cases,omitempty"`
+	// Spend reconstructed from disk and restored to the guard.
+	//
+	// Carried because a resumed Run that believed it had spent nothing could
+	// consume its cap a second time, and a consumer should be able to see that
+	// it did not.
+	RestoredCostUsdMicros int64 `protobuf:"varint,4,opt,name=restored_cost_usd_micros,json=restoredCostUsdMicros,proto3" json:"restored_cost_usd_micros,omitempty"`
+	// Calls likewise.
+	RestoredCalls int64 `protobuf:"varint,5,opt,name=restored_calls,json=restoredCalls,proto3" json:"restored_calls,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RunResumed) Reset() {
+	*x = RunResumed{}
+	mi := &file_kno_v1_event_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RunResumed) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RunResumed) ProtoMessage() {}
+
+func (x *RunResumed) ProtoReflect() protoreflect.Message {
+	mi := &file_kno_v1_event_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RunResumed.ProtoReflect.Descriptor instead.
+func (*RunResumed) Descriptor() ([]byte, []int) {
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *RunResumed) GetAlreadyCompleted() int32 {
+	if x != nil {
+		return x.AlreadyCompleted
+	}
+	return 0
+}
+
+func (x *RunResumed) GetRemaining() int32 {
+	if x != nil {
+		return x.Remaining
+	}
+	return 0
+}
+
+func (x *RunResumed) GetTotalCases() int32 {
+	if x != nil {
+		return x.TotalCases
+	}
+	return 0
+}
+
+func (x *RunResumed) GetRestoredCostUsdMicros() int64 {
+	if x != nil {
+		return x.RestoredCostUsdMicros
+	}
+	return 0
+}
+
+func (x *RunResumed) GetRestoredCalls() int64 {
+	if x != nil {
+		return x.RestoredCalls
+	}
+	return 0
+}
+
+// RetryAttempted reports one retried attempt at a Case.
+//
+// Emitted rather than logged because a retry is user-visible state: a run that
+// appears frozen is usually a run backing off, and a user with no signal
+// assumes it hung.
+//
+// Every attempt takes its own budget reservation and settles its own call, so
+// a retry is not free and is not hidden from the caps.
+type RetryAttempted struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Which Case.
+	CaseId string `protobuf:"bytes,1,opt,name=case_id,json=caseId,proto3" json:"case_id,omitempty"`
+	// Which attempt this is, 1-based. The first attempt does not emit.
+	AttemptOrdinal int32 `protobuf:"varint,2,opt,name=attempt_ordinal,json=attemptOrdinal,proto3" json:"attempt_ordinal,omitempty"`
+	// Why the previous attempt failed.
+	//
+	// An enum, not a string. The previous draft took a string and asserted in a
+	// comment that it would never carry provider text — an assertion nothing
+	// enforced. The natural implementation of an emitter is
+	// `ReasonCode: err.Error()`, and a provider 400 that echoes an oversized
+	// prompt would then land in the events table, in --json, in SSE, and in log
+	// lines. No gate catches that: not the schema shape test, not gitleaks, not
+	// lint. This message is fourteen lines away from EventError, which exists
+	// for exactly this reason.
+	Reason RetryReason `protobuf:"varint,3,opt,name=reason,proto3,enum=kno.v1.RetryReason" json:"reason,omitempty"`
+	// How long before this attempt was made.
+	BackoffMs int64 `protobuf:"varint,4,opt,name=backoff_ms,json=backoffMs,proto3" json:"backoff_ms,omitempty"`
+	// What remains of the Case's retry budget. Retry is bounded by time as well
+	// as by attempts: a pure time bound lets one Case consume dozens of calls
+	// against a call cap, and a pure attempt bound gives a 1.5-second window
+	// against provider rate limits measured in minutes.
+	RetryBudgetRemainingMs int64 `protobuf:"varint,5,opt,name=retry_budget_remaining_ms,json=retryBudgetRemainingMs,proto3" json:"retry_budget_remaining_ms,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
+}
+
+func (x *RetryAttempted) Reset() {
+	*x = RetryAttempted{}
+	mi := &file_kno_v1_event_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RetryAttempted) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RetryAttempted) ProtoMessage() {}
+
+func (x *RetryAttempted) ProtoReflect() protoreflect.Message {
+	mi := &file_kno_v1_event_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RetryAttempted.ProtoReflect.Descriptor instead.
+func (*RetryAttempted) Descriptor() ([]byte, []int) {
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *RetryAttempted) GetCaseId() string {
+	if x != nil {
+		return x.CaseId
+	}
+	return ""
+}
+
+func (x *RetryAttempted) GetAttemptOrdinal() int32 {
+	if x != nil {
+		return x.AttemptOrdinal
+	}
+	return 0
+}
+
+func (x *RetryAttempted) GetReason() RetryReason {
+	if x != nil {
+		return x.Reason
+	}
+	return RetryReason_RETRY_REASON_UNSPECIFIED
+}
+
+func (x *RetryAttempted) GetBackoffMs() int64 {
+	if x != nil {
+		return x.BackoffMs
+	}
+	return 0
+}
+
+func (x *RetryAttempted) GetRetryBudgetRemainingMs() int64 {
+	if x != nil {
+		return x.RetryBudgetRemainingMs
+	}
+	return 0
+}
+
+// RateLimitWaiting reports that the run is deliberately idle.
+//
+// This is the difference between "hung" and "obeying Retry-After". Emitted for
+// both the provider's own signal and the client-side limiter, because from the
+// user's side they look identical and only one of them is the provider's fault.
+type RateLimitWaiting struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// How long the wait is expected to last.
+	WaitMs int64 `protobuf:"varint,1,opt,name=wait_ms,json=waitMs,proto3" json:"wait_ms,omitempty"`
+	// Set when the provider asked for this wait, via Retry-After. Unset means
+	// the client-side limiter chose it.
+	ProviderRequested bool `protobuf:"varint,2,opt,name=provider_requested,json=providerRequested,proto3" json:"provider_requested,omitempty"`
+	// The host being waited on, as `host` or `host:port` — NEVER a full URL.
+	//
+	// Rate limits are per-host, and a run against two providers should say which
+	// one is throttling. A URL would carry a path, a query, and potentially
+	// userinfo onto a stream that is persisted and logged.
+	Host          string `protobuf:"bytes,3,opt,name=host,proto3" json:"host,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RateLimitWaiting) Reset() {
+	*x = RateLimitWaiting{}
+	mi := &file_kno_v1_event_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RateLimitWaiting) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RateLimitWaiting) ProtoMessage() {}
+
+func (x *RateLimitWaiting) ProtoReflect() protoreflect.Message {
+	mi := &file_kno_v1_event_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RateLimitWaiting.ProtoReflect.Descriptor instead.
+func (*RateLimitWaiting) Descriptor() ([]byte, []int) {
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *RateLimitWaiting) GetWaitMs() int64 {
+	if x != nil {
+		return x.WaitMs
+	}
+	return 0
+}
+
+func (x *RateLimitWaiting) GetProviderRequested() bool {
+	if x != nil {
+		return x.ProviderRequested
+	}
+	return false
+}
+
+func (x *RateLimitWaiting) GetHost() string {
+	if x != nil {
+		return x.Host
+	}
+	return ""
+}
+
+// SettlementOvershoot reports that a call cost more than was authorized.
+//
+// Observability, not enforcement: by settlement the money is spent, and the
+// guard already refuses every subsequent authorization once spend reaches the
+// cap. What this exists for is that Guard.Remaining clamps at zero, so a cap
+// that has been exceeded is otherwise indistinguishable from one exactly
+// consumed.
+//
+// A cap of C bounds spend at C + the sum of under-predictions across the calls
+// in flight when it binds. This event is how that sum stops being invisible.
+type SettlementOvershoot struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Which Case.
+	CaseId string `protobuf:"bytes,1,opt,name=case_id,json=caseId,proto3" json:"case_id,omitempty"`
+	// What was authorized, in MICRO-USD.
+	ReservedUsdMicros int64 `protobuf:"varint,2,opt,name=reserved_usd_micros,json=reservedUsdMicros,proto3" json:"reserved_usd_micros,omitempty"`
+	// What it actually cost.
+	SettledUsdMicros int64 `protobuf:"varint,3,opt,name=settled_usd_micros,json=settledUsdMicros,proto3" json:"settled_usd_micros,omitempty"`
+	// Cumulative spend beyond the cap, or zero while still within it.
+	CumulativeOvershootUsdMicros int64 `protobuf:"varint,4,opt,name=cumulative_overshoot_usd_micros,json=cumulativeOvershootUsdMicros,proto3" json:"cumulative_overshoot_usd_micros,omitempty"`
+	unknownFields                protoimpl.UnknownFields
+	sizeCache                    protoimpl.SizeCache
+}
+
+func (x *SettlementOvershoot) Reset() {
+	*x = SettlementOvershoot{}
+	mi := &file_kno_v1_event_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SettlementOvershoot) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SettlementOvershoot) ProtoMessage() {}
+
+func (x *SettlementOvershoot) ProtoReflect() protoreflect.Message {
+	mi := &file_kno_v1_event_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SettlementOvershoot.ProtoReflect.Descriptor instead.
+func (*SettlementOvershoot) Descriptor() ([]byte, []int) {
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *SettlementOvershoot) GetCaseId() string {
+	if x != nil {
+		return x.CaseId
+	}
+	return ""
+}
+
+func (x *SettlementOvershoot) GetReservedUsdMicros() int64 {
+	if x != nil {
+		return x.ReservedUsdMicros
+	}
+	return 0
+}
+
+func (x *SettlementOvershoot) GetSettledUsdMicros() int64 {
+	if x != nil {
+		return x.SettledUsdMicros
+	}
+	return 0
+}
+
+func (x *SettlementOvershoot) GetCumulativeOvershootUsdMicros() int64 {
+	if x != nil {
+		return x.CumulativeOvershootUsdMicros
+	}
+	return 0
+}
+
 var File_kno_v1_event_proto protoreflect.FileDescriptor
 
 const file_kno_v1_event_proto_rawDesc = "" +
 	"\n" +
-	"\x12kno/v1/event.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/portfolio.proto\x1a\x10kno/v1/run.proto\"\xc6\x03\n" +
+	"\x12kno/v1/event.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/portfolio.proto\x1a\x10kno/v1/run.proto\"\xdc\x05\n" +
 	"\x05Event\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x1d\n" +
 	"\n" +
@@ -895,7 +1384,12 @@ const file_kno_v1_event_proto_rawDesc = "" +
 	"\fcase_errored\x18\f \x01(\v2\x13.kno.v1.CaseErroredH\x00R\vcaseErrored\x12>\n" +
 	"\x0estage_progress\x18\r \x01(\v2\x15.kno.v1.StageProgressH\x00R\rstageProgress\x12>\n" +
 	"\x0espend_recorded\x18\x0e \x01(\v2\x15.kno.v1.SpendRecordedH\x00R\rspendRecorded\x128\n" +
-	"\frun_finished\x18\x0f \x01(\v2\x13.kno.v1.RunFinishedH\x00R\vrunFinishedB\t\n" +
+	"\frun_finished\x18\x0f \x01(\v2\x13.kno.v1.RunFinishedH\x00R\vrunFinished\x125\n" +
+	"\vrun_resumed\x18\x10 \x01(\v2\x12.kno.v1.RunResumedH\x00R\n" +
+	"runResumed\x12A\n" +
+	"\x0fretry_attempted\x18\x11 \x01(\v2\x16.kno.v1.RetryAttemptedH\x00R\x0eretryAttempted\x12H\n" +
+	"\x12rate_limit_waiting\x18\x12 \x01(\v2\x18.kno.v1.RateLimitWaitingH\x00R\x10rateLimitWaiting\x12P\n" +
+	"\x14settlement_overshoot\x18\x13 \x01(\v2\x1b.kno.v1.SettlementOvershootH\x00R\x13settlementOvershootB\t\n" +
 	"\apayload\"W\n" +
 	"\n" +
 	"EventError\x12\x12\n" +
@@ -951,7 +1445,37 @@ const file_kno_v1_event_proto_rawDesc = "" +
 	"\x0faggregate_score\x18\x06 \x01(\x01H\x00R\x0eaggregateScore\x88\x01\x01\x121\n" +
 	"\x15total_cost_usd_micros\x18\a \x01(\x03R\x12totalCostUsdMicros\x12(\n" +
 	"\x05error\x18\b \x01(\v2\x12.kno.v1.EventErrorR\x05errorB\x12\n" +
-	"\x10_aggregate_scoreB{\n" +
+	"\x10_aggregate_score\"\xd8\x01\n" +
+	"\n" +
+	"RunResumed\x12+\n" +
+	"\x11already_completed\x18\x01 \x01(\x05R\x10alreadyCompleted\x12\x1c\n" +
+	"\tremaining\x18\x02 \x01(\x05R\tremaining\x12\x1f\n" +
+	"\vtotal_cases\x18\x03 \x01(\x05R\n" +
+	"totalCases\x127\n" +
+	"\x18restored_cost_usd_micros\x18\x04 \x01(\x03R\x15restoredCostUsdMicros\x12%\n" +
+	"\x0erestored_calls\x18\x05 \x01(\x03R\rrestoredCalls\"\xd9\x01\n" +
+	"\x0eRetryAttempted\x12\x17\n" +
+	"\acase_id\x18\x01 \x01(\tR\x06caseId\x12'\n" +
+	"\x0fattempt_ordinal\x18\x02 \x01(\x05R\x0eattemptOrdinal\x12+\n" +
+	"\x06reason\x18\x03 \x01(\x0e2\x13.kno.v1.RetryReasonR\x06reason\x12\x1d\n" +
+	"\n" +
+	"backoff_ms\x18\x04 \x01(\x03R\tbackoffMs\x129\n" +
+	"\x19retry_budget_remaining_ms\x18\x05 \x01(\x03R\x16retryBudgetRemainingMs\"n\n" +
+	"\x10RateLimitWaiting\x12\x17\n" +
+	"\await_ms\x18\x01 \x01(\x03R\x06waitMs\x12-\n" +
+	"\x12provider_requested\x18\x02 \x01(\bR\x11providerRequested\x12\x12\n" +
+	"\x04host\x18\x03 \x01(\tR\x04host\"\xd3\x01\n" +
+	"\x13SettlementOvershoot\x12\x17\n" +
+	"\acase_id\x18\x01 \x01(\tR\x06caseId\x12.\n" +
+	"\x13reserved_usd_micros\x18\x02 \x01(\x03R\x11reservedUsdMicros\x12,\n" +
+	"\x12settled_usd_micros\x18\x03 \x01(\x03R\x10settledUsdMicros\x12E\n" +
+	"\x1fcumulative_overshoot_usd_micros\x18\x04 \x01(\x03R\x1ccumulativeOvershootUsdMicros*\xb1\x01\n" +
+	"\vRetryReason\x12\x1c\n" +
+	"\x18RETRY_REASON_UNSPECIFIED\x10\x00\x12\x1d\n" +
+	"\x19RETRY_REASON_RATE_LIMITED\x10\x01\x12$\n" +
+	" RETRY_REASON_TRANSPORT_TRANSIENT\x10\x02\x12%\n" +
+	"!RETRY_REASON_PROVIDER_UNAVAILABLE\x10\x03\x12\x18\n" +
+	"\x14RETRY_REASON_TIMEOUT\x10\x04B{\n" +
 	"\n" +
 	"com.kno.v1B\n" +
 	"EventProtoP\x01Z(github.com/knograph/kno/gen/kno/v1;knov1\xa2\x02\x03KXX\xaa\x02\x06Kno.V1\xca\x02\x06Kno\\V1\xe2\x02\x12Kno\\V1\\GPBMetadata\xea\x02\aKno::V1b\x06proto3"
@@ -968,42 +1492,53 @@ func file_kno_v1_event_proto_rawDescGZIP() []byte {
 	return file_kno_v1_event_proto_rawDescData
 }
 
-var file_kno_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_kno_v1_event_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_kno_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_kno_v1_event_proto_goTypes = []any{
-	(*Event)(nil),         // 0: kno.v1.Event
-	(*EventError)(nil),    // 1: kno.v1.EventError
-	(*RunStarted)(nil),    // 2: kno.v1.RunStarted
-	(*CaseScored)(nil),    // 3: kno.v1.CaseScored
-	(*CaseErrored)(nil),   // 4: kno.v1.CaseErrored
-	(*StageProgress)(nil), // 5: kno.v1.StageProgress
-	(*SpendRecorded)(nil), // 6: kno.v1.SpendRecorded
-	(*RunFinished)(nil),   // 7: kno.v1.RunFinished
-	(Stage)(0),            // 8: kno.v1.Stage
-	(*AgentRef)(nil),      // 9: kno.v1.AgentRef
-	(Direction)(0),        // 10: kno.v1.Direction
-	(*Budget)(nil),        // 11: kno.v1.Budget
-	(RunStatus)(0),        // 12: kno.v1.RunStatus
+	(RetryReason)(0),            // 0: kno.v1.RetryReason
+	(*Event)(nil),               // 1: kno.v1.Event
+	(*EventError)(nil),          // 2: kno.v1.EventError
+	(*RunStarted)(nil),          // 3: kno.v1.RunStarted
+	(*CaseScored)(nil),          // 4: kno.v1.CaseScored
+	(*CaseErrored)(nil),         // 5: kno.v1.CaseErrored
+	(*StageProgress)(nil),       // 6: kno.v1.StageProgress
+	(*SpendRecorded)(nil),       // 7: kno.v1.SpendRecorded
+	(*RunFinished)(nil),         // 8: kno.v1.RunFinished
+	(*RunResumed)(nil),          // 9: kno.v1.RunResumed
+	(*RetryAttempted)(nil),      // 10: kno.v1.RetryAttempted
+	(*RateLimitWaiting)(nil),    // 11: kno.v1.RateLimitWaiting
+	(*SettlementOvershoot)(nil), // 12: kno.v1.SettlementOvershoot
+	(Stage)(0),                  // 13: kno.v1.Stage
+	(*AgentRef)(nil),            // 14: kno.v1.AgentRef
+	(Direction)(0),              // 15: kno.v1.Direction
+	(*Budget)(nil),              // 16: kno.v1.Budget
+	(RunStatus)(0),              // 17: kno.v1.RunStatus
 }
 var file_kno_v1_event_proto_depIdxs = []int32{
-	2,  // 0: kno.v1.Event.run_started:type_name -> kno.v1.RunStarted
-	3,  // 1: kno.v1.Event.case_scored:type_name -> kno.v1.CaseScored
-	4,  // 2: kno.v1.Event.case_errored:type_name -> kno.v1.CaseErrored
-	5,  // 3: kno.v1.Event.stage_progress:type_name -> kno.v1.StageProgress
-	6,  // 4: kno.v1.Event.spend_recorded:type_name -> kno.v1.SpendRecorded
-	7,  // 5: kno.v1.Event.run_finished:type_name -> kno.v1.RunFinished
-	8,  // 6: kno.v1.RunStarted.stage:type_name -> kno.v1.Stage
-	9,  // 7: kno.v1.RunStarted.agent:type_name -> kno.v1.AgentRef
-	10, // 8: kno.v1.RunStarted.goal_direction:type_name -> kno.v1.Direction
-	11, // 9: kno.v1.RunStarted.budget:type_name -> kno.v1.Budget
-	1,  // 10: kno.v1.CaseErrored.error:type_name -> kno.v1.EventError
-	8,  // 11: kno.v1.StageProgress.stage:type_name -> kno.v1.Stage
-	12, // 12: kno.v1.RunFinished.status:type_name -> kno.v1.RunStatus
-	1,  // 13: kno.v1.RunFinished.error:type_name -> kno.v1.EventError
-	14, // [14:14] is the sub-list for method output_type
-	14, // [14:14] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	3,  // 0: kno.v1.Event.run_started:type_name -> kno.v1.RunStarted
+	4,  // 1: kno.v1.Event.case_scored:type_name -> kno.v1.CaseScored
+	5,  // 2: kno.v1.Event.case_errored:type_name -> kno.v1.CaseErrored
+	6,  // 3: kno.v1.Event.stage_progress:type_name -> kno.v1.StageProgress
+	7,  // 4: kno.v1.Event.spend_recorded:type_name -> kno.v1.SpendRecorded
+	8,  // 5: kno.v1.Event.run_finished:type_name -> kno.v1.RunFinished
+	9,  // 6: kno.v1.Event.run_resumed:type_name -> kno.v1.RunResumed
+	10, // 7: kno.v1.Event.retry_attempted:type_name -> kno.v1.RetryAttempted
+	11, // 8: kno.v1.Event.rate_limit_waiting:type_name -> kno.v1.RateLimitWaiting
+	12, // 9: kno.v1.Event.settlement_overshoot:type_name -> kno.v1.SettlementOvershoot
+	13, // 10: kno.v1.RunStarted.stage:type_name -> kno.v1.Stage
+	14, // 11: kno.v1.RunStarted.agent:type_name -> kno.v1.AgentRef
+	15, // 12: kno.v1.RunStarted.goal_direction:type_name -> kno.v1.Direction
+	16, // 13: kno.v1.RunStarted.budget:type_name -> kno.v1.Budget
+	2,  // 14: kno.v1.CaseErrored.error:type_name -> kno.v1.EventError
+	13, // 15: kno.v1.StageProgress.stage:type_name -> kno.v1.Stage
+	17, // 16: kno.v1.RunFinished.status:type_name -> kno.v1.RunStatus
+	2,  // 17: kno.v1.RunFinished.error:type_name -> kno.v1.EventError
+	0,  // 18: kno.v1.RetryAttempted.reason:type_name -> kno.v1.RetryReason
+	19, // [19:19] is the sub-list for method output_type
+	19, // [19:19] is the sub-list for method input_type
+	19, // [19:19] is the sub-list for extension type_name
+	19, // [19:19] is the sub-list for extension extendee
+	0,  // [0:19] is the sub-list for field type_name
 }
 
 func init() { file_kno_v1_event_proto_init() }
@@ -1021,6 +1556,10 @@ func file_kno_v1_event_proto_init() {
 		(*Event_StageProgress)(nil),
 		(*Event_SpendRecorded)(nil),
 		(*Event_RunFinished)(nil),
+		(*Event_RunResumed)(nil),
+		(*Event_RetryAttempted)(nil),
+		(*Event_RateLimitWaiting)(nil),
+		(*Event_SettlementOvershoot)(nil),
 	}
 	file_kno_v1_event_proto_msgTypes[6].OneofWrappers = []any{}
 	file_kno_v1_event_proto_msgTypes[7].OneofWrappers = []any{}
@@ -1029,13 +1568,14 @@ func file_kno_v1_event_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kno_v1_event_proto_rawDesc), len(file_kno_v1_event_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   8,
+			NumEnums:      1,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_kno_v1_event_proto_goTypes,
 		DependencyIndexes: file_kno_v1_event_proto_depIdxs,
+		EnumInfos:         file_kno_v1_event_proto_enumTypes,
 		MessageInfos:      file_kno_v1_event_proto_msgTypes,
 	}.Build()
 	File_kno_v1_event_proto = out.File
