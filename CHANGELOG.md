@@ -24,6 +24,13 @@ covenants — breaking any of them requires a major version.
 
 ### Fixed
 
+- Two `kno` processes opening the same database at the same moment could fail to start with a raw
+  `SQLITE_BUSY`. Creating a database converts its journal to WAL, which needs an exclusive lock,
+  and the process that loses that race is told the database is locked rather than made to wait —
+  `busy_timeout` does not cover it, and setting the pragma after `journal_mode` in DSN order meant
+  it was not even in effect yet. The base schema now applies under the same write lock migrations
+  use, `busy_timeout` is set first, and the open path retries on a locked database with bounded
+  backoff. Measured 9 of 10 runs failing before, 0 of 18 after.
 - The coverage ratchet compared a platform-dependent measurement against a single-platform
   baseline, so it failed CI on Linux for code that had not changed. `executor` measures 96.0% on
   darwin and 94.9% on linux for the same commit with every test passing on both, and the 1.0pp
