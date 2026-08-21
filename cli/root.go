@@ -35,6 +35,7 @@ runs; the rest arrive milestone by milestone.`,
 	}
 
 	root.AddCommand(newBaselineCmd())
+	root.AddCommand(newPurgeCmd())
 	return root
 }
 

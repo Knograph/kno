@@ -62,6 +62,26 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
+- **`kno purge`** — delete stored agent output and judge rationales for a run, keeping the scores,
+  costs, and completion records. The database is opened with `secure_delete`, and a purge
+  checkpoints the WAL and `VACUUM`s, so the content is gone from the bytes on disk rather than
+  merely unlinked from a column — without this, `strings kno.db` recovered 14 of 16 occurrences of
+  a Case's output from a purge that reported success. It NULLs the trace columns and never deletes a row: the recorded
+  outcome IS the done-marker Kno resumes from, so a purge that removed rows would make a purged run
+  pay for every Case a second time. A privacy feature that costs money is not one. Repays
+  `docs/debt.md#25`, including the test that entry required by name.
+- **A schema migration path.** `store` now tracks `PRAGMA user_version` and applies numbered steps.
+  Fresh and existing databases take the *same* path, so the migration runs on every open rather
+  than only on files old enough to need it — a migration only old files run is a migration nobody
+  tests. Opening a database written by a newer build is refused rather than guessed at.
+- **Seven columns on `outcomes`**: `score_value`, `score_passed`, `refused`, `truncated`,
+  `usage_estimated`, `provider_build_id`, `resolved_model`. Every fact a later stage reads now lives
+  outside the protobuf blobs that `kno purge` clears. Existing rows are backfilled from
+  `score_proto`; a row purged before the column existed keeps a NULL `score_value` and is reported
+  as unrecoverable rather than counted as zero, because averaging in a zero would drag the mean down
+  and present the result as the run's actual aggregate.
+- **`docs/cookbook/retention.md`** — what Kno stores, what purge removes, and what it does not cover.
+  CLAUDE.md requires retention stated plainly; this is that.
 - **M2-0, the proto surface for real provider adapters.** All additive; `buf breaking` clean.
   - `Price`: a four-rate vector (input, cached-read, cache-write, output) rather than an
     input/output pair. Both target providers price cached input differently, and a two-field model

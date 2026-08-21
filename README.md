@@ -51,6 +51,8 @@ Full walkthrough: **[Score your agent for the first time](docs/cookbook/first-ba
 
 **Interrupting is boring.** Work is checkpointed as each Case completes, in one transaction with its result. `--resume` skips what's finished and reconstructs prior spend from disk, so an interrupted run cannot pay twice.
 
+**Your traces stay yours, and nothing expires on its own.** Runs are stored locally in SQLite, including the agent's output — which is conversation content if your evals come from production logs. Kno itself sends nothing anywhere — there is no telemetry of content, ever. Your Cases go to whatever provider you point Kno at, and that provider's retention is theirs. `kno purge` deletes it when you decide to, keeping the scores and costs so the run stays resumable. [Retention, in full](docs/cookbook/retention.md).
+
 ## Exit codes
 
 A CI gate branches on these, so they're a contract rather than an afterthought.
@@ -81,7 +83,7 @@ Provider adapters (OpenAI-compatible, Anthropic) arrive with **Value**. Until th
 
 - **[The mental model](docs/mental-model.md)** — one page; read it and the rest should be obvious.
 - **[What the numbers mean](docs/what-the-numbers-mean.md)** — what each number claims, and what it does not.
-- **[Cookbook](docs/cookbook/)** — task-shaped recipes.
+- **[Cookbook](docs/cookbook/)** — task-shaped recipes, including [data retention](docs/cookbook/retention.md).
 - **[DESIGN.md](DESIGN.md)** — architecture, and what is deliberately out of scope.
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — how we work. Plan, adversarial review, then code.
 - **[docs/debt.md](docs/debt.md)** — every piece of accepted debt, with a repayment trigger. Public on purpose.
