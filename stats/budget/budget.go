@@ -3,6 +3,7 @@ package budget
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -146,6 +147,40 @@ type Reservation struct {
 	once sync.Once
 }
 
+// ErrInvalidEstimate means an Estimate could not be authorized because its
+// values are not usable as a bound.
+//
+// Separate from a refusal to spend: nothing was denied on budget grounds, the
+// caller handed the guard a number it cannot reason about.
+var ErrInvalidEstimate = errors.New("budget: invalid estimate")
+
+// validate rejects an Estimate the guard cannot treat as a ceiling.
+//
+// A negative value does not merely under-reserve, it CREDITS the budget:
+// fitsLocked compares spent+reserved+est against the cap, and reserved is
+// summed, so a -$5.00 reservation hands $5.00 of phantom headroom to every
+// other concurrent worker. Measured: a $1.00 cap reporting $6.00 remaining, and
+// a cap of 2 calls authorizing 60 more.
+//
+// This lives here rather than only in the caller because Authorize is the
+// choke point every spend path shares. cli/baseline.go already refuses a
+// negative --cost-per-call-usd for exactly this reason; when core.Estimator
+// moved the number from a validated flag to adapter code, that defense had to
+// move with it.
+func (est Estimate) validate() error {
+	switch {
+	case est.CostUSDMicros < 0:
+		return fmt.Errorf("%w: cost is %d micro-USD; a negative reservation credits "+
+			"the budget rather than consuming it", ErrInvalidEstimate, est.CostUSDMicros)
+	case est.Calls < 0:
+		return fmt.Errorf("%w: calls is %d; a negative reservation credits the call "+
+			"cap rather than consuming it", ErrInvalidEstimate, est.Calls)
+	case est.Tokens < 0:
+		return fmt.Errorf("%w: tokens is %d", ErrInvalidEstimate, est.Tokens)
+	}
+	return nil
+}
+
 // Authorize reserves headroom for est, asking for confirmation if the estimate
 // crosses the threshold.
 //
@@ -156,6 +191,9 @@ type Reservation struct {
 // Reservations are counted against the caps while outstanding, so N concurrent
 // workers cannot each pass a check that only one of them should.
 func (g *Guard) Authorize(ctx context.Context, est Estimate) (*Reservation, error) {
+	if err := est.validate(); err != nil {
+		return nil, err
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -410,6 +448,38 @@ func (g *Guard) Restore(spent Spend) {
 
 // Limits reports the caps this Guard enforces.
 func (g *Guard) Limits() Limits { return g.limits }
+
+// Overshoot reports how far settled spend has passed the cost cap, or zero
+// while it is still within it.
+//
+// It exists because Remaining clamps at zero: a Guard that has blown its cap
+// reports Remaining{CostUSDMicros: 0}, which is indistinguishable from one
+// exactly consumed. The breach is real — a cap of C bounds spend at C plus the
+// sum of under-estimations across the calls in flight when it binds — and
+// without this it is not merely unenforced but unobservable.
+//
+// Two things can produce a non-zero reading, and a consumer that reports this
+// as "we under-estimated by X" would be wrong about the second: settled spend
+// really passing the cap, OR a resume under a LOWER cap than the run was
+// started with. Restore is additive and does not check the cap, so a run
+// resumed with --max-cost-usd reduced reads as over immediately, before this
+// process spends anything. That is a supported stop, not an estimation error.
+//
+// This is observability, not enforcement. By settlement the money is spent, and
+// fitsLocked already refuses every subsequent authorization once spend reaches
+// the cap. Making Settle fail instead would turn a successful, paid, scored
+// call into an errored Case and lose work that was paid for.
+//
+// Zero when no cost cap is set: without a cap there is nothing to overshoot.
+func (g *Guard) Overshoot() int64 {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if g.limits.MaxCostUSDMicros <= 0 {
+		return 0
+	}
+	return max(0, g.spent.CostUSDMicros-g.limits.MaxCostUSDMicros)
+}
 
 // Spent reports what has actually been settled, excluding outstanding
 // reservations. This is the number a report shows.

@@ -543,3 +543,132 @@ func TestConsentFailureStopsTheRun(t *testing.T) {
 		t.Errorf("error = %q, want it to name how to proceed", err)
 	}
 }
+
+// TestOvershootMakesABreachedCapVisible.
+//
+// Remaining clamps at zero, so a Guard that has passed its cap reports the same
+// thing as one exactly consumed. That is not a display quirk: the bound this
+// guard actually offers is "the cap plus whatever the calls in flight
+// under-predicted by", and without a way to read the excess, nobody can tell
+// whether it happened.
+func TestOvershootMakesABreachedCapVisible(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const capUSDMicros = 1_000_000 // $1.00
+	g := budget.New(budget.Limits{MaxCostUSDMicros: capUSDMicros}, nil, 0)
+
+	// Authorize against a low estimate, settle against a high actual — which is
+	// exactly what an under-predicting adapter does.
+	res, err := g.Authorize(ctx, budget.Estimate{Calls: 1, CostUSDMicros: 100})
+	if err != nil {
+		t.Fatalf("Authorize: %v", err)
+	}
+	res.Settle(budget.Spend{Calls: 1, CostUSDMicros: capUSDMicros + 250_000})
+
+	if got := g.Remaining().CostUSDMicros; got != 0 {
+		t.Errorf("Remaining = %d, want 0 (it clamps)", got)
+	}
+	if got := g.Overshoot(); got != 250_000 {
+		t.Errorf("Overshoot = %d, want 250000; the breach must be readable "+
+			"somewhere, or the cap's real bound is unobservable", got)
+	}
+}
+
+// TestOvershootIsZeroWithinTheCapAndWithoutOne.
+func TestOvershootIsZeroWithinTheCapAndWithoutOne(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("within the cap", func(t *testing.T) {
+		t.Parallel()
+		g := budget.New(budget.Limits{MaxCostUSDMicros: 1_000_000}, nil, 0)
+		res, err := g.Authorize(ctx, budget.Estimate{Calls: 1, CostUSDMicros: 100})
+		if err != nil {
+			t.Fatalf("Authorize: %v", err)
+		}
+		res.Settle(budget.Spend{Calls: 1, CostUSDMicros: 400_000})
+		if got := g.Overshoot(); got != 0 {
+			t.Errorf("Overshoot = %d, want 0", got)
+		}
+	})
+
+	t.Run("no cost cap", func(t *testing.T) {
+		t.Parallel()
+		// Only a call cap. There is no dollar ceiling to pass.
+		g := budget.New(budget.Limits{MaxLLMCalls: 10}, nil, 0)
+		res, err := g.Authorize(ctx, budget.Estimate{Calls: 1})
+		if err != nil {
+			t.Fatalf("Authorize: %v", err)
+		}
+		res.Settle(budget.Spend{Calls: 1, CostUSDMicros: 999_999_999})
+		if got := g.Overshoot(); got != 0 {
+			t.Errorf("Overshoot = %d, want 0; without a cap there is nothing to "+
+				"overshoot, and reporting a number would invent a limit the user "+
+				"never set", got)
+		}
+	})
+}
+
+// TestAuthorizeRejectsAnEstimateItCannotTreatAsACeiling.
+//
+// A negative value does not under-reserve, it CREDITS the budget: fitsLocked
+// sums reservations, so a -$5.00 reservation hands $5.00 of phantom headroom to
+// every other concurrent worker. Measured before the check existed: a $1.00 cap
+// reporting $6.00 remaining and settling $5.00, and a cap of 2 calls
+// authorizing 60 more.
+//
+// The check lives in Authorize because that is the choke point every spend path
+// shares. cli/baseline.go already refuses a negative --cost-per-call-usd for
+// this reason; when core.Estimator moved the number from a validated flag to
+// adapter code, the defense had to move with it.
+func TestAuthorizeRejectsAnEstimateItCannotTreatAsACeiling(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	tests := []struct {
+		name string
+		est  budget.Estimate
+	}{
+		{"negative cost", budget.Estimate{Calls: 1, CostUSDMicros: -5_000_000}},
+		{"negative calls", budget.Estimate{Calls: -100}},
+		{"negative tokens", budget.Estimate{Calls: 1, Tokens: -1}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			g := budget.New(budget.Limits{MaxCostUSDMicros: 1_000_000, MaxLLMCalls: 2}, nil, 0)
+			res, err := g.Authorize(ctx, tc.est)
+			if err == nil {
+				t.Fatalf("authorized %+v", tc.est)
+			}
+			if !errors.Is(err, budget.ErrInvalidEstimate) {
+				t.Errorf("err = %v, want ErrInvalidEstimate", err)
+			}
+			if res != nil {
+				t.Error("a rejected estimate returned a reservation")
+			}
+			// And no headroom moved.
+			if got := g.Remaining().CostUSDMicros; got != 1_000_000 {
+				t.Errorf("Remaining = %d after a rejected estimate, want the full "+
+					"cap; the guard consumed or credited budget for a call it "+
+					"refused to authorize", got)
+			}
+		})
+	}
+}
+
+// TestAuthorizeAcceptsAZeroCostEstimate: the guard does not decide policy about
+// zero. A call cap alone is a legitimate configuration with no cost to report,
+// and refusing here would break it. Whether a zero cost is acceptable under a
+// DOLLAR cap is the caller's rule, enforced in core.
+func TestAuthorizeAcceptsAZeroCostEstimate(t *testing.T) {
+	t.Parallel()
+
+	g := budget.New(budget.Limits{MaxLLMCalls: 5}, nil, 0)
+	if _, err := g.Authorize(context.Background(), budget.Estimate{Calls: 1}); err != nil {
+		t.Fatalf("a zero-cost estimate under a call-only cap was refused: %v", err)
+	}
+}

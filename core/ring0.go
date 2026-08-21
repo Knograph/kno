@@ -3,6 +3,8 @@ package core
 import (
 	"context"
 	"iter"
+
+	"github.com/knograph/kno/stats/budget"
 )
 
 // Agent is anything invokable on a Case.
@@ -44,6 +46,51 @@ type ContextInjector interface {
 	// WithContext returns an Agent that carries a in its context. The receiver
 	// is unmodified, so the original Agent remains usable as a control.
 	WithContext(a *Asset) (Agent, error)
+}
+
+// Estimator is an Agent that can say what a Case will cost before it runs.
+//
+// Named for the value it produces — budget.Estimate — rather than introducing
+// a second word for the same act. The plan called this a Predictor; "predict"
+// and "estimate" would then be two names for one thing, which is the drift the
+// vocabulary rule exists to stop.
+//
+// Optional, like Capable and the injectors: an adapter that does not implement
+// it falls back to BaselineOptions.EstCostPerCallUSDMicros, so the fake agent
+// and every existing caller are unaffected.
+//
+// It exists because a cost cap the guard checks only at settlement is a cap
+// discovered after the money is gone — that failure already overshot a $0.10
+// cap once. And the cost of a Case depends on the Case: its input tokens are
+// the input term of the arithmetic. A single run-scoped scalar cannot express
+// that, which is why this is an interface on the adapter rather than another
+// field on the options.
+//
+// The estimate must be PESSIMISTIC — the most a call could cost, not the most
+// likely. It bounds a reservation, and a bound that can be too low is not a
+// bound. Under-predicting is how a run walks past its cap; over-predicting only
+// makes the guard refuse early, which is the recoverable direction.
+type Estimator interface {
+	// Estimate reports the most one Invoke of c could cost.
+	//
+	// It MUST be local: arithmetic over a pricing table the adapter already
+	// holds. It must not call the provider. This runs BEFORE the budget guard
+	// authorizes anything, so a network call here spends money outside the
+	// guard entirely — the one thing prime directive 4 forbids — and a slow one
+	// blocks a worker while holding no reservation. The engine bounds the call
+	// with a timeout, but a timeout cannot un-spend a request already sent.
+	//
+	// Calls must be exactly 1. One Invoke settles as one provider call, so
+	// reserving more would reserve N and settle 1, and the call cap would drift
+	// by (N-1) for every Case. An adapter whose single Invoke really does make
+	// several provider requests needs the settlement side to carry that too;
+	// until it does, the engine refuses the Case rather than mis-count it.
+	//
+	// An error means the cost is unknown, which is NOT the same as zero: a zero
+	// estimate makes a dollar cap unenforceable, so the engine treats a
+	// zero-cost answer under a cost cap exactly as it treats an error. Report
+	// the error; do not invent a cheap number.
+	Estimate(ctx context.Context, c *Case) (budget.Estimate, error)
 }
 
 // KnowledgeInjector is an Agent whose knowledge index Kno can write.

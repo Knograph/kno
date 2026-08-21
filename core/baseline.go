@@ -36,6 +36,14 @@ const DefaultMaxAttempts = 3
 // each attempt.
 const DefaultRetryBackoff = 500 * time.Millisecond
 
+// estimateTimeout bounds an Estimator call.
+//
+// Estimating is arithmetic over a local pricing table — the Estimator godoc
+// says so — and this exists for the adapter that does not honor that. Generous
+// enough that no honest implementation notices, short enough that a hung one
+// costs a single Case rather than the run.
+const estimateTimeout = 5 * time.Second
+
 // BaselineOptions configures a Baseline run.
 type BaselineOptions struct {
 	// RunID identifies this run. Required.
@@ -385,6 +393,79 @@ func (o BaselineOptions) staleFix(run *knov1.Run) string {
 		"re-run without --resume, or restore the setting it was recorded against"
 }
 
+// estimate reports what one invocation of c may cost.
+//
+// An adapter implementing Estimator answers per Case; anything else falls back
+// to the run-scoped scalar, which is what the fake and every M1 caller use.
+//
+// A Estimator that cannot price a Case is a refusal when a dollar cap is set,
+// never a zero: the guard cannot refuse what it was not told about, and a zero
+// estimate is precisely what made a cap unenforceable in M1.
+func (o BaselineOptions) estimate(ctx context.Context, c *Case) (budget.Estimate, error) {
+	e, ok := o.Agent.(Estimator)
+	if !ok {
+		return budget.Estimate{Calls: 1, CostUSDMicros: o.EstCostPerCallUSDMicros}, nil
+	}
+
+	// Bounded, because Estimate runs BEFORE Authorize on the worker's own
+	// context. An adapter that hangs here would pin a worker for the life of
+	// the run, and the godoc's "must be local" is a contract, not a guarantee.
+	ctx, cancel := context.WithTimeout(ctx, estimateTimeout)
+	defer cancel()
+
+	est, err := e.Estimate(ctx, c)
+	capped := o.Guard.Limits().MaxCostUSDMicros > 0
+
+	switch {
+	case err != nil && capped:
+		return budget.Estimate{}, o.unpriceable(c, err)
+	case err != nil:
+		// No dollar cap: the call cap still applies, and refusing the run
+		// because a price is unknown would be worse than running uncapped when
+		// the user asked for uncapped.
+		return budget.Estimate{Calls: 1, CostUSDMicros: o.EstCostPerCallUSDMicros}, nil
+
+	// A zero cost is not a cheap Case, it is an absent answer — the natural
+	// output of a pricing-table miss coded as a zero row. Accepting it puts the
+	// cap back to being discovered at settlement, which is the M1 failure this
+	// whole interface exists to close, reached through the interface.
+	case est.CostUSDMicros <= 0 && capped:
+		return budget.Estimate{}, o.unpriceable(c,
+			errors.New("the estimate is zero, which a cost cap cannot be enforced against"))
+
+	// One Invoke settles as exactly one call (see spendOf), so an Estimate
+	// reserving more would reserve N and settle 1, and the call cap would drift
+	// by (N-1) per Case. Measured at 18 real calls against a cap of 10.
+	// Rejected rather than coerced: silently rewriting one out-of-contract
+	// field hides the adapter bug a reviewer needs to see.
+	case est.Calls != 1:
+		return budget.Estimate{}, o.unpriceable(c,
+			fmt.Errorf("the estimate reserves %d calls, but one Invoke settles as "+
+				"exactly one call", est.Calls))
+	}
+	return est, nil
+}
+
+// errUnpriceable marks a Case the guard was never asked to authorize.
+//
+// A sentinel rather than an inspection of the message, so the sink can tell
+// "refused before any call" from "failed after a paid call" — the two have
+// opposite correct handling, and only one of them is resumable work.
+var errUnpriceable = errors.New("core: case cannot be priced")
+
+// unpriceable renders a refusal to authorize a Case.
+//
+// The fix names things that actually work. An explicit --cost-per-call-usd does
+// NOT override an Estimator, so advertising it would send the user down a dead
+// end — which the first version of this message did.
+func (o BaselineOptions) unpriceable(c *Case, cause error) error {
+	return errs.ErrInvalidInput.WithFix(
+		"drop --max-cost-usd to run without a dollar cap, or use an agent that " +
+			"can price this model").
+		Wrap(fmt.Errorf("cannot price case %s, and a cost cap cannot be enforced "+
+			"against an unknown cost: %w: %w", c.GetId(), errUnpriceable, cause))
+}
+
 // workFunc invokes the agent under the budget guard and scores the response.
 //
 // It does not touch the aggregator: counting happens after persistence, in
@@ -394,7 +475,10 @@ func (o BaselineOptions) workFunc() executor.WorkFunc[*Case, caseOutcome] {
 		// One provider call, estimated before it is made. A zero estimate makes
 		// the dollar cap unenforceable, so callers that care about it must
 		// supply EstCostPerCallUSDMicros.
-		est := budget.Estimate{Calls: 1, CostUSDMicros: o.EstCostPerCallUSDMicros}
+		est, err := o.estimate(ctx, c)
+		if err != nil {
+			return nil, err
+		}
 
 		resp, invokeErr := o.invokeWithRetry(ctx, c, est)
 		if invokeErr != nil {
@@ -505,7 +589,13 @@ func (o BaselineOptions) sinkFunc(agg *aggregator) executor.SinkFunc[*Case, case
 		//
 		// It is left unrecorded so the resume picks it up, which is the whole
 		// point of stopping resumably rather than failing.
-		if errors.Is(r.Err, errs.ErrBudgetExceeded) {
+		//
+		// A Case that could not be PRICED is the same shape: estimate() refuses
+		// before Authorize is ever called, so no provider call was made and
+		// nothing was spent. Recording it would charge a resumed run for a call
+		// that never happened AND mark the Case done, so fixing the pricing
+		// table and re-running with --resume would never re-attempt it.
+		if errors.Is(r.Err, errs.ErrBudgetExceeded) || errors.Is(r.Err, errUnpriceable) {
 			return nil
 		}
 

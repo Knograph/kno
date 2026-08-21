@@ -69,6 +69,28 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
+- **`core.Estimator`**, an optional Ring-0 interface: an adapter can price a Case before the call
+  is made. A cost cap the guard checks only at settlement is a cap discovered after the money is
+  gone, and what a Case costs depends on the Case — a single run-scoped scalar cannot express that.
+  Optional, like `Capable` and the injectors, so the fake agent and every existing caller are
+  unaffected. **When a cost cap is set**, an adapter that cannot price a Case — or that answers
+  zero, or reserves more than one call — has that Case refused rather than authorized against a
+  cheaper guess; the priced Cases still run, and the refused ones are left unrecorded so a resume
+  with a fixed pricing table picks them up. Without a cost cap the run proceeds on the scalar,
+  because refusing when the user asked for no dollar cap would be worse than running uncapped.
+  `Estimate` must be local and must not call the provider: it runs before the guard authorizes
+  anything, so a network call there would spend outside the guard entirely. The engine bounds it
+  with a timeout regardless.
+- **`budget.Guard.Authorize` now validates the Estimate it is given.** A negative value does not
+  under-reserve, it *credits* the budget — measured at $6.00 of headroom on a $1.00 cap, and 60
+  calls authorized against a cap of 2. `cli/baseline.go` already refused a negative
+  `--cost-per-call-usd` for this reason; moving the number from a validated flag to adapter code
+  meant the defense had to move to the choke point every spend path shares.
+- **`Guard.Overshoot`** reports how far settled spend has passed the cost cap. `Remaining` clamps at
+  zero, so a Guard that blew its cap read identically to one exactly consumed — the breach was not
+  merely unenforced but unobservable. This is observability, not enforcement: by settlement the
+  money is spent, and making `Settle` fail would turn a successful, paid, scored call into an
+  errored Case and lose work already paid for.
 - **`kno purge`** — delete stored agent output and judge rationales for a run, keeping the scores,
   costs, and completion records. The database is opened with `secure_delete`, and a purge
   checkpoints the WAL and `VACUUM`s, so the content is gone from the bytes on disk rather than

@@ -221,13 +221,13 @@ which an adapter supplies a per-Case number without one. Draft 3 claimed "an ada
 prediction… no `core` API break," which is not reachable from the code — the same failure class as
 draft 2, one section over.
 
-Admitted rather than hidden: **`core.Predictor`, an optional Ring-0 interface** alongside `Capable`
+Admitted rather than hidden: **`core.Estimator`, an optional Ring-0 interface** alongside `Capable`
 and `ContextInjector`.
 
 ```go
-// Predictor reports what a Case will cost before the call is made.
-type Predictor interface {
-    Predict(ctx context.Context, c *Case) (budget.Estimate, error)
+// Estimator reports what a Case will cost before the call is made.
+type Estimator interface {
+    Estimate(ctx context.Context, c *Case) (budget.Estimate, error)
 }
 ```
 
@@ -304,7 +304,7 @@ reservation while the store persists `spendOf(resp)` = 0 means `SettledSpend` un
 full inferred cost of every usage-less Case — resume double-spend, the exact amnesia that comment
 closes.
 
-So **the adapter stamps its own prediction onto `Response.cost_usd_micros`** and sets
+So **the adapter stamps its own estimate onto `Response.cost_usd_micros`** and sets
 `usage_estimated`. `spendOf` stays the single derivation, guard and store agree, and resume is
 correct. Mark the Response, count them, warn above a threshold, and expose the count
 in `--json` (M-l) so a CI gate parsing `spent_usd` can tell how much of it was inferred.
@@ -323,10 +323,19 @@ the user notices as divergence from their invoice.
 An unknown model is **not** priced at zero. With a cost cap set, it is a refusal naming the model
 and the override flags. With no cap, it runs with a warning that spend is unbounded and unpredicted.
 
-**Naming (M-k).** Three concepts, three words, used identically in code, CLI, events, and docs:
-**prediction** (what we think a call costs), **reservation** (what the guard authorizes —
-`prediction` unchanged, under this design), **settlement** (what it actually cost). `Reservation.Estimate()`
-returns the reservation. `--strict-reservation` is not needed: pessimism is now the only policy.
+**Naming (M-k), corrected in M2-2.** Draft 4 proposed **prediction / reservation / settlement**.
+That was itself the drift M-k warned about: `stats/budget` already names these `Estimate`,
+`Reservation`, and `Spend`, so "prediction" was a fourth word for something `Estimate` already
+covers — and under pessimistic-only reservation, "prediction" and "reservation" are the *same
+value*, so keeping both guarantees a synonym.
+
+The code's words win, because they were already right: **`Estimate`** (what a call is predicted to
+cost), **`Reservation`** (the authorization holding it), **`Spend`** (what it actually cost). Three
+concepts, three words, no renames to `stats/budget`.
+
+For the same reason the Ring-0 interface is **`core.Estimator`** with an `Estimate` method, not
+`Predictor`/`Predict` as earlier drafts called it: an interface named for the value it produces
+rather than for a second verb meaning the same act.
 
 ### 2.4 Confirmation is run-level, capped, and computed where the remaining count is known
 
@@ -340,11 +349,11 @@ The second draft's fix was under-specified in three ways, each putting a wrong n
 human at the consent moment (H-D):
 
 1. **It ignored the cap.** With `--max-cost-usd 5.00`, honest maximum exposure is $5.00 + `N × δ_max`,
-   not `10,000 × prediction`. Showing $328 when the guard stops at $5 is simply false.
+   not `10,000 × estimate`. Showing $328 when the guard stops at $5 is simply false.
 2. **It could not be computed on resume.** §2.4 put it in the CLI *"because it already has
    `counts.Dev`"* — but the completed-Case set is loaded **inside** `core.Baseline`. A run killed at
    9,988/10,000 would prompt for **$328** to finish 12 Cases.
-3. Which prediction, given the (now-deleted) varying estimate.
+3. Which estimate, given the (now-deleted) varying one.
 
 **Corrected.** The confirmation is computed in `core.Baseline`, **after** `CompletedCases` is
 loaded, over `DevCases − done`, and is **bounded by the cap**:
@@ -577,7 +586,7 @@ rewrites that function; the sentinel is fixed there (L4).
 The second draft added an injected `func(*Case) budget.Estimate` on `BaselineOptions` —
 a public Go API change — to carry a per-Case adaptive estimate. §2.3 deletes the adaptation,
 so this dissolves with it (H-A, H-C). The flat `EstCostPerCallUSDMicros` is replaced by an
-adapter-supplied pessimistic prediction computed at the adapter, and `core` keeps the scalar
+adapter-supplied pessimistic estimate computed at the adapter, and `core` keeps the scalar
 shape it already has. No `core` API break, and `core/baseline.go` does not grow a streaming
 quantile estimator on top of its current 657 lines (M-j).
 
@@ -587,10 +596,10 @@ quantile estimator on top of its current 657 lines (M-j).
 |---|---|---|---|
 | M2-0 | **Settles §10a's open decision (M-7)**, with an ADR. Proto: agent-ref grammar, price vector, refusal/truncation/usage-estimated flags, resolved-model and provider-build fields, retry/rate-limit/overshoot **events**, `RunResumed` payload, `CaseExecution` submessage (ADR-0004) | — | 26 (partly), 29 (partly) |
 | M2-1 | `store`: `PRAGMA user_version` migration; `score_value`/`score_passed`/`refused`/`truncated` columns; backfill from `score_proto`; **`kno purge`** (`store` + `cli`, nulling blobs only) | M2-0 | 25 |
-| M2-2 | `core.Predictor` optional Ring-0 interface; `Guard.Overshoot`; `budget` naming | M2-0 | — |
+| M2-2 | `core.Estimator` optional Ring-0 interface; `Guard.Overshoot`; `budget` naming | M2-0 | — |
 | M2-3 | `internal/transport`: rate limiter, `GetBody` pinning + round-trip counter, redirect refusal, explicit per-host key binding, private-address rules, timeouts, redaction, OTel spans, `goleak.VerifyTestMain` | M2-0 | 18 (partly) |
 | M2-4 | Agent-ref parser: fuzz target + golden table | M2-0 | 4 (partly) |
-| M2-5 | Pricing table + pessimistic prediction behind `core.Predictor` | M2-2, M2-4 | — |
+| M2-5 | Pricing table + pessimistic estimate behind `core.Estimator` | M2-2, M2-4 | — |
 | M2-6 | `core`: feasibility check after `Restore`; run-level confirmation after `CompletedCases`; `RetryBudget` replacing `MaxAttempts`; `ErrTransportTransient`; resume check on resolved model; per-attempt spend on `Outcome` | M2-5 | — |
 | M2-7 | `openaicompat` adapter, fixtures, `goleak.VerifyTestMain`, executor conformance against a real transport; **wire the env cap into the live-test path and delete the grep interlock** | M2-3, M2-5 | 11, 18, 23; investigates 20 |
 | M2-8 | `anthropic` adapter, fixtures, `goleak.VerifyTestMain` | M2-7 | 18 |
@@ -828,7 +837,7 @@ draft 3's §11 claimed every row had an owner while §10's header did not have t
 | 26 | "before the first non-Case-executing stage writes a `Run`" | **Partly repaid M2-0** (schema), **fully M2-10** (writer + reader migration). Labelled "partly" because a `DEBT()` comment pointing at a row marked repaid is worse than a live marker (P1-M6). Trigger retained until M2-10 | @devarispbrown |
 | 27 | "before any stage reads `AggregateScore` — M2 at the latest" | Repaid M2-9, not re-dated | @devarispbrown |
 | 29 | "before the TUI renders progress" | **Partly repaid M2-0** (payload), **fully M2-10** (emitter). Draft 3 labelled this "repaid" while labelling entry 26 — identical shape, identical split, same file — "partly" (M-2). Same label now, and the trigger is retained until M2-10 | @devarispbrown |
-| *new* | **The cap is a soft bound**, `C + N × δ_max`, and settlement cannot enforce it — only observe it (H-4) | Trigger: before 1.0, or when a provider's settled cost exceeds its reservation in nightly live tests. `Guard.Overshoot()` lands in M2-2 so the condition is measurable | @devarispbrown |
+| *new* | **The cap is a soft bound**, `C + N × δ_max`, and settlement cannot enforce it — only observe it (H-4) | Trigger: before 1.0, or when a provider's settled cost exceeds its reservation in nightly live tests. Ledger entry 32. `Guard.Overshoot()` landed in M2-2, which makes the excess *computable*; nothing SURFACES it until M2-10 emits `SettlementOvershoot` | @devarispbrown |
 | *new* | **Headroom forfeiture**, `N × pessimistic`, measured at 4.7% (N=8) and 19.5% (N=32) of a $5.00 cap | Trigger: when a user reports a run stopping below its cap, or when `f = 0.25` (§2.3) is shown wrong by live data | @devarispbrown |
 | *new* | Cross-process rate-limit coordination | Trigger: when `kno serve` lands (v0.3), which makes concurrent runs the normal case | @devarispbrown |
 | *new* | Streaming unimplemented | Trigger: when any stage needs incremental output. That PR adds an SSE frame parser **and its fuzz target** | @devarispbrown |
@@ -844,7 +853,12 @@ three and should have said four; draft 2 proposed one, to a milestone that does 
 
 ## 11. Accepted risks
 
-Every entry has a **§10 row with a trigger and an owner**. Draft 2 claimed five were mirrored and
+Every entry has a row in **`docs/debt.md`** — entries 32-36 — with a trigger and an owner.
+
+Draft 4 said "a §10 row", meaning this document's own table, and that was not mirroring: CLAUDE.md
+requires accepted debt to live in the ledger, not in the plan that accepted it. The rows were
+written during M2-2, after a Phase-3 review pointed out that an accepted-risk row was phrased as
+though its repayment mechanism already worked. Draft 2 claimed five were mirrored and
 added one row; draft 3 added rows but no owner column and claimed one risk was "narrowed, not
 accepted" when it was not (M-14, H-4). Both are corrected.
 
