@@ -1,11 +1,13 @@
 # Coverage baseline. Regenerate with `make update-coverage-baseline`.
 # Coverage may not decrease against these numbers. Review diffs like code.
+adapters/agent/fake 0.0
 adapters/evals/jsonl 92.2
-core 93.3
+core 95.1
 core/errs 92.3
 coretest 83.8
-executor 95.8
+executor 96.0
+goal/exactmatch 0.0
 internal/cmd/covercheck 83.9
 internal/cmd/godoccheck 74.0
 stats/budget 92.9
-store 80.0
+store 79.3

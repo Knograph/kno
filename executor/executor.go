@@ -11,8 +11,6 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/proto"
-
-	"github.com/knograph/kno/core"
 )
 
 // Result is one item's terminal outcome.
@@ -21,9 +19,9 @@ import (
 // the event stream's CaseScored/CaseErrored split. An item is either done or
 // failed; it is never both, because a shape permitting both would let one item
 // land on both sides of the denominator.
-type Result[T any] struct {
+type Result[I proto.Message, T any] struct {
 	// Item is the input this result belongs to.
-	Item *core.Case
+	Item I
 
 	// Value is the work's output. Nil when Err is set.
 	Value *T
@@ -33,7 +31,7 @@ type Result[T any] struct {
 }
 
 // Done reports whether the item succeeded.
-func (r Result[T]) Done() bool { return r.Err == nil }
+func (r Result[I, T]) Done() bool { return r.Err == nil }
 
 // Options configures a Run.
 type Options struct {
@@ -42,6 +40,12 @@ type Options struct {
 	// The constraint is provider rate limits, not CPU: a bigger pool buys
 	// nothing but a faster path to a 429.
 	Concurrency int
+
+	// ID identifies an item, for Skip and for error messages. Required.
+	//
+	// The executor is generic over its item type — it has no business knowing
+	// what a Case is — so the caller supplies the identity function.
+	ID func(any) string
 
 	// Skip reports whether an item is already complete and should not be
 	// re-executed. Nil means execute everything.
@@ -68,6 +72,15 @@ type Options struct {
 	RecordGrace time.Duration
 }
 
+// id returns an item's identity, falling back to a placeholder rather than
+// panicking if the caller omitted the function.
+func (o Options) id(item any) string {
+	if o.ID == nil {
+		return "<unidentified>"
+	}
+	return o.ID(item)
+}
+
 func (o Options) recordGrace() time.Duration {
 	if o.RecordGrace > 0 {
 		return o.RecordGrace
@@ -91,7 +104,7 @@ func (o Options) concurrency() int {
 //
 // It must honor ctx. A worker blocked past cancellation is what turns a
 // graceful drain into a hung process.
-type WorkFunc[T any] func(ctx context.Context, c *core.Case) (*T, error)
+type WorkFunc[I proto.Message, T any] func(ctx context.Context, item I) (*T, error)
 
 // SinkFunc durably records one result.
 //
@@ -99,7 +112,7 @@ type WorkFunc[T any] func(ctx context.Context, c *core.Case) (*T, error)
 // own and results are recorded in completion order. Returning an error stops
 // the run: if results cannot be persisted, continuing would spend money whose
 // outcome nothing can record, and resume would pay for it again.
-type SinkFunc[T any] func(ctx context.Context, r Result[T]) error
+type SinkFunc[I proto.Message, T any] func(ctx context.Context, r Result[I, T]) error
 
 // Stats reports what a run did.
 type Stats struct {
@@ -170,11 +183,11 @@ func (s Stats) Recorded() int { return s.Succeeded + s.Failed }
 // A sink that blocks forever will stall a run for RecordGrace and then be
 // abandoned; a sink that blocks and ignores its context will stall it
 // indefinitely, which is the caller's responsibility to avoid.
-func Run[T any](
+func Run[I proto.Message, T any](
 	ctx context.Context,
-	items iter.Seq2[*core.Case, error],
-	work WorkFunc[T],
-	sink SinkFunc[T],
+	items iter.Seq2[I, error],
+	work WorkFunc[I, T],
+	sink SinkFunc[I, T],
 	opts Options,
 ) (Stats, error) {
 	if work == nil || sink == nil {
@@ -201,8 +214,8 @@ func Run[T any](
 	}
 
 	n := opts.concurrency()
-	cases := make(chan *core.Case)
-	results := make(chan Result[T])
+	cases := make(chan I)
+	results := make(chan Result[I, T])
 
 	// Sink: one goroutine, so implementations need no locking and results are
 	// recorded in completion order.
@@ -243,7 +256,7 @@ func Run[T any](
 			// hung sink cannot make shutdown unbounded.
 			if err := recordOne(recordCtx, sink, r); err != nil {
 				sinkBroken = true
-				fail(fmt.Errorf("recording result for %s: %w", r.Item.GetId(), err))
+				fail(fmt.Errorf("recording result for %s: %w", opts.id(r.Item), err))
 				continue
 			}
 
@@ -264,7 +277,7 @@ func Run[T any](
 	for range n {
 		workers.Go(func() {
 			for c := range cases {
-				value, err := runOne(runCtx, work, c)
+				value, err := runOne(runCtx, work, c, opts.id(c))
 
 				// UNCONDITIONAL send. An earlier version selected on
 				// runCtx.Done() here, which was the most damaging bug in this
@@ -278,7 +291,7 @@ func Run[T any](
 				// This cannot block indefinitely: the sink drains `results`
 				// until it is closed, and it is closed only after every worker
 				// has returned.
-				results <- Result[T]{Item: c, Value: value, Err: err}
+				results <- Result[I, T]{Item: c, Value: value, Err: err}
 
 				if opts.IsFatal != nil && err != nil && opts.IsFatal(err) {
 					// The work reported something that ends the run rather than
@@ -309,7 +322,7 @@ func Run[T any](
 			// Skip runs outside the lock: resume's implementation consults a
 			// store, and holding the sink's mutex across that would serialize
 			// every result's accounting behind it.
-			if opts.Skip != nil && opts.Skip(c.GetId()) {
+			if opts.Skip != nil && opts.Skip(opts.id(c)) {
 				mu.Lock()
 				stats.Skipped++
 				mu.Unlock()
@@ -318,9 +331,9 @@ func Run[T any](
 
 			// Clone BEFORE the send. The source may reuse its backing memory
 			// on the next iteration, and the worker outlives this one.
-			clone, ok := proto.Clone(c).(*core.Case)
+			clone, ok := proto.Clone(c).(I)
 			if !ok {
-				return fmt.Errorf("cloning case %s produced the wrong type", c.GetId())
+				return fmt.Errorf("cloning item %s produced the wrong type", opts.id(c))
 			}
 
 			select {
@@ -369,7 +382,7 @@ func Run[T any](
 //
 // A panic here would otherwise escape on the sink goroutine, where no caller's
 // recover can reach it, and take the process down mid-run.
-func recordOne[T any](ctx context.Context, sink SinkFunc[T], r Result[T]) (err error) {
+func recordOne[I proto.Message, T any](ctx context.Context, sink SinkFunc[I, T], r Result[I, T]) (err error) {
 	defer func() {
 		if p := recover(); p != nil {
 			// %T, not %v: a panic value is arbitrary and may embed prompt or
@@ -386,7 +399,7 @@ func recordOne[T any](ctx context.Context, sink SinkFunc[T], r Result[T]) (err e
 // money on hundreds of others. CLAUDE.md reserves panics for programmer error;
 // this boundary makes one item's programmer error survivable and recorded
 // rather than fatal to the whole run.
-func runOne[T any](ctx context.Context, work WorkFunc[T], c *core.Case) (value *T, err error) {
+func runOne[I proto.Message, T any](ctx context.Context, work WorkFunc[I, T], item I, id string) (value *T, err error) {
 	defer func() {
 		if p := recover(); p != nil {
 			value = nil
@@ -394,8 +407,8 @@ func runOne[T any](ctx context.Context, work WorkFunc[T], c *core.Case) (value *
 			// prompt, a response, or a formatted assertion containing either —
 			// and this error is persisted as Outcome.Err, which store.go
 			// requires to be a code rather than verbatim content.
-			err = fmt.Errorf("panic executing case %s: %T", c.GetId(), p)
+			err = fmt.Errorf("panic executing item %s: %T", id, p)
 		}
 	}()
-	return work(ctx, c)
+	return work(ctx, item)
 }

@@ -28,6 +28,16 @@ func TestMain(m *testing.M) {
 
 type output struct{ id string }
 
+// caseID identifies an item for the executor, which is generic over its item
+// type and so cannot know what a Case is.
+func caseID(item any) string {
+	c, ok := item.(*core.Case)
+	if !ok {
+		return ""
+	}
+	return c.GetId()
+}
+
 // staticCases yields n Cases, allocating a fresh one each time.
 func staticCases(n int) iter.Seq2[*core.Case, error] {
 	return func(yield func(*core.Case, error) bool) {
@@ -61,8 +71,8 @@ func echoWork(_ context.Context, c *core.Case) (*output, error) {
 	return &output{id: c.GetId()}, nil
 }
 
-func collectSink(mu *sync.Mutex, got *[]executor.Result[output]) executor.SinkFunc[output] {
-	return func(_ context.Context, r executor.Result[output]) error {
+func collectSink(mu *sync.Mutex, got *[]executor.Result[*core.Case, output]) executor.SinkFunc[*core.Case, output] {
+	return func(_ context.Context, r executor.Result[*core.Case, output]) error {
 		mu.Lock()
 		defer mu.Unlock()
 		*got = append(*got, r)
@@ -79,11 +89,11 @@ func TestEveryItemIsExecutedExactlyOnce(t *testing.T) {
 	const n = 500
 	var (
 		mu  sync.Mutex
-		got []executor.Result[output]
+		got []executor.Result[*core.Case, output]
 	)
 
 	stats, err := executor.Run(context.Background(), staticCases(n),
-		echoWork, collectSink(&mu, &got), executor.Options{Concurrency: 16})
+		echoWork, collectSink(&mu, &got), executor.Options{Concurrency: 16, ID: caseID})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -121,7 +131,7 @@ func TestWorkersDoNotShareCaseMemory(t *testing.T) {
 	const n = 400
 	var (
 		mu  sync.Mutex
-		got []executor.Result[output]
+		got []executor.Result[*core.Case, output]
 	)
 
 	// The work reads the Case's fields and asserts they are self-consistent.
@@ -142,7 +152,7 @@ func TestWorkersDoNotShareCaseMemory(t *testing.T) {
 	}
 
 	stats, err := executor.Run(context.Background(), reusingCases(n),
-		work, collectSink(&mu, &got), executor.Options{Concurrency: 16})
+		work, collectSink(&mu, &got), executor.Options{Concurrency: 16, ID: caseID})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -173,10 +183,11 @@ func TestSkipAvoidsRedispatch(t *testing.T) {
 	}
 
 	var mu sync.Mutex
-	var got []executor.Result[output]
+	var got []executor.Result[*core.Case, output]
 	stats, err := executor.Run(context.Background(), staticCases(n), work,
 		collectSink(&mu, &got), executor.Options{
 			Concurrency: 8,
+			ID:          caseID,
 			Skip:        func(id string) bool { _, ok := done[id]; return ok },
 		})
 	if err != nil {
@@ -218,9 +229,9 @@ func TestFatalSourceErrorDrainsInFlightWork(t *testing.T) {
 	}
 
 	var mu sync.Mutex
-	var got []executor.Result[output]
+	var got []executor.Result[*core.Case, output]
 	stats, err := executor.Run(context.Background(), items, echoWork,
-		collectSink(&mu, &got), executor.Options{Concurrency: 8})
+		collectSink(&mu, &got), executor.Options{Concurrency: 8, ID: caseID})
 
 	if !errors.Is(err, wantErr) {
 		t.Errorf("error = %v, want the source's fatal error", err)
@@ -248,9 +259,9 @@ func TestWorkerErrorsAreRecordedNotFatal(t *testing.T) {
 	}
 
 	var mu sync.Mutex
-	var got []executor.Result[output]
+	var got []executor.Result[*core.Case, output]
 	stats, err := executor.Run(context.Background(), staticCases(n), work,
-		collectSink(&mu, &got), executor.Options{Concurrency: 8})
+		collectSink(&mu, &got), executor.Options{Concurrency: 8, ID: caseID})
 	if err != nil {
 		t.Fatalf("one failing item ended the whole run: %v", err)
 	}
@@ -279,9 +290,9 @@ func TestPanicInOneItemDoesNotKillTheRun(t *testing.T) {
 	}
 
 	var mu sync.Mutex
-	var got []executor.Result[output]
+	var got []executor.Result[*core.Case, output]
 	stats, err := executor.Run(context.Background(), staticCases(n), work,
-		collectSink(&mu, &got), executor.Options{Concurrency: 4})
+		collectSink(&mu, &got), executor.Options{Concurrency: 4, ID: caseID})
 	if err != nil {
 		t.Fatalf("a panic in one item ended the run: %v", err)
 	}
@@ -316,9 +327,9 @@ func TestCancellationStopsDispatchPromptly(t *testing.T) {
 	}
 
 	var mu sync.Mutex
-	var got []executor.Result[output]
+	var got []executor.Result[*core.Case, output]
 	stats, err := executor.Run(ctx, staticCases(100_000), work,
-		collectSink(&mu, &got), executor.Options{Concurrency: 4})
+		collectSink(&mu, &got), executor.Options{Concurrency: 4, ID: caseID})
 
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("error = %v, want context.Canceled so the caller can tell an "+
@@ -341,7 +352,7 @@ func TestSinkFailureStopsTheRun(t *testing.T) {
 
 	wantErr := errors.New("disk full")
 	var recorded atomic.Int64
-	sink := func(_ context.Context, _ executor.Result[output]) error {
+	sink := func(_ context.Context, _ executor.Result[*core.Case, output]) error {
 		if recorded.Add(1) == 10 {
 			return wantErr
 		}
@@ -349,7 +360,7 @@ func TestSinkFailureStopsTheRun(t *testing.T) {
 	}
 
 	stats, err := executor.Run(context.Background(), staticCases(100_000),
-		echoWork, sink, executor.Options{Concurrency: 4})
+		echoWork, sink, executor.Options{Concurrency: 4, ID: caseID})
 
 	if !errors.Is(err, wantErr) {
 		t.Errorf("error = %v, want the sink's failure", err)
@@ -382,7 +393,7 @@ func TestConcurrencyIsBounded(t *testing.T) {
 	}
 
 	var mu sync.Mutex
-	var got []executor.Result[output]
+	var got []executor.Result[*core.Case, output]
 	if _, err := executor.Run(context.Background(), staticCases(200), work,
 		collectSink(&mu, &got), executor.Options{Concurrency: limit}); err != nil {
 		t.Fatalf("Run: %v", err)
@@ -399,9 +410,9 @@ func TestEmptySourceIsNotAnError(t *testing.T) {
 	t.Parallel()
 
 	var mu sync.Mutex
-	var got []executor.Result[output]
+	var got []executor.Result[*core.Case, output]
 	stats, err := executor.Run(context.Background(), staticCases(0), echoWork,
-		collectSink(&mu, &got), executor.Options{})
+		collectSink(&mu, &got), executor.Options{ID: caseID})
 	if err != nil {
 		t.Fatalf("an empty source errored: %v", err)
 	}
@@ -415,14 +426,14 @@ func TestMissingWorkOrSinkIsRefused(t *testing.T) {
 	t.Parallel()
 
 	var mu sync.Mutex
-	var got []executor.Result[output]
+	var got []executor.Result[*core.Case, output]
 
-	if _, err := executor.Run(context.Background(), staticCases(1), executor.WorkFunc[output](nil),
-		collectSink(&mu, &got), executor.Options{}); err == nil {
+	if _, err := executor.Run(context.Background(), staticCases(1), executor.WorkFunc[*core.Case, output](nil),
+		collectSink(&mu, &got), executor.Options{ID: caseID}); err == nil {
 		t.Error("a nil work function was accepted")
 	}
 	if _, err := executor.Run(context.Background(), staticCases(1), echoWork,
-		nil, executor.Options{}); err == nil {
+		nil, executor.Options{ID: caseID}); err == nil {
 		t.Error("a nil sink was accepted")
 	}
 }
@@ -432,8 +443,8 @@ func TestMissingWorkOrSinkIsRefused(t *testing.T) {
 func TestResultsRecordSuccessAndFailureDistinctly(t *testing.T) {
 	t.Parallel()
 
-	ok := executor.Result[output]{Item: &core.Case{Id: "a"}, Value: &output{id: "a"}}
-	bad := executor.Result[output]{Item: &core.Case{Id: "b"}, Err: errors.New("boom")}
+	ok := executor.Result[*core.Case, output]{Item: &core.Case{Id: "a"}, Value: &output{id: "a"}}
+	bad := executor.Result[*core.Case, output]{Item: &core.Case{Id: "b"}, Err: errors.New("boom")}
 
 	if !ok.Done() {
 		t.Error("a result with no error does not report itself as done")
@@ -461,7 +472,7 @@ func TestCancellationDoesNotDropPaidForResults(t *testing.T) {
 
 	var (
 		mu        sync.Mutex
-		recorded  []executor.Result[output]
+		recorded  []executor.Result[*core.Case, output]
 		completed atomic.Int64
 	)
 
@@ -475,7 +486,7 @@ func TestCancellationDoesNotDropPaidForResults(t *testing.T) {
 	}
 
 	// A sink slow enough that a worker's send would lose a select race.
-	sink := func(_ context.Context, r executor.Result[output]) error {
+	sink := func(_ context.Context, r executor.Result[*core.Case, output]) error {
 		time.Sleep(200 * time.Microsecond)
 		mu.Lock()
 		defer mu.Unlock()
@@ -484,7 +495,7 @@ func TestCancellationDoesNotDropPaidForResults(t *testing.T) {
 	}
 
 	stats, err := executor.Run(ctx, staticCases(100_000), work, sink,
-		executor.Options{Concurrency: 8})
+		executor.Options{Concurrency: 8, ID: caseID})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context.Canceled", err)
 	}
@@ -524,9 +535,9 @@ func TestStatsPartitionDispatched(t *testing.T) {
 	}
 
 	var mu sync.Mutex
-	var got []executor.Result[output]
+	var got []executor.Result[*core.Case, output]
 	stats, _ := executor.Run(ctx, staticCases(50_000), work,
-		collectSink(&mu, &got), executor.Options{Concurrency: 8})
+		collectSink(&mu, &got), executor.Options{Concurrency: 8, ID: caseID})
 
 	if stats.Dispatched != stats.Recorded() {
 		t.Errorf("stats = %+v: Dispatched (%d) != Succeeded+Failed (%d); a caller "+
@@ -554,10 +565,11 @@ func TestIsFatalStopsTheRun(t *testing.T) {
 	}
 
 	var mu sync.Mutex
-	var got []executor.Result[output]
+	var got []executor.Result[*core.Case, output]
 	stats, err := executor.Run(context.Background(), staticCases(100_000), work,
 		collectSink(&mu, &got), executor.Options{
 			Concurrency: 4,
+			ID:          caseID,
 			IsFatal:     func(err error) bool { return errors.Is(err, errBudget) },
 		})
 
@@ -584,7 +596,7 @@ func TestSinkPanicDoesNotKillTheProcess(t *testing.T) {
 	t.Parallel()
 
 	var recorded atomic.Int64
-	sink := func(_ context.Context, _ executor.Result[output]) error {
+	sink := func(_ context.Context, _ executor.Result[*core.Case, output]) error {
 		if recorded.Add(1) == 5 {
 			panic("nil map write in the sink")
 		}
@@ -592,7 +604,7 @@ func TestSinkPanicDoesNotKillTheProcess(t *testing.T) {
 	}
 
 	_, err := executor.Run(context.Background(), staticCases(1_000), echoWork,
-		sink, executor.Options{Concurrency: 4})
+		sink, executor.Options{Concurrency: 4, ID: caseID})
 	if err == nil {
 		t.Error("a panicking sink completed without error")
 	}
@@ -609,7 +621,7 @@ func TestBrokenSinkIsNotCalledAgain(t *testing.T) {
 	wantErr := errors.New("disk full")
 	var calls atomic.Int64
 
-	sink := func(_ context.Context, _ executor.Result[output]) error {
+	sink := func(_ context.Context, _ executor.Result[*core.Case, output]) error {
 		if calls.Add(1) >= 5 {
 			return wantErr
 		}
@@ -617,7 +629,7 @@ func TestBrokenSinkIsNotCalledAgain(t *testing.T) {
 	}
 
 	_, err := executor.Run(context.Background(), staticCases(10_000), echoWork,
-		sink, executor.Options{Concurrency: 4})
+		sink, executor.Options{Concurrency: 4, ID: caseID})
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("error = %v, want the sink failure", err)
 	}
@@ -639,7 +651,7 @@ func TestSinkRecordsAfterCallerCancellation(t *testing.T) {
 		return echoWork(ctx, c)
 	}
 	// A context-respecting sink, as any store-backed one is.
-	sink := func(ctx context.Context, _ executor.Result[output]) error {
+	sink := func(ctx context.Context, _ executor.Result[*core.Case, output]) error {
 		if ctx.Err() != nil {
 			sawDeadContext.Store(true)
 			return ctx.Err()
@@ -648,7 +660,7 @@ func TestSinkRecordsAfterCallerCancellation(t *testing.T) {
 	}
 
 	if _, err := executor.Run(ctx, staticCases(200), work, sink,
-		executor.Options{Concurrency: 2}); !errors.Is(err, context.Canceled) {
+		executor.Options{Concurrency: 2, ID: caseID}); !errors.Is(err, context.Canceled) {
 		t.Logf("run ended with: %v", err)
 	}
 
