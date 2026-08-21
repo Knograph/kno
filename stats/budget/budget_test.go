@@ -443,3 +443,18 @@ func TestRestoreIsSafeUnderConcurrency(t *testing.T) {
 		t.Errorf("spent = %d, want at least the 64 restored calls", got)
 	}
 }
+
+// TestLimitsAreReadable lets a caller check whether a cap is set before
+// deciding whether an estimate is required — which is how Baseline refuses a
+// dollar cap it cannot actually enforce.
+func TestLimitsAreReadable(t *testing.T) {
+	t.Parallel()
+
+	want := budget.Limits{MaxCostUSDMicros: 5_000, MaxLLMCalls: 10}
+	if got := budget.New(want, nil, 0).Limits(); got != want {
+		t.Errorf("Limits = %+v, want %+v", got, want)
+	}
+	if got := budget.New(budget.Limits{}, nil, 0).Limits(); got != (budget.Limits{}) {
+		t.Errorf("Limits = %+v, want the zero value for an uncapped guard", got)
+	}
+}

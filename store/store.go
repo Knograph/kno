@@ -61,6 +61,16 @@ type Store interface {
 	// query per Case, is worse.
 	CompletedCases(ctx context.Context, runID string) (map[string]struct{}, error)
 
+	// OutcomeCounts reports how many Cases a run has scored and how many have
+	// terminally errored.
+	//
+	// Resume needs these for the same reason it needs SettledSpend: the
+	// in-memory aggregate starts empty in each process, so without them a
+	// resumed run reports counts covering only the work it did — losing the
+	// Cases the interrupted run already paid for, and understating the
+	// denominator behind every delta later measured against it.
+	OutcomeCounts(ctx context.Context, runID string) (scored, errored int, err error)
+
 	// SettledSpend sums what a run actually spent, for reseeding the budget
 	// guard on resume.
 	//

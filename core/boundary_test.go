@@ -22,21 +22,41 @@ func TestCoreImportsNothingAbove(t *testing.T) {
 
 	const module = "github.com/knograph/kno"
 
-	// Packages core is permitted to reach. gen is the generated contract
-	// (ADR-0001 makes those messages the domain types), and core/... is
-	// core itself.
-	allowed := []string{
-		module + "/gen/",
-		module + "/core",
+	// Packages core must never reach.
+	//
+	// The rule is "core imports nothing ABOVE it", and DESIGN.md is explicit
+	// about what above means: cli, tui, and api are thin shells over identical
+	// core calls, never the reverse. Ring-1 adapters, bridge, judge, and the
+	// plugin ring are pluggable implementations of core's contracts — core
+	// defines the interfaces, so depending on an implementation would invert
+	// the ring.
+	//
+	// store, executor, and stats are BELOW core: infrastructure it orchestrates
+	// while running a stage. An earlier version of this test was an allowlist
+	// of gen/ and core/ alone, which made the pipeline stages DESIGN.md places
+	// in core/ impossible to write there. Widened deliberately rather than
+	// silently; see the M1-5 PR.
+	forbidden := []string{
+		module + "/cli",
+		module + "/tui",
+		module + "/api",
+		module + "/adapters/",
+		module + "/bridge",
+		module + "/judge",
+		module + "/plugin",
+		module + "/goal/",
 	}
 
 	// Deps, not Imports: a transitive upward import is just as much a
 	// violation as a direct one, and only the transitive set catches a
 	// laundering package in between.
 	//
-	// -deps includes the test binary's dependencies too, so a test file
-	// reaching upward for a fixture is caught as well.
-	out, err := exec.Command("go", "list", "-deps", "-test", "./...").Output()
+	// Test dependencies are deliberately EXCLUDED (no -test flag). The rule
+	// constrains what ships: core's own tests legitimately construct a fake
+	// agent and a concrete Goal to exercise a stage against, and that is not
+	// the ring inverting — nothing in the shipped binary depends on them.
+	// Phase-1 finding G10 raised this as undecided; it is decided here.
+	out, err := exec.Command("go", "list", "-deps", "./...").Output()
 	if err != nil {
 		t.Fatalf("go list: %v", err)
 	}
@@ -49,17 +69,13 @@ func TestCoreImportsNothingAbove(t *testing.T) {
 		// The synthesized test binary shows up as "pkg [pkg.test]".
 		dep = strings.Fields(dep)[0]
 
-		var ok bool
-		for _, prefix := range allowed {
+		for _, prefix := range forbidden {
 			if dep == strings.TrimSuffix(prefix, "/") || strings.HasPrefix(dep, prefix) {
-				ok = true
-				break
+				t.Errorf("core depends on %s.\n"+
+					"core imports nothing above it (CLAUDE.md prime directive 3): cli, tui, and "+
+					"api are shells over core, and adapters implement core's contracts rather "+
+					"than the reverse.", dep)
 			}
-		}
-		if !ok {
-			t.Errorf("core depends on %s.\n"+
-				"core imports nothing above it (CLAUDE.md prime directive 3): cli, tui, and api "+
-				"are shells over core, never the other way round.", dep)
 		}
 	}
 }

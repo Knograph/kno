@@ -31,6 +31,11 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
+- `core.Baseline`: the first pipeline stage. Runs an agent over the dev Cases, scores each
+  Response, persists every outcome, and survives interruption. Takes a `*SealedEvals`, so a stage
+  that could read the holdout does not compile.
+- `adapters/agent/fake` and `goal/exactmatch`: a deterministic agent and Goal, so the whole
+  pipeline is exercisable without a provider or a bill.
 - `executor`: a bounded worker pool with a written shutdown protocol. Cases are cloned in the
   producer before dispatch, so a source reusing its buffer cannot be read by a worker mid-rewrite
   — the borrow contract becoming enforcement rather than documentation. A fatal source error
@@ -45,7 +50,8 @@ covenants — breaking any of them requires a major version.
   TUI, logs, and API all render, and it carries IDs and metrics only — conversation content is
   structurally unrepresentable, enforced by a schema test rather than by reviewer vigilance.
   `CaseErrored` is a distinct payload from `CaseScored`, so a live view and the persisted result
-  cannot disagree about the sample. Events use `EventError` rather than `Actionable`, because
+  cannot disagree about the sample. (Correction: the M1-1 notes said `Run`'s Case counters track
+  presence. That edit did not apply and shipped unfixed — see `docs/debt.md#26`.) Events use `EventError` rather than `Actionable`, because
   `Actionable.cause` carries upstream provider errors verbatim and providers echo request content
   in them. Retires debt 2.
 - `stats/budget`: the spend guard. Every path that can call an LLM or a fine-tuning API goes
