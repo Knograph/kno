@@ -24,6 +24,11 @@ covenants — breaking any of them requires a major version.
 
 ### Fixed
 
+- `make record-fixtures` set `KNO_LIVE_TESTS=1` itself while checking neither condition
+  `make test-live` enforces: that `KNO_MAX_COST_USD` is set, and that some Go code actually reads
+  it. It was an unguarded live-spend path that would have armed the moment the first adapter
+  fixture recorder was written. The guard is now a shared `live_spend_guard` define both targets
+  call, and both were verified to fail closed on both conditions. See `docs/debt.md#11`.
 - A resume compared only the caller-supplied input fingerprint, which covers the eval file and the
   split but not the Goal or the Agent. Resuming a run with a different `--agent` or `--goal` was
   accepted, blending Cases scored under two different configurations into one `AggregateScore`

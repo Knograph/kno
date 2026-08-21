@@ -106,6 +106,32 @@ define pending
 	printf '\033[34m PEND \033[0m %s: implementation lands in %s.\n' "$(1)" "$(2)"
 endef
 
+# live_spend_guard <target name>
+#
+# Every target that sets KNO_LIVE_TESTS=1 must call this FIRST. Two checks,
+# both of which fail closed:
+#
+#   1. KNO_MAX_COST_USD must be set, so a live run always has a stated ceiling.
+#   2. Some Go file must actually read it, so the ceiling is enforced by code
+#      rather than asserted by a comment. See docs/debt.md#11 — the nightly job
+#      was once armed with real credentials and a cap nothing read.
+#
+# This lived inline in test-live only, which is how record-fixtures came to set
+# KNO_LIVE_TESTS=1 itself while passing neither check. A guard that one target
+# implements privately is a guard the next target forgets.
+define live_spend_guard
+	if [ -z "$${KNO_MAX_COST_USD:-}" ]; then \
+		printf '\033[31m FAIL \033[0m %s: refusing to run without KNO_MAX_COST_USD set.\n' "$(1)"; \
+		exit 1; \
+	fi; \
+	if ! grep -rqs 'KNO_MAX_COST_USD' --include='*.go' .; then \
+		printf '\033[31m FAIL \033[0m %s: KNO_MAX_COST_USD is set but NO CODE READS IT.\n' "$(1)"; \
+		printf '        The cap is not enforced by anything. Refusing to spend.\n'; \
+		printf '        See docs/debt.md#11.\n'; \
+		exit 1; \
+	fi
+endef
+
 .PHONY: check
 check: fmt-check lint test typecheck-proto generate-check vuln docs fuzz-short bench-diff ## The PR gate: everything CI runs on a pull request
 	@printf '\033[32m  OK  \033[0m all gates passed\n'
@@ -165,16 +191,7 @@ test-integration: ## Adapter tests against RECORDED FIXTURES; never live APIs
 # always an explicit choice. Nightly CI calls this one.
 .PHONY: test-live
 test-live: ## Integration tests against LIVE providers. Spends real money.
-	@$(SAFE) if [ -z "$${KNO_MAX_COST_USD:-}" ]; then \
-		printf '\033[31m FAIL \033[0m test-live: refusing to run without KNO_MAX_COST_USD set.\n'; \
-		exit 1; \
-	fi
-	@$(SAFE) if ! grep -rqs 'KNO_MAX_COST_USD' --include='*.go' .; then \
-		printf '\033[31m FAIL \033[0m test-live: KNO_MAX_COST_USD is set but NO CODE READS IT.\n'; \
-		printf '        The budget guard (stats/budget) does not exist yet, so this cap is\n'; \
-		printf '        not enforced by anything. Refusing to spend. See docs/debt.md#11.\n'; \
-		exit 1; \
-	fi
+	@$(SAFE) $(call live_spend_guard,test-live)
 	@KNO_LIVE_TESTS=1 go test $(GOTESTFLAGS) -tags=integration ./...
 
 .PHONY: coverage-check
@@ -195,8 +212,13 @@ secrets-scan: ## gitleaks over BOTH the working tree and git history
 		printf '\033[32m  OK  \033[0m secrets scan: working tree and history clean\n'; \
 	fi
 
+# Recording calls real providers, so it spends real money — the same as
+# test-live, and it must pass the same guard. It previously set
+# KNO_LIVE_TESTS=1 itself and checked neither condition, which armed a live
+# spend path the moment anyone wrote the first TestRecord.
 .PHONY: record-fixtures
-record-fixtures: ## Re-record adapter fixtures; secrets scrubbed at record time
+record-fixtures: ## Re-record adapter fixtures against LIVE providers. Spends real money.
+	@$(SAFE) $(call live_spend_guard,record-fixtures)
 	@KNO_RECORD_FIXTURES=1 KNO_LIVE_TESTS=1 go test -tags=integration -run TestRecord ./adapters/...
 
 .PHONY: update-golden
