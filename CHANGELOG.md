@@ -63,7 +63,10 @@ covenants — breaking any of them requires a major version.
 ### Added
 
 - **`kno purge`** — delete stored agent output and judge rationales for a run, keeping the scores,
-  costs, and completion records. It NULLs the trace columns and never deletes a row: the recorded
+  costs, and completion records. The database is opened with `secure_delete`, and a purge
+  checkpoints the WAL and `VACUUM`s, so the content is gone from the bytes on disk rather than
+  merely unlinked from a column — without this, `strings kno.db` recovered 14 of 16 occurrences of
+  a Case's output from a purge that reported success. It NULLs the trace columns and never deletes a row: the recorded
   outcome IS the done-marker Kno resumes from, so a purge that removed rows would make a purged run
   pay for every Case a second time. A privacy feature that costs money is not one. Repays
   `docs/debt.md#25`, including the test that entry required by name.

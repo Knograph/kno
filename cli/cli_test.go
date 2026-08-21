@@ -3,12 +3,18 @@ package cli_test
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+
+	"google.golang.org/protobuf/proto"
+	_ "modernc.org/sqlite"
+
+	knov1 "github.com/knograph/kno/gen/kno/v1"
 
 	"github.com/knograph/kno/cli"
 	"github.com/knograph/kno/core/errs"
@@ -495,9 +501,19 @@ func TestPurgeRequiresConfirmation(t *testing.T) {
 		t.Fatalf("baseline produced no report:\n%s", stdout)
 	}
 
-	out, _, code := run(t, "purge", "--run-id", "r1", "--db", db)
-	if code != errs.ExitOK {
-		t.Fatalf("purge exit %d", code)
+	out, stderr, code := run(t, "purge", "--run-id", "r1", "--db", db)
+	// Non-zero on purpose: a retention job that forgets --yes must fail loudly
+	// rather than report success over data it never removed.
+	if code == errs.ExitOK {
+		t.Errorf("purge without --yes exited 0 after doing nothing; a scheduled " +
+			"job would log success and keep the data")
+	}
+	if !strings.Contains(stderr, "fix:") {
+		t.Errorf("no fix line:\n%s", stderr)
+	}
+	if !strings.Contains(out, "outcome(s)") {
+		t.Errorf("the prompt does not say how much it would remove, so it is not "+
+			"a dry run:\n%s", out)
 	}
 	if !strings.Contains(out, "cannot be undone") {
 		t.Errorf("the prompt does not say the action is irreversible:\n%s", out)
@@ -542,10 +558,53 @@ func TestPurgeKeepsTheRunResumable(t *testing.T) {
 		t.Fatalf("decoding report: %v", err)
 	}
 	if int(rep.Scored) != rep.DevCases {
-		t.Errorf("after purge, the resumed run reports %d of %d scored; a purge "+
-			"that lost the done-markers would make it re-run and re-pay for work",
+		t.Errorf("after purge, the resumed run reports %d of %d scored",
 			rep.Scored, rep.DevCases)
 	}
+
+	// The count above passes whether or not the work was redone — a re-run
+	// scores the same Cases again and reports the same number. What separates
+	// them is whether the resume DID anything: a resumed run that re-executed
+	// every Case appends a CaseScored event for each one.
+	//
+	// Asserting on the observable that actually differs, because the first
+	// version of this test passed against a purge that deleted every row.
+	seqBefore, seqAfter := eventSequences(t, db, "r1")
+	if seqAfter != seqBefore {
+		t.Errorf("the event sequence grew from %d to %d across a resume of a "+
+			"fully-completed run; the resume re-executed %d Case(s) and paid "+
+			"for them again, which means the purge destroyed the done-markers",
+			seqBefore, seqAfter, seqAfter-seqBefore)
+	}
+}
+
+// eventSequences returns the run's max event sequence before and after the
+// caller's resume, by reading the database directly. It is deliberately not
+// routed through the CLI: the report is what the assertion above already
+// showed cannot distinguish the two cases.
+func eventSequences(t *testing.T, dbPath, runID string) (before, after int64) {
+	t.Helper()
+	// The caller has already resumed, so both readings come from the same
+	// database; "before" is reconstructed from the number of scored Cases,
+	// which a first run and a re-run would differ on.
+	db, err := sql.Open("sqlite", "file:"+dbPath)
+	if err != nil {
+		t.Fatalf("opening %s: %v", dbPath, err)
+	}
+	defer func() { _ = db.Close() }()
+
+	var events, outcomes int64
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM events WHERE run_id = ?`, runID).Scan(&events); err != nil {
+		t.Fatalf("counting events: %v", err)
+	}
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM outcomes WHERE run_id = ?`, runID).Scan(&outcomes); err != nil {
+		t.Fatalf("counting outcomes: %v", err)
+	}
+	// One CaseScored per Case, plus RunStarted and RunFinished per process.
+	// A resume that re-ran everything would have twice the per-Case events.
+	return outcomes, events - 4
 }
 
 // TestPurgeRefusesAnUnknownRun: a typo must be a refusal, not a silent no-op
@@ -604,5 +663,68 @@ func TestPurgePromptDoesNotLeakRawEnumNames(t *testing.T) {
 	}
 	if !strings.Contains(out, "completed") {
 		t.Errorf("the prompt does not name the run's status in the CLI's own words:\n%s", out)
+	}
+}
+
+// TestPurgeRefusesARunningRun.
+//
+// Cases completing after the purge write fresh traces, so the command would
+// report success over content that reappears seconds later.
+func TestPurgeRefusesARunningRun(t *testing.T) {
+	t.Parallel()
+
+	db := filepath.Join(t.TempDir(), "kno.db")
+	cases := writeCases(t, 50)
+
+	// A budget stop leaves the run BUDGET_STOPPED, not RUNNING, so drive the
+	// state directly: what matters is the guard, not how the run got there.
+	if _, _, code := run(t, "baseline", "--evals", cases, "--db", db, "--run-id", "r1"); code != errs.ExitOK {
+		t.Fatalf("baseline exit %d", code)
+	}
+	setRunStatusRunning(t, db, "r1")
+
+	_, stderr, code := run(t, "purge", "--run-id", "r1", "--db", db, "--yes")
+	if code == errs.ExitOK {
+		t.Fatal("purged a run that is still executing")
+	}
+	if !strings.Contains(stderr, "still running") {
+		t.Errorf("the refusal does not say why:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "--force") {
+		t.Errorf("the refusal does not name the override:\n%s", stderr)
+	}
+
+	// --force is the documented way through.
+	if _, stderr, code := run(t, "purge", "--run-id", "r1", "--db", db, "--yes", "--force"); code != errs.ExitOK {
+		t.Errorf("--force did not override the refusal: exit %d\n%s", code, stderr)
+	}
+}
+
+// setRunStatusRunning rewrites a stored Run's status column and blob.
+func setRunStatusRunning(t *testing.T, dbPath, runID string) {
+	t.Helper()
+
+	db, err := sql.Open("sqlite", "file:"+dbPath)
+	if err != nil {
+		t.Fatalf("opening %s: %v", dbPath, err)
+	}
+	defer func() { _ = db.Close() }()
+
+	var blob []byte
+	if err := db.QueryRow(`SELECT proto FROM runs WHERE id = ?`, runID).Scan(&blob); err != nil {
+		t.Fatalf("reading run: %v", err)
+	}
+	var r knov1.Run
+	if err := proto.Unmarshal(blob, &r); err != nil {
+		t.Fatalf("unmarshaling run: %v", err)
+	}
+	r.Status = knov1.RunStatus_RUN_STATUS_RUNNING
+	updated, err := proto.Marshal(&r)
+	if err != nil {
+		t.Fatalf("marshaling run: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE runs SET proto = ?, status = ? WHERE id = ?`,
+		updated, int(knov1.RunStatus_RUN_STATUS_RUNNING), runID); err != nil {
+		t.Fatalf("updating run: %v", err)
 	}
 }

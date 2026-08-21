@@ -62,6 +62,10 @@ type Store interface {
 	// second time on resume. See docs/debt.md#25.
 	Purge(ctx context.Context, runID string) (int64, error)
 
+	// PurgeableCount reports how many outcomes still hold trace content, so a
+	// confirmation prompt can state what it would remove rather than assert it.
+	PurgeableCount(ctx context.Context, runID string) (int, error)
+
 	// ScoreSum returns the sum of recorded scores, how many Cases contributed
 	// one, and how many scored but can no longer contribute — their number
 	// having been purged before it was stored in a column.

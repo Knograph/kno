@@ -99,6 +99,19 @@ var (
 		ExitCode: ExitInterrupted,
 	}
 
+	// ErrConfirmationRequired means a destructive or costly action was
+	// described but not performed, because nobody confirmed it.
+	//
+	// Non-zero on purpose. A scheduled job that forgets the confirmation flag
+	// would otherwise exit 0, log success, and have done nothing — which for a
+	// retention job means keeping data the operator believes was deleted.
+	ErrConfirmationRequired = &Actionable{
+		Code:     "CONFIRMATION_REQUIRED",
+		Message:  "the action was not confirmed, so nothing was changed",
+		Fix:      "re-run with --yes",
+		ExitCode: ExitError,
+	}
+
 	// ErrRateLimited means a provider asked us to slow down. Transient: the
 	// caller should back off and retry rather than fail the run.
 	ErrRateLimited = &Actionable{

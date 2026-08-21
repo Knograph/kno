@@ -8,6 +8,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	knov1 "github.com/knograph/kno/gen/kno/v1"
+
 	"github.com/knograph/kno/core/errs"
 	"github.com/knograph/kno/store"
 )
@@ -17,6 +19,7 @@ type purgeFlags struct {
 	runID  string
 	dbPath string
 	yes    bool
+	force  bool
 }
 
 func newPurgeCmd() *cobra.Command {
@@ -54,6 +57,7 @@ This cannot be undone.`,
 	flags.StringVar(&f.runID, "run-id", "", "the run whose traces to remove (required)")
 	flags.StringVar(&f.dbPath, "db", "kno.db", "where runs and traces are stored")
 	flags.BoolVar(&f.yes, "yes", false, "skip the confirmation")
+	flags.BoolVar(&f.force, "force", false, "purge even a run that is still executing")
 
 	if err := cmd.MarkFlagRequired("run-id"); err != nil {
 		panic(fmt.Sprintf("cli: marking --run-id required: %v", err))
@@ -80,18 +84,37 @@ func runPurge(ctx context.Context, out io.Writer, f purgeFlags) error {
 		return fmt.Errorf("loading run %s: %w", f.runID, err)
 	}
 
+	// A run still executing keeps writing traces after the purge, so the
+	// command would report success over content that reappears seconds later.
+	if run.GetStatus() == knov1.RunStatus_RUN_STATUS_RUNNING && !f.force {
+		return errs.ErrInvalidInput.
+			WithFix("wait for the run to finish, then purge; or pass --force if you know it is not running").
+			Wrap(fmt.Errorf("run %s is still running, and Cases completing after a purge would write new traces", f.runID))
+	}
+
+	pending, err := db.PurgeableCount(ctx, f.runID)
+	if err != nil {
+		return fmt.Errorf("counting purgeable outcomes for %s: %w", f.runID, err)
+	}
+
 	if !f.yes {
 		// Irreversible and not a spend, so it gets its own confirmation rather
 		// than reusing the budget guard's.
 		_, err := fmt.Fprintf(out,
-			"\nPurge would remove agent output and judge rationales for run %s (%s, %s).\n"+
+			"\nPurge would remove agent output and judge rationales from %d outcome(s) "+
+				"in run %s (%s, %s).\n"+
 				"Scores, costs, and completion records are kept, so the run stays resumable.\n"+
 				"This cannot be undone. Re-run with --yes to proceed.\n",
-			run.GetId(), run.GetGoalName(), statusName(run.GetStatus()))
+			pending, run.GetId(), run.GetGoalName(), statusName(run.GetStatus()))
 		if err != nil {
 			return fmt.Errorf("writing confirmation: %w", err)
 		}
-		return nil
+		// Exit non-zero. A retention job that forgets --yes would otherwise
+		// succeed, log success, and delete nothing — the same silent no-op the
+		// unknown-run check above exists to prevent.
+		return errs.ErrConfirmationRequired.WithFix(
+			"re-run with --yes to purge").
+			Wrap(fmt.Errorf("purge of run %s was not confirmed; nothing was removed", f.runID))
 	}
 
 	purged, err := db.Purge(ctx, f.runID)

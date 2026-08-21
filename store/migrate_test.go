@@ -1,9 +1,12 @@
 package store_test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -526,5 +529,287 @@ func TestPurgeIsScopedToItsRun(t *testing.T) {
 	}
 	if resp == nil {
 		t.Error("purging run-1 also cleared run-2's traces")
+	}
+}
+
+// TestPurgeRemovesContentFromTheFileNotJustTheColumn.
+//
+// TestPurgeRemovesTraceContent asserts through RawBlobs — it reads the column,
+// which is the exact surface that reports NULL while the bytes are still in the
+// file. SQLite frees a page without overwriting it, so before secure_delete was
+// enabled this store reported "Purged 20 outcome(s)" and left 14 of 16
+// occurrences of the Case output readable with `strings`.
+//
+// So this one reads the bytes on disk. A deletion feature has to be tested at
+// the layer a person recovering the data would attack.
+func TestPurgeRemovesContentFromTheFileNotJustTheColumn(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const secret = "CONVERSATION-CONTENT-THAT-MUST-NOT-SURVIVE"
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "kno.db")
+	s, err := store.NewSQLite(ctx, path)
+	if err != nil {
+		t.Fatalf("opening: %v", err)
+	}
+	if err := s.CreateRun(ctx, newRun("run-1")); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	for i := range 20 {
+		out := scoredOutcome(caseName(i), 1, 1_000)
+		out.Response.Output = secret
+		out.Score.Rationale = secret
+		if err := s.RecordOutcome(ctx, "run-1", out); err != nil {
+			t.Fatalf("RecordOutcome: %v", err)
+		}
+	}
+
+	if got := countInFiles(t, dir, secret); got == 0 {
+		t.Fatal("the content was never written, so this test proves nothing")
+	}
+
+	if _, err := s.Purge(ctx, "run-1"); err != nil {
+		t.Fatalf("Purge: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("closing: %v", err)
+	}
+
+	if got := countInFiles(t, dir, secret); got != 0 {
+		t.Errorf("%d occurrence(s) of purged content are still readable in the "+
+			"database files; `strings kno.db` recovers what the command said "+
+			"could not be undone", got)
+	}
+}
+
+// countInFiles reports how many times needle appears across every file in dir,
+// which is the database plus any -wal and -shm alongside it.
+func countInFiles(t *testing.T, dir, needle string) int {
+	t.Helper()
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("reading %s: %v", dir, err)
+	}
+	total := 0
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatalf("reading %s: %v", e.Name(), err)
+		}
+		total += bytes.Count(b, []byte(needle))
+	}
+	return total
+}
+
+// TestConcurrentOpensMigrateExactlyOnce.
+//
+// The version check and the migration used to be separate: every process read
+// version 0, every process tried to add the same column, and all but one died
+// with `duplicate column name`. Reproduced at 2-3 failures in 4 concurrent
+// opens against an M1-era database — and on a fresh one too, which is the
+// ordinary case of a CI job running two kno commands at once.
+//
+// The concrete user sequence: a long `kno baseline` is running, the user opens
+// a second terminal to `kno purge`, and purge dies with a SQL-internals error
+// that names nothing they can act on.
+func TestConcurrentOpensMigrateExactlyOnce(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const openers = 6
+
+	for _, tc := range []struct {
+		name string
+		path func(*testing.T) string
+	}{
+		{"an M1-era database", func(t *testing.T) string { return writeM1Database(t, 5, false) }},
+		{"a fresh database", func(t *testing.T) string { return filepath.Join(t.TempDir(), "kno.db") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			path := tc.path(t)
+			var wg sync.WaitGroup
+			errsCh := make(chan error, openers)
+			start := make(chan struct{})
+
+			for range openers {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					<-start // maximize the overlap
+					s, err := store.NewSQLite(ctx, path)
+					if err != nil {
+						errsCh <- err
+						return
+					}
+					if err := s.Close(); err != nil {
+						errsCh <- err
+					}
+				}()
+			}
+			close(start)
+			wg.Wait()
+			close(errsCh)
+
+			var failures []error
+			for err := range errsCh {
+				failures = append(failures, err)
+			}
+			if len(failures) > 0 {
+				t.Errorf("%d of %d concurrent opens failed; the first: %v",
+					len(failures), openers, failures[0])
+			}
+		})
+	}
+}
+
+// TestPurgeableCountReportsWhatPurgeWouldTouch: the confirmation prompt shows
+// this number, so a wrong one makes the dry run a lie.
+func TestPurgeableCountReportsWhatPurgeWouldTouch(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	s := newStore(t)
+	if err := s.CreateRun(ctx, newRun("run-1")); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	for i := range 5 {
+		if err := s.RecordOutcome(ctx, "run-1", scoredOutcome(caseName(i), 1, 100)); err != nil {
+			t.Fatalf("RecordOutcome: %v", err)
+		}
+	}
+
+	n, err := s.PurgeableCount(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("PurgeableCount: %v", err)
+	}
+	if n != 5 {
+		t.Errorf("PurgeableCount = %d, want 5", n)
+	}
+
+	purged, err := s.Purge(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("Purge: %v", err)
+	}
+	if purged != int64(n) {
+		t.Errorf("the prompt promised %d and the purge touched %d; a dry run that "+
+			"does not match the run is worse than no dry run", n, purged)
+	}
+
+	// Nothing left to purge.
+	if after, err := s.PurgeableCount(ctx, "run-1"); err != nil || after != 0 {
+		t.Errorf("PurgeableCount after purge = %d (err %v), want 0", after, err)
+	}
+
+	// Unknown run: zero, not an error.
+	if n, err := s.PurgeableCount(ctx, "nope"); err != nil || n != 0 {
+		t.Errorf("PurgeableCount for an unknown run = %d (err %v), want 0", n, err)
+	}
+}
+
+// TestPurgeableCountFailsClosedAfterClose.
+func TestPurgeableCountFailsClosedAfterClose(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	s, err := store.NewSQLite(ctx, filepath.Join(t.TempDir(), "kno.db"))
+	if err != nil {
+		t.Fatalf("opening: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("closing: %v", err)
+	}
+	if _, err := s.PurgeableCount(ctx, "run-1"); err == nil {
+		t.Error("PurgeableCount succeeded on a closed store")
+	}
+}
+
+// TestMigrationRefusesAReadOnlyDatabase: the write lock cannot be taken, and
+// that must surface as an error rather than a partial upgrade.
+func TestMigrationRefusesAReadOnlyDatabase(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	path := writeM1Database(t, 2, false)
+	if err := os.Chmod(path, 0o400); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+
+	if _, err := store.NewSQLite(ctx, path); err == nil {
+		t.Error("a read-only database was migrated without complaint")
+	}
+}
+
+// TestMigrationSkipsAStepAnotherProcessAlreadyApplied.
+//
+// applyMigration re-reads the version under the write lock, and the branch that
+// finds the step already applied is the one that makes concurrent opens safe.
+// Reaching it deterministically means migrating twice: the second call takes
+// the lock, sees the version another caller committed, and commits an empty
+// transaction rather than repeating the DDL.
+func TestMigrationSkipsAStepAnotherProcessAlreadyApplied(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	path := writeM1Database(t, 2, false)
+
+	first, err := store.NewSQLite(ctx, path)
+	if err != nil {
+		t.Fatalf("first open: %v", err)
+	}
+
+	// A second store against the same file, while the first is still open.
+	// It must find the migration done and proceed rather than re-apply it.
+	second, err := store.NewSQLite(ctx, path)
+	if err != nil {
+		t.Fatalf("second open against an already-migrated database: %v", err)
+	}
+
+	if _, counted, _, err := second.ScoreSum(ctx, "run-1"); err != nil || counted != 2 {
+		t.Errorf("counted = %d (err %v), want 2", counted, err)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatalf("closing second: %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("closing first: %v", err)
+	}
+}
+
+// TestUserVersionErrorsOnAClosedDatabase covers the read path's failure branch,
+// which is what turns a broken handle into a refusal to open rather than a
+// migration against nothing.
+func TestUserVersionErrorsOnAClosedDatabase(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// A path that cannot be opened as a database: a directory.
+	dir := t.TempDir()
+	if _, err := store.NewSQLite(ctx, dir); err == nil {
+		t.Error("opening a directory as a database succeeded")
+	}
+}
+
+// TestPurgeOnAnUnknownRunIsANoOp: the store reports zero rather than failing,
+// so the CLI's own "no such run" refusal is the single place that decides.
+func TestPurgeOnAnUnknownRunIsANoOp(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	s := newStore(t)
+	n, err := s.Purge(ctx, "never-existed")
+	if err != nil {
+		t.Fatalf("Purge: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("purged %d rows for a run that does not exist", n)
 	}
 }
