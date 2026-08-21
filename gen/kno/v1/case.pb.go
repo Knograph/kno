@@ -149,6 +149,72 @@ func (Role) EnumDescriptor() ([]byte, []int) {
 	return file_kno_v1_case_proto_rawDescGZIP(), []int{1}
 }
 
+// StopReason is why generation ended.
+//
+// LENGTH is the one that matters most and the one a naive adapter drops: it is
+// a well-formed 200 with valid JSON and a truncated answer. Scored as a wrong
+// answer, it means Kno's own max_output_tokens silently depresses the
+// baseline, with nothing in the output saying so.
+type StopReason int32
+
+const (
+	// The provider did not report one.
+	StopReason_STOP_REASON_UNSPECIFIED StopReason = 0
+	// The model finished on its own.
+	StopReason_STOP_REASON_STOP StopReason = 1
+	// The output ceiling was reached. The answer is incomplete.
+	StopReason_STOP_REASON_LENGTH StopReason = 2
+	// The model emitted a tool call.
+	StopReason_STOP_REASON_TOOL_CALL StopReason = 3
+	// The provider's content filter stopped it. Pairs with Response.refused.
+	StopReason_STOP_REASON_CONTENT_FILTER StopReason = 4
+)
+
+// Enum value maps for StopReason.
+var (
+	StopReason_name = map[int32]string{
+		0: "STOP_REASON_UNSPECIFIED",
+		1: "STOP_REASON_STOP",
+		2: "STOP_REASON_LENGTH",
+		3: "STOP_REASON_TOOL_CALL",
+		4: "STOP_REASON_CONTENT_FILTER",
+	}
+	StopReason_value = map[string]int32{
+		"STOP_REASON_UNSPECIFIED":    0,
+		"STOP_REASON_STOP":           1,
+		"STOP_REASON_LENGTH":         2,
+		"STOP_REASON_TOOL_CALL":      3,
+		"STOP_REASON_CONTENT_FILTER": 4,
+	}
+)
+
+func (x StopReason) Enum() *StopReason {
+	p := new(StopReason)
+	*p = x
+	return p
+}
+
+func (x StopReason) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (StopReason) Descriptor() protoreflect.EnumDescriptor {
+	return file_kno_v1_case_proto_enumTypes[2].Descriptor()
+}
+
+func (StopReason) Type() protoreflect.EnumType {
+	return &file_kno_v1_case_proto_enumTypes[2]
+}
+
+func (x StopReason) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use StopReason.Descriptor instead.
+func (StopReason) EnumDescriptor() ([]byte, []int) {
+	return file_kno_v1_case_proto_rawDescGZIP(), []int{2}
+}
+
 // Case is one scoreable eval interaction: an input, and either an expected
 // outcome or a rubric to judge against.
 //
@@ -433,7 +499,50 @@ type Response struct {
 	ToolCalls []*ToolCall `protobuf:"bytes,7,rep,name=tool_calls,json=toolCalls,proto3" json:"tool_calls,omitempty"`
 	// Set when the agent failed rather than answered. An errored Response is
 	// still recorded: silently dropping failures biases every downstream number.
-	Error         string `protobuf:"bytes,8,opt,name=error,proto3" json:"error,omitempty"`
+	Error string `protobuf:"bytes,8,opt,name=error,proto3" json:"error,omitempty"`
+	// Input tokens the provider served from its own cache, where it reports
+	// them. Priced separately — see Price.
+	CachedTokens int64 `protobuf:"varint,9,opt,name=cached_tokens,json=cachedTokens,proto3" json:"cached_tokens,omitempty"`
+	// Set when cost_usd_micros is the engine's own prediction rather than a
+	// figure derived from a reported usage block.
+	//
+	// The adapter — which computed the prediction — stamps it here, so the
+	// guard and the store agree on one number. Two independent derivations of a
+	// Case's cost would drift, and the persisted one is what Guard.Restore
+	// reads on resume: charging the guard a prediction while persisting zero
+	// under-restores prior spend and lets a resumed run spend its cap twice.
+	//
+	// Never zero-cost. A zero settlement is what makes a dollar cap
+	// unenforceable, which has already caused one real overshoot.
+	UsageEstimated bool `protobuf:"varint,10,opt,name=usage_estimated,json=usageEstimated,proto3" json:"usage_estimated,omitempty"`
+	// Set when the provider declined on policy grounds rather than answering.
+	//
+	// A refusal IS scored — the provider answered, badly, for the Goal's
+	// purposes — but scoring it without recording it is how an account whose
+	// safety settings refuse every Case produces 100% scored Cases, an
+	// aggregate of 0.000, and a clean error rate. That reads as a usable
+	// baseline for a run in which the agent was never measured.
+	//
+	// It must also survive to later stages: refusals are provider policy and
+	// are not deterministic, so a refusal present in a baseline and absent in a
+	// later run reads as improvement attributable to an injected Asset.
+	Refused bool `protobuf:"varint,11,opt,name=refused,proto3" json:"refused,omitempty"`
+	// Why generation stopped, where the provider reports it.
+	StopReason StopReason `protobuf:"varint,12,opt,name=stop_reason,json=stopReason,proto3,enum=kno.v1.StopReason" json:"stop_reason,omitempty"`
+	// The model the provider says actually answered.
+	//
+	// Recorded because a ref like `openai:gpt-4.1` is a moving pointer. A run
+	// interrupted on Monday and resumed on Friday after the alias re-points
+	// would otherwise blend two models into one aggregate and present it as a
+	// single homogeneous number.
+	ResolvedModel string `protobuf:"bytes,13,opt,name=resolved_model,json=resolvedModel,proto3" json:"resolved_model,omitempty"`
+	// An opaque identifier for the provider-side build that answered, where one
+	// is reported (OpenAI calls it system_fingerprint).
+	//
+	// Recorded and reported, never used to refuse a resume: it changes whenever
+	// the provider's backend config changes, routinely and with no model change,
+	// and refusing on it would cost the user a full re-run for a false positive.
+	BackendId     string `protobuf:"bytes,14,opt,name=backend_id,json=backendId,proto3" json:"backend_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -520,6 +629,48 @@ func (x *Response) GetToolCalls() []*ToolCall {
 func (x *Response) GetError() string {
 	if x != nil {
 		return x.Error
+	}
+	return ""
+}
+
+func (x *Response) GetCachedTokens() int64 {
+	if x != nil {
+		return x.CachedTokens
+	}
+	return 0
+}
+
+func (x *Response) GetUsageEstimated() bool {
+	if x != nil {
+		return x.UsageEstimated
+	}
+	return false
+}
+
+func (x *Response) GetRefused() bool {
+	if x != nil {
+		return x.Refused
+	}
+	return false
+}
+
+func (x *Response) GetStopReason() StopReason {
+	if x != nil {
+		return x.StopReason
+	}
+	return StopReason_STOP_REASON_UNSPECIFIED
+}
+
+func (x *Response) GetResolvedModel() string {
+	if x != nil {
+		return x.ResolvedModel
+	}
+	return ""
+}
+
+func (x *Response) GetBackendId() string {
+	if x != nil {
+		return x.BackendId
 	}
 	return ""
 }
@@ -644,7 +795,7 @@ const file_kno_v1_case_proto_rawDesc = "" +
 	"\x04role\x18\x01 \x01(\x0e2\f.kno.v1.RoleR\x04role\x12\x18\n" +
 	"\acontent\x18\x02 \x01(\tR\acontent\x12/\n" +
 	"\n" +
-	"tool_calls\x18\x03 \x03(\v2\x10.kno.v1.ToolCallR\ttoolCalls\"\x9b\x02\n" +
+	"tool_calls\x18\x03 \x03(\v2\x10.kno.v1.ToolCallR\ttoolCalls\"\xfe\x03\n" +
 	"\bResponse\x12\x17\n" +
 	"\acase_id\x18\x01 \x01(\tR\x06caseId\x12\x16\n" +
 	"\x06output\x18\x02 \x01(\tR\x06output\x12#\n" +
@@ -655,7 +806,16 @@ const file_kno_v1_case_proto_rawDesc = "" +
 	"latency_ms\x18\x06 \x01(\x03R\tlatencyMs\x12/\n" +
 	"\n" +
 	"tool_calls\x18\a \x03(\v2\x10.kno.v1.ToolCallR\ttoolCalls\x12\x14\n" +
-	"\x05error\x18\b \x01(\tR\x05error\"\x8b\x02\n" +
+	"\x05error\x18\b \x01(\tR\x05error\x12#\n" +
+	"\rcached_tokens\x18\t \x01(\x03R\fcachedTokens\x12'\n" +
+	"\x0fusage_estimated\x18\n" +
+	" \x01(\bR\x0eusageEstimated\x12\x18\n" +
+	"\arefused\x18\v \x01(\bR\arefused\x123\n" +
+	"\vstop_reason\x18\f \x01(\x0e2\x12.kno.v1.StopReasonR\n" +
+	"stopReason\x12%\n" +
+	"\x0eresolved_model\x18\r \x01(\tR\rresolvedModel\x12\x1d\n" +
+	"\n" +
+	"backend_id\x18\x0e \x01(\tR\tbackendId\"\x8b\x02\n" +
 	"\x05Score\x12\x17\n" +
 	"\acase_id\x18\x01 \x01(\tR\x06caseId\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\x01R\x05value\x12\x16\n" +
@@ -678,7 +838,14 @@ const file_kno_v1_case_proto_rawDesc = "" +
 	"\vROLE_SYSTEM\x10\x01\x12\r\n" +
 	"\tROLE_USER\x10\x02\x12\x12\n" +
 	"\x0eROLE_ASSISTANT\x10\x03\x12\r\n" +
-	"\tROLE_TOOL\x10\x04Bz\n" +
+	"\tROLE_TOOL\x10\x04*\x92\x01\n" +
+	"\n" +
+	"StopReason\x12\x1b\n" +
+	"\x17STOP_REASON_UNSPECIFIED\x10\x00\x12\x14\n" +
+	"\x10STOP_REASON_STOP\x10\x01\x12\x16\n" +
+	"\x12STOP_REASON_LENGTH\x10\x02\x12\x19\n" +
+	"\x15STOP_REASON_TOOL_CALL\x10\x03\x12\x1e\n" +
+	"\x1aSTOP_REASON_CONTENT_FILTER\x10\x04Bz\n" +
 	"\n" +
 	"com.kno.v1B\tCaseProtoP\x01Z(github.com/knograph/kno/gen/kno/v1;knov1\xa2\x02\x03KXX\xaa\x02\x06Kno.V1\xca\x02\x06Kno\\V1\xe2\x02\x12Kno\\V1\\GPBMetadata\xea\x02\aKno::V1b\x06proto3"
 
@@ -694,32 +861,34 @@ func file_kno_v1_case_proto_rawDescGZIP() []byte {
 	return file_kno_v1_case_proto_rawDescData
 }
 
-var file_kno_v1_case_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_kno_v1_case_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
 var file_kno_v1_case_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_kno_v1_case_proto_goTypes = []any{
 	(Split)(0),         // 0: kno.v1.Split
 	(Role)(0),          // 1: kno.v1.Role
-	(*Case)(nil),       // 2: kno.v1.Case
-	(*ToolCall)(nil),   // 3: kno.v1.ToolCall
-	(*Turn)(nil),       // 4: kno.v1.Turn
-	(*Response)(nil),   // 5: kno.v1.Response
-	(*Score)(nil),      // 6: kno.v1.Score
-	nil,                // 7: kno.v1.Score.ComponentsEntry
-	(*Provenance)(nil), // 8: kno.v1.Provenance
+	(StopReason)(0),    // 2: kno.v1.StopReason
+	(*Case)(nil),       // 3: kno.v1.Case
+	(*ToolCall)(nil),   // 4: kno.v1.ToolCall
+	(*Turn)(nil),       // 5: kno.v1.Turn
+	(*Response)(nil),   // 6: kno.v1.Response
+	(*Score)(nil),      // 7: kno.v1.Score
+	nil,                // 8: kno.v1.Score.ComponentsEntry
+	(*Provenance)(nil), // 9: kno.v1.Provenance
 }
 var file_kno_v1_case_proto_depIdxs = []int32{
 	0, // 0: kno.v1.Case.split:type_name -> kno.v1.Split
-	8, // 1: kno.v1.Case.provenance:type_name -> kno.v1.Provenance
-	4, // 2: kno.v1.Case.history:type_name -> kno.v1.Turn
+	9, // 1: kno.v1.Case.provenance:type_name -> kno.v1.Provenance
+	5, // 2: kno.v1.Case.history:type_name -> kno.v1.Turn
 	1, // 3: kno.v1.Turn.role:type_name -> kno.v1.Role
-	3, // 4: kno.v1.Turn.tool_calls:type_name -> kno.v1.ToolCall
-	3, // 5: kno.v1.Response.tool_calls:type_name -> kno.v1.ToolCall
-	7, // 6: kno.v1.Score.components:type_name -> kno.v1.Score.ComponentsEntry
-	7, // [7:7] is the sub-list for method output_type
-	7, // [7:7] is the sub-list for method input_type
-	7, // [7:7] is the sub-list for extension type_name
-	7, // [7:7] is the sub-list for extension extendee
-	0, // [0:7] is the sub-list for field type_name
+	4, // 4: kno.v1.Turn.tool_calls:type_name -> kno.v1.ToolCall
+	4, // 5: kno.v1.Response.tool_calls:type_name -> kno.v1.ToolCall
+	2, // 6: kno.v1.Response.stop_reason:type_name -> kno.v1.StopReason
+	8, // 7: kno.v1.Score.components:type_name -> kno.v1.Score.ComponentsEntry
+	8, // [8:8] is the sub-list for method output_type
+	8, // [8:8] is the sub-list for method input_type
+	8, // [8:8] is the sub-list for extension type_name
+	8, // [8:8] is the sub-list for extension extendee
+	0, // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_kno_v1_case_proto_init() }
@@ -733,7 +902,7 @@ func file_kno_v1_case_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kno_v1_case_proto_rawDesc), len(file_kno_v1_case_proto_rawDesc)),
-			NumEnums:      2,
+			NumEnums:      3,
 			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   0,

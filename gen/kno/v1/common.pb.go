@@ -492,6 +492,15 @@ type Capabilities struct {
 	// The adapter reports token usage, without which cost is estimated rather
 	// than measured.
 	TokenCounts bool `protobuf:"varint,4,opt,name=token_counts,json=tokenCounts,proto3" json:"token_counts,omitempty"`
+	// The adapter accepts sampling parameters (temperature, top_p, seed).
+	//
+	// Not universal, and assuming it is breaks a whole model class: reasoning
+	// models reject any non-default temperature with a 400, and Anthropic
+	// constrains it under extended thinking. A blanket temperature=0 default
+	// would 400 every Case, trip error_rate_exceeded, and tell the user "too
+	// many cases errored for this to be a usable baseline" — naming nothing
+	// about the actual cause.
+	SamplingParams bool `protobuf:"varint,6,opt,name=sampling_params,json=samplingParams,proto3" json:"sampling_params,omitempty"`
 	// Capability names this schema version does not model, for forward
 	// compatibility with adapters newer than the engine.
 	Extensions    []string `protobuf:"bytes,5,rep,name=extensions,proto3" json:"extensions,omitempty"`
@@ -557,6 +566,13 @@ func (x *Capabilities) GetTokenCounts() bool {
 	return false
 }
 
+func (x *Capabilities) GetSamplingParams() bool {
+	if x != nil {
+		return x.SamplingParams
+	}
+	return false
+}
+
 func (x *Capabilities) GetExtensions() []string {
 	if x != nil {
 		return x.Extensions
@@ -564,14 +580,183 @@ func (x *Capabilities) GetExtensions() []string {
 	return nil
 }
 
+// Price is what one model costs, per million tokens, in MICRO-USD.
+//
+// A vector rather than an input/output pair: both target providers price
+// cached input differently from fresh input — Anthropic bills cache writes
+// above base input and cache reads far below it, OpenAI discounts cached
+// input. A two-field model settles a cache read at full input price, which
+// overstates spend systematically, in the direction the user notices as
+// divergence from their invoice.
+type Price struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Fresh input tokens.
+	InputPerMtokUsdMicros int64 `protobuf:"varint,1,opt,name=input_per_mtok_usd_micros,json=inputPerMtokUsdMicros,proto3" json:"input_per_mtok_usd_micros,omitempty"`
+	// Input tokens served from the provider's cache.
+	CachedInputPerMtokUsdMicros int64 `protobuf:"varint,2,opt,name=cached_input_per_mtok_usd_micros,json=cachedInputPerMtokUsdMicros,proto3" json:"cached_input_per_mtok_usd_micros,omitempty"`
+	// Input tokens written to the provider's cache, where that is billed
+	// separately and above the base input rate.
+	CacheWritePerMtokUsdMicros int64 `protobuf:"varint,3,opt,name=cache_write_per_mtok_usd_micros,json=cacheWritePerMtokUsdMicros,proto3" json:"cache_write_per_mtok_usd_micros,omitempty"`
+	// Output tokens.
+	OutputPerMtokUsdMicros int64 `protobuf:"varint,4,opt,name=output_per_mtok_usd_micros,json=outputPerMtokUsdMicros,proto3" json:"output_per_mtok_usd_micros,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
+}
+
+func (x *Price) Reset() {
+	*x = Price{}
+	mi := &file_kno_v1_common_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Price) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Price) ProtoMessage() {}
+
+func (x *Price) ProtoReflect() protoreflect.Message {
+	mi := &file_kno_v1_common_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Price.ProtoReflect.Descriptor instead.
+func (*Price) Descriptor() ([]byte, []int) {
+	return file_kno_v1_common_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *Price) GetInputPerMtokUsdMicros() int64 {
+	if x != nil {
+		return x.InputPerMtokUsdMicros
+	}
+	return 0
+}
+
+func (x *Price) GetCachedInputPerMtokUsdMicros() int64 {
+	if x != nil {
+		return x.CachedInputPerMtokUsdMicros
+	}
+	return 0
+}
+
+func (x *Price) GetCacheWritePerMtokUsdMicros() int64 {
+	if x != nil {
+		return x.CacheWritePerMtokUsdMicros
+	}
+	return 0
+}
+
+func (x *Price) GetOutputPerMtokUsdMicros() int64 {
+	if x != nil {
+		return x.OutputPerMtokUsdMicros
+	}
+	return 0
+}
+
+// Sampling is the generation configuration a Run executed under.
+//
+// Recorded because a baseline is the reference every later delta is measured
+// against, and an unpinned temperature makes two runs over the same evals and
+// the same model produce different references. Every field is optional: unset
+// means "the adapter's default was used", which is NOT the same as a
+// deliberate zero, and the distinction decides whether a resume is comparable.
+type Sampling struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Zero for a reproducible measurement, where the adapter reports
+	// Capabilities.sampling_params.
+	Temperature *float64 `protobuf:"fixed64,1,opt,name=temperature,proto3,oneof" json:"temperature,omitempty"`
+	// Provider-side determinism hint, where supported. Not a guarantee: no
+	// hosted model is deterministic across a silent version bump.
+	Seed *int64 `protobuf:"varint,2,opt,name=seed,proto3,oneof" json:"seed,omitempty"`
+	// Ceiling on generated tokens.
+	//
+	// Load-bearing twice over, which is why it is recorded rather than assumed:
+	// it is the output term of every cost prediction, AND the threshold at which
+	// a response is truncated. Raising it to stop truncating inflates every
+	// reservation; lowering it to loosen the cap truncates more answers. It is
+	// part of input_fingerprint so a resume under a different ceiling is
+	// refused rather than silently mixed.
+	MaxOutputTokens *int64 `protobuf:"varint,3,opt,name=max_output_tokens,json=maxOutputTokens,proto3,oneof" json:"max_output_tokens,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *Sampling) Reset() {
+	*x = Sampling{}
+	mi := &file_kno_v1_common_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Sampling) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Sampling) ProtoMessage() {}
+
+func (x *Sampling) ProtoReflect() protoreflect.Message {
+	mi := &file_kno_v1_common_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Sampling.ProtoReflect.Descriptor instead.
+func (*Sampling) Descriptor() ([]byte, []int) {
+	return file_kno_v1_common_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *Sampling) GetTemperature() float64 {
+	if x != nil && x.Temperature != nil {
+		return *x.Temperature
+	}
+	return 0
+}
+
+func (x *Sampling) GetSeed() int64 {
+	if x != nil && x.Seed != nil {
+		return *x.Seed
+	}
+	return 0
+}
+
+func (x *Sampling) GetMaxOutputTokens() int64 {
+	if x != nil && x.MaxOutputTokens != nil {
+		return *x.MaxOutputTokens
+	}
+	return 0
+}
+
 // AgentRef identifies an agent or model. One URI-ish scheme is used
 // identically in config, flags, the API, and the SDKs:
 //
 //	openai:gpt-4.1
 //	anthropic:claude-sonnet-4-6
+//	openai:llama-3.3-70b@https://api.groq.com/openai/v1
 //	http://localhost:8000/v1
 //	tuned:<job-ref>
 //	exec:kno-agent-mybot
+//
+// The optional `@<base-url>` suffix points a scheme's adapter at a different
+// endpoint. One adapter, base_url-configurable, reaches every
+// OpenAI-compatible provider — which is why there is no separate
+// `openai-compat` scheme: two user-visible names for one adapter is drift.
+//
+// A base URL does not carry a credential with it. The key is bound to a host
+// explicitly, and a key bound to one host is never sent to another.
 type AgentRef struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The reference exactly as the user wrote it. Kept verbatim so error
@@ -579,15 +764,24 @@ type AgentRef struct {
 	Ref string `protobuf:"bytes,1,opt,name=ref,proto3" json:"ref,omitempty"`
 	// Scheme, parsed from ref: "openai", "anthropic", "http", "tuned", "exec".
 	Scheme string `protobuf:"bytes,2,opt,name=scheme,proto3" json:"scheme,omitempty"`
-	// Everything after the scheme: a model name, URL, or job reference.
-	Target        string `protobuf:"bytes,3,opt,name=target,proto3" json:"target,omitempty"`
+	// Everything after the scheme and before any `@`: a model name, URL, or job
+	// reference.
+	Target string `protobuf:"bytes,3,opt,name=target,proto3" json:"target,omitempty"`
+	// The `@<base-url>` suffix, parsed out. Empty means the scheme's default
+	// endpoint.
+	//
+	// Parsed into its own field rather than left inside target because the
+	// security rules key on it: plain HTTP, loopback, RFC1918 and link-local
+	// destinations are refused or gated here, and credential selection is keyed
+	// on this host.
+	BaseUrl       string `protobuf:"bytes,4,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AgentRef) Reset() {
 	*x = AgentRef{}
-	mi := &file_kno_v1_common_proto_msgTypes[3]
+	mi := &file_kno_v1_common_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -599,7 +793,7 @@ func (x *AgentRef) String() string {
 func (*AgentRef) ProtoMessage() {}
 
 func (x *AgentRef) ProtoReflect() protoreflect.Message {
-	mi := &file_kno_v1_common_proto_msgTypes[3]
+	mi := &file_kno_v1_common_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -612,7 +806,7 @@ func (x *AgentRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentRef.ProtoReflect.Descriptor instead.
 func (*AgentRef) Descriptor() ([]byte, []int) {
-	return file_kno_v1_common_proto_rawDescGZIP(), []int{3}
+	return file_kno_v1_common_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *AgentRef) GetRef() string {
@@ -636,6 +830,13 @@ func (x *AgentRef) GetTarget() string {
 	return ""
 }
 
+func (x *AgentRef) GetBaseUrl() string {
+	if x != nil {
+		return x.BaseUrl
+	}
+	return ""
+}
+
 var File_kno_v1_common_proto protoreflect.FileDescriptor
 
 const file_kno_v1_common_proto_rawDesc = "" +
@@ -655,19 +856,33 @@ const file_kno_v1_common_proto_rawDesc = "" +
 	"\vingested_at\x18\x03 \x01(\tR\n" +
 	"ingestedAt\x12\x18\n" +
 	"\aderived\x18\x04 \x01(\bR\aderived\x12'\n" +
-	"\x0fderivation_note\x18\x05 \x01(\tR\x0ederivationNote\"\xb9\x01\n" +
+	"\x0fderivation_note\x18\x05 \x01(\tR\x0ederivationNote\"\xe2\x01\n" +
 	"\fCapabilities\x12%\n" +
 	"\x0econtext_inject\x18\x01 \x01(\bR\rcontextInject\x12'\n" +
 	"\x0fknowledge_write\x18\x02 \x01(\bR\x0eknowledgeWrite\x12\x16\n" +
 	"\x06stream\x18\x03 \x01(\bR\x06stream\x12!\n" +
-	"\ftoken_counts\x18\x04 \x01(\bR\vtokenCounts\x12\x1e\n" +
+	"\ftoken_counts\x18\x04 \x01(\bR\vtokenCounts\x12'\n" +
+	"\x0fsampling_params\x18\x06 \x01(\bR\x0esamplingParams\x12\x1e\n" +
 	"\n" +
 	"extensions\x18\x05 \x03(\tR\n" +
-	"extensions\"L\n" +
+	"extensions\"\x89\x02\n" +
+	"\x05Price\x128\n" +
+	"\x19input_per_mtok_usd_micros\x18\x01 \x01(\x03R\x15inputPerMtokUsdMicros\x12E\n" +
+	" cached_input_per_mtok_usd_micros\x18\x02 \x01(\x03R\x1bcachedInputPerMtokUsdMicros\x12C\n" +
+	"\x1fcache_write_per_mtok_usd_micros\x18\x03 \x01(\x03R\x1acacheWritePerMtokUsdMicros\x12:\n" +
+	"\x1aoutput_per_mtok_usd_micros\x18\x04 \x01(\x03R\x16outputPerMtokUsdMicros\"\xaa\x01\n" +
+	"\bSampling\x12%\n" +
+	"\vtemperature\x18\x01 \x01(\x01H\x00R\vtemperature\x88\x01\x01\x12\x17\n" +
+	"\x04seed\x18\x02 \x01(\x03H\x01R\x04seed\x88\x01\x01\x12/\n" +
+	"\x11max_output_tokens\x18\x03 \x01(\x03H\x02R\x0fmaxOutputTokens\x88\x01\x01B\x0e\n" +
+	"\f_temperatureB\a\n" +
+	"\x05_seedB\x14\n" +
+	"\x12_max_output_tokens\"g\n" +
 	"\bAgentRef\x12\x10\n" +
 	"\x03ref\x18\x01 \x01(\tR\x03ref\x12\x16\n" +
 	"\x06scheme\x18\x02 \x01(\tR\x06scheme\x12\x16\n" +
-	"\x06target\x18\x03 \x01(\tR\x06target*C\n" +
+	"\x06target\x18\x03 \x01(\tR\x06target\x12\x19\n" +
+	"\bbase_url\x18\x04 \x01(\tR\abaseUrl*C\n" +
 	"\x04Kind\x12\x14\n" +
 	"\x10KIND_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eKIND_KNOWLEDGE\x10\x01\x12\x11\n" +
@@ -704,7 +919,7 @@ func file_kno_v1_common_proto_rawDescGZIP() []byte {
 }
 
 var file_kno_v1_common_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_kno_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_kno_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_kno_v1_common_proto_goTypes = []any{
 	(Kind)(0),            // 0: kno.v1.Kind
 	(Direction)(0),       // 1: kno.v1.Direction
@@ -713,7 +928,9 @@ var file_kno_v1_common_proto_goTypes = []any{
 	(*CostVector)(nil),   // 4: kno.v1.CostVector
 	(*Provenance)(nil),   // 5: kno.v1.Provenance
 	(*Capabilities)(nil), // 6: kno.v1.Capabilities
-	(*AgentRef)(nil),     // 7: kno.v1.AgentRef
+	(*Price)(nil),        // 7: kno.v1.Price
+	(*Sampling)(nil),     // 8: kno.v1.Sampling
+	(*AgentRef)(nil),     // 9: kno.v1.AgentRef
 }
 var file_kno_v1_common_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for method output_type
@@ -728,13 +945,14 @@ func file_kno_v1_common_proto_init() {
 	if File_kno_v1_common_proto != nil {
 		return
 	}
+	file_kno_v1_common_proto_msgTypes[4].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kno_v1_common_proto_rawDesc), len(file_kno_v1_common_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   4,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

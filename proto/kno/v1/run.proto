@@ -161,4 +161,90 @@ message Run {
   // Run in this state is not a baseline, and later stages must refuse to treat
   // it as a clean reference.
   bool error_rate_exceeded = 20;
+
+  // Facts about a Run that executed Cases. Absent for a stage that does not.
+  //
+  // See ADR-0004. This is the presence-carrying replacement for the five flat
+  // counters above, which stay until their writer and reader migrate.
+  optional CaseExecution case_execution = 22;
+
+  // The generation configuration this Run executed under.
+  //
+  // Part of what makes a baseline comparable to itself. Absent for a stage
+  // that invokes no agent.
+  optional Sampling sampling = 23;
+
+  // Which dated pricing table produced this Run's cost figures.
+  //
+  // Prices are a versioned table rather than a runtime lookup — a pricing
+  // endpoint that is down or lying is a spend path with no ceiling. Recording
+  // which version was used is what lets a report say the spend figure is
+  // reported usage at a dated price, which is not the same thing as an
+  // invoice.
+  string pricing_table_version = 24;
+}
+
+// CaseExecution carries the facts that only mean something for a Run that
+// actually executed Cases.
+//
+// It exists for message presence: a stage that executes no Cases — Value works
+// over Assets, Select attempts none — would otherwise write hard zeros
+// indistinguishable from genuinely attempting nothing and scoring nothing.
+// That is docs/debt.md#26.
+//
+// Its numbers are aggregated from persisted outcome rows at close, not from
+// in-memory counters. Deriving a run-level figure from what is already durable
+// is what makes it survive a crash and stay correct across a resume — the same
+// move that repays docs/debt.md#27.
+message CaseExecution {
+  // Cases in the dev split — the ones this Run was allowed to read.
+  int32 dev_case_count = 1;
+
+  // Cases held back for Validate. A small holdout produces a wide interval,
+  // so this is part of reading the final result honestly.
+  int32 holdout_case_count = 2;
+
+  // Cases with a terminal outcome. attempted = scored + errored, counting each
+  // Case once regardless of how many times it was retried.
+  int32 attempted_case_count = 3;
+
+  // Of those, how many produced a Score. This is the denominator.
+  int32 scored_case_count = 4;
+
+  // Of those, how many terminally failed to answer. An errored Case is NOT a
+  // scored Case: the agent did not answer badly, it did not answer, and
+  // counting infrastructure failure as task failure biases the baseline
+  // downward and makes every later Asset look better than it is.
+  int32 errored_case_count = 5;
+
+  // Cases the provider declined on policy grounds. Scored, and counted here
+  // so a run that was refused rather than measured cannot pass for a clean
+  // baseline.
+  int32 refused_case_count = 6;
+
+  // Cases whose answer hit the output ceiling and was cut off. Scored against
+  // an incomplete answer, so a number here means Kno's own max_output_tokens
+  // is depressing the score.
+  int32 truncated_case_count = 7;
+
+  // Cases whose cost is the engine's prediction rather than reported usage.
+  // The spend figure is a guess to this extent, and says so.
+  int32 usage_estimated_case_count = 8;
+
+  // The distinct provider-side builds observed during this Run.
+  //
+  // Repeated, not scalar: with concurrency there is no "first response", and
+  // during a provider rollout two workers in one Run legitimately see
+  // different builds. A set makes the mixture visible where a
+  // first-writer-wins scalar hides it.
+  //
+  // Deliberately NOT called a fingerprint. Run.input_fingerprint already means
+  // "the hash whose mismatch refuses a resume", and a second, unrelated
+  // "fingerprint" on the same message is exactly the vocabulary drift the
+  // project forbids.
+  repeated string observed_backends = 9;
+
+  // The models the provider reported as actually answering. More than one
+  // means an alias moved mid-Run.
+  repeated string resolved_models = 10;
 }

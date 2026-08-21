@@ -246,8 +246,26 @@ type Run struct {
 	// Run in this state is not a baseline, and later stages must refuse to treat
 	// it as a clean reference.
 	ErrorRateExceeded bool `protobuf:"varint,20,opt,name=error_rate_exceeded,json=errorRateExceeded,proto3" json:"error_rate_exceeded,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Facts about a Run that executed Cases. Absent for a stage that does not.
+	//
+	// See ADR-0004. This is the presence-carrying replacement for the five flat
+	// counters above, which stay until their writer and reader migrate.
+	CaseExecution *CaseExecution `protobuf:"bytes,22,opt,name=case_execution,json=caseExecution,proto3,oneof" json:"case_execution,omitempty"`
+	// The generation configuration this Run executed under.
+	//
+	// Part of what makes a baseline comparable to itself. Absent for a stage
+	// that invokes no agent.
+	Sampling *Sampling `protobuf:"bytes,23,opt,name=sampling,proto3,oneof" json:"sampling,omitempty"`
+	// Which dated pricing table produced this Run's cost figures.
+	//
+	// Prices are a versioned table rather than a runtime lookup — a pricing
+	// endpoint that is down or lying is a spend path with no ceiling. Recording
+	// which version was used is what lets a report say the spend figure is
+	// reported usage at a dated price, which is not the same thing as an
+	// invoice.
+	PricingTableVersion string `protobuf:"bytes,24,opt,name=pricing_table_version,json=pricingTableVersion,proto3" json:"pricing_table_version,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *Run) Reset() {
@@ -427,11 +445,191 @@ func (x *Run) GetErrorRateExceeded() bool {
 	return false
 }
 
+func (x *Run) GetCaseExecution() *CaseExecution {
+	if x != nil {
+		return x.CaseExecution
+	}
+	return nil
+}
+
+func (x *Run) GetSampling() *Sampling {
+	if x != nil {
+		return x.Sampling
+	}
+	return nil
+}
+
+func (x *Run) GetPricingTableVersion() string {
+	if x != nil {
+		return x.PricingTableVersion
+	}
+	return ""
+}
+
+// CaseExecution carries the facts that only mean something for a Run that
+// actually executed Cases.
+//
+// It exists for message presence: a stage that executes no Cases — Value works
+// over Assets, Select attempts none — would otherwise write hard zeros
+// indistinguishable from genuinely attempting nothing and scoring nothing.
+// That is docs/debt.md#26.
+//
+// Its numbers are aggregated from persisted outcome rows at close, not from
+// in-memory counters. Deriving a run-level figure from what is already durable
+// is what makes it survive a crash and stay correct across a resume — the same
+// move that repays docs/debt.md#27.
+type CaseExecution struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Cases in the dev split — the ones this Run was allowed to read.
+	DevCaseCount int32 `protobuf:"varint,1,opt,name=dev_case_count,json=devCaseCount,proto3" json:"dev_case_count,omitempty"`
+	// Cases held back for Validate. A small holdout produces a wide interval,
+	// so this is part of reading the final result honestly.
+	HoldoutCaseCount int32 `protobuf:"varint,2,opt,name=holdout_case_count,json=holdoutCaseCount,proto3" json:"holdout_case_count,omitempty"`
+	// Cases with a terminal outcome. attempted = scored + errored, counting each
+	// Case once regardless of how many times it was retried.
+	AttemptedCaseCount int32 `protobuf:"varint,3,opt,name=attempted_case_count,json=attemptedCaseCount,proto3" json:"attempted_case_count,omitempty"`
+	// Of those, how many produced a Score. This is the denominator.
+	ScoredCaseCount int32 `protobuf:"varint,4,opt,name=scored_case_count,json=scoredCaseCount,proto3" json:"scored_case_count,omitempty"`
+	// Of those, how many terminally failed to answer. An errored Case is NOT a
+	// scored Case: the agent did not answer badly, it did not answer, and
+	// counting infrastructure failure as task failure biases the baseline
+	// downward and makes every later Asset look better than it is.
+	ErroredCaseCount int32 `protobuf:"varint,5,opt,name=errored_case_count,json=erroredCaseCount,proto3" json:"errored_case_count,omitempty"`
+	// Cases the provider declined on policy grounds. Scored, and counted here
+	// so a run that was refused rather than measured cannot pass for a clean
+	// baseline.
+	RefusedCaseCount int32 `protobuf:"varint,6,opt,name=refused_case_count,json=refusedCaseCount,proto3" json:"refused_case_count,omitempty"`
+	// Cases whose answer hit the output ceiling and was cut off. Scored against
+	// an incomplete answer, so a number here means Kno's own max_output_tokens
+	// is depressing the score.
+	TruncatedCaseCount int32 `protobuf:"varint,7,opt,name=truncated_case_count,json=truncatedCaseCount,proto3" json:"truncated_case_count,omitempty"`
+	// Cases whose cost is the engine's prediction rather than reported usage.
+	// The spend figure is a guess to this extent, and says so.
+	UsageEstimatedCaseCount int32 `protobuf:"varint,8,opt,name=usage_estimated_case_count,json=usageEstimatedCaseCount,proto3" json:"usage_estimated_case_count,omitempty"`
+	// The distinct provider-side builds observed during this Run.
+	//
+	// Repeated, not scalar: with concurrency there is no "first response", and
+	// during a provider rollout two workers in one Run legitimately see
+	// different builds. A set makes the mixture visible where a
+	// first-writer-wins scalar hides it.
+	//
+	// Deliberately NOT called a fingerprint. Run.input_fingerprint already means
+	// "the hash whose mismatch refuses a resume", and a second, unrelated
+	// "fingerprint" on the same message is exactly the vocabulary drift the
+	// project forbids.
+	ObservedBackends []string `protobuf:"bytes,9,rep,name=observed_backends,json=observedBackends,proto3" json:"observed_backends,omitempty"`
+	// The models the provider reported as actually answering. More than one
+	// means an alias moved mid-Run.
+	ResolvedModels []string `protobuf:"bytes,10,rep,name=resolved_models,json=resolvedModels,proto3" json:"resolved_models,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *CaseExecution) Reset() {
+	*x = CaseExecution{}
+	mi := &file_kno_v1_run_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CaseExecution) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CaseExecution) ProtoMessage() {}
+
+func (x *CaseExecution) ProtoReflect() protoreflect.Message {
+	mi := &file_kno_v1_run_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CaseExecution.ProtoReflect.Descriptor instead.
+func (*CaseExecution) Descriptor() ([]byte, []int) {
+	return file_kno_v1_run_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *CaseExecution) GetDevCaseCount() int32 {
+	if x != nil {
+		return x.DevCaseCount
+	}
+	return 0
+}
+
+func (x *CaseExecution) GetHoldoutCaseCount() int32 {
+	if x != nil {
+		return x.HoldoutCaseCount
+	}
+	return 0
+}
+
+func (x *CaseExecution) GetAttemptedCaseCount() int32 {
+	if x != nil {
+		return x.AttemptedCaseCount
+	}
+	return 0
+}
+
+func (x *CaseExecution) GetScoredCaseCount() int32 {
+	if x != nil {
+		return x.ScoredCaseCount
+	}
+	return 0
+}
+
+func (x *CaseExecution) GetErroredCaseCount() int32 {
+	if x != nil {
+		return x.ErroredCaseCount
+	}
+	return 0
+}
+
+func (x *CaseExecution) GetRefusedCaseCount() int32 {
+	if x != nil {
+		return x.RefusedCaseCount
+	}
+	return 0
+}
+
+func (x *CaseExecution) GetTruncatedCaseCount() int32 {
+	if x != nil {
+		return x.TruncatedCaseCount
+	}
+	return 0
+}
+
+func (x *CaseExecution) GetUsageEstimatedCaseCount() int32 {
+	if x != nil {
+		return x.UsageEstimatedCaseCount
+	}
+	return 0
+}
+
+func (x *CaseExecution) GetObservedBackends() []string {
+	if x != nil {
+		return x.ObservedBackends
+	}
+	return nil
+}
+
+func (x *CaseExecution) GetResolvedModels() []string {
+	if x != nil {
+		return x.ResolvedModels
+	}
+	return nil
+}
+
 var File_kno_v1_run_proto protoreflect.FileDescriptor
 
 const file_kno_v1_run_proto_rawDesc = "" +
 	"\n" +
-	"\x10kno/v1/run.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/portfolio.proto\"\xec\x06\n" +
+	"\x10kno/v1/run.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/portfolio.proto\"\xb6\b\n" +
 	"\x03Run\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12#\n" +
 	"\x05stage\x18\x02 \x01(\x0e2\r.kno.v1.StageR\x05stage\x12\x1d\n" +
@@ -457,8 +655,25 @@ const file_kno_v1_run_proto_rawDesc = "" +
 	"\x11scored_case_count\x18\x11 \x01(\x05R\x0fscoredCaseCount\x12,\n" +
 	"\x12errored_case_count\x18\x12 \x01(\x05R\x10erroredCaseCount\x121\n" +
 	"\x14holdout_underpowered\x18\x13 \x01(\bR\x13holdoutUnderpowered\x12.\n" +
-	"\x13error_rate_exceeded\x18\x14 \x01(\bR\x11errorRateExceededB\x0e\n" +
-	"\f_finished_at*{\n" +
+	"\x13error_rate_exceeded\x18\x14 \x01(\bR\x11errorRateExceeded\x12A\n" +
+	"\x0ecase_execution\x18\x16 \x01(\v2\x15.kno.v1.CaseExecutionH\x01R\rcaseExecution\x88\x01\x01\x121\n" +
+	"\bsampling\x18\x17 \x01(\v2\x10.kno.v1.SamplingH\x02R\bsampling\x88\x01\x01\x122\n" +
+	"\x15pricing_table_version\x18\x18 \x01(\tR\x13pricingTableVersionB\x0e\n" +
+	"\f_finished_atB\x11\n" +
+	"\x0f_case_executionB\v\n" +
+	"\t_sampling\"\xe2\x03\n" +
+	"\rCaseExecution\x12$\n" +
+	"\x0edev_case_count\x18\x01 \x01(\x05R\fdevCaseCount\x12,\n" +
+	"\x12holdout_case_count\x18\x02 \x01(\x05R\x10holdoutCaseCount\x120\n" +
+	"\x14attempted_case_count\x18\x03 \x01(\x05R\x12attemptedCaseCount\x12*\n" +
+	"\x11scored_case_count\x18\x04 \x01(\x05R\x0fscoredCaseCount\x12,\n" +
+	"\x12errored_case_count\x18\x05 \x01(\x05R\x10erroredCaseCount\x12,\n" +
+	"\x12refused_case_count\x18\x06 \x01(\x05R\x10refusedCaseCount\x120\n" +
+	"\x14truncated_case_count\x18\a \x01(\x05R\x12truncatedCaseCount\x12;\n" +
+	"\x1ausage_estimated_case_count\x18\b \x01(\x05R\x17usageEstimatedCaseCount\x12+\n" +
+	"\x11observed_backends\x18\t \x03(\tR\x10observedBackends\x12'\n" +
+	"\x0fresolved_models\x18\n" +
+	" \x03(\tR\x0eresolvedModels*{\n" +
 	"\x05Stage\x12\x15\n" +
 	"\x11STAGE_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eSTAGE_BASELINE\x10\x01\x12\x0f\n" +
@@ -489,26 +704,30 @@ func file_kno_v1_run_proto_rawDescGZIP() []byte {
 }
 
 var file_kno_v1_run_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_kno_v1_run_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
+var file_kno_v1_run_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_kno_v1_run_proto_goTypes = []any{
-	(Stage)(0),       // 0: kno.v1.Stage
-	(RunStatus)(0),   // 1: kno.v1.RunStatus
-	(*Run)(nil),      // 2: kno.v1.Run
-	(*AgentRef)(nil), // 3: kno.v1.AgentRef
-	(Direction)(0),   // 4: kno.v1.Direction
-	(*Budget)(nil),   // 5: kno.v1.Budget
+	(Stage)(0),            // 0: kno.v1.Stage
+	(RunStatus)(0),        // 1: kno.v1.RunStatus
+	(*Run)(nil),           // 2: kno.v1.Run
+	(*CaseExecution)(nil), // 3: kno.v1.CaseExecution
+	(*AgentRef)(nil),      // 4: kno.v1.AgentRef
+	(Direction)(0),        // 5: kno.v1.Direction
+	(*Budget)(nil),        // 6: kno.v1.Budget
+	(*Sampling)(nil),      // 7: kno.v1.Sampling
 }
 var file_kno_v1_run_proto_depIdxs = []int32{
 	0, // 0: kno.v1.Run.stage:type_name -> kno.v1.Stage
-	3, // 1: kno.v1.Run.agent:type_name -> kno.v1.AgentRef
-	4, // 2: kno.v1.Run.goal_direction:type_name -> kno.v1.Direction
-	5, // 3: kno.v1.Run.budget:type_name -> kno.v1.Budget
+	4, // 1: kno.v1.Run.agent:type_name -> kno.v1.AgentRef
+	5, // 2: kno.v1.Run.goal_direction:type_name -> kno.v1.Direction
+	6, // 3: kno.v1.Run.budget:type_name -> kno.v1.Budget
 	1, // 4: kno.v1.Run.status:type_name -> kno.v1.RunStatus
-	5, // [5:5] is the sub-list for method output_type
-	5, // [5:5] is the sub-list for method input_type
-	5, // [5:5] is the sub-list for extension type_name
-	5, // [5:5] is the sub-list for extension extendee
-	0, // [0:5] is the sub-list for field type_name
+	3, // 5: kno.v1.Run.case_execution:type_name -> kno.v1.CaseExecution
+	7, // 6: kno.v1.Run.sampling:type_name -> kno.v1.Sampling
+	7, // [7:7] is the sub-list for method output_type
+	7, // [7:7] is the sub-list for method input_type
+	7, // [7:7] is the sub-list for extension type_name
+	7, // [7:7] is the sub-list for extension extendee
+	0, // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_kno_v1_run_proto_init() }
@@ -525,7 +744,7 @@ func file_kno_v1_run_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kno_v1_run_proto_rawDesc), len(file_kno_v1_run_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   1,
+			NumMessages:   2,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

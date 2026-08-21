@@ -136,6 +136,20 @@ func TestMoneyIsAlwaysInt64MicroUSD(t *testing.T) {
 		"kno.v1.CaseErrored.cost_usd_micros",
 		"kno.v1.SpendRecorded.total_cost_usd_micros",
 		"kno.v1.SpendRecorded.remaining_cost_usd_micros",
+		// M2-0: the price vector. Four rates rather than an input/output pair,
+		// because both target providers price cached input differently and a
+		// two-field model settles a cache read at full input price.
+		"kno.v1.Price.input_per_mtok_usd_micros",
+		"kno.v1.Price.cached_input_per_mtok_usd_micros",
+		"kno.v1.Price.cache_write_per_mtok_usd_micros",
+		"kno.v1.Price.output_per_mtok_usd_micros",
+		// M2-0: resume and overshoot. Spend restored from disk is money that
+		// crosses the wire, and the overshoot fields exist precisely because
+		// Guard.Remaining clamps at zero and hides a breached cap.
+		"kno.v1.RunResumed.restored_cost_usd_micros",
+		"kno.v1.SettlementOvershoot.reserved_usd_micros",
+		"kno.v1.SettlementOvershoot.settled_usd_micros",
+		"kno.v1.SettlementOvershoot.cumulative_overshoot_usd_micros",
 		"kno.v1.RunFinished.total_cost_usd_micros",
 	}
 	slices.Sort(wantMoneyFields)

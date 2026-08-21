@@ -859,7 +859,17 @@ accepted" when it was not (M-14, H-4). Both are corrected.
 5. **Streaming is not implemented.** §10 row.
 6. **Approximate token counting.** §10 row, with the divergence check that makes its trigger real.
 
-## 10a. Open decision, to be settled in M2-0
+## 10a. Open decision — SETTLED in M2-0 by [ADR-0004](../adr/0004-per-run-observations.md)
+
+**Resolution: option B**, with one deviation from the ledger's prescribed naming. Facts about a
+Case-executing Run live in a `CaseExecution` submessage on `Run`, aggregated from persisted outcome
+rows at close rather than from in-memory counters — so they survive a crash and stay correct across
+a resume, the same property that repays entry 27. Not named `BaselineDetail` as entry 26 prescribed,
+because Value also executes Cases and a stage-named message would be wrong for it. The backend
+identity is `observed_backends`, repeated, and does not reuse the word "fingerprint". Original
+statement of the question follows.
+
+### The question as it stood
 
 **Pass three's M-7 is unresolved, and this plan does not resolve it.** Recorded here rather than
 patched over, because three drafts of this document have now demonstrated that a design question

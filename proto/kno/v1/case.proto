@@ -147,6 +147,78 @@ message Response {
   // Set when the agent failed rather than answered. An errored Response is
   // still recorded: silently dropping failures biases every downstream number.
   string error = 8;
+
+  // Input tokens the provider served from its own cache, where it reports
+  // them. Priced separately — see Price.
+  int64 cached_tokens = 9;
+
+  // Set when cost_usd_micros is the engine's own prediction rather than a
+  // figure derived from a reported usage block.
+  //
+  // The adapter — which computed the prediction — stamps it here, so the
+  // guard and the store agree on one number. Two independent derivations of a
+  // Case's cost would drift, and the persisted one is what Guard.Restore
+  // reads on resume: charging the guard a prediction while persisting zero
+  // under-restores prior spend and lets a resumed run spend its cap twice.
+  //
+  // Never zero-cost. A zero settlement is what makes a dollar cap
+  // unenforceable, which has already caused one real overshoot.
+  bool usage_estimated = 10;
+
+  // Set when the provider declined on policy grounds rather than answering.
+  //
+  // A refusal IS scored — the provider answered, badly, for the Goal's
+  // purposes — but scoring it without recording it is how an account whose
+  // safety settings refuse every Case produces 100% scored Cases, an
+  // aggregate of 0.000, and a clean error rate. That reads as a usable
+  // baseline for a run in which the agent was never measured.
+  //
+  // It must also survive to later stages: refusals are provider policy and
+  // are not deterministic, so a refusal present in a baseline and absent in a
+  // later run reads as improvement attributable to an injected Asset.
+  bool refused = 11;
+
+  // Why generation stopped, where the provider reports it.
+  StopReason stop_reason = 12;
+
+  // The model the provider says actually answered.
+  //
+  // Recorded because a ref like `openai:gpt-4.1` is a moving pointer. A run
+  // interrupted on Monday and resumed on Friday after the alias re-points
+  // would otherwise blend two models into one aggregate and present it as a
+  // single homogeneous number.
+  string resolved_model = 13;
+
+  // An opaque identifier for the provider-side build that answered, where one
+  // is reported (OpenAI calls it system_fingerprint).
+  //
+  // Recorded and reported, never used to refuse a resume: it changes whenever
+  // the provider's backend config changes, routinely and with no model change,
+  // and refusing on it would cost the user a full re-run for a false positive.
+  string backend_id = 14;
+}
+
+// StopReason is why generation ended.
+//
+// LENGTH is the one that matters most and the one a naive adapter drops: it is
+// a well-formed 200 with valid JSON and a truncated answer. Scored as a wrong
+// answer, it means Kno's own max_output_tokens silently depresses the
+// baseline, with nothing in the output saying so.
+enum StopReason {
+  // The provider did not report one.
+  STOP_REASON_UNSPECIFIED = 0;
+
+  // The model finished on its own.
+  STOP_REASON_STOP = 1;
+
+  // The output ceiling was reached. The answer is incomplete.
+  STOP_REASON_LENGTH = 2;
+
+  // The model emitted a tool call.
+  STOP_REASON_TOOL_CALL = 3;
+
+  // The provider's content filter stopped it. Pairs with Response.refused.
+  STOP_REASON_CONTENT_FILTER = 4;
 }
 
 // Score is the Goal's judgement of one Response.

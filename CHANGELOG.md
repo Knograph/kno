@@ -62,6 +62,32 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
+- **M2-0, the proto surface for real provider adapters.** All additive; `buf breaking` clean.
+  - `Price`: a four-rate vector (input, cached-read, cache-write, output) rather than an
+    input/output pair. Both target providers price cached input differently, and a two-field model
+    settles a cache read at full input price — a systematic overstatement in the direction a user
+    notices as divergence from their invoice.
+  - `Sampling` on `Run`: temperature, seed, and `max_output_tokens`, all optional so that "the
+    adapter's default" is distinguishable from a deliberate zero. `max_output_tokens` is recorded
+    because it is load-bearing twice — the output term of every cost prediction *and* the
+    truncation threshold.
+  - `Capabilities.sampling_params`: whether an adapter accepts temperature at all. Assuming it does
+    breaks reasoning models, which reject any non-default temperature with a 400 — every Case would
+    error and the run would report "too many cases errored" while naming nothing about the cause.
+  - `Response` gains `cached_tokens`, `usage_estimated`, `refused`, `stop_reason`, `resolved_model`,
+    and `backend_id`. A refusal is scored *and* recorded: an account whose safety settings refuse
+    every Case would otherwise produce 100% scored Cases, an aggregate of 0.000, and a clean error
+    rate — a usable-looking baseline for a run in which the agent was never measured. A
+    `STOP_REASON_LENGTH` response is a well-formed 200 with a truncated answer, which would
+    otherwise let Kno's own output ceiling silently depress the score.
+  - `AgentRef.base_url` and the `scheme:model@base-url` grammar, so one `base_url`-configurable
+    adapter reaches every OpenAI-compatible provider. Parsed into its own field because the
+    security rules key on the host.
+  - `CaseExecution` on `Run` (see ADR-0004), and four event payloads: `RunResumed`,
+    `RetryAttempted`, `RateLimitWaiting`, `SettlementOvershoot`.
+- **ADR-0004**: per-run observations live in a submessage derived from persisted rows, not from
+  in-memory counters. Settles the open design question the M2 plan's third adversarial review
+  raised and the plan deliberately left open rather than answering in prose.
 - Exit code `4`, `ExitInterrupted`: a run ended by a signal or a deadline is resumable, not broken.
   Additive to the exit-code contract; `2` and `4` are the two resumable outcomes.
 - README: quickstart with verified output, the exit-code contract, and a stage-by-stage status
