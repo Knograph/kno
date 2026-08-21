@@ -40,6 +40,12 @@ var floors = []struct {
 	{"stats", 85},
 	{"bridge", 85},
 	{"plugin", 85},
+
+	// Not from CLAUDE.md's list, added deliberately: this package decides which
+	// hosts a request may reach and which credential travels there. It is a
+	// stronger security boundary than bridge, and it would otherwise inherit
+	// only the 70% repo-wide floor.
+	{"adapters/agent/internal/transport", 85},
 }
 
 const repoWideFloor = 70

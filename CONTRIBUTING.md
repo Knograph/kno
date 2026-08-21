@@ -116,8 +116,20 @@ an existing dependency can't, its license, and its maintenance signal.
   isolation asserted directly.
 - **Golden files** for report rendering and CLI output; `make update-golden` regenerates, and the
   diff is reviewed like code.
+- **Any package that owns goroutines installs `goleak.VerifyTestMain`** in a `TestMain`. That means
+  every adapter package and the shared transport: connection pools, rate-limiter timers, and
+  request timeouts all outlive the call that started them, and a leak there shows up as a run that
+  will not exit rather than as a failing test.
+
+  `VerifyTestMain`, not a per-test helper. goleak takes a process-global census, so a parallel
+  sibling's goroutines are indistinguishable from a leak — once per package is the only form that
+  is not flaky, and a flaky gate gets deleted rather than fixed. See `docs/debt.md#18`.
 - **Flaky tests are quarantined within 24 hours** with an issue, then fixed or deleted within a
   week. Retries are never the fix.
+
+  "Fixed" means the code, not the test. A test of this project's own making went flaky on `main`
+  within minutes of merging; the cause was two processes racing to create a database, and the fix
+  was to serialize that — not to loosen the assertion.
 
 ## Style
 
