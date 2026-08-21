@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/knograph/kno/adapters/agent/agentref"
 	"github.com/knograph/kno/adapters/agent/fake"
 	"github.com/knograph/kno/adapters/evals/jsonl"
 	"github.com/knograph/kno/core"
@@ -31,16 +32,25 @@ const confirmThresholdUSD = 1.00
 // with a message saying so, rather than falling back to something that would
 // silently produce numbers the user would read as real.
 func resolveAgent(ref string) (core.Agent, *knov1.AgentRef, error) {
-	scheme, target, _ := strings.Cut(ref, ":")
+	// Parse and resolve are separate steps because they answer different
+	// questions. Parsing asks whether the reference is well formed; resolving
+	// asks whether an adapter exists for it. Merging them means a typo and an
+	// unsupported provider produce the same message, and the user cannot tell
+	// which one they have.
+	parsed, err := agentref.Parse(ref)
+	if err != nil {
+		return nil, nil, errs.ErrInvalidInput.WithFix(
+			"write the reference as scheme:model, for example openai:gpt-4.1 " +
+				"or fake: for the local agent that costs nothing").Wrap(err)
+	}
 
-	parsed := &knov1.AgentRef{Ref: ref, Scheme: scheme, Target: target}
-	if scheme == "fake" {
+	if parsed.GetScheme() == agentref.SchemeFake {
 		return fake.New(fake.Options{}), parsed, nil
 	}
 
 	return nil, nil, errs.ErrCapabilityUnsupported.WithFix(
 		"only `fake:` is available in this build; provider adapters land in the next milestone").
-		Wrap(fmt.Errorf("no adapter for agent ref %q", ref))
+		Wrap(fmt.Errorf("no adapter for agent ref %q", parsed.GetRef()))
 }
 
 // resolveGoal turns a goal name into a Goal.

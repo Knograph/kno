@@ -72,6 +72,22 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
+- **`adapters/agent/agentref`**, the parser for `scheme:target[@base-url]` — one grammar for flags,
+  `kno.yaml`, the API, and the SDKs. Parsing is separate from resolution, so a typo and an
+  unsupported provider produce different errors rather than the same one.
+  - The scheme ends at the **first** colon, because a model name may contain its own: Ollama spells
+    them `llama3:8b`, OpenRouter spells them `vendor/model:free`.
+  - The base URL begins at the first `@` whose remainder is an absolute URL — not the first `@`
+    (which breaks `openai:my-model@v2`) and not the last (which breaks
+    `openai:m@https://user:pass@host/v1`, splitting *inside* the credential and hiding it from the
+    check meant to catch it).
+  - A base URL carrying userinfo, a fragment, or a query is refused. `AgentRef.Ref` is persisted on
+    the Run, emitted on `RunStarted`, and rendered in `--json` and logs, so a credential there would
+    reach all four.
+- **The repository's first fuzz target**, `FuzzParse` — `make fuzz-short` now runs instead of
+  reporting PEND, repaying part of `docs/debt.md#4`. It asserts invariants rather than absence of
+  panics, and found a real defect on its first run: `openai:0@http://0#@` parsed cleanly with a
+  base URL carrying a fragment.
 - **`adapters/agent/internal/transport`**, the shared HTTP layer every provider adapter will sit
   on. It owns what must be identical across adapters and is dangerous to reimplement: which hosts a
   request may reach, which credential may travel there, how rate limits are honored, and what an

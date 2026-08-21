@@ -1,0 +1,2 @@
+go test fuzz v1
+string("openAi:0@http://0#@")
