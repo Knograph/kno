@@ -24,6 +24,13 @@ covenants — breaking any of them requires a major version.
 
 ### Fixed
 
+- The coverage ratchet compared a platform-dependent measurement against a single-platform
+  baseline, so it failed CI on Linux for code that had not changed. `executor` measures 96.0% on
+  darwin and 94.9% on linux for the same commit with every test passing on both, and the 1.0pp
+  jitter tolerance is not the right instrument for a systematic gap — widening a tolerance until
+  the gap fits is how a gate stops detecting what it exists for. `.coverage-baseline` now holds the
+  lowest reading across the platforms CI runs, and `make update-coverage-baseline` refuses to run
+  anywhere but Linux, because writing it elsewhere raises the floor above what CI can meet.
 - `make record-fixtures` set `KNO_LIVE_TESTS=1` itself while checking neither condition
   `make test-live` enforces: that `KNO_MAX_COST_USD` is set, and that some Go code actually reads
   it. It was an unguarded live-spend path that would have armed the moment the first adapter

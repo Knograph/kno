@@ -49,6 +49,14 @@ const repoWideFloor = 70
 //
 // It exists because concurrent code's measured coverage is not deterministic,
 // not because small regressions are acceptable. See the comment at its use.
+//
+// It is deliberately NOT the mechanism that absorbs platform differences. Those
+// are systematic, not jitter — executor measures 96.0% on darwin and 94.9% on
+// linux for the same commit, every test passing on both — and widening a
+// tolerance until a systematic gap fits inside it is how a gate stops detecting
+// the thing it exists for. The baseline holds the lowest reading across
+// platforms instead; see .coverage-baseline and the Makefile target that writes
+// it.
 const ratchetTolerance = 1.0
 
 // skipPrefixes are never measured. Generated code is not ours to test, and the
