@@ -23,6 +23,19 @@ import (
 // treated as clean by the stages that read it.
 const DefaultMaxErrorRate = 0.05
 
+// DefaultMaxAttempts is how many times one Case is tried when the provider
+// rate limits it.
+//
+// A 429 is the provider asking us to slow down, not the Case failing.
+// Recording it as terminal throws away capacity already paid for, and ordinary
+// throttling would push a run past max_error_rate — marking a perfectly good
+// baseline unusable for no statistical reason.
+const DefaultMaxAttempts = 3
+
+// DefaultRetryBackoff is the delay before the first retry. It doubles after
+// each attempt.
+const DefaultRetryBackoff = 500 * time.Millisecond
+
 // BaselineOptions configures a Baseline run.
 type BaselineOptions struct {
 	// RunID identifies this run. Required.
@@ -75,6 +88,14 @@ type BaselineOptions struct {
 	// MaxErrorRate overrides DefaultMaxErrorRate. Zero uses the default.
 	MaxErrorRate float64
 
+	// MaxAttempts bounds how many times one Case is tried when the provider
+	// rate limits. Zero means DefaultMaxAttempts; 1 disables retry.
+	MaxAttempts int
+
+	// RetryBackoff is the delay before the first retry, doubling thereafter.
+	// Zero means DefaultRetryBackoff.
+	RetryBackoff time.Duration
+
 	// EstCostPerCallUSDMicros is what one Agent call is expected to cost.
 	//
 	// The guard cannot refuse what it was not told about: authorizing with a
@@ -99,6 +120,20 @@ func (o BaselineOptions) now() time.Time {
 		return o.Now()
 	}
 	return time.Now().UTC()
+}
+
+func (o BaselineOptions) maxAttempts() int {
+	if o.MaxAttempts > 0 {
+		return o.MaxAttempts
+	}
+	return DefaultMaxAttempts
+}
+
+func (o BaselineOptions) retryBackoff() time.Duration {
+	if o.RetryBackoff > 0 {
+		return o.RetryBackoff
+	}
+	return DefaultRetryBackoff
 }
 
 func (o BaselineOptions) maxErrorRate() float64 {
@@ -196,7 +231,7 @@ func Baseline(
 		return nil, err
 	}
 	stats, runErr := executor.Run(ctx, cases,
-		opts.workFunc(agg), opts.sinkFunc(agg),
+		opts.workFunc(), opts.sinkFunc(agg),
 		executor.Options{
 			Concurrency: opts.Concurrency,
 			ID:          func(item any) string { c, _ := item.(*Case); return c.GetId() },
@@ -227,6 +262,12 @@ func (o BaselineOptions) validate(evals *SealedEvals) error {
 		return errors.New("core: baseline needs a budget guard")
 	case o.Store == nil:
 		return errors.New("core: baseline needs a store")
+	case o.Guard.Limits().MaxCostUSDMicros > 0 && o.EstCostPerCallUSDMicros <= 0:
+		// The guard cannot refuse what it was not told about. A dollar cap
+		// with a zero estimate is only discovered at settlement, after the
+		// money is spent — which already caused a real overshoot once.
+		return errors.New("core: a run with a cost cap needs EstCostPerCallUSDMicros, " +
+			"or the cap is only enforced after the money is spent")
 	case o.Goal.Direction() == knov1.Direction_DIRECTION_UNSPECIFIED:
 		return errors.New("core: the goal must report a direction, or the sign of every " +
 			"number this run produces is uninterpretable")
@@ -281,44 +322,112 @@ func (o BaselineOptions) staleFix(run *knov1.Run) string {
 }
 
 // workFunc invokes the agent under the budget guard and scores the response.
-func (o BaselineOptions) workFunc(agg *aggregator) executor.WorkFunc[*Case, caseOutcome] {
+//
+// It does not touch the aggregator: counting happens after persistence, in
+// emit, so the Run's counts can never outrun the outcomes table.
+func (o BaselineOptions) workFunc() executor.WorkFunc[*Case, caseOutcome] {
 	return func(ctx context.Context, c *Case) (*caseOutcome, error) {
 		// One provider call, estimated before it is made. A zero estimate makes
 		// the dollar cap unenforceable, so callers that care about it must
 		// supply EstCostPerCallUSDMicros.
 		est := budget.Estimate{Calls: 1, CostUSDMicros: o.EstCostPerCallUSDMicros}
 
-		res, err := o.Guard.Authorize(ctx, est)
-		if err != nil {
-			return nil, err
-		}
-		// Reached on every path: the agent erroring, the context cancelling
-		// mid-call, a panic recovered by the executor. Without it each of
-		// those leaks headroom and the guard eventually refuses work it should
-		// allow.
-		defer res.Release()
-
-		resp, invokeErr := o.Agent.Invoke(ctx, c)
+		resp, invokeErr := o.invokeWithRetry(ctx, c, est)
 		if invokeErr != nil {
-			// The attempt still cost whatever it cost, which may be nothing.
-			res.Settle(budget.Spend{Calls: 1})
 			return &caseOutcome{Response: nil, Err: invokeErr}, invokeErr
 		}
-
-		// The same computation the sink persists. Two independent derivations
-		// of one Case's cost could drift, and the persisted one is what
-		// Guard.Restore reads on resume — so a divergence would reseed the
-		// guard with a total the guard itself never recorded.
-		res.Settle(spendOf(resp))
 
 		score, scoreErr := o.Goal.Score(ctx, c, resp)
 		if scoreErr != nil {
 			return &caseOutcome{Response: resp, Err: scoreErr}, scoreErr
 		}
 
-		agg.add(score.GetValue())
+		// NOT counted here. An earlier version incremented the scored count on
+		// the worker goroutine the moment scoring succeeded — before the sink
+		// had persisted anything. A store failure mid-run then left the Run
+		// claiming more scored Cases than the outcomes table held, and that
+		// inflated count was the last thing durably recorded. Counting happens
+		// after persistence, in emit, where errored Cases are already counted.
 		return &caseOutcome{Response: resp, Score: score}, nil
 	}
+}
+
+// invokeWithRetry calls the Agent, backing off when the provider rate limits.
+//
+// Each attempt takes its OWN reservation and settles it. A retry is a new
+// provider call: it consumes call budget whether or not it produces an answer,
+// and pretending otherwise would let a throttled run spend past its cap
+// invisibly.
+//
+// Only ErrRateLimited is retried. A 429 is the provider asking us to slow
+// down, not the Case failing — recording it as terminal throws away capacity
+// already paid for, and ordinary throttling would push a run past
+// max_error_rate and mark a perfectly good baseline unusable for no
+// statistical reason. An agent that returned a 500 or malformed output did
+// fail, and retrying it burns budget on a Case that will fail again.
+func (o BaselineOptions) invokeWithRetry(
+	ctx context.Context,
+	c *Case,
+	est budget.Estimate,
+) (*Response, error) {
+	backoff := o.retryBackoff()
+	var lastErr error
+
+	for attempt := 1; attempt <= o.maxAttempts(); attempt++ {
+		resp, err := o.invokeOnce(ctx, c, est)
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+
+		// A budget refusal is not retryable: the cap will not have moved, and
+		// re-authorizing would spin.
+		if !errors.Is(err, errs.ErrRateLimited) || errors.Is(err, errs.ErrBudgetExceeded) {
+			return nil, err
+		}
+		if attempt == o.maxAttempts() {
+			break
+		}
+
+		// A ctx-aware wait. Sleeping through a cancellation would keep a
+		// stopped run alive for the length of the backoff.
+		select {
+		case <-time.After(backoff):
+			backoff *= 2
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return nil, lastErr
+}
+
+// invokeOnce is a single authorized attempt.
+func (o BaselineOptions) invokeOnce(
+	ctx context.Context,
+	c *Case,
+	est budget.Estimate,
+) (*Response, error) {
+	res, err := o.Guard.Authorize(ctx, est)
+	if err != nil {
+		return nil, err
+	}
+	// Reached on every path: the agent erroring, the context cancelling
+	// mid-call, a panic recovered by the executor. Without it each of those
+	// leaks headroom and the guard eventually refuses work it should allow.
+	defer res.Release()
+
+	resp, invokeErr := o.Agent.Invoke(ctx, c)
+	if invokeErr != nil {
+		// The attempt still consumed a call, whether or not it answered.
+		res.Settle(budget.Spend{Calls: 1})
+		return nil, invokeErr
+	}
+
+	// The same computation the sink persists. Two independent derivations of
+	// one Case's cost could drift, and the persisted one is what
+	// Guard.Restore reads on resume.
+	res.Settle(spendOf(resp))
+	return resp, nil
 }
 
 // sinkFunc persists each outcome and emits its event.
@@ -345,10 +454,17 @@ func (o BaselineOptions) sinkFunc(agg *aggregator) executor.SinkFunc[*Case, case
 			out.Spend = spendOf(r.Value.Response)
 		default:
 			out.Err = codeOf(r.Err)
-			if r.Value != nil {
+			// A Case can fail AFTER a paid call — a Goal erroring on malformed
+			// output, for instance. A flat one-call spend there understates
+			// what was actually spent, and SettledSpend is what Guard.Restore
+			// reads on resume: the resumed process would believe less was
+			// spent than really was, reopening the amnesia M1-0 closed.
+			if r.Value != nil && r.Value.Response != nil {
 				out.Response = r.Value.Response
+				out.Spend = spendOf(r.Value.Response)
+			} else {
+				out.Spend = budget.Spend{Calls: 1}
 			}
-			out.Spend = budget.Spend{Calls: 1}
 		}
 
 		if err := o.Store.RecordOutcome(ctx, o.RunID, out); err != nil {
@@ -429,7 +545,7 @@ func codeOf(err error) string {
 	if errors.As(err, &a) {
 		return a.Code
 	}
-	if errors.Is(err, context.Canceled) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return "INTERRUPTED"
 	}
 	return "AGENT_ERROR"

@@ -116,6 +116,9 @@ func (o BaselineOptions) emit(ctx context.Context, r executor.Result[*Case, case
 	}
 
 	if r.Done() {
+		// Counted here, after the outcome is persisted, so the Run's counts can
+		// never outrun the outcomes table.
+		agg.add(r.Value.Score.GetValue())
 		ev.Payload = &knov1.Event_CaseScored{CaseScored: &knov1.CaseScored{
 			CaseId:        r.Item.GetId(),
 			Score:         r.Value.Score.GetValue(),

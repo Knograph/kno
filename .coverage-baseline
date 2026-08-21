@@ -2,7 +2,7 @@
 # Coverage may not decrease against these numbers. Review diffs like code.
 adapters/agent/fake 0.0
 adapters/evals/jsonl 92.2
-core 94.7
+core 96.8
 core/errs 92.3
 coretest 83.8
 executor 96.0

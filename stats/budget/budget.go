@@ -374,6 +374,9 @@ func (g *Guard) Restore(spent Spend) {
 	g.spent.Tokens += spent.Tokens
 }
 
+// Limits reports the caps this Guard enforces.
+func (g *Guard) Limits() Limits { return g.limits }
+
 // Spent reports what has actually been settled, excluding outstanding
 // reservations. This is the number a report shows.
 func (g *Guard) Spent() Spend {

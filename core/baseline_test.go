@@ -295,6 +295,7 @@ func TestResumeSkipsCompletedWorkAndDoesNotDoubleSpend(t *testing.T) {
 	opts.Agent = resumed.agent
 	opts.Resume = true
 	opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 1_000_000}, nil, 0)
+	opts.EstCostPerCallUSDMicros = 1_000
 
 	if _, err := core.Baseline(ctx, h.evals, opts); err != nil {
 		t.Fatalf("resumed run: %v", err)
@@ -549,28 +550,89 @@ func TestRunThatScoredNothingHasNoAggregate(t *testing.T) {
 	}
 }
 
-// TestRateLimitedCallsAreRecordedAsErrors covers the sentinel the fake can
-// schedule, so the path exists before a paid adapter first exercises it.
-func TestRateLimitedCallsAreRecordedAsErrors(t *testing.T) {
+// TestRateLimitsAreRetriedNotRecordedAsFailures.
+//
+// A 429 is the provider asking us to slow down, not the Case failing. An
+// earlier version recorded it as a terminal error, which threw away capacity
+// already paid for — and worse, ordinary throttling would push a run past
+// max_error_rate and mark a perfectly good baseline unusable for no
+// statistical reason.
+func TestRateLimitsAreRetriedNotRecordedAsFailures(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	h := newHarness(t, 20, 5, fake.Options{RateLimitEvery: 4})
-	h.opts.MaxErrorRate = 0.9
+	// Every 3rd call is throttled, so retries are needed but always succeed.
+	h := newHarness(t, 20, 5, fake.Options{RateLimitEvery: 3})
+	h.opts.RetryBackoff = time.Millisecond // keep the test fast
 
 	res, err := core.Baseline(ctx, h.evals, h.opts)
 	if err != nil {
 		t.Fatalf("Baseline: %v", err)
 	}
 	if h.agent.RateLimited() == 0 {
-		t.Fatal("no calls were rate limited; the fixture is not exercising this")
+		t.Fatal("no calls were throttled; the fixture is not exercising retry")
 	}
-	if res.Run.GetErroredCaseCount() == 0 {
-		t.Error("rate-limited Cases were not recorded as errors")
+
+	if got := res.Run.GetErroredCaseCount(); got != 0 {
+		t.Errorf("%d Cases recorded as errors; a throttled call must be retried, "+
+			"not counted as a failure", got)
 	}
-	// A rate limit is not a scoring outcome, so the aggregate is over the rest.
-	if res.AggregateScore == nil || *res.AggregateScore != 1 {
-		t.Errorf("aggregate = %v, want 1 over the Cases that did answer", res.AggregateScore)
+	if got := res.Run.GetScoredCaseCount(); got != 20 {
+		t.Errorf("scored = %d, want 20: retries did not recover the throttled Cases", got)
+	}
+	if res.Run.GetErrorRateExceeded() {
+		t.Error("ordinary throttling marked the baseline unusable")
+	}
+
+	// Retries are real provider calls and must consume call budget.
+	if h.agent.Calls() <= 20 {
+		t.Errorf("the agent was called %d times for 20 Cases; retries were not "+
+			"counted as calls", h.agent.Calls())
+	}
+}
+
+// TestPersistentRateLimitEventuallyGivesUp: retry is bounded, or a wedged
+// provider would hang a run forever.
+func TestPersistentRateLimitEventuallyGivesUp(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	h := newHarness(t, 5, 2, fake.Options{RateLimitEvery: 1}) // always throttled
+	h.opts.RetryBackoff = time.Millisecond
+	h.opts.MaxAttempts = 2
+	h.opts.MaxErrorRate = 1
+
+	res, err := core.Baseline(ctx, h.evals, h.opts)
+	if err != nil {
+		t.Fatalf("Baseline: %v", err)
+	}
+	if got := res.Run.GetErroredCaseCount(); got != 5 {
+		t.Errorf("errored = %d, want 5: a permanently throttled Case must eventually "+
+			"be recorded rather than retried forever", got)
+	}
+	// Two attempts per Case, not more.
+	if got := h.agent.Calls(); got != 10 {
+		t.Errorf("the agent was called %d times, want 10 (5 Cases x 2 attempts)", got)
+	}
+}
+
+// TestAgentErrorsAreNotRetried: retrying a 500 or malformed output burns
+// budget on a Case that will fail again.
+func TestAgentErrorsAreNotRetried(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	h := newHarness(t, 6, 2, fake.Options{FailEvery: 1}) // every call fails
+	h.opts.RetryBackoff = time.Millisecond
+	h.opts.MaxAttempts = 3
+	h.opts.MaxErrorRate = 1
+
+	if _, err := core.Baseline(ctx, h.evals, h.opts); err != nil {
+		t.Fatalf("Baseline: %v", err)
+	}
+	if got := h.agent.Calls(); got != 6 {
+		t.Errorf("the agent was called %d times for 6 Cases; a non-throttle error "+
+			"was retried, burning budget on Cases that fail again", got)
 	}
 }
 
@@ -846,5 +908,155 @@ func TestResumedRunReportsTheWholeRunNotJustTheResumedPart(t *testing.T) {
 	if len(done) != int(second.Run.GetAttemptedCaseCount()) {
 		t.Errorf("the store holds %d outcomes but the Run claims %d attempted",
 			len(done), second.Run.GetAttemptedCaseCount())
+	}
+}
+
+// TestCostCapWithoutAnEstimateIsRefused.
+//
+// The guard cannot refuse what it was not told about: a dollar cap with a zero
+// per-call estimate is only discovered at settlement, after the money is
+// spent. That already caused a real overshoot, so the run is refused up front
+// rather than silently overshooting again.
+func TestCostCapWithoutAnEstimateIsRefused(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t, 5, 2, fake.Options{})
+	h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 100_000}, nil, 0)
+	h.opts.EstCostPerCallUSDMicros = 0
+
+	_, err := core.Baseline(context.Background(), h.evals, h.opts)
+	if err == nil {
+		t.Fatal("a cost cap with no estimate was accepted; the cap would only be " +
+			"enforced after the money was spent")
+	}
+	if !contains(err.Error(), "EstCostPerCallUSDMicros") {
+		t.Errorf("error = %q, want it to name the missing estimate", err)
+	}
+
+	// A call cap alone needs no cost estimate.
+	h.opts.Guard = budget.New(budget.Limits{MaxLLMCalls: 100}, nil, 0)
+	if _, err := core.Baseline(context.Background(), h.evals, h.opts); err != nil {
+		t.Errorf("a call-capped run without a cost estimate was refused: %v", err)
+	}
+}
+
+// erroringGoal fails after the agent has already answered — and been paid for.
+type erroringGoal struct{}
+
+func (erroringGoal) Score(context.Context, *core.Case, *core.Response) (*core.Score, error) {
+	return nil, errors.New("the judge returned malformed output")
+}
+func (erroringGoal) Direction() core.Direction { return knov1.Direction_DIRECTION_MAXIMIZE }
+
+// TestScoreFailureAfterAPaidCallPersistsTheRealCost.
+//
+// A Case can fail after the money is spent: the agent answers, then the Goal
+// errors. An earlier version persisted a flat one-call spend for that path,
+// understating what was actually spent. SettledSpend is what Guard.Restore
+// reads on resume, so the resumed process would believe less was spent than
+// really was — reopening the amnesia M1-0 exists to close.
+//
+// Unreachable with exact-match, which cannot fail; live the moment a judge
+// Goal is paired with a paying agent, which is M2.
+func TestScoreFailureAfterAPaidCallPersistsTheRealCost(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const costPerCall = 7_000
+	h := newHarness(t, 10, 3, fake.Options{CostPerCallUSDMicros: costPerCall})
+	h.opts.Goal = erroringGoal{}
+	h.opts.MaxErrorRate = 1
+
+	res, err := core.Baseline(ctx, h.evals, h.opts)
+	if err != nil {
+		t.Fatalf("Baseline: %v", err)
+	}
+	if got := res.Run.GetErroredCaseCount(); got != 10 {
+		t.Fatalf("errored = %d, want 10", got)
+	}
+
+	// The agent was paid for all ten calls, so the persisted total must say so.
+	spend, err := h.store.SettledSpend(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("SettledSpend: %v", err)
+	}
+	if want := int64(10) * costPerCall; spend.CostUSDMicros != want {
+		t.Errorf("persisted spend = %d, want %d; a resumed run would reseed the "+
+			"guard with %d less than was actually spent",
+			spend.CostUSDMicros, want, want-spend.CostUSDMicros)
+	}
+}
+
+// TestCountsNeverOutrunPersistedOutcomes.
+//
+// The scored count used to be incremented on the worker goroutine the moment
+// scoring succeeded — before anything was persisted. A store failure mid-run
+// then left the Run claiming more scored Cases than the outcomes table held,
+// and that inflated count was the last thing durably recorded.
+func TestCountsNeverOutrunPersistedOutcomes(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	h := newHarness(t, 30, 5, fake.Options{})
+	opts := h.opts
+	opts.Store = &failingStore{Store: h.store, failRecord: true}
+
+	res, err := core.Baseline(ctx, h.evals, opts)
+	if err == nil {
+		t.Fatal("a store failure was swallowed")
+	}
+	if res == nil {
+		t.Fatal("no result returned")
+	}
+
+	done, dErr := h.store.CompletedCases(ctx, "run-1")
+	if dErr != nil {
+		t.Fatalf("CompletedCases: %v", dErr)
+	}
+	if got := int(res.Run.GetScoredCaseCount()); got > len(done) {
+		t.Errorf("the Run claims %d scored Cases but only %d outcomes were "+
+			"persisted; the count outran the store", got, len(done))
+	}
+}
+
+// deadlineAgent always reports a deadline, deterministically.
+//
+// An earlier version of this test raced a real 30ms deadline against 20ms of
+// simulated latency. It passed alone and failed under the full parallel suite —
+// a timing-dependent flake, which CLAUDE.md says to fix rather than retry. The
+// property under test is how a deadline error is CLASSIFIED, which needs no
+// real clock.
+type deadlineAgent struct{}
+
+func (deadlineAgent) Invoke(context.Context, *core.Case) (*core.Response, error) {
+	return nil, fmt.Errorf("calling provider: %w", context.DeadlineExceeded)
+}
+
+// TestDeadlineIsClassifiedAsAnInterruption, not as a generic agent error — the
+// same distinction statusFor draws for the run as a whole. A run stopped by a
+// deadline is resumable; one that broke is not.
+func TestDeadlineIsClassifiedAsAnInterruption(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	h := newHarness(t, 8, 2, fake.Options{})
+	h.opts.Agent = deadlineAgent{}
+	// The default error-rate threshold applies: a run where everything timed
+	// out is not a usable baseline.
+
+	res, err := core.Baseline(ctx, h.evals, h.opts)
+	if err != nil {
+		t.Fatalf("Baseline: %v", err)
+	}
+	if got := res.Run.GetErroredCaseCount(); got != 8 {
+		t.Fatalf("errored = %d, want 8", got)
+	}
+
+	// The run itself completed — the deadline was per-Case, not the run's.
+	if got := res.Run.GetStatus(); got != knov1.RunStatus_RUN_STATUS_COMPLETED {
+		t.Errorf("status = %v, want COMPLETED: the run finished, the Cases did not", got)
+	}
+	if !res.Run.GetErrorRateExceeded() {
+		t.Error("a run where every Case timed out was not marked unusable")
 	}
 }
