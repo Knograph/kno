@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -102,9 +103,15 @@ CREATE TABLE IF NOT EXISTS events (
 //
 // It costs write throughput on every delete, which is the right trade here:
 // this store's writes are dwarfed by the agent calls that produce them.
-const pragmas = "_pragma=journal_mode(WAL)" +
+// busy_timeout is FIRST on purpose. Pragmas are applied in DSN order, and
+// journal_mode(WAL) needs an exclusive lock to convert a brand-new database.
+// With the timeout set afterwards, two processes opening the same fresh file
+// race on that conversion and the loser fails outright with SQLITE_BUSY instead
+// of waiting — observed as 2 in 6 concurrent opens failing at connection
+// acquisition. Setting the timeout first makes the loser wait for the winner.
+const pragmas = "_pragma=busy_timeout(5000)" +
+	"&_pragma=journal_mode(WAL)" +
 	"&_pragma=foreign_keys(1)" +
-	"&_pragma=busy_timeout(5000)" +
 	"&_pragma=synchronous(FULL)" +
 	"&_pragma=secure_delete(1)"
 
@@ -149,7 +156,7 @@ func NewSQLite(ctx context.Context, path string) (*SQLite, error) {
 	// at one would serialize a long read ahead of every pending write.
 	db.SetMaxOpenConns(maxConns)
 
-	if _, err := db.ExecContext(ctx, schema); err != nil {
+	if err := retryOnBusy(ctx, func() error { return applySchema(ctx, db) }); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("applying schema: %w", err)
 	}
@@ -158,6 +165,87 @@ func NewSQLite(ctx context.Context, path string) (*SQLite, error) {
 		return nil, fmt.Errorf("migrating %s: %w", path, err)
 	}
 	return &SQLite{db: db}, nil
+}
+
+// openBusyRetries bounds how many times an open waits out contention.
+//
+// With a 5ms base and doubling, the last attempt lands around 160ms — long
+// enough for another process to finish creating a database, short enough that a
+// genuinely locked file fails while a user is still watching.
+const openBusyRetries = 6
+
+// retryOnBusy runs fn, retrying while SQLite reports the database is locked.
+//
+// busy_timeout does not cover every case. Creating a brand-new database
+// converts its journal to WAL, which needs an exclusive lock, and a process
+// that loses that race is told the database is locked rather than being made to
+// wait — observed as 1-2 of 6 concurrent first-opens failing outright. SQLite's
+// own guidance is that SQLITE_BUSY is a condition to handle, not an error to
+// surface, and the two `kno` commands a user runs in two terminals should not
+// depend on which one reached the file first.
+func retryOnBusy(ctx context.Context, fn func() error) error {
+	delay := 5 * time.Millisecond
+	var err error
+	for range openBusyRetries {
+		if err = fn(); !isBusy(err) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+		delay *= 2
+	}
+	return err
+}
+
+// isBusy reports whether err is SQLite's "database is locked".
+func isBusy(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "database is locked") ||
+		strings.Contains(msg, "database table is locked")
+}
+
+// applySchema creates the version-0 tables under the write lock.
+//
+// The DDL is idempotent, but running it concurrently is not: two processes
+// opening the same fresh database race on the schema cookie and one gets
+// SQLITE_BUSY, which busy_timeout does not absorb because the loser is not
+// waiting on a lock it can acquire — it is being told the schema changed under
+// it. Observed as 1 in 6 concurrent opens failing with
+// "applying schema: database is locked (5)".
+//
+// BEGIN IMMEDIATE serializes it the same way migrations are serialized, so the
+// second process waits, then finds every CREATE TABLE IF NOT EXISTS satisfied.
+func applySchema(ctx context.Context, db *sql.DB) error {
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquiring a connection: %w", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return fmt.Errorf("taking the write lock: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(ctx, `ROLLBACK`)
+		}
+	}()
+
+	if _, err := conn.ExecContext(ctx, schema); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return fmt.Errorf("committing: %w", err)
+	}
+	committed = true
+	return nil
 }
 
 // migration is one numbered schema step.
@@ -226,7 +314,7 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		if m.to <= current {
 			continue
 		}
-		if err := applyMigration(ctx, db, m); err != nil {
+		if err := retryOnBusy(ctx, func() error { return applyMigration(ctx, db, m) }); err != nil {
 			return fmt.Errorf("migrating to version %d: %w", m.to, err)
 		}
 	}
