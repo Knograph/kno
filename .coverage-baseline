@@ -4,6 +4,7 @@ adapters/evals/jsonl 92.2
 core 93.3
 core/errs 92.3
 coretest 83.8
+executor 97.4
 internal/cmd/covercheck 83.9
 internal/cmd/godoccheck 74.0
 stats/budget 92.9
