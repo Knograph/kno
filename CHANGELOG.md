@@ -90,6 +90,25 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
+- **`adapters/agent/pricing`**, the dated price table and the pessimistic estimate the budget guard
+  reserves against. Prices as published on 2026-08-21 for Anthropic and OpenAI models; the table is
+  **static and never fetched at runtime**, because an endpoint that is down leaves the engine
+  choosing between refusing to run and running with no ceiling, and one that is wrong is a spend
+  path with no ceiling at all.
+  - **An unknown model is unpriced, not free.** A zero estimate makes a dollar cap unenforceable —
+    the failure that overshot a cap in M1 — so a model with no row is refused under a cost cap
+    rather than authorized against a guess. Models reached through a base URL (OpenRouter, a
+    self-hosted server) are deliberately absent: their prices are not these.
+  - **Every term is pessimistic.** Input is charged at the fresh rate, never the cached one, because
+    whether a prompt hits the provider's cache is not knowable before the call — and assuming a hit
+    under-reserves exactly when a run repeats similar prompts. Output is charged at the full
+    ceiling, because the ceiling is what the request permits.
+  - **Claude 4.7 and later are priced for their denser tokenizer**, which produces roughly 30% more
+    tokens for the same text. Applying the old ratio would under-count every input by about a
+    quarter. Matched by prefix, so a pinned `claude-sonnet-5-20260514` keeps it.
+  - Token counting is an approximation over bytes with a stated safety margin, not a vendored
+    tokenizer — it bounds a reservation, and settlement reconciles against the provider's own
+    reported usage.
 - **`adapters/agent/agentref`**, the parser for `scheme:target[@base-url]` — one grammar for flags,
   `kno.yaml`, the API, and the SDKs. Parsing is separate from resolution, so a typo and an
   unsupported provider produce different errors rather than the same one.

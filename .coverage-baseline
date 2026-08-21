@@ -12,6 +12,7 @@
 adapters/agent/agentref 94.0
 adapters/agent/fake 0.0
 adapters/agent/internal/transport 88.0
+adapters/agent/pricing 97.0
 adapters/evals/jsonl 92.2
 cli 84.1
 cmd/kno 0.0
