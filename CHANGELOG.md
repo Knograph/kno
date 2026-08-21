@@ -18,6 +18,9 @@ covenants — breaking any of them requires a major version.
 
 ### Changed
 
+- Go toolchain bumped to `go1.25.13`. Making the first real HTTP call turned seven standard-library
+  advisories from unreachable into reachable — `crypto/x509`, `net/http`, and `golang.org/x/net/idna`
+  — and `govulncheck` failed the build for them. Working exactly as intended.
 - Go toolchain pinned to `go1.25.8` (from 1.25.5), which `govulncheck` flagged for `GO-2026-4602`
   in the standard library, reachable from `covercheck`. `GOTOOLCHAIN` is pinned in the Makefile so
   the toolchain is as reproducible as every other tool.
@@ -69,6 +72,31 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
+- **`adapters/agent/internal/transport`**, the shared HTTP layer every provider adapter will sit
+  on. It owns what must be identical across adapters and is dangerous to reimplement: which hosts a
+  request may reach, which credential may travel there, how rate limits are honored, and what an
+  error may say.
+  - **A credential bound to one host never reaches another** — not through a redirect, not through
+    a misconfiguration, not with a flag. Cross-host redirects are refused outright rather than
+    filtered, because Go's `net/http` strips only `Authorization`, `WWW-Authenticate`, `Cookie`,
+    and `Cookie2` on a cross-domain redirect — and **not `x-api-key`**, which is how Anthropic
+    authenticates.
+  - **Key bindings are explicit, never derived**: `--key-env api.groq.com=GROQ_API_KEY`. A derived
+    scheme is not injective — env var names permit only `[A-Za-z0-9_]`, so `api.groq.com` and the
+    typosquat `api-groq.com` would collapse to one variable. A scheme's default applies only to
+    that scheme's own host, so pointing an `openai:` model at Groq does not mail the user's OpenAI
+    key to a third party.
+  - **Link-local (`169.254.0.0/16`) is refused with no override** — that is where cloud instance
+    metadata lives, and Kno persists response bodies. Loopback and RFC1918 are opt-in, because
+    local vLLM and Ollama are a real use.
+  - **A URL carrying userinfo is refused rather than stripped.** Silently rewriting it would hide
+    that the credential is already in the user's shell history.
+  - **The transport does not retry, and that is enforced rather than asserted.** `Request.GetBody`
+    is cleared, because `net/http` replays a request on a reused connection when it is set — which
+    an `Idempotency-Key` (see `docs/debt.md#20`) would turn on silently. A replay is invisible at
+    the server, so the test asserts the invariant on the request itself.
+  - `Retry-After` is honored in both RFC 9110 forms and clamped, so a misconfigured gateway cannot
+    hang a run for a day.
 - **`core.Estimator`**, an optional Ring-0 interface: an adapter can price a Case before the call
   is made. A cost cap the guard checks only at settlement is a cap discovered after the money is
   gone, and what a Case costs depends on the Case — a single run-scoped scalar cannot express that.
