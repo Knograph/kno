@@ -16,8 +16,19 @@ import (
 	_ "modernc.org/sqlite" // pure-Go driver; see the note on NewSQLite
 )
 
-// schema is applied on open. It is idempotent, so opening an existing database
-// is a no-op rather than a migration.
+// schemaVersion is the migration level this build expects, recorded in
+// SQLite's own `PRAGMA user_version`.
+//
+// Version 0 is the M1 schema. Every later version is a numbered step in
+// migrations below.
+const schemaVersion = 1
+
+// schema is the version-0 base, applied on open. It is idempotent.
+//
+// New columns do NOT go here. They go in a migration step, and a freshly
+// created database runs the same steps an existing one does — so the migration
+// path is exercised on every open rather than only by databases old enough to
+// need it. A migration only old files take is a migration nobody tests.
 //
 // Money is INTEGER micro-USD throughout, matching the proto. SQLite has no
 // decimal type, and REAL here would reintroduce exactly the float drift the
@@ -130,7 +141,172 @@ func NewSQLite(ctx context.Context, path string) (*SQLite, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("applying schema: %w", err)
 	}
+	if err := migrate(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("migrating %s: %w", path, err)
+	}
 	return &SQLite{db: db}, nil
+}
+
+// migration is one numbered schema step.
+type migration struct {
+	// to is the user_version this step produces.
+	to int
+
+	// stmts are applied in order, in one transaction with the version bump.
+	stmts []string
+
+	// backfill populates the new columns from data the previous schema
+	// already held. Runs inside the same transaction as stmts.
+	backfill func(context.Context, *sql.Tx) error
+}
+
+// migrations is the ordered list of schema steps.
+//
+// Adding a step means appending one, never editing an existing one: a step
+// that has run somewhere is history, and changing it produces two databases
+// claiming the same version with different shapes.
+var migrations = []migration{{
+	to: 1,
+	// M2-1. Every fact a later stage needs about an outcome gets its own
+	// column, because the alternative is reading it back out of a protobuf
+	// blob — and `kno purge` nulls those blobs. A number that lives only
+	// inside purged trace content is a number a privacy-conscious user
+	// silently loses.
+	//
+	// score_value is REAL, unlike every money column in this file. A Score is
+	// not money: it is a double in the schema, bounded and never accumulated
+	// across thousands of operations, so the int64 discipline that exists to
+	// stop cost drift does not apply and would misrepresent the value.
+	stmts: []string{
+		`ALTER TABLE outcomes ADD COLUMN score_value REAL`,
+		`ALTER TABLE outcomes ADD COLUMN score_passed INTEGER`,
+		`ALTER TABLE outcomes ADD COLUMN refused INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE outcomes ADD COLUMN truncated INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE outcomes ADD COLUMN usage_estimated INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE outcomes ADD COLUMN provider_build_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE outcomes ADD COLUMN resolved_model TEXT NOT NULL DEFAULT ''`,
+	},
+	backfill: backfillScoreValues,
+}}
+
+// migrate brings the database up to schemaVersion.
+//
+// Each step runs in its own transaction with its own version bump, so an
+// interrupted upgrade leaves the database at the last version that completed
+// rather than half-way through one.
+func migrate(ctx context.Context, db *sql.DB) error {
+	var current int
+	if err := db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&current); err != nil {
+		return fmt.Errorf("reading user_version: %w", err)
+	}
+	if current > schemaVersion {
+		// Refuse rather than guess. A newer binary wrote this file; running
+		// older code against it would read columns it does not know about and
+		// write rows the newer code cannot interpret.
+		return fmt.Errorf(
+			"database is at schema version %d but this build understands %d; "+
+				"upgrade kno, or point --db at a different file",
+			current, schemaVersion)
+	}
+
+	for _, m := range migrations {
+		if m.to <= current {
+			continue
+		}
+		if err := applyMigration(ctx, db, m); err != nil {
+			return fmt.Errorf("migrating to version %d: %w", m.to, err)
+		}
+	}
+	return nil
+}
+
+func applyMigration(ctx context.Context, db *sql.DB, m migration) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for _, stmt := range m.stmts {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("%s: %w", stmt, err)
+		}
+	}
+	if m.backfill != nil {
+		if err := m.backfill(ctx, tx); err != nil {
+			return fmt.Errorf("backfilling: %w", err)
+		}
+	}
+	// PRAGMA does not accept a bound parameter, and m.to is an int constant
+	// from this file rather than anything a caller supplies.
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, m.to)); err != nil {
+		return fmt.Errorf("setting user_version: %w", err)
+	}
+	return tx.Commit()
+}
+
+// backfillScoreValues lifts each existing Score's number out of its protobuf
+// blob and into the new columns.
+//
+// Rows whose score_proto is already gone — purged before the upgrade — keep a
+// NULL score_value. That NULL is load-bearing: `scored = 1 AND score_value IS
+// NULL` is the only way to tell "this Case scored, and the number is
+// unrecoverable" from "this Case did not score". Summing NULL as zero would
+// produce an aggregate biased toward zero and report it as though it were the
+// run's mean.
+func backfillScoreValues(ctx context.Context, tx *sql.Tx) error {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT run_id, case_id, score_proto FROM outcomes
+		 WHERE score_proto IS NOT NULL`)
+	if err != nil {
+		return fmt.Errorf("reading scores: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	type scoreRow struct {
+		runID, caseID string
+		value         float64
+		passed        bool
+	}
+	var pending []scoreRow
+
+	for rows.Next() {
+		var r scoreRow
+		var blob []byte
+		if err := rows.Scan(&r.runID, &r.caseID, &blob); err != nil {
+			return fmt.Errorf("scanning score: %w", err)
+		}
+		var score knov1.Score
+		if err := proto.Unmarshal(blob, &score); err != nil {
+			// A blob this build cannot parse is not a reason to refuse the
+			// upgrade: the row keeps a NULL score_value and is reported as
+			// unrecoverable, which is the same honest outcome as a purge.
+			continue
+		}
+		r.value, r.passed = score.GetValue(), score.GetPassed()
+		pending = append(pending, r)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("reading scores: %w", err)
+	}
+
+	for _, r := range pending {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE outcomes SET score_value = ?, score_passed = ?
+			 WHERE run_id = ? AND case_id = ?`,
+			r.value, boolToInt(r.passed), r.runID, r.caseID); err != nil {
+			return fmt.Errorf("updating %s/%s: %w", r.runID, r.caseID, err)
+		}
+	}
+	return nil
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // CreateRun records a new run.
@@ -246,6 +422,16 @@ func (s *SQLite) RecordOutcome(ctx context.Context, runID string, out *Outcome) 
 		scored = 1
 	}
 
+	// Columns, not blob fields, for everything a later stage reads back. The
+	// blobs are trace content and `kno purge` nulls them; a number that lives
+	// only inside one is a number a privacy-conscious user silently loses.
+	var scoreValue, scorePassed any // NULL when the Case errored
+	if out.Score != nil {
+		scoreValue, scorePassed = out.Score.GetValue(), boolToInt(out.Score.GetPassed())
+	}
+	r := out.Response
+	truncated := r.GetStopReason() == knov1.StopReason_STOP_REASON_LENGTH
+
 	// INSERT OR IGNORE, not INSERT OR REPLACE. A Case that already has an
 	// outcome keeps the one it has: the money for it is already spent and
 	// already counted, and overwriting would let a resumed run's second
@@ -253,10 +439,15 @@ func (s *SQLite) RecordOutcome(ctx context.Context, runID string, out *Outcome) 
 	_, err = db.ExecContext(ctx,
 		`INSERT OR IGNORE INTO outcomes
 		   (run_id, case_id, scored, err_code, response_proto, score_proto,
-		    calls, cost_usd_micros, tokens)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		    calls, cost_usd_micros, tokens,
+		    score_value, score_passed, refused, truncated, usage_estimated,
+		    provider_build_id, resolved_model)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		runID, out.CaseID, scored, out.Err, responseBlob, scoreBlob,
-		out.Spend.Calls, out.Spend.CostUSDMicros, out.Spend.Tokens)
+		out.Spend.Calls, out.Spend.CostUSDMicros, out.Spend.Tokens,
+		scoreValue, scorePassed,
+		boolToInt(r.GetRefused()), boolToInt(truncated), boolToInt(r.GetUsageEstimated()),
+		r.GetProviderBuildId(), r.GetResolvedModel())
 	if err != nil {
 		return fmt.Errorf("recording outcome for %s: %w", out.CaseID, err)
 	}
@@ -418,3 +609,62 @@ func isUniqueViolation(err error) bool {
 
 // Compile-time proof that SQLite satisfies the interface.
 var _ Store = (*SQLite)(nil)
+
+// Purge removes trace content from a run while leaving the run resumable.
+//
+// It NULLs the protobuf blobs and never deletes a row. That distinction is the
+// whole design: the outcomes table IS the done-marker this store uses to skip
+// finished work, so a purge that deleted rows would reopen the double-spend it
+// exists to prevent — a purged run, resumed, would pay for every Case a second
+// time. See docs/debt.md#25.
+//
+// What survives: which Cases completed, what they cost, whether they scored,
+// and the numeric score itself, all of which live in columns. What goes: the
+// agent's output and the judge's rationale, which are the parts that can
+// contain end-user conversation content.
+//
+// A purged Case keeps `scored = 1` with a NULL `score_value` only if it was
+// purged before the score column existed. Purging today preserves the number.
+func (s *SQLite) Purge(ctx context.Context, runID string) (int64, error) {
+	db, err := s.conn()
+	if err != nil {
+		return 0, err
+	}
+	res, err := db.ExecContext(ctx,
+		`UPDATE outcomes SET response_proto = NULL, score_proto = NULL
+		 WHERE run_id = ? AND (response_proto IS NOT NULL OR score_proto IS NOT NULL)`,
+		runID)
+	if err != nil {
+		return 0, fmt.Errorf("purging traces for %s: %w", runID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("counting purged rows for %s: %w", runID, err)
+	}
+	return n, nil
+}
+
+// ScoreSum reports the sum of recorded scores for a run, and how many Cases
+// scored but can no longer contribute a number.
+//
+// Two counts rather than one because they must not be conflated. A Case whose
+// score_value is NULL while scored = 1 was purged before the column existed:
+// its number is gone. Summing it as zero would drag the mean toward zero and
+// present the result as the run's actual aggregate — which is worse than
+// reporting nothing, and is why the caller is handed `unrecoverable` rather
+// than a single pre-mixed average.
+func (s *SQLite) ScoreSum(ctx context.Context, runID string) (sum float64, counted, unrecoverable int, err error) {
+	db, err := s.conn()
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	err = db.QueryRowContext(ctx,
+		`SELECT COALESCE(SUM(score_value), 0),
+		        COALESCE(SUM(score_value IS NOT NULL), 0),
+		        COALESCE(SUM(scored = 1 AND score_value IS NULL), 0)
+		 FROM outcomes WHERE run_id = ?`, runID).Scan(&sum, &counted, &unrecoverable)
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("summing scores for %s: %w", runID, err)
+	}
+	return sum, counted, unrecoverable, nil
+}

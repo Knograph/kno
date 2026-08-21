@@ -49,3 +49,20 @@ func (s *SQLite) PragmaOnEveryConn(ctx context.Context, n int) ([][2]int, error)
 	}
 	return out, nil
 }
+
+// RawBlobs reads the raw trace columns for one outcome.
+//
+// Exported for tests only. A purge reports how many rows it touched; that
+// number would be identical for a purge that cleared the wrong column or none
+// at all, so the assertion that trace content is actually gone has to read the
+// columns directly.
+func (s *SQLite) RawBlobs(ctx context.Context, runID, caseID string) (resp, score []byte, err error) {
+	db, err := s.conn()
+	if err != nil {
+		return nil, nil, err
+	}
+	err = db.QueryRowContext(ctx,
+		`SELECT response_proto, score_proto FROM outcomes WHERE run_id = ? AND case_id = ?`,
+		runID, caseID).Scan(&resp, &score)
+	return resp, score, err
+}

@@ -478,3 +478,131 @@ func TestNegativeCapsDoNotDisableTheCap(t *testing.T) {
 			"treated as no cap at all; stderr: %s", stderr)
 	}
 }
+
+// TestPurgeRequiresConfirmation: destroying data is irreversible, so the
+// default is to describe what would happen and stop.
+func TestPurgeRequiresConfirmation(t *testing.T) {
+	t.Parallel()
+
+	cases := writeCases(t, 50)
+	db := filepath.Join(t.TempDir(), "kno.db")
+
+	stdout, _, code := run(t, "baseline", "--evals", cases, "--db", db, "--run-id", "r1")
+	if code != errs.ExitOK {
+		t.Fatalf("baseline exit %d", code)
+	}
+	if !strings.Contains(stdout, "Baseline") {
+		t.Fatalf("baseline produced no report:\n%s", stdout)
+	}
+
+	out, _, code := run(t, "purge", "--run-id", "r1", "--db", db)
+	if code != errs.ExitOK {
+		t.Fatalf("purge exit %d", code)
+	}
+	if !strings.Contains(out, "cannot be undone") {
+		t.Errorf("the prompt does not say the action is irreversible:\n%s", out)
+	}
+	if !strings.Contains(out, "--yes") {
+		t.Errorf("the prompt does not say how to proceed:\n%s", out)
+	}
+	if strings.Contains(out, "Purged") {
+		t.Errorf("purge reported doing work without confirmation:\n%s", out)
+	}
+}
+
+// TestPurgeKeepsTheRunResumable is the user-facing half of docs/debt.md#25:
+// after a purge, --resume must still skip the work already paid for.
+func TestPurgeKeepsTheRunResumable(t *testing.T) {
+	t.Parallel()
+
+	cases := writeCases(t, 60)
+	db := filepath.Join(t.TempDir(), "kno.db")
+
+	if _, stderr, code := run(t, "baseline", "--evals", cases, "--db", db,
+		"--run-id", "r1", "--json"); code != errs.ExitOK {
+		t.Fatalf("baseline exit %d: %s", code, stderr)
+	}
+
+	out, _, code := run(t, "purge", "--run-id", "r1", "--db", db, "--yes")
+	if code != errs.ExitOK {
+		t.Fatalf("purge exit %d", code)
+	}
+	if !strings.Contains(out, "Purged") {
+		t.Errorf("purge did not report what it did:\n%s", out)
+	}
+
+	// Resuming a purged run must not re-execute anything.
+	stdout, stderr, code := run(t, "baseline", "--evals", cases, "--db", db,
+		"--run-id", "r1", "--resume", "--json")
+	if code != errs.ExitOK {
+		t.Fatalf("resume after purge exit %d: %s", code, stderr)
+	}
+	rep, err := cli.DecodeReport([]byte(stdout))
+	if err != nil {
+		t.Fatalf("decoding report: %v", err)
+	}
+	if int(rep.Scored) != rep.DevCases {
+		t.Errorf("after purge, the resumed run reports %d of %d scored; a purge "+
+			"that lost the done-markers would make it re-run and re-pay for work",
+			rep.Scored, rep.DevCases)
+	}
+}
+
+// TestPurgeRefusesAnUnknownRun: a typo must be a refusal, not a silent no-op
+// that reads as "already purged".
+func TestPurgeRefusesAnUnknownRun(t *testing.T) {
+	t.Parallel()
+
+	db := filepath.Join(t.TempDir(), "kno.db")
+	cases := writeCases(t, 50)
+	if _, _, code := run(t, "baseline", "--evals", cases, "--db", db, "--run-id", "r1"); code != errs.ExitOK {
+		t.Fatalf("baseline exit %d", code)
+	}
+
+	_, stderr, code := run(t, "purge", "--run-id", "r-typo", "--db", db, "--yes")
+	if code == errs.ExitOK {
+		t.Fatal("purging a run that does not exist succeeded")
+	}
+	if !strings.Contains(stderr, "fix:") {
+		t.Errorf("no fix line:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "r-typo") {
+		t.Errorf("the message does not quote what was asked for:\n%s", stderr)
+	}
+}
+
+// TestPurgeRequiresARunID.
+func TestPurgeRequiresARunID(t *testing.T) {
+	t.Parallel()
+
+	_, stderr, code := run(t, "purge", "--db", filepath.Join(t.TempDir(), "kno.db"))
+	if code == errs.ExitOK {
+		t.Fatal("purge ran without --run-id")
+	}
+	if !strings.Contains(stderr, "run-id") {
+		t.Errorf("the error does not name the missing flag:\n%s", stderr)
+	}
+}
+
+// TestPurgePromptDoesNotLeakRawEnumNames.
+//
+// The confirmation printed `RUN_STATUS_COMPLETED` — a generated Go identifier
+// in a sentence aimed at a human, in the one place the CLI asks permission to
+// destroy data. The report elsewhere renders the same value as "completed".
+func TestPurgePromptDoesNotLeakRawEnumNames(t *testing.T) {
+	t.Parallel()
+
+	cases := writeCases(t, 50)
+	db := filepath.Join(t.TempDir(), "kno.db")
+	if _, _, code := run(t, "baseline", "--evals", cases, "--db", db, "--run-id", "r1"); code != errs.ExitOK {
+		t.Fatalf("baseline exit %d", code)
+	}
+
+	out, _, _ := run(t, "purge", "--run-id", "r1", "--db", db)
+	if strings.Contains(out, "RUN_STATUS_") {
+		t.Errorf("the prompt shows a raw enum name:\n%s", out)
+	}
+	if !strings.Contains(out, "completed") {
+		t.Errorf("the prompt does not name the run's status in the CLI's own words:\n%s", out)
+	}
+}

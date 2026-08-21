@@ -54,6 +54,22 @@ type Store interface {
 	// change the denominator behind every delta computed against this run.
 	RecordOutcome(ctx context.Context, runID string, out *Outcome) error
 
+	// Purge removes trace content from a run without making it un-resumable,
+	// returning how many outcomes were affected.
+	//
+	// Implementations MUST NOT delete outcome rows. The outcome row is the
+	// done-marker; deleting it would make a purged run pay for every Case a
+	// second time on resume. See docs/debt.md#25.
+	Purge(ctx context.Context, runID string) (int64, error)
+
+	// ScoreSum returns the sum of recorded scores, how many Cases contributed
+	// one, and how many scored but can no longer contribute — their number
+	// having been purged before it was stored in a column.
+	//
+	// The third value exists so a caller can refuse to report an aggregate
+	// rather than report one biased toward zero.
+	ScoreSum(ctx context.Context, runID string) (sum float64, counted, unrecoverable int, err error)
+
 	// CompletedCases returns the IDs of every Case with a terminal outcome.
 	//
 	// Resume uses this to skip finished work. It loads the full set into

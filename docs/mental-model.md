@@ -107,6 +107,8 @@ Work is checkpointed as each Case completes, in one transaction with its result 
 
 An interrupted run exits `4`, not `1`: it is resumable, not broken, and a CI gate should tell those apart. A second Ctrl-C during the shutdown drain kills the process the ordinary way.
 
+The same design decides how deletion works. `kno purge` removes the agent's output and the judge's rationale — the parts that can be conversation content — and keeps the score, the cost, and the completion record. It never deletes a row, because deleting the row deletes the done-marker, and a purged run would then pay for every Case a second time. A privacy feature that costs you money is not one.
+
 Resuming is refused if the evals, the goal, or the agent changed — averaging Cases measured under two configurations into one number is the same corruption the holdout rule exists to prevent, arriving through a different door.
 
 ## Where to go next
