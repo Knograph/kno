@@ -292,6 +292,24 @@ func (s *SQLite) CompletedCases(ctx context.Context, runID string) (map[string]s
 	return out, nil
 }
 
+// OutcomeCounts reports how many Cases a run scored and how many errored.
+func (s *SQLite) OutcomeCounts(ctx context.Context, runID string) (scored, errored int, err error) {
+	db, err := s.conn()
+	if err != nil {
+		return 0, 0, err
+	}
+
+	// COALESCE for the same reason SettledSpend needs it: a run with no
+	// outcomes yet must read as zero rather than failing the scan.
+	err = db.QueryRowContext(ctx,
+		`SELECT COALESCE(SUM(scored), 0), COALESCE(SUM(1 - scored), 0)
+		 FROM outcomes WHERE run_id = ?`, runID).Scan(&scored, &errored)
+	if err != nil {
+		return 0, 0, fmt.Errorf("counting outcomes for %s: %w", runID, err)
+	}
+	return scored, errored, nil
+}
+
 // SettledSpend sums what a run actually spent.
 func (s *SQLite) SettledSpend(ctx context.Context, runID string) (budget.Spend, error) {
 	db, err := s.conn()

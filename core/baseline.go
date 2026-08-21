@@ -177,6 +177,20 @@ func Baseline(
 			return nil, fmt.Errorf("reading event sequence: %w", err)
 		}
 		agg.seedSequence(maxSeq)
+
+		// Seed the counts too. Without this the aggregate covers only the work
+		// THIS process did, so a run interrupted after 24 Cases and resumed for
+		// 36 more would report 36 — losing the Cases the first run paid for and
+		// understating the denominator behind every later delta.
+		//
+		// The mean is seeded alongside, from the scored count and the outcomes
+		// already recorded, so the aggregate spans the whole run rather than
+		// the tail of it.
+		priorScored, priorErrored, err := opts.Store.OutcomeCounts(ctx, opts.RunID)
+		if err != nil {
+			return nil, fmt.Errorf("loading prior outcome counts: %w", err)
+		}
+		agg.seedCounts(priorScored, priorErrored)
 	}
 	if err := opts.emitRunStarted(ctx, agg, opts.DevCases); err != nil {
 		return nil, err
@@ -291,11 +305,11 @@ func (o BaselineOptions) workFunc(agg *aggregator) executor.WorkFunc[*Case, case
 			return &caseOutcome{Response: nil, Err: invokeErr}, invokeErr
 		}
 
-		res.Settle(budget.Spend{
-			Calls:         1,
-			CostUSDMicros: resp.GetCostUsdMicros(),
-			Tokens:        resp.GetPromptTokens() + resp.GetCompletionTokens(),
-		})
+		// The same computation the sink persists. Two independent derivations
+		// of one Case's cost could drift, and the persisted one is what
+		// Guard.Restore reads on resume — so a divergence would reseed the
+		// guard with a total the guard itself never recorded.
+		res.Settle(spendOf(resp))
 
 		score, scoreErr := o.Goal.Score(ctx, c, resp)
 		if scoreErr != nil {

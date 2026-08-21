@@ -26,6 +26,11 @@ type aggregator struct {
 	scored  int
 	errored int
 	seq     int64
+
+	// Counts carried over from an interrupted run, so the totals describe the
+	// whole run rather than only the resumed portion.
+	priorScored  int
+	priorErrored int
 }
 
 func (a *aggregator) add(value float64) {
@@ -44,7 +49,7 @@ func (a *aggregator) addError() {
 func (a *aggregator) counts() (scored, errored int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.scored, a.errored
+	return a.scored + a.priorScored, a.errored + a.priorErrored
 }
 
 // mean returns the aggregate over scored Cases, or nil when nothing scored.
@@ -68,6 +73,19 @@ func (a *aggregator) next() int64 {
 	defer a.mu.Unlock()
 	a.seq++
 	return a.seq
+}
+
+// seedCounts carries a prior run's outcome counts into this process.
+//
+// Only the counts, not the score sum: the individual Scores live in the store
+// and are not re-read, so a resumed run's aggregate is the mean over the Cases
+// IT scored. That is recorded as debt rather than silently presented as the
+// whole run's mean — see docs/debt.md#27.
+func (a *aggregator) seedCounts(scored, errored int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.priorScored = scored
+	a.priorErrored = errored
 }
 
 // seedSequence continues numbering after a resume rather than restarting at 1,

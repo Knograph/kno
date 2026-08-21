@@ -787,3 +787,64 @@ func TestDefaultNowIsUsedWhenUnset(t *testing.T) {
 		t.Error("no finish timestamp recorded")
 	}
 }
+
+// TestResumedRunReportsTheWholeRunNotJustTheResumedPart.
+//
+// The aggregator starts empty in each process, so a resumed run's counts
+// covered only the work IT did. A run that scored 24 Cases, was interrupted,
+// and then scored 36 more recorded 36 — not 60.
+//
+// Those counts are the denominator behind every delta later measured against
+// this baseline. Reporting the resumed portion as the whole run understates
+// the sample, and every Asset measured against it would look better than it is.
+func TestResumedRunReportsTheWholeRunNotJustTheResumedPart(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const total = 60
+	h := newHarness(t, total, 10, fake.Options{})
+
+	// Stop partway by capping calls.
+	h.opts.Guard = budget.New(budget.Limits{MaxLLMCalls: 20}, nil, 0)
+	first, err := core.Baseline(ctx, h.evals, h.opts)
+	if !errors.Is(err, errs.ErrBudgetExceeded) {
+		t.Fatalf("first run: %v", err)
+	}
+	firstScored := first.Run.GetScoredCaseCount()
+	if firstScored == 0 || firstScored >= total {
+		t.Fatalf("first run scored %d of %d; the fixture is not exercising a partial run",
+			firstScored, total)
+	}
+
+	// Resume to completion.
+	opts := h.opts
+	opts.Resume = true
+	opts.Agent = fake.New(fake.Options{})
+	opts.Guard = budget.New(budget.Limits{}, nil, 0)
+
+	second, err := core.Baseline(ctx, h.evals, opts)
+	if err != nil {
+		t.Fatalf("resumed run: %v", err)
+	}
+
+	// Every Case in the eval set has now been executed exactly once, across
+	// two processes. The Run must say so.
+	if got := second.Run.GetScoredCaseCount(); got != total {
+		t.Errorf("the completed run reports %d scored Cases, want %d; it counted only "+
+			"the resumed portion and lost the %d Cases the first run paid for",
+			got, total, firstScored)
+	}
+	if got := second.Run.GetAttemptedCaseCount(); got != total {
+		t.Errorf("attempted = %d, want %d", got, total)
+	}
+
+	// And the persisted outcomes agree with the reported counts.
+	done, err := h.store.CompletedCases(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("CompletedCases: %v", err)
+	}
+	if len(done) != int(second.Run.GetAttemptedCaseCount()) {
+		t.Errorf("the store holds %d outcomes but the Run claims %d attempted",
+			len(done), second.Run.GetAttemptedCaseCount())
+	}
+}

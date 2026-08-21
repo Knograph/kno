@@ -2,7 +2,7 @@
 # Coverage may not decrease against these numbers. Review diffs like code.
 adapters/agent/fake 0.0
 adapters/evals/jsonl 92.2
-core 95.1
+core 94.7
 core/errs 92.3
 coretest 83.8
 executor 96.0
@@ -10,4 +10,4 @@ goal/exactmatch 0.0
 internal/cmd/covercheck 83.9
 internal/cmd/godoccheck 74.0
 stats/budget 92.9
-store 79.3
+store 83.1

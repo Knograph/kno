@@ -615,3 +615,120 @@ func TestCloseDoesNotRaceWithInFlightCalls(t *testing.T) {
 		t.Log("note: the store was still open when this ran; no race either way")
 	}
 }
+
+// TestOutcomeCountsSpanTheWholeRun covers what a resumed run reads to report
+// counts for the whole run rather than only the portion it executed.
+func TestOutcomeCountsSpanTheWholeRun(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := newStore(t)
+
+	if err := s.CreateRun(ctx, newRun("run-1")); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	// A fresh run has counted nothing, and that must read as zero rather than
+	// failing the scan.
+	scored, errored, err := s.OutcomeCounts(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("OutcomeCounts on an empty run: %v", err)
+	}
+	if scored != 0 || errored != 0 {
+		t.Errorf("empty run = %d scored, %d errored; want 0, 0", scored, errored)
+	}
+
+	for i := range 7 {
+		if err := s.RecordOutcome(ctx, "run-1", scoredOutcome(fmt.Sprintf("ok-%d", i), 1, 100)); err != nil {
+			t.Fatalf("RecordOutcome: %v", err)
+		}
+	}
+	for i := range 3 {
+		out := &store.Outcome{
+			CaseID: fmt.Sprintf("bad-%d", i),
+			Err:    "AGENT_ERROR",
+			Spend:  budget.Spend{Calls: 1},
+		}
+		if err := s.RecordOutcome(ctx, "run-1", out); err != nil {
+			t.Fatalf("RecordOutcome: %v", err)
+		}
+	}
+
+	scored, errored, err = s.OutcomeCounts(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("OutcomeCounts: %v", err)
+	}
+	if scored != 7 || errored != 3 {
+		t.Errorf("counts = %d scored, %d errored; want 7 and 3", scored, errored)
+	}
+}
+
+// TestOutcomeCountsAreScopedToTheirRun: a resumed run must not inherit another
+// run's counts, which would inflate its reported denominator.
+func TestOutcomeCountsAreScopedToTheirRun(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := newStore(t)
+
+	for _, id := range []string{"run-1", "run-2"} {
+		if err := s.CreateRun(ctx, newRun(id)); err != nil {
+			t.Fatalf("CreateRun %s: %v", id, err)
+		}
+	}
+	if err := s.RecordOutcome(ctx, "run-1", scoredOutcome("c1", 1, 10)); err != nil {
+		t.Fatalf("RecordOutcome: %v", err)
+	}
+
+	scored, errored, err := s.OutcomeCounts(ctx, "run-2")
+	if err != nil {
+		t.Fatalf("OutcomeCounts: %v", err)
+	}
+	if scored != 0 || errored != 0 {
+		t.Errorf("run-2 = %d scored, %d errored; counts leaked across runs", scored, errored)
+	}
+}
+
+// TestClosedStoreRefusesEveryOperation.
+//
+// A closed store must report that plainly rather than panicking on a nil
+// handle, since the executor's shutdown is drain-then-close and a late call is
+// expected rather than exceptional.
+func TestClosedStoreRefusesEveryOperation(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	s, err := store.NewSQLite(ctx, filepath.Join(t.TempDir(), "kno.db"))
+	if err != nil {
+		t.Fatalf("opening: %v", err)
+	}
+	if err := s.CreateRun(ctx, newRun("run-1")); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if _, _, err := s.OutcomeCounts(ctx, "run-1"); err == nil {
+		t.Error("OutcomeCounts on a closed store returned no error")
+	}
+	if _, err := s.SettledSpend(ctx, "run-1"); err == nil {
+		t.Error("SettledSpend on a closed store returned no error")
+	}
+	if _, err := s.CompletedCases(ctx, "run-1"); err == nil {
+		t.Error("CompletedCases on a closed store returned no error")
+	}
+	if _, err := s.GetRun(ctx, "run-1"); err == nil {
+		t.Error("GetRun on a closed store returned no error")
+	}
+	if err := s.RecordOutcome(ctx, "run-1", scoredOutcome("c", 1, 1)); err == nil {
+		t.Error("RecordOutcome on a closed store returned no error")
+	}
+	if err := s.AppendEvent(ctx, &knov1.Event{RunId: "run-1", Sequence: 1}); err == nil {
+		t.Error("AppendEvent on a closed store returned no error")
+	}
+	if _, err := s.MaxEventSequence(ctx, "run-1"); err == nil {
+		t.Error("MaxEventSequence on a closed store returned no error")
+	}
+	if err := s.FinishRun(ctx, newRun("run-1")); err == nil {
+		t.Error("FinishRun on a closed store returned no error")
+	}
+}
