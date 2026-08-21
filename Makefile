@@ -324,6 +324,18 @@ bench-diff: ## Tripwire: fails once benchmarks exist, until the gate is implemen
 docs: ## Regenerate OpenAPI, check godoc coverage, verify links
 	@go run ./internal/cmd/godoccheck
 	@$(call pending,OpenAPI generation,the first proto service definition)
+	@$(SAFE) broken=0; \
+	for f in $$(find . -name '*.md' -not -path './bin/*' -not -path './.git/*'); do \
+		dir=$$(dirname "$$f"); \
+		for link in $$(grep -oE '\]\([^)#h][^)]*\.md\)' "$$f" 2>/dev/null | tr -d '])' | sed 's/^(//'); do \
+			if [ ! -f "$$dir/$$link" ]; then \
+				printf '\033[31m FAIL \033[0m broken link in %s: %s\n' "$$f" "$$link"; \
+				broken=1; \
+			fi; \
+		done; \
+	done; \
+	if [ "$$broken" -ne 0 ]; then exit 1; fi; \
+	printf '\033[32m  OK  \033[0m every internal doc link resolves\n'
 
 ## ─── Meta ───────────────────────────────────────────────────────────────────
 
