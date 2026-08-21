@@ -155,6 +155,13 @@ type BaselineResult struct {
 
 	// Stats is what the executor did.
 	Stats executor.Stats
+
+	// Spent is what the run actually cost, settled.
+	//
+	// Carried here rather than on the Run because it is the guard's number,
+	// not the schema's — and a caller reporting spend should read what the
+	// guard settled rather than re-deriving it from stored outcomes.
+	Spent budget.Spend
 }
 
 // Baseline runs the agent over the dev Cases and scores each Response.
@@ -507,7 +514,12 @@ func (o BaselineOptions) closeRun(
 		}
 	}
 
-	result := &BaselineResult{Run: run, Stats: stats, AggregateScore: agg.mean()}
+	result := &BaselineResult{
+		Run:            run,
+		Stats:          stats,
+		AggregateScore: agg.mean(),
+		Spent:          o.Guard.Spent(),
+	}
 
 	// Recording how the run ended must survive the cancellation that ended it:
 	// on Ctrl-C the caller's context is precisely the one that died, and a Run

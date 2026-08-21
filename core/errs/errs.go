@@ -67,6 +67,18 @@ var (
 		ExitCode: ExitError,
 	}
 
+	// ErrInvalidInput means the user gave the command something it cannot use
+	// — a missing file, a malformed record, an unknown adapter name.
+	//
+	// Distinct from a run failure: nothing was attempted and nothing was
+	// spent, so the fix is always to change the input rather than to resume.
+	ErrInvalidInput = &Actionable{
+		Code:     "INVALID_INPUT",
+		Message:  "the command cannot use the input it was given",
+		Fix:      "check the flags and files named above",
+		ExitCode: ExitError,
+	}
+
 	// ErrRateLimited means a provider asked us to slow down. Transient: the
 	// caller should back off and retry rather than fail the run.
 	ErrRateLimited = &Actionable{

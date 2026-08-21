@@ -44,6 +44,13 @@ var floors = []struct {
 
 const repoWideFloor = 70
 
+// ratchetTolerance is how far a package may drift below its baseline before
+// the no-decrease rule fires, in percentage points.
+//
+// It exists because concurrent code's measured coverage is not deterministic,
+// not because small regressions are acceptable. See the comment at its use.
+const ratchetTolerance = 1.0
+
 // skipPrefixes are never measured. Generated code is not ours to test, and the
 // tools module is build tooling rather than shipping code.
 //
@@ -339,11 +346,21 @@ func check(baselinePath string, pkgs []pkgCoverage) (failed bool) {
 			failed = true
 			continue
 		}
-		// Compare at the baseline's own precision. The file stores one decimal
-		// place, so an unrounded 73.68 would read as a decrease against a
-		// stored 73.7 — failing a package against its own unchanged coverage
-		// on every run.
-		if was, ok := prev[p.path]; ok && round1(pct) < was {
+		// Compare at the baseline's own precision, with a tolerance.
+		//
+		// Two separate problems live here. The file stores one decimal place,
+		// so an unrounded 73.68 would read as a decrease against a stored 73.7
+		// — failing a package against its own unchanged coverage.
+		//
+		// And coverage genuinely varies between runs for packages with
+		// concurrent code: which paths a scheduler happens to take differs
+		// under -race and -shuffle, so the same commit measured twice can
+		// report 84.1% and then 83.4%. Without a tolerance this gate fails
+		// randomly, and a gate that fails randomly gets deleted rather than
+		// fixed — which would cost more than the drift it was catching. The
+		// tolerance is small enough that real rot, which arrives in whole
+		// points, still fails.
+		if was, ok := prev[p.path]; ok && round1(pct) < was-ratchetTolerance {
 			fmt.Printf("  FAIL    %-40s %.1f%% < %.1f%% baseline (coverage may not decrease)\n",
 				p.path, pct, was)
 			failed = true

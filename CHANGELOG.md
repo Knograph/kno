@@ -31,6 +31,9 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
+- `kno baseline`: the first user-facing command. Runs the agent over the dev half of an eval set,
+  scores it, reports what it cost, and names the next step. Exit codes distinguish a budget stop
+  (resumable) from a failure, so CI can gate on the difference. `--json` for pipelines.
 - `core.Baseline`: the first pipeline stage. Runs an agent over the dev Cases, scores each
   Response, persists every outcome, and survives interruption. Takes a `*SealedEvals`, so a stage
   that could read the holdout does not compile.
