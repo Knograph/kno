@@ -99,6 +99,22 @@ func usdToMicros(usd float64) int64 {
 	return int64(usd*1_000_000 + 0.5)
 }
 
+// validateCaps refuses budget flags that would disable the thing they name.
+func (f baselineFlags) validateCaps() error {
+	switch {
+	case f.maxCostUSD < 0:
+		return errs.ErrInvalidInput.WithFix("pass a positive --max-cost-usd, or omit it for no cap").
+			Wrap(fmt.Errorf("--max-cost-usd is %.2f; a negative cap would disable the limit, not tighten it", f.maxCostUSD))
+	case f.maxCalls < 0:
+		return errs.ErrInvalidInput.WithFix("pass a positive --max-calls, or omit it for no cap").
+			Wrap(fmt.Errorf("--max-calls is %d; a negative cap would disable the limit, not tighten it", f.maxCalls))
+	case f.costPerCall < 0:
+		return errs.ErrInvalidInput.WithFix("pass a positive --cost-per-call-usd").
+			Wrap(fmt.Errorf("--cost-per-call-usd is %.2f; a negative estimate would credit the budget on every call", f.costPerCall))
+	}
+	return nil
+}
+
 func runBaseline(ctx context.Context, out io.Writer, f baselineFlags) error {
 	evals, err := jsonl.New(jsonl.Options{
 		Path:        f.evalsPath,
@@ -121,6 +137,14 @@ func runBaseline(ctx context.Context, out io.Writer, f baselineFlags) error {
 	if err := counts.Validate(); err != nil {
 		return errs.ErrInvalidInput.WithFix(
 			"add more cases, or lower --holdout-frac").Wrap(err)
+	}
+
+	// A negative cap must not read as an absent one. The guard treats a limit
+	// as active only when positive, so --max-cost-usd -1 would sail past the
+	// dollar check entirely and spend without a ceiling — the silent-spend
+	// failure prime directive 4 exists to prevent, reached by a typo.
+	if err := f.validateCaps(); err != nil {
+		return err
 	}
 
 	agent, agentRef, err := resolveAgent(f.agentRef)
@@ -182,10 +206,17 @@ func runBaseline(ctx context.Context, out io.Writer, f baselineFlags) error {
 		return runErr
 	}
 
-	if err := render(out, f, res, counts, runID); err != nil {
-		return err
+	renderErr := render(out, f, res, counts, runID)
+	// The run's own error wins. Rendering happens first so a budget stop or an
+	// interruption still shows what it accomplished — but if stdout is a
+	// closed pipe, reporting THAT instead would exit 1 ("broken") for a run
+	// that in fact stopped exactly as configured, which is the misclassification
+	// the exit-code grammar exists to avoid.
+	if runErr != nil {
+		return runErr
 	}
-	// The run's own error is returned AFTER rendering, so a budget stop or an
-	// interruption still shows what it accomplished before exiting non-zero.
-	return runErr
+	if renderErr != nil {
+		return renderErr
+	}
+	return nil
 }

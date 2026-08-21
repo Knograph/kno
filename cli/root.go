@@ -45,10 +45,23 @@ runs; the rest arrive milestone by milestone.`,
 // only be tested by spawning a subprocess.
 func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	// Ctrl-C cancels the context rather than killing the process, so a run
-	// checkpoints what it finished instead of losing it. A second Ctrl-C
-	// restores the default behavior and exits immediately.
+	// checkpoints what it finished instead of losing it.
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
-	defer stop()
+
+	// A second Ctrl-C must kill the process. NotifyContext keeps swallowing
+	// signals until stop is called, so deferring stop to the end of Execute
+	// would silently eat every further Ctrl-C during the shutdown drain —
+	// exactly when a user staring at an apparently hung command reaches for
+	// it. Unregistering as soon as the first signal lands restores the default
+	// behavior for the next one.
+	// stop cancels ctx as well as unregistering, so the deferred call both
+	// releases the watcher and covers the normal-exit path. Waiting keeps
+	// Execute free of a goroutine still running after it returns.
+	wait := restoreDefaultOnFirstSignal(ctx, stop)
+	defer func() {
+		stop()
+		wait()
+	}()
 
 	root := NewRootCmd()
 	root.SetArgs(args)
@@ -60,6 +73,22 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return errs.ExitCodeOf(err)
 	}
 	return errs.ExitOK
+}
+
+// restoreDefaultOnFirstSignal unregisters the signal handler as soon as ctx is
+// cancelled, and returns a function that waits for that watcher to finish.
+//
+// Extracted so the behavior is testable without delivering a real second
+// signal, which would kill the test process — which is also why the bug it
+// fixes survived review the first time.
+func restoreDefaultOnFirstSignal(ctx context.Context, stop context.CancelFunc) func() {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		<-ctx.Done()
+		stop()
+	}()
+	return func() { <-done }
 }
 
 // renderError prints a failure in the grammar: what failed, why, the fix.

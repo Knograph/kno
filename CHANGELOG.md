@@ -24,6 +24,25 @@ covenants — breaking any of them requires a major version.
 
 ### Fixed
 
+- A resume compared only the caller-supplied input fingerprint, which covers the eval file and the
+  split but not the Goal or the Agent. Resuming a run with a different `--agent` or `--goal` was
+  accepted, blending Cases scored under two different configurations into one `AggregateScore`
+  presented as a single homogeneous number. `core.Baseline` now compares the recorded Goal, Goal
+  direction, and Agent directly and refuses, naming which one changed.
+- The dev/holdout refusal — a run that can never produce a holdout number — was enforced only in
+  `cli/`, so any other caller of `core.Baseline` could run against an empty holdout with no refusal
+  at all. The check now lives in the stage, where the docs already claimed it was.
+- An interrupted run returned a bare `context.Canceled` and exited `1`, indistinguishable from a
+  broken build. It now returns `errs.ErrInterrupted` and exits `4` (see Added).
+- A second Ctrl-C during shutdown was silently swallowed. `signal.NotifyContext` keeps intercepting
+  signals until `stop` is called, and `stop` was deferred to the end of `Execute`; it now runs as
+  soon as the first signal lands, restoring the default behavior for the next one.
+- A negative `--max-cost-usd` or `--max-calls` disabled the cap instead of tightening it, because
+  the guard treats a limit as active only when positive. Both are now refused.
+- A cost cap without `--cost-per-call-usd` failed with a bare error carrying no fix line and exit
+  `1` by fallthrough. It now follows the CLI error grammar.
+- A failure to write the report — a closed stdout pipe — replaced the run's own outcome, so a
+  legitimate budget stop exited `1` instead of `2`. The run's error now wins.
 - `budget.Guard` had no persistence, so a resumed run started at zero spent regardless of what the
   killed run had actually spent — a run near its cap could authorize nearly the whole cap a second
   time, for up to twice the intended spend across one kill/resume cycle. `Guard.Restore` reseeds
@@ -31,6 +50,10 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
+- Exit code `4`, `ExitInterrupted`: a run ended by a signal or a deadline is resumable, not broken.
+  Additive to the exit-code contract; `2` and `4` are the two resumable outcomes.
+- README: quickstart with verified output, the exit-code contract, and a stage-by-stage status
+  table. It had gone untouched from the first commit through a working `kno baseline`.
 - `kno baseline`: the first user-facing command. Runs the agent over the dev half of an eval set,
   scores it, reports what it cost, and names the next step. Exit codes distinguish a budget stop
   (resumable) from a failure, so CI can gate on the difference. `--json` for pipelines.

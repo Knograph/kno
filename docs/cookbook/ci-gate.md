@@ -14,17 +14,21 @@ kno baseline --evals cases.jsonl --json > report.json
 | `1` | Failed | Fail the build — something is broken |
 | `2` | Stopped at a budget cap | **Not a failure.** The run did what you told it |
 | `3` | Validation failed | Fail the build — this is the deploy gate (reserved for `kno validate`) |
+| `4` | Interrupted (signal or deadline) | **Not a failure.** Resume it |
 
-The distinction between `1` and `2` matters. A run that stopped at its spending limit did exactly what you configured; treating it as a broken build trains people to ignore the signal.
+The distinction between `1` and the two resumable codes matters. A run that stopped at its spending limit did exactly what you configured, and a run killed by a pod eviction or a job timeout is not broken either. Reporting both as `1` trains people to ignore `1` — which is the one code your gate actually depends on.
 
 ```bash
 kno baseline --evals cases.jsonl --json > report.json
 case $? in
-  0) echo "baseline complete" ;;
-  2) echo "stopped at budget cap; resume or raise it" ; exit 0 ;;
-  *) echo "baseline failed" ; exit 1 ;;
+  0)   echo "baseline complete" ;;
+  2)   echo "stopped at budget cap; resume or raise it" ; exit 0 ;;
+  4)   echo "interrupted; re-run with --resume" ; exit 0 ;;
+  *)   echo "baseline failed" ; exit 1 ;;
 esac
 ```
+
+Both `2` and `4` leave a resumable run: work already recorded is never paid for twice.
 
 ## Machine-readable output
 
@@ -79,7 +83,9 @@ kno baseline --evals cases.jsonl --run-id "nightly-$(date +%F)" --max-calls 5000
 kno baseline --evals cases.jsonl --run-id "nightly-$(date +%F)" --resume
 ```
 
-Resume skips completed Cases and reconstructs prior spend from disk, so the cap holds across both invocations. A resume against changed evals is refused, naming which input changed — continuing would mix results measured over different Case sets into one run.
+Resume skips completed Cases and reconstructs prior spend from disk, so the cap holds across both invocations.
+
+A resume is refused if the **evals, the goal, or the agent** changed since the run was recorded, and the message names which one. Continuing would average Cases scored under one configuration together with Cases scored under another and present the result as a single number — which looks like one measurement and is not.
 
 ## What not to gate on yet
 

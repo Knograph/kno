@@ -401,3 +401,80 @@ func TestMissingRequiredFlagIsRefused(t *testing.T) {
 		t.Error("baseline ran without --evals")
 	}
 }
+
+// TestEveryUserReachableErrorNamesAFix.
+//
+// A Phase-3 review found `--max-cost-usd` without `--cost-per-call-usd`
+// returning a bare errors.New from core: no fix line, and exit 1 by fallthrough
+// rather than by choice. The exit-code case above passed anyway, because it
+// asserted only the code. This asserts the grammar CLAUDE.md requires.
+func TestEveryUserReachableErrorNamesAFix(t *testing.T) {
+	t.Parallel()
+
+	cases := writeCases(t, 50)
+
+	tests := []struct {
+		name     string
+		args     []string
+		wantFrag string
+	}{
+		{
+			name:     "cost cap with no per-call estimate",
+			args:     []string{"--max-cost-usd", "5", "--yes"},
+			wantFrag: "--cost-per-call-usd",
+		},
+		{
+			name:     "negative cost cap",
+			args:     []string{"--max-cost-usd", "-1", "--cost-per-call-usd", "0.01", "--yes"},
+			wantFrag: "--max-cost-usd",
+		},
+		{
+			name:     "negative call cap",
+			args:     []string{"--max-calls", "-1"},
+			wantFrag: "--max-calls",
+		},
+		{
+			name:     "negative per-call estimate",
+			args:     []string{"--cost-per-call-usd", "-0.01"},
+			wantFrag: "--cost-per-call-usd",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			args := append([]string{"baseline", "--evals", cases}, tc.args...)
+			args = append(args, "--db", filepath.Join(t.TempDir(), "kno.db"))
+			_, stderr, code := run(t, args...)
+
+			if code == errs.ExitOK {
+				t.Fatalf("the command succeeded; stderr: %s", stderr)
+			}
+			if !strings.Contains(stderr, "fix:") {
+				t.Errorf("no fix line:\n%s", stderr)
+			}
+			if !strings.Contains(stderr, tc.wantFrag) {
+				t.Errorf("the message never names %s:\n%s", tc.wantFrag, stderr)
+			}
+		})
+	}
+}
+
+// TestNegativeCapsDoNotDisableTheCap is the money half of the case above,
+// stated separately because the failure mode is silent rather than loud: the
+// guard treats a limit as active only when positive, so a negative
+// --max-cost-usd read as "unlimited" and spent without a ceiling.
+func TestNegativeCapsDoNotDisableTheCap(t *testing.T) {
+	t.Parallel()
+
+	cases := writeCases(t, 50)
+	_, stderr, code := run(t, "baseline", "--evals", cases,
+		"--max-cost-usd", "-1", "--cost-per-call-usd", "0.01", "--yes",
+		"--db", filepath.Join(t.TempDir(), "kno.db"))
+
+	if code == errs.ExitOK {
+		t.Fatalf("a negative spend cap ran to completion, which means it was "+
+			"treated as no cap at all; stderr: %s", stderr)
+	}
+}

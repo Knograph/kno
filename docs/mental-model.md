@@ -105,6 +105,10 @@ Every run reports three counts — attempted, scored, errored — so the exclusi
 
 Work is checkpointed as each Case completes, in one transaction with its result — there is no separate "done" marker that a crash could leave disagreeing with the data. Resume skips what's finished and reconstructs prior spend from disk, so an interrupted run cannot spend its budget twice.
 
+An interrupted run exits `4`, not `1`: it is resumable, not broken, and a CI gate should tell those apart. A second Ctrl-C during the shutdown drain kills the process the ordinary way.
+
+Resuming is refused if the evals, the goal, or the agent changed — averaging Cases measured under two configurations into one number is the same corruption the holdout rule exists to prevent, arriving through a different door.
+
 ## Where to go next
 
 - **[What the numbers mean](what-the-numbers-mean.md)** — confidence intervals, the winner's curse in detail, and what a delta does not tell you.

@@ -324,18 +324,25 @@ bench-diff: ## Tripwire: fails once benchmarks exist, until the gate is implemen
 docs: ## Regenerate OpenAPI, check godoc coverage, verify links
 	@go run ./internal/cmd/godoccheck
 	@$(call pending,OpenAPI generation,the first proto service definition)
-	@$(SAFE) broken=0; \
+	@$(SAFE) broken=0; checked=0; \
 	for f in $$(find . -name '*.md' -not -path './bin/*' -not -path './.git/*'); do \
 		dir=$$(dirname "$$f"); \
-		for link in $$(grep -oE '\]\([^)#h][^)]*\.md\)' "$$f" 2>/dev/null | tr -d '])' | sed 's/^(//'); do \
-			if [ ! -f "$$dir/$$link" ]; then \
-				printf '\033[31m FAIL \033[0m broken link in %s: %s\n' "$$f" "$$link"; \
+		for target in $$(grep -oE '\]\([^)[:space:]]+\)' "$$f" 2>/dev/null \
+			| sed -e 's/^](//' -e 's/)$$//'); do \
+			case "$$target" in \
+				\#*|http://*|https://*|mailto:*|tel:*) continue ;; \
+			esac; \
+			path=$$(printf '%s' "$$target" | sed 's/#.*$$//'); \
+			[ -n "$$path" ] || continue; \
+			checked=$$((checked+1)); \
+			if [ ! -e "$$dir/$$path" ]; then \
+				printf '\033[31m FAIL \033[0m broken link in %s: %s\n' "$$f" "$$target"; \
 				broken=1; \
 			fi; \
 		done; \
 	done; \
 	if [ "$$broken" -ne 0 ]; then exit 1; fi; \
-	printf '\033[32m  OK  \033[0m every internal doc link resolves\n'
+	printf '\033[32m  OK  \033[0m %d internal doc links resolve\n' "$$checked"
 
 ## ─── Meta ───────────────────────────────────────────────────────────────────
 
