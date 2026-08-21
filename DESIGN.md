@@ -207,7 +207,7 @@ type Asset struct {
 }
 ```
 
-Agent and model references use one URI-ish scheme everywhere — `openai:gpt-4.1`, `anthropic:claude-sonnet-4-6`, `http://localhost:8000/v1`, `tuned:<job-ref>`, `exec:kno-agent-mybot` — documented once as "agent refs," used identically in config, flags, API, and SDKs.
+Agent and model references use one URI-ish scheme everywhere — `openai:gpt-4.1`, `anthropic:claude-sonnet-4-6`, `openai:llama3:8b@http://localhost:8000/v1`, `tuned:<job-ref>`, `exec:kno-agent-mybot` — documented once as "agent refs," used identically in config, flags, API, and SDKs.
 
 All supporting types (`Case`, `Score`, `Valuation`, `Portfolio`, `Report`) are defined **once, in protobuf** — schema source of truth from day one, so the later API, SDKs, plugins, and platform are codegen, not rewrites.
 

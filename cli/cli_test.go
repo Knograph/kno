@@ -728,3 +728,93 @@ func setRunStatusRunning(t *testing.T, dbPath, runID string) {
 		t.Fatalf("updating run: %v", err)
 	}
 }
+
+// TestAMalformedRefAndAnUnsupportedOneReadDifferently.
+//
+// Parsing and resolution are separate steps, and the whole point is that a typo
+// and an unsupported provider produce different messages. Both exit 1, so an
+// exit-code assertion cannot tell them apart — which is why the existing
+// exit-code table did not cover this.
+func TestAMalformedRefAndAnUnsupportedOneReadDifferently(t *testing.T) {
+	t.Parallel()
+
+	cases := writeCases(t, 50)
+
+	tests := []struct {
+		name string
+		ref  string
+		frag string
+	}{
+		{"a typo in the scheme", "opeani:gpt-4.1", "unknown scheme"},
+		{"a scheme that does not exist", "openai-compat:model", "unknown scheme"},
+		{"no scheme at all", "gpt-4.1", "no scheme"},
+		{"a well-formed reference with no adapter", "openai:gpt-4.1", "no adapter for agent ref"},
+		{"a command scheme with no command", "exec:", "no command"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, stderr, code := run(t, "baseline", "--evals", cases, "--agent", tc.ref,
+				"--db", filepath.Join(t.TempDir(), "kno.db"))
+			if code == errs.ExitOK {
+				t.Fatalf("--agent %s succeeded", tc.ref)
+			}
+			if !strings.Contains(stderr, tc.frag) {
+				t.Errorf("the message does not say %q:\n%s", tc.frag, stderr)
+			}
+			if !strings.Contains(stderr, "fix:") {
+				t.Errorf("no fix line:\n%s", stderr)
+			}
+		})
+	}
+}
+
+// TestACredentialInAnAgentRefIsNeverStored.
+//
+// AgentRef.Ref is written to the Run, put on the event stream, and rendered in
+// --json — and `kno purge` does not remove any of those, because it clears
+// outcome traces and not the Run's own agent field. Before this was fixed, four
+// copies of a credential survived a purge.
+func TestACredentialInAnAgentRefIsNeverStored(t *testing.T) {
+	t.Parallel()
+
+	const secret = "EXAMPLE-CREDENTIAL-VALUE"
+	cases := writeCases(t, 20)
+	dir := t.TempDir()
+	db := filepath.Join(dir, "kno.db")
+
+	for _, ref := range []string{
+		"fake:m@HTTPS://user:" + secret + "@api.evil.com/v1",
+		"fake:m@https://user:" + secret + "@api.evil.com/v1",
+	} {
+		_, stderr, code := run(t, "baseline", "--evals", cases, "--agent", ref, "--db", db)
+		if code == errs.ExitOK {
+			t.Errorf("--agent %s ran", ref)
+		}
+		if strings.Contains(stderr, secret) {
+			t.Errorf("the refusal echoed the credential:\n%s", stderr)
+		}
+	}
+
+	// Nothing reached disk.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("reading %s: %v", dir, err)
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatalf("reading %s: %v", e.Name(), err)
+		}
+		if bytes.Contains(b, []byte(secret)) {
+			t.Errorf("a credential from an agent ref reached %s; kno purge does "+
+				"not remove it, because purge clears outcome traces and not the "+
+				"Run's own agent field", e.Name())
+		}
+	}
+}

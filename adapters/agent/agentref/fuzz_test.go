@@ -40,6 +40,11 @@ func FuzzParse(f *testing.F) {
 		"OpenAI:GPT-4.1@HTTPS://HOST/V1",
 		"openai:model@http://[::1]:8000/v1",
 		"\x00openai:m",
+		"openai:m@HTTPS://user:pw@host/v1",
+		"openai:m@ https://user:pw@host/v1",
+		"openai:m@https:/user:pw@host/v1",
+		"openai:m@https://Host.Example.COM:443/v1/",
+		"fake:x@https://host/v1",
 		strings.Repeat("openai:", 50),
 	}
 	for _, s := range seeds {
@@ -78,7 +83,34 @@ func FuzzParse(f *testing.F) {
 				in, got.GetRef(), want)
 		}
 
-		// 3. Canonical form is stable.
+		// 3. A URL never sits in the model slot.
+		//
+		// This is the invariant whose ABSENCE let the author's own seed —
+		// "OpenAI:GPT-4.1@HTTPS://HOST/V1", seed 11 below — pass every other
+		// check while smuggling an absolute URL into Target and from there into
+		// Ref, which is persisted and emitted. The other invariants could not
+		// see it: BaseUrl was empty so 1 was skipped, and 2 and 4 were
+		// satisfied by construction.
+		if target := got.GetTarget(); strings.Contains(target, ":/") {
+			t.Errorf("Parse(%q) put a URL in Target=%q; Ref=%q is persisted on the "+
+				"Run, emitted on RunStarted, and rendered in --json",
+				in, target, got.GetRef())
+		}
+
+		// There is deliberately no fourth invariant about "@" in Ref.
+		//
+		// Two formulations were tried and both were resemblances rather than
+		// properties. A userinfo-shaped regexp flagged "openai:/@", which
+		// carries no URL. Counting "@" flagged "openai:0@http://0/@", where the
+		// second one is inside the URL PATH and entirely legitimate — the
+		// fuzzer's own earlier regression seed.
+		//
+		// Invariants 1 and 3 together already state it exactly: a credential
+		// needs a URL, a URL in the target is caught by 3, and a credential in
+		// the base URL is caught by 1. Adding a third check that approximates
+		// the same thing only adds false positives.
+
+		// 5. Canonical form is stable.
 		again, err := agentref.Parse(got.GetRef())
 		if err != nil {
 			t.Fatalf("Parse(%q) produced Ref %q, which does not parse: %v",

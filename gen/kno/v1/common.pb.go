@@ -774,9 +774,13 @@ func (x *Generation) GetMaxOutputTokens() int64 {
 //	openai:gpt-4.1
 //	anthropic:claude-sonnet-4-6
 //	openai:llama-3.3-70b@https://api.groq.com/openai/v1
-//	http://localhost:8000/v1
+//	openai:llama3:8b@http://localhost:8000/v1
 //	tuned:<job-ref>
 //	exec:kno-agent-mybot
+//
+// A BARE URL is not an agent reference. It names an endpoint with no model, and
+// every adapter needs one — write it as scheme:model@base-url instead. The form
+// is reserved rather than supported.
 //
 // The optional `@<base-url>` suffix points a scheme's adapter at a different
 // endpoint. One adapter, base_url-configurable, reaches every
@@ -793,10 +797,19 @@ type AgentRef struct {
 	// them — but this field is persisted on Run, emitted on RunStarted, and
 	// rendered in --json and logs. A user who typed
 	// `openai:m@https://sk-abc@host/v1` would otherwise put their key in all
-	// four. The parser strips URL userinfo before constructing this; it does not
-	// trust the caller to have done so.
+	// four. The parser REFUSES a reference carrying userinfo rather than
+	// stripping it: the credential is already in the user's shell history, and
+	// quietly rewriting what they typed hides that from them.
+	//
+	// Canonical, not verbatim. The scheme and the base URL's host are lowercased,
+	// a default port and trailing slashes are dropped, and surrounding whitespace
+	// is trimmed — because this value is what a resume compares, and two
+	// spellings of one agent must not read as two agents.
 	Ref string `protobuf:"bytes,1,opt,name=ref,proto3" json:"ref,omitempty"`
-	// Scheme, parsed from ref: "openai", "anthropic", "http", "tuned", "exec".
+	// Scheme, parsed from ref. A closed set: "openai", "anthropic", "fake",
+	// "exec", "tuned". Closed rather than open because an unrecognized scheme is
+	// far more often a typo than a provider Kno has never heard of, and naming
+	// the known ones is a better answer than failing later as a missing adapter.
 	Scheme string `protobuf:"bytes,2,opt,name=scheme,proto3" json:"scheme,omitempty"`
 	// Everything after the scheme and before any `@`: a model name, URL, or job
 	// reference.

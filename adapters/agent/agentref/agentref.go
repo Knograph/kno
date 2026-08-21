@@ -13,7 +13,9 @@ package agentref
 
 import (
 	"fmt"
+	"net"
 	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -65,6 +67,20 @@ var knownSchemes = map[string]bool{
 // every reader of the README types first.
 func schemeNeedsTarget(scheme string) bool { return scheme != SchemeFake }
 
+// whatSchemeNames says what a scheme's target IS, so a refusal uses the user's
+// word rather than the parser's. "exec: names a scheme with no model" is wrong:
+// exec names a command.
+func whatSchemeNames(scheme string) string {
+	switch scheme {
+	case SchemeExec:
+		return "command"
+	case SchemeTuned:
+		return "job"
+	default:
+		return "model"
+	}
+}
+
 // ErrMalformed means a reference does not fit the grammar.
 var ErrMalformed = fmt.Errorf("agentref: malformed")
 
@@ -84,8 +100,9 @@ func Parse(raw string) (*knov1.AgentRef, error) {
 	// Named explicitly so the error can say what to write instead.
 	if strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://") {
 		return nil, fmt.Errorf("%w: %q is a bare URL with no model. Write it as "+
-			"scheme:model@base-url, for example openai:llama-3.3-70b@%s",
-			ErrMalformed, redactRef(s), redactRef(s))
+			"scheme:model@base-url, for example "+
+			"openai:llama-3.3-70b@https://api.groq.com/openai/v1",
+			ErrMalformed, redactRef(s))
 	}
 
 	// Scheme ends at the FIRST colon. A model name may contain colons of its
@@ -104,15 +121,48 @@ func Parse(raw string) (*knov1.AgentRef, error) {
 	}
 
 	target, baseURL := splitBaseURL(rest)
-	if strings.TrimSpace(target) == "" && schemeNeedsTarget(scheme) {
-		return nil, fmt.Errorf("%w: %q names a scheme with no model",
+	target = strings.TrimSpace(target)
+	if target == "" && schemeNeedsTarget(scheme) {
+		return nil, fmt.Errorf("%w: %q names a scheme with no %s",
+			ErrMalformed, redactRef(s), whatSchemeNames(scheme))
+	}
+
+	// A model slot never legitimately contains a URL scheme. This does not
+	// depend on splitBaseURL having got the split right, which is the point:
+	// when the split MISSED — a scheme spelled HTTPS://, a fullwidth ＠, a typo
+	// like https:/host — the whole URL landed in the target and was
+	// reconstructed verbatim into Ref, which is persisted on the Run, emitted
+	// on RunStarted, and rendered in --json. A credential there reached all
+	// three and `kno purge` did not remove it, because purge clears outcome
+	// traces and not the Run's own agent field. Verified: four copies in the
+	// database, still there after a purge.
+	if strings.Contains(target, ":/") {
+		return nil, fmt.Errorf("%w: %q puts a URL where the model belongs. A base "+
+			"URL is introduced by @ and must begin http:// or https://",
 			ErrMalformed, redactRef(s))
+	}
+	if strings.Count(target, "@") > 1 {
+		// One @ can be part of a model name ("my-model@v2"). Two means a split
+		// that did not happen, and the second is almost certainly the userinfo
+		// separator of a URL this parser failed to recognize.
+		return nil, fmt.Errorf("%w: %q contains more than one @, so the base URL "+
+			"could not be identified", ErrMalformed, redactRef(s))
 	}
 
 	if baseURL != "" {
-		if err := checkBaseURL(baseURL); err != nil {
+		if !schemeUsesBaseURL(scheme) {
+			return nil, fmt.Errorf("%w: the %s scheme reaches no endpoint, so a "+
+				"base URL would be stored and never read", ErrMalformed, scheme)
+		}
+		canonical, err := checkBaseURL(baseURL)
+		if err != nil {
 			return nil, err
 		}
+		baseURL = canonical
+	}
+
+	if err := checkTarget(target); err != nil {
+		return nil, err
 	}
 
 	return &knov1.AgentRef{
@@ -140,8 +190,9 @@ func splitBaseURL(rest string) (target, baseURL string) {
 		if r != '@' {
 			continue
 		}
-		candidate := rest[i+1:]
-		if strings.HasPrefix(candidate, "http://") || strings.HasPrefix(candidate, "https://") {
+		candidate := strings.TrimSpace(rest[i+1:])
+		lower := strings.ToLower(candidate)
+		if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
 			return rest[:i], candidate
 		}
 	}
@@ -162,15 +213,15 @@ func suffix(baseURL string) string {
 // addresses, link-local — belongs to the transport, which applies it against
 // the resolved address. Duplicating those rules here would give two places to
 // change and one of them would drift.
-func checkBaseURL(raw string) error {
+func checkBaseURL(raw string) (string, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
 		// Neither the URL nor the parse error is echoed: a malformed URL can
 		// still carry a credential, and url.Parse quotes its input.
-		return fmt.Errorf("%w: the base URL could not be parsed", ErrMalformed)
+		return "", fmt.Errorf("%w: the base URL could not be parsed", ErrMalformed)
 	}
 	if u.Host == "" {
-		return fmt.Errorf("%w: the base URL has no host", ErrMalformed)
+		return "", fmt.Errorf("%w: the base URL has no host", ErrMalformed)
 	}
 	// A base URL is an endpoint root, not a request. A fragment is never sent
 	// to a server, and a query would be silently appended to every request the
@@ -182,36 +233,110 @@ func checkBaseURL(raw string) error {
 	// userinfo. Rejecting the fragment is the honest fix; special-casing the
 	// invariant to allow it would have been the convenient one.
 	if u.Fragment != "" || u.RawQuery != "" {
-		return fmt.Errorf("%w: the base URL carries a %s. It names an endpoint "+
+		return "", fmt.Errorf("%w: the base URL carries a %s. It names an endpoint "+
 			"root, and anything after it would be appended to every request",
 			ErrMalformed, map[bool]string{true: "fragment", false: "query string"}[u.Fragment != ""])
 	}
 	if u.User != nil {
 		// Refused, not stripped. The credential is already in the user's shell
 		// history; quietly rewriting it would hide that from them.
-		return fmt.Errorf("%w: the base URL carries a credential in its userinfo. "+
+		return "", fmt.Errorf("%w: the base URL carries a credential in its userinfo. "+
 			"Remove it and bind the key to the host through the environment",
 			ErrMalformed)
 	}
+
+	// Canonicalized, because Ref is what checkResumable compares across a
+	// resume. Stored byte-for-byte, "https://Host.Example.com/v1" and
+	// "https://host.example.com/v1" name one endpoint and compare as two — so
+	// a resume is refused, and the message tells the user the AGENT changed
+	// when it did not, pointing them at a setting they never altered.
+	u.Scheme = strings.ToLower(u.Scheme)
+
+	// Rebuilt from Hostname and Port rather than trimmed off the raw host
+	// string. Trimming ":443" off "http://:A:443" produced "http://:a", which
+	// no longer parses — found by the fuzzer, and it broke the idempotency the
+	// resume comparison depends on.
+	host := strings.ToLower(u.Hostname())
+	if host == "" {
+		return "", fmt.Errorf("%w: the base URL has no host", ErrMalformed)
+	}
+	port := u.Port()
+	if (u.Scheme == "https" && port == "443") || (u.Scheme == "http" && port == "80") {
+		port = ""
+	}
+	switch {
+	case port != "":
+		u.Host = net.JoinHostPort(host, port) // brackets IPv6 for us
+	case strings.Contains(host, ":"):
+		// A bracketless IPv6 host is not a URL. Hostname() strips the brackets,
+		// so writing it back unwrapped turned "http://[::]" into "http://::",
+		// which re-parses as something else — breaking the idempotency the
+		// resume comparison depends on. Found by the fuzzer.
+		u.Host = "[" + host + "]"
+	default:
+		u.Host = host
+	}
+	// TrimRight, not TrimSuffix: removing ONE trailing slash turns "//" into
+	// "/" and then "" on the next pass, so the canonical form of a canonical
+	// form differed from itself. Found by the fuzzer.
+	u.Path = strings.TrimRight(u.Path, "/")
+
+	// Canonicalizing must not produce something that no longer parses. Checked
+	// rather than assumed: this function rewrites a URL, and a rewrite that
+	// invalidates it would make Ref unparseable — so a resume would compare a
+	// reference against one that cannot be reconstructed.
+	canonical := u.String()
+	if _, err := url.Parse(canonical); err != nil {
+		return "", fmt.Errorf("%w: the base URL could not be parsed", ErrMalformed)
+	}
+	return canonical, nil
+}
+
+// schemeUsesBaseURL reports whether a scheme reaches an HTTP endpoint at all.
+//
+// fake runs locally, exec runs a command, tuned names a job. Accepting an
+// @base-url on those would store a value nothing reads — and it was the `fake:`
+// vehicle that made the credential-in-target defect reachable end to end today,
+// since fake is the only scheme this build resolves.
+func schemeUsesBaseURL(scheme string) bool {
+	return scheme == SchemeOpenAI || scheme == SchemeAnthropic
+}
+
+// checkTarget rejects characters that have no place in a model name.
+//
+// The target is reconstructed into Ref, which is written to SQLite, put on the
+// event stream, and rendered wherever a run is displayed. A NUL or a newline
+// there is a log-injection primitive waiting for the first log line that
+// renders an agent ref with %s.
+func checkTarget(target string) error {
+	for _, r := range target {
+		if r == 0 || r == '\n' || r == '\r' || r == '\t' {
+			return fmt.Errorf("%w: the model name contains a control character",
+				ErrMalformed)
+		}
+	}
 	return nil
 }
+
+// userinfoPattern matches a `scheme://userinfo@` prefix.
+//
+// Applied to the raw string rather than to a parsed URL, because a reference
+// reaches an error path precisely when it does not parse — and a malformed one
+// may be malformed IN the scheme. `https:/user:pass@host` has a single slash,
+// so a pattern anchored on "://" would leave the credential in place, which is
+// how the first version of this leaked one.
+var userinfoPattern = regexp.MustCompile(`(?i)([a-z][a-z0-9+.\-]*:/+)[^/?#@]*@`)
 
 // redactRef removes a credential from a reference before it is quoted back.
 //
 // Parse refuses userinfo, but the refusals ABOVE that check quote the input
 // too, and a reference can be malformed and credential-bearing at once.
+//
+// An earlier version keyed on finding a SECOND "@" after the first, so it left
+// the common single-@ shape — "https://user:pass@host/v1" — completely
+// unredacted, and the bare-URL refusal then interpolated it twice.
 func redactRef(s string) string {
-	at := strings.Index(s, "@")
-	if at < 0 {
-		return s
-	}
-	// Any `user:pass@` inside the URL portion is replaced wholesale rather than
-	// parsed, because the string may not parse at all — which is how it reached
-	// an error path.
-	if i := strings.Index(s[at+1:], "@"); i >= 0 {
-		return s[:at+1] + "[redacted]@" + s[at+1+i+1:]
-	}
-	return s
+	return userinfoPattern.ReplaceAllString(s, "${1}[redacted]@")
 }
 
 func knownSchemeNames() []string {

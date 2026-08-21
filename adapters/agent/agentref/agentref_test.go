@@ -239,3 +239,145 @@ func TestOnlyTheFakeSchemeMayOmitItsTarget(t *testing.T) {
 		}
 	}
 }
+
+// TestAURLNeverLandsInTheTargetHoweverItIsSpelled.
+//
+// splitBaseURL matched "http://" case-sensitively, so HTTPS:// — or a leading
+// space, or a fullwidth ＠ — failed to split and the whole URL, credential and
+// all, landed in Target and was reconstructed into Ref. Ref is persisted on the
+// Run, emitted on RunStarted, and rendered in --json. Verified end to end
+// before the fix: four copies of the credential in kno.db, and `kno purge` left
+// every one of them, because purge clears outcome traces and not the Run's own
+// agent field.
+//
+// The post-condition this pins does not depend on the split being right. That
+// is deliberate: the split rule can be wrong again, and this catches it.
+func TestAURLNeverLandsInTheTargetHoweverItIsSpelled(t *testing.T) {
+	t.Parallel()
+
+	const secret = "EXAMPLE-CREDENTIAL"
+	for _, in := range []string{
+		"openai:m@HTTPS://user:" + secret + "@api.evil.com/v1",
+		"openai:m@Https://user:" + secret + "@api.evil.com/v1",
+		"openai:m@ https://user:" + secret + "@api.evil.com/v1",
+		"openai:m@\thttps://user:" + secret + "@api.evil.com/v1",
+		"openai:m＠https://user:" + secret + "@api.evil.com/v1", // fullwidth ＠
+		"openai:m@https:/user:" + secret + "@api.evil.com/v1",  // one slash
+		"fake:m@HTTPS://user:" + secret + "@api.evil.com/v1",
+	} {
+		got, err := agentref.Parse(in)
+		if err == nil {
+			t.Errorf("Parse(%q) succeeded with Target=%q Ref=%q; a credential in "+
+				"Ref reaches the Run record, the event stream, and --json, and "+
+				"kno purge does not remove it",
+				in, got.GetTarget(), got.GetRef())
+			continue
+		}
+		if strings.Contains(err.Error(), secret) {
+			t.Errorf("the refusal quotes the credential:\n%s", err)
+		}
+	}
+}
+
+// TestASingleAtCredentialIsRedactedInEveryRefusal.
+//
+// redactRef keyed on finding a SECOND "@" after the first, so the common
+// single-@ shape was returned unchanged — and the bare-URL refusal then
+// interpolated it twice.
+func TestASingleAtCredentialIsRedactedInEveryRefusal(t *testing.T) {
+	t.Parallel()
+
+	const secret = "EXAMPLE-TOKEN-VALUE"
+	for _, in := range []string{
+		"https://" + secret + ":pw@api.evil.com/v1", // bare URL, one @
+		"https://" + secret + "@api.evil.com/v1",    // userinfo, no password
+		"ftp://" + secret + ":pw@host/v1",           // unknown scheme
+		"openai:m@https://" + secret + ":pw@h/v1",   // two @
+	} {
+		_, err := agentref.Parse(in)
+		if err == nil {
+			t.Errorf("Parse(%q) succeeded", in)
+			continue
+		}
+		if strings.Contains(err.Error(), secret) {
+			t.Errorf("Parse(%q) echoed the credential:\n%s", in, err)
+		}
+	}
+}
+
+// TestCanonicalFormSurvivesAResume.
+//
+// Ref is what core.checkResumable compares. Stored byte-for-byte, two spellings
+// of one endpoint compare as two agents, and the user is told the AGENT changed
+// — pointed at a setting they never altered.
+func TestCanonicalFormSurvivesAResume(t *testing.T) {
+	t.Parallel()
+
+	groups := [][]string{
+		{"openai:gpt-4.1", "OpenAI:gpt-4.1", "  openai:gpt-4.1  ", "openai: gpt-4.1"},
+		{
+			"openai:m@https://host.example.com/v1",
+			"openai:m@https://Host.Example.com/v1",
+			"openai:m@HTTPS://HOST.EXAMPLE.COM/v1",
+			"openai:m@https://host.example.com:443/v1",
+			"openai:m@https://host.example.com/v1/",
+		},
+	}
+
+	for _, group := range groups {
+		want, err := agentref.Parse(group[0])
+		if err != nil {
+			t.Fatalf("Parse(%q): %v", group[0], err)
+		}
+		for _, in := range group[1:] {
+			got, err := agentref.Parse(in)
+			if err != nil {
+				t.Errorf("Parse(%q): %v", in, err)
+				continue
+			}
+			if got.GetRef() != want.GetRef() {
+				t.Errorf("%q and %q name one agent but produced %q and %q; a resume "+
+					"would be refused over spelling", group[0], in,
+					want.GetRef(), got.GetRef())
+			}
+		}
+	}
+}
+
+// TestABaseURLIsRefusedForSchemesThatReachNoEndpoint.
+//
+// fake runs locally, exec runs a command, tuned names a job. Storing a base URL
+// for those keeps a value nothing reads — and `fake:` was the vehicle that made
+// the credential-in-target defect reachable today, since it is the only scheme
+// this build resolves.
+func TestABaseURLIsRefusedForSchemesThatReachNoEndpoint(t *testing.T) {
+	t.Parallel()
+
+	for _, scheme := range []string{"fake", "exec", "tuned"} {
+		if _, err := agentref.Parse(scheme + ":x@https://host/v1"); err == nil {
+			t.Errorf("%s: accepted a base URL it will never read", scheme)
+		}
+	}
+	for _, scheme := range []string{"openai", "anthropic"} {
+		if _, err := agentref.Parse(scheme + ":m@https://host/v1"); err != nil {
+			t.Errorf("%s: refused a base URL it needs: %v", scheme, err)
+		}
+	}
+}
+
+// TestControlCharactersAreRefusedInATarget: Ref reaches SQLite, the event
+// stream, and anything that renders a run. A newline there is a log-injection
+// primitive waiting for the first log line that formats an agent ref.
+func TestControlCharactersAreRefusedInATarget(t *testing.T) {
+	t.Parallel()
+
+	for _, in := range []string{
+		"openai:m\x00odel",
+		"openai:m\nINFO an injected log line",
+		"openai:m\rmodel",
+	} {
+		if _, err := agentref.Parse(in); err == nil {
+			t.Errorf("Parse(%q) accepted a control character into Ref", in)
+		}
+	}
+}

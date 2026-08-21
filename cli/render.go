@@ -40,8 +40,9 @@ func resolveAgent(ref string) (core.Agent, *knov1.AgentRef, error) {
 	parsed, err := agentref.Parse(ref)
 	if err != nil {
 		return nil, nil, errs.ErrInvalidInput.WithFix(
-			"write the reference as scheme:model, for example openai:gpt-4.1 " +
-				"or fake: for the local agent that costs nothing").Wrap(err)
+			"write the reference as scheme:target — openai:gpt-4.1, " +
+				"exec:my-agent-command, or fake: for the local agent that costs " +
+				"nothing").Wrap(err)
 	}
 
 	if parsed.GetScheme() == agentref.SchemeFake {
