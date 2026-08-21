@@ -30,6 +30,21 @@ covenants — breaking any of them requires a major version.
 
 ### Fixed
 
+- A budget stop lost the Cases that were in flight when it landed. The drain cancels them mid-call,
+  and each was recorded as terminally errored — which marks it complete, so `--resume` skipped it
+  forever and the run reported a smaller denominator than it measured, with nothing saying why.
+  Measured at concurrency 8 with a 50ms agent: two lost Cases on every run, and a resumed run
+  scoring 51 of 52. CI surfaced it as an intermittent CLI failure; it was not intermittent, just
+  timing-dependent, and the CLI's fake agent has no latency.
+
+  A Case cancelled *by* the shutdown is now left unrecorded so the resume picks it up, exactly like
+  a budget-refused one. A per-Case provider timeout against a healthy run is still recorded — the
+  distinction matters, and collapsing it would hide a broken provider behind a shrinking
+  denominator.
+- `make fuzz-short` is now bounded by **executions rather than wall-clock**. `-fuzztime=30s` failed
+  intermittently on both CI runners with "context deadline exceeded" — the fuzzing coordinator
+  timing out on a worker as the deadline lands, not a failing input. A count also makes the gate do
+  the same work everywhere, so "passes locally" and "passes in CI" stop meaning different things.
 - Two `kno` processes opening the same database at the same moment could fail to start with a raw
   `SQLITE_BUSY`. Creating a database converts its journal to WAL, which needs an exclusive lock,
   and the process that loses that race is told the database is locked rather than made to wait —

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/knograph/kno/core/errs"
@@ -253,15 +254,31 @@ func Baseline(
 	if err := opts.emitRunStarted(ctx, agg, opts.DevCases); err != nil {
 		return nil, err
 	}
+	// draining is set the moment a fatal error starts the shutdown, and read by
+	// the sink to tell "this Case was cancelled BY the stop" from "this Case
+	// timed out on its own".
+	//
+	// The run's own context is not that signal: a budget stop cancels the
+	// executor's internal context, never the caller's, so runCtx.Err() stays
+	// nil throughout — which is exactly the wrong answer for the case this
+	// exists to catch.
+	var draining atomic.Bool
+
 	stats, runErr := executor.Run(ctx, cases,
-		opts.workFunc(), opts.sinkFunc(agg),
+		opts.workFunc(), opts.sinkFunc(ctx, &draining, agg),
 		executor.Options{
 			Concurrency: opts.Concurrency,
 			ID:          func(item any) string { c, _ := item.(*Case); return c.GetId() },
 			Skip:        func(id string) bool { _, ok := done[id]; return ok },
 			// Budget exhaustion ends the run rather than failing every
 			// remaining Case one at a time.
-			IsFatal: func(err error) bool { return errors.Is(err, errs.ErrBudgetExceeded) },
+			IsFatal: func(err error) bool {
+				if errors.Is(err, errs.ErrBudgetExceeded) {
+					draining.Store(true)
+					return true
+				}
+				return false
+			},
 		})
 
 	return opts.closeRun(ctx, run, agg, stats, runErr)
@@ -579,7 +596,14 @@ func (o BaselineOptions) invokeOnce(
 }
 
 // sinkFunc persists each outcome and emits its event.
-func (o BaselineOptions) sinkFunc(agg *aggregator) executor.SinkFunc[*Case, caseOutcome] {
+// sinkFunc persists each Case's outcome.
+//
+// runCtx is the RUN's context, distinct from the ctx the sink is called with:
+// the sink deliberately runs on a context that outlives cancellation so it can
+// still write during shutdown, which means it cannot ask its own ctx whether
+// the run is ending. draining covers the other way a run stops — a fatal error
+// such as a budget stop, which never touches the caller's context.
+func (o BaselineOptions) sinkFunc(runCtx context.Context, draining *atomic.Bool, agg *aggregator) executor.SinkFunc[*Case, caseOutcome] {
 	return func(ctx context.Context, r executor.Result[*Case, caseOutcome]) error {
 		// A Case refused by the budget guard was never attempted: no provider
 		// call was made and nothing was spent. Recording it as a terminal
@@ -596,6 +620,44 @@ func (o BaselineOptions) sinkFunc(agg *aggregator) executor.SinkFunc[*Case, case
 		// that never happened AND mark the Case done, so fixing the pricing
 		// table and re-running with --resume would never re-attempt it.
 		if errors.Is(r.Err, errs.ErrBudgetExceeded) || errors.Is(r.Err, errUnpriceable) {
+			return nil
+		}
+
+		// A Case the shutdown cancelled before it produced anything is the same
+		// shape again: the run is stopping resumably, and this Case has no
+		// result to record.
+		//
+		// Recording it would mark it complete, so a resume would SKIP it — and
+		// the run would report a smaller denominator than it measured, with
+		// nothing saying why. Measured: a budget stop at concurrency 8 with a
+		// 50ms agent recorded 2 errored Cases every single time, and the
+		// resumed run scored 51 of 52 rather than 52. CI caught it as a flaky
+		// test; it is not flaky, it is timing-dependent.
+		//
+		// The trade is deliberate. Not recording means the resumed run does not
+		// restore whatever that attempt may have cost, so it gets slightly more
+		// headroom than it should — bounded by concurrency, and already the
+		// documented dark-spend window (docs/debt.md#20). Losing a Case from
+		// the run permanently, silently, is the worse failure: prime directive
+		// 5 is what makes the denominator behind every later delta mean
+		// something.
+		//
+		// Two conditions, and both matter.
+		//
+		// The RUN's context must be done. A per-Case deadline against a healthy
+		// run is a provider timeout: that Case genuinely failed, it is recorded,
+		// and a run where enough of them time out is marked unusable. Skipping
+		// those would hide a broken provider behind a shrinking denominator —
+		// the opposite failure, and an existing test caught me making it.
+		//
+		// And there must be no Response. A Case that failed AFTER a paid call
+		// produced one is a real terminal outcome, recorded below with the
+		// spend that call incurred.
+		shuttingDown := runCtx.Err() != nil || draining.Load()
+		cancelled := errors.Is(r.Err, context.Canceled) || errors.Is(r.Err, context.DeadlineExceeded)
+		noResult := r.Value == nil || r.Value.Response == nil
+
+		if shuttingDown && cancelled && noResult {
 			return nil
 		}
 
