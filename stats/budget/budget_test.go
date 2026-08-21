@@ -543,3 +543,69 @@ func TestConsentFailureStopsTheRun(t *testing.T) {
 		t.Errorf("error = %q, want it to name how to proceed", err)
 	}
 }
+
+// TestOvershootMakesABreachedCapVisible.
+//
+// Remaining clamps at zero, so a Guard that has passed its cap reports the same
+// thing as one exactly consumed. That is not a display quirk: the bound this
+// guard actually offers is "the cap plus whatever the calls in flight
+// under-predicted by", and without a way to read the excess, nobody can tell
+// whether it happened.
+func TestOvershootMakesABreachedCapVisible(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const capUSDMicros = 1_000_000 // $1.00
+	g := budget.New(budget.Limits{MaxCostUSDMicros: capUSDMicros}, nil, 0)
+
+	// Authorize against a low estimate, settle against a high actual — which is
+	// exactly what an under-predicting adapter does.
+	res, err := g.Authorize(ctx, budget.Estimate{Calls: 1, CostUSDMicros: 100})
+	if err != nil {
+		t.Fatalf("Authorize: %v", err)
+	}
+	res.Settle(budget.Spend{Calls: 1, CostUSDMicros: capUSDMicros + 250_000})
+
+	if got := g.Remaining().CostUSDMicros; got != 0 {
+		t.Errorf("Remaining = %d, want 0 (it clamps)", got)
+	}
+	if got := g.Overshoot(); got != 250_000 {
+		t.Errorf("Overshoot = %d, want 250000; the breach must be readable "+
+			"somewhere, or the cap's real bound is unobservable", got)
+	}
+}
+
+// TestOvershootIsZeroWithinTheCapAndWithoutOne.
+func TestOvershootIsZeroWithinTheCapAndWithoutOne(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("within the cap", func(t *testing.T) {
+		t.Parallel()
+		g := budget.New(budget.Limits{MaxCostUSDMicros: 1_000_000}, nil, 0)
+		res, err := g.Authorize(ctx, budget.Estimate{Calls: 1, CostUSDMicros: 100})
+		if err != nil {
+			t.Fatalf("Authorize: %v", err)
+		}
+		res.Settle(budget.Spend{Calls: 1, CostUSDMicros: 400_000})
+		if got := g.Overshoot(); got != 0 {
+			t.Errorf("Overshoot = %d, want 0", got)
+		}
+	})
+
+	t.Run("no cost cap", func(t *testing.T) {
+		t.Parallel()
+		// Only a call cap. There is no dollar ceiling to pass.
+		g := budget.New(budget.Limits{MaxLLMCalls: 10}, nil, 0)
+		res, err := g.Authorize(ctx, budget.Estimate{Calls: 1})
+		if err != nil {
+			t.Fatalf("Authorize: %v", err)
+		}
+		res.Settle(budget.Spend{Calls: 1, CostUSDMicros: 999_999_999})
+		if got := g.Overshoot(); got != 0 {
+			t.Errorf("Overshoot = %d, want 0; without a cap there is nothing to "+
+				"overshoot, and reporting a number would invent a limit the user "+
+				"never set", got)
+		}
+	})
+}

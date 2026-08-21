@@ -69,6 +69,18 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
+- **`core.Estimator`**, an optional Ring-0 interface: an adapter can price a Case before the call
+  is made. A cost cap the guard checks only at settlement is a cap discovered after the money is
+  gone, and what a Case costs depends on the Case — a single run-scoped scalar cannot express that.
+  Optional, like `Capable` and the injectors, so the fake agent and every existing caller are
+  unaffected. An adapter that cannot price a Case errors that Case rather than authorizing it
+  against a cheaper guess; the priced ones still run, and a run where nothing can be priced is
+  marked unusable rather than quietly cheap.
+- **`Guard.Overshoot`** reports how far settled spend has passed the cost cap. `Remaining` clamps at
+  zero, so a Guard that blew its cap read identically to one exactly consumed — the breach was not
+  merely unenforced but unobservable. This is observability, not enforcement: by settlement the
+  money is spent, and making `Settle` fail would turn a successful, paid, scored call into an
+  errored Case and lose work already paid for.
 - **`kno purge`** — delete stored agent output and judge rationales for a run, keeping the scores,
   costs, and completion records. The database is opened with `secure_delete`, and a purge
   checkpoints the WAL and `VACUUM`s, so the content is gone from the bytes on disk rather than

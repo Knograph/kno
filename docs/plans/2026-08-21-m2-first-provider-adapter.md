@@ -221,13 +221,13 @@ which an adapter supplies a per-Case number without one. Draft 3 claimed "an ada
 prediction… no `core` API break," which is not reachable from the code — the same failure class as
 draft 2, one section over.
 
-Admitted rather than hidden: **`core.Predictor`, an optional Ring-0 interface** alongside `Capable`
+Admitted rather than hidden: **`core.Estimator`, an optional Ring-0 interface** alongside `Capable`
 and `ContextInjector`.
 
 ```go
-// Predictor reports what a Case will cost before the call is made.
-type Predictor interface {
-    Predict(ctx context.Context, c *Case) (budget.Estimate, error)
+// Estimator reports what a Case will cost before the call is made.
+type Estimator interface {
+    Estimate(ctx context.Context, c *Case) (budget.Estimate, error)
 }
 ```
 
@@ -323,10 +323,19 @@ the user notices as divergence from their invoice.
 An unknown model is **not** priced at zero. With a cost cap set, it is a refusal naming the model
 and the override flags. With no cap, it runs with a warning that spend is unbounded and unpredicted.
 
-**Naming (M-k).** Three concepts, three words, used identically in code, CLI, events, and docs:
-**prediction** (what we think a call costs), **reservation** (what the guard authorizes —
-`prediction` unchanged, under this design), **settlement** (what it actually cost). `Reservation.Estimate()`
-returns the reservation. `--strict-reservation` is not needed: pessimism is now the only policy.
+**Naming (M-k), corrected in M2-2.** Draft 4 proposed **prediction / reservation / settlement**.
+That was itself the drift M-k warned about: `stats/budget` already names these `Estimate`,
+`Reservation`, and `Spend`, so "prediction" was a fourth word for something `Estimate` already
+covers — and under pessimistic-only reservation, "prediction" and "reservation" are the *same
+value*, so keeping both guarantees a synonym.
+
+The code's words win, because they were already right: **`Estimate`** (what a call is predicted to
+cost), **`Reservation`** (the authorization holding it), **`Spend`** (what it actually cost). Three
+concepts, three words, no renames to `stats/budget`.
+
+For the same reason the Ring-0 interface is **`core.Estimator`** with an `Estimate` method, not
+`Predictor`/`Predict` as earlier drafts called it: an interface named for the value it produces
+rather than for a second verb meaning the same act.
 
 ### 2.4 Confirmation is run-level, capped, and computed where the remaining count is known
 
@@ -587,10 +596,10 @@ quantile estimator on top of its current 657 lines (M-j).
 |---|---|---|---|
 | M2-0 | **Settles §10a's open decision (M-7)**, with an ADR. Proto: agent-ref grammar, price vector, refusal/truncation/usage-estimated flags, resolved-model and provider-build fields, retry/rate-limit/overshoot **events**, `RunResumed` payload, `CaseExecution` submessage (ADR-0004) | — | 26 (partly), 29 (partly) |
 | M2-1 | `store`: `PRAGMA user_version` migration; `score_value`/`score_passed`/`refused`/`truncated` columns; backfill from `score_proto`; **`kno purge`** (`store` + `cli`, nulling blobs only) | M2-0 | 25 |
-| M2-2 | `core.Predictor` optional Ring-0 interface; `Guard.Overshoot`; `budget` naming | M2-0 | — |
+| M2-2 | `core.Estimator` optional Ring-0 interface; `Guard.Overshoot`; `budget` naming | M2-0 | — |
 | M2-3 | `internal/transport`: rate limiter, `GetBody` pinning + round-trip counter, redirect refusal, explicit per-host key binding, private-address rules, timeouts, redaction, OTel spans, `goleak.VerifyTestMain` | M2-0 | 18 (partly) |
 | M2-4 | Agent-ref parser: fuzz target + golden table | M2-0 | 4 (partly) |
-| M2-5 | Pricing table + pessimistic prediction behind `core.Predictor` | M2-2, M2-4 | — |
+| M2-5 | Pricing table + pessimistic prediction behind `core.Estimator` | M2-2, M2-4 | — |
 | M2-6 | `core`: feasibility check after `Restore`; run-level confirmation after `CompletedCases`; `RetryBudget` replacing `MaxAttempts`; `ErrTransportTransient`; resume check on resolved model; per-attempt spend on `Outcome` | M2-5 | — |
 | M2-7 | `openaicompat` adapter, fixtures, `goleak.VerifyTestMain`, executor conformance against a real transport; **wire the env cap into the live-test path and delete the grep interlock** | M2-3, M2-5 | 11, 18, 23; investigates 20 |
 | M2-8 | `anthropic` adapter, fixtures, `goleak.VerifyTestMain` | M2-7 | 18 |

@@ -385,6 +385,40 @@ func (o BaselineOptions) staleFix(run *knov1.Run) string {
 		"re-run without --resume, or restore the setting it was recorded against"
 }
 
+// predict reports what one invocation of c may cost.
+//
+// An adapter implementing Estimator answers per Case; anything else falls back
+// to the run-scoped scalar, which is what the fake and every M1 caller use.
+//
+// A Estimator that cannot price a Case is a refusal when a dollar cap is set,
+// never a zero: the guard cannot refuse what it was not told about, and a zero
+// estimate is precisely what made a cap unenforceable in M1.
+func (o BaselineOptions) estimate(ctx context.Context, c *Case) (budget.Estimate, error) {
+	e, ok := o.Agent.(Estimator)
+	if !ok {
+		return budget.Estimate{Calls: 1, CostUSDMicros: o.EstCostPerCallUSDMicros}, nil
+	}
+
+	est, err := e.Estimate(ctx, c)
+	if err != nil {
+		if o.Guard.Limits().MaxCostUSDMicros > 0 {
+			return budget.Estimate{}, errs.ErrInvalidInput.WithFix(
+				"pass --cost-per-call-usd to price it yourself, or drop --max-cost-usd").
+				Wrap(fmt.Errorf("cannot price case %s, and a cost cap cannot be "+
+					"enforced against an unknown cost: %w", c.GetId(), err))
+		}
+		// No dollar cap: the call cap still applies, and refusing the whole run
+		// because a price is unknown would be worse than running uncapped when
+		// the user asked for uncapped.
+		return budget.Estimate{Calls: 1, CostUSDMicros: o.EstCostPerCallUSDMicros}, nil
+	}
+	// A Estimator that reports zero calls is answering a different question.
+	if est.Calls == 0 {
+		est.Calls = 1
+	}
+	return est, nil
+}
+
 // workFunc invokes the agent under the budget guard and scores the response.
 //
 // It does not touch the aggregator: counting happens after persistence, in
@@ -394,7 +428,10 @@ func (o BaselineOptions) workFunc() executor.WorkFunc[*Case, caseOutcome] {
 		// One provider call, estimated before it is made. A zero estimate makes
 		// the dollar cap unenforceable, so callers that care about it must
 		// supply EstCostPerCallUSDMicros.
-		est := budget.Estimate{Calls: 1, CostUSDMicros: o.EstCostPerCallUSDMicros}
+		est, err := o.estimate(ctx, c)
+		if err != nil {
+			return nil, err
+		}
 
 		resp, invokeErr := o.invokeWithRetry(ctx, c, est)
 		if invokeErr != nil {

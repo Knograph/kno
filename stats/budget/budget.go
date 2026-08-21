@@ -411,6 +411,31 @@ func (g *Guard) Restore(spent Spend) {
 // Limits reports the caps this Guard enforces.
 func (g *Guard) Limits() Limits { return g.limits }
 
+// Overshoot reports how far settled spend has passed the cost cap, or zero
+// while it is still within it.
+//
+// It exists because Remaining clamps at zero: a Guard that has blown its cap
+// reports Remaining{CostUSDMicros: 0}, which is indistinguishable from one
+// exactly consumed. The breach is real — a cap of C bounds spend at C plus the
+// sum of under-predictions across the calls in flight when it binds — and
+// without this it is not merely unenforced but unobservable.
+//
+// This is observability, not enforcement. By settlement the money is spent, and
+// fitsLocked already refuses every subsequent authorization once spend reaches
+// the cap. Making Settle fail instead would turn a successful, paid, scored
+// call into an errored Case and lose work that was paid for.
+//
+// Zero when no cost cap is set: without a cap there is nothing to overshoot.
+func (g *Guard) Overshoot() int64 {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if g.limits.MaxCostUSDMicros <= 0 {
+		return 0
+	}
+	return max(0, g.spent.CostUSDMicros-g.limits.MaxCostUSDMicros)
+}
+
 // Spent reports what has actually been settled, excluding outstanding
 // reservations. This is the number a report shows.
 func (g *Guard) Spent() Spend {

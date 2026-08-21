@@ -7,6 +7,7 @@ import (
 	"iter"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1195,5 +1196,164 @@ func TestTheEngineRefusesARunThatCanNeverBeValidated(t *testing.T) {
 				t.Errorf("the refusal does not say which side was empty:\n%s", err)
 			}
 		})
+	}
+}
+
+// pricingAgent is an Agent that also implements core.Estimator, so a Case's
+// cost depends on the Case rather than on one run-scoped scalar.
+type pricingAgent struct {
+	core.Agent
+
+	// perInputByte prices a Case by the size of its input, which is the shape
+	// a real adapter's arithmetic takes.
+	perInputByte int64
+
+	// failOn makes Predict refuse for a Case whose ID matches, standing in for
+	// a model absent from the pricing table.
+	failOn string
+}
+
+func (p *pricingAgent) Estimate(_ context.Context, c *core.Case) (budget.Estimate, error) {
+	if p.failOn != "" && c.GetId() == p.failOn {
+		return budget.Estimate{}, errors.New("no price for this model")
+	}
+	return budget.Estimate{
+		Calls:         1,
+		CostUSDMicros: int64(len(c.GetInput())) * p.perInputByte,
+	}, nil
+}
+
+// TestEstimatorPricesEachCaseIndividually.
+//
+// The M1 design authorized every Case against one run-scoped number, which
+// cannot express that a long Case costs more than a short one. A cap enforced
+// against a flat guess is a cap that binds at the wrong time.
+func TestEstimatorPricesEachCaseIndividually(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// The contrast is the point: identical run, identical cap, and the only
+	// difference is whether the agent prices its own Cases.
+	const capUSDMicros = 500
+
+	withEstimator := newHarness(t, 20, 5, fake.Options{})
+	withEstimator.opts.Agent = &pricingAgent{Agent: withEstimator.agent, perInputByte: 1_000}
+	withEstimator.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: capUSDMicros}, nil, 0)
+	withEstimator.opts.EstCostPerCallUSDMicros = 1
+
+	_, err := core.Baseline(ctx, withEstimator.evals, withEstimator.opts)
+	if !errors.Is(err, errs.ErrBudgetExceeded) {
+		t.Fatalf("error = %v, want ErrBudgetExceeded; the Case prices at 1000 "+
+			"against a cap of %d, so the per-Case estimate was ignored and the "+
+			"run was authorized against the flat scalar instead", err, capUSDMicros)
+	}
+
+	// Same cap, same Cases, no Estimator: the flat scalar of 1 fits, and the
+	// run completes. Without this the test above would pass against a guard
+	// that simply refused everything.
+	withScalar := newHarness(t, 20, 5, fake.Options{})
+	withScalar.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: capUSDMicros}, nil, 0)
+	withScalar.opts.EstCostPerCallUSDMicros = 1
+
+	if _, err := core.Baseline(ctx, withScalar.evals, withScalar.opts); err != nil {
+		t.Fatalf("the same run without a Estimator was refused: %v", err)
+	}
+}
+
+// TestEstimatorFailureRefusesWhenACostCapIsSet.
+//
+// A Estimator that cannot price a Case must not fall back to a cheap guess when
+// dollars are capped: the guard cannot refuse what it was not told about, and a
+// too-low estimate is how a run walks past its cap.
+func TestEstimatorFailureRefusesWhenACostCapIsSet(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// One unpriceable Case is refused; the priced ones still run. Aborting the
+	// whole run would be harsher than the problem — no money can be spent on a
+	// Case that was never authorized, and the rest are priced correctly.
+	h := newHarness(t, 20, 5, fake.Options{})
+	h.opts.Agent = &pricingAgent{Agent: h.agent, perInputByte: 1, failOn: "dev-000"}
+	h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 1_000_000}, nil, 0)
+	h.opts.EstCostPerCallUSDMicros = 1
+
+	res, err := core.Baseline(ctx, h.evals, h.opts)
+	if err != nil {
+		t.Fatalf("one unpriceable Case ended the whole run: %v", err)
+	}
+	if got := res.Run.GetErroredCaseCount(); got != 1 {
+		t.Errorf("errored = %d, want 1; the Case that could not be priced must "+
+			"not be silently authorized against a cheaper guess", got)
+	}
+	if got := res.Run.GetScoredCaseCount(); got != 19 {
+		t.Errorf("scored = %d, want 19; the Cases that COULD be priced should "+
+			"still run", got)
+	}
+
+	// And when nothing can be priced, the run is loudly not a baseline rather
+	// than a cheap one.
+	all := newHarness(t, 20, 5, fake.Options{})
+	unpriceable := &everythingUnpriceable{Agent: all.agent}
+	all.opts.Agent = unpriceable
+	all.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 1_000_000}, nil, 0)
+	all.opts.EstCostPerCallUSDMicros = 1
+
+	res, err = core.Baseline(ctx, all.evals, all.opts)
+	if err != nil {
+		t.Fatalf("Baseline: %v", err)
+	}
+	if !res.Run.GetErrorRateExceeded() {
+		t.Error("every Case failed to price and the run was not marked unusable")
+	}
+	if unpriceable.invoked.Load() != 0 {
+		t.Errorf("the agent was invoked %d time(s) for Cases that could not be "+
+			"priced; that is money spent against a cap the guard was never told "+
+			"about", unpriceable.invoked.Load())
+	}
+}
+
+// everythingUnpriceable stands in for a model absent from the pricing table.
+type everythingUnpriceable struct {
+	core.Agent
+	invoked atomic.Int64
+}
+
+func (e *everythingUnpriceable) Invoke(ctx context.Context, c *core.Case) (*core.Response, error) {
+	e.invoked.Add(1)
+	return e.Agent.Invoke(ctx, c)
+}
+
+func (e *everythingUnpriceable) Estimate(context.Context, *core.Case) (budget.Estimate, error) {
+	return budget.Estimate{}, errors.New("model not in the pricing table")
+}
+
+// TestEstimatorFailureRunsWhenNoCostCapIsSet: refusing the whole run because a
+// price is unknown, when the user asked for no dollar cap, would be worse than
+// running uncapped. The call cap still applies.
+func TestEstimatorFailureRunsWhenNoCostCapIsSet(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	h := newHarness(t, 20, 5, fake.Options{})
+	h.opts.Agent = &pricingAgent{Agent: h.agent, perInputByte: 1, failOn: "dev-000"}
+	h.opts.Guard = budget.New(budget.Limits{MaxLLMCalls: 1_000}, nil, 0)
+
+	if _, err := core.Baseline(ctx, h.evals, h.opts); err != nil {
+		t.Fatalf("a run with no cost cap was refused over an unknown price: %v", err)
+	}
+}
+
+// TestAgentWithoutEstimatorUsesTheScalar keeps the optional interface optional:
+// the fake and every M1 caller must be unaffected.
+func TestAgentWithoutEstimatorUsesTheScalar(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	h := newHarness(t, 20, 5, fake.Options{})
+	h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 1_000_000}, nil, 0)
+	h.opts.EstCostPerCallUSDMicros = 1_000
+
+	if _, err := core.Baseline(ctx, h.evals, h.opts); err != nil {
+		t.Fatalf("an agent that does not implement Estimator was refused: %v", err)
 	}
 }
