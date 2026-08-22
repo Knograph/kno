@@ -449,6 +449,44 @@ func (g *Guard) Restore(spent Spend) {
 // Limits reports the caps this Guard enforces.
 func (g *Guard) Limits() Limits { return g.limits }
 
+// PreConfirm asks the human about a WHOLE run before any of it is authorized,
+// and records that they agreed.
+//
+// The per-operation prompt is the wrong instrument for this. ConfirmFunc
+// receives one call's estimate and askOnce sets confirmed for the life of the
+// run, so a user shown "$0.04" for the first Case that crossed the threshold
+// consented to the whole run — 10,000 Cases at that price is $400, asked once,
+// at four cents.
+//
+// The estimate passed here should be bounded by the cap, since that is the
+// honest maximum exposure: showing $328 when the guard stops at $5 is false in
+// the direction that trains people to ignore the prompt.
+//
+// Idempotent. A second call after agreement is a no-op, so a resumed run does
+// not re-ask about work it already paid for.
+func (g *Guard) PreConfirm(ctx context.Context, total Estimate) (bool, error) {
+	g.mu.Lock()
+	already := g.confirmed
+	confirm := g.confirm
+	threshold := g.threshold
+	rem := g.remainingLocked()
+	g.mu.Unlock()
+
+	if already || confirm == nil || threshold <= 0 || total.CostUSDMicros < threshold {
+		return true, nil
+	}
+
+	ok, err := confirm(ctx, total, rem)
+	if err != nil || !ok {
+		return false, err
+	}
+
+	g.mu.Lock()
+	g.confirmed = true
+	g.mu.Unlock()
+	return true, nil
+}
+
 // Overshoot reports how far settled spend has passed the cost cap, or zero
 // while it is still within it.
 //

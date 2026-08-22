@@ -112,6 +112,27 @@ var (
 		ExitCode: ExitError,
 	}
 
+	// ErrTransportTransient means a request failed in a way that may succeed if
+	// retried, with no evidence the provider processed it — a stale pooled
+	// connection, a reset before any bytes were written, a 5xx.
+	//
+	// It exists here, in core, because the transport cannot put it here itself:
+	// adapters/agent/internal/transport is internal to adapters, and core
+	// importing it would invert the dependency rule. The transport classifies
+	// and the adapter maps onto this. See docs/debt.md#38.
+	//
+	// Distinct from ErrRateLimited, which is the provider deliberately refusing.
+	// Both are retryable; only one carries a Retry-After. Treating a dropped
+	// connection as an agent error instead marks a healthy baseline unusable
+	// over an idle timeout, because at concurrency any pause in a long run
+	// produces a handful of them.
+	ErrTransportTransient = &Actionable{
+		Code:     "TRANSPORT_TRANSIENT",
+		Message:  "the request failed before the provider answered",
+		Fix:      "this is usually transient; re-run with --resume if the run stopped",
+		ExitCode: ExitError,
+	}
+
 	// ErrRateLimited means a provider asked us to slow down. Transient: the
 	// caller should back off and retry rather than fail the run.
 	ErrRateLimited = &Actionable{

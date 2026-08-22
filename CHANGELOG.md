@@ -90,6 +90,36 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
+- **`errs.ErrTransportTransient`**, and `core` retries it. A stale pooled connection is not the
+  agent failing — at concurrency, any pause in a long run produces a handful, and treating them as
+  terminal marked a healthy baseline unusable over an idle timeout. The transport classified them
+  already; the sentinel had to live in `core` because `core` cannot import an internal adapter
+  package. Repays `docs/debt.md#38`.
+- **A retry budget bounded by time as well as attempts.** Three attempts at 500ms doubling is a
+  1.5-second window, and a real provider's sustained 429 window is minutes — so a rate-limited
+  account had a perfectly good baseline marked `error_rate_exceeded`. Time alone is also wrong:
+  each attempt takes its own reservation, so a long window lets one Case consume dozens of calls
+  against `--max-calls`. Both bounds, whichever binds first. A provider-supplied `Retry-After`
+  replaces our guess, because the provider is the authority on its own limits.
+- **A feasibility check** that reduces concurrency rather than letting the guard deny its way to a
+  halt. A pessimistic reservation holds `concurrency × estimate` in flight; when that exceeds the
+  cap, nothing settles and the run stops having done almost nothing — measured at a 32k output
+  ceiling against a $1.00 cap at concurrency 8, the **fourth** Case denied with **$0.00 spent**. It
+  runs after `Guard.Restore`, so a resume is judged against the headroom it actually has, and an
+  unaffordable run exits 2 rather than 1: an exhausted cap is a resumable stop, not a broken build.
+- **`Guard.PreConfirm`** — the human is asked about the **whole run**, once, before any of it is
+  authorized. The per-operation prompt showed one call's estimate and recorded agreement for the
+  life of the run, so a user shown `$0.04` for the first Case that crossed the threshold consented
+  to 10,000 Cases at that price. The quote is computed in `core` after the completed set is known,
+  so a resume asks only about what is left, and it is bounded by the cap, because quoting more than
+  the guard can spend is false in the direction that teaches people to dismiss the prompt.
+- A retried Case now persists **every call it paid for**. `store.Outcome.Spend` was documented as
+  including failed attempts and did not: the guard settled each attempt while the store recorded
+  one, so `Guard.Restore` under-restored the call cap by (attempts − 1) per retried Case.
+- A resume is refused when the **resolved model** changed. A ref like `openai:gpt-4.1` is a moving
+  pointer, and a run resumed after the alias re-points would blend two models into one
+  `AggregateScore`. The provider's build identifier is recorded but never refused on — it changes
+  routinely with no model change, and a false refusal costs a full re-run.
 - **`adapters/agent/pricing`**, the dated price table and the pessimistic estimate the budget guard
   reserves against. Prices as published on 2026-08-21 for Anthropic and OpenAI models; the table is
   **static and never fetched at runtime**, because an endpoint that is down leaves the engine

@@ -33,6 +33,20 @@ const DefaultMaxErrorRate = 0.05
 // baseline unusable for no statistical reason.
 const DefaultMaxAttempts = 3
 
+// DefaultRetryBudget bounds retry by TIME as well as by attempts.
+//
+// Attempts alone was the wrong bound. Three attempts at 500ms doubling gives a
+// total window of 1.5 seconds, and a real provider's sustained 429 window is
+// minutes — so a rate-limited account marked a perfectly good baseline
+// ErrorRateExceeded and told the user "too many cases errored for this to be a
+// usable baseline", naming nothing about the cause.
+//
+// Time alone is also wrong, and for the opposite reason: each attempt takes its
+// own reservation and settles its own call, so a long window lets one Case
+// consume dozens of calls against --max-calls. Both bounds apply, whichever
+// binds first.
+const DefaultRetryBudget = 90 * time.Second
+
 // DefaultRetryBackoff is the delay before the first retry. It doubles after
 // each attempt.
 const DefaultRetryBackoff = 500 * time.Millisecond
@@ -99,15 +113,31 @@ type BaselineOptions struct {
 	DevCases     int
 	HoldoutCases int
 
+	// ResolvedModel is what the provider reported actually answering, once one
+	// has. Empty until the adapter supplies it.
+	//
+	// Compared on resume: a ref like openai:gpt-4.1 is a moving pointer, and a
+	// run resumed after the alias re-points would otherwise blend two models
+	// into one AggregateScore.
+	ResolvedModel string
+
 	// HoldoutUnderpowered marks a holdout too small for a meaningful interval.
 	HoldoutUnderpowered bool
 
 	// MaxErrorRate overrides DefaultMaxErrorRate. Zero uses the default.
 	MaxErrorRate float64
 
-	// MaxAttempts bounds how many times one Case is tried when the provider
-	// rate limits. Zero means DefaultMaxAttempts; 1 disables retry.
+	// MaxAttempts bounds how many times one Case is tried. Zero means
+	// DefaultMaxAttempts; 1 disables retry.
 	MaxAttempts int
+
+	// RetryBudget bounds the total WALL-CLOCK time spent retrying one Case.
+	// Zero means DefaultRetryBudget.
+	//
+	// Applies alongside MaxAttempts rather than replacing it. A provider's
+	// Retry-After can ask for a minute; three attempts of that is three
+	// minutes on one Case, and a run of a thousand Cases cannot afford it.
+	RetryBudget time.Duration
 
 	// RetryBackoff is the delay before the first retry, doubling thereafter.
 	// Zero means DefaultRetryBackoff.
@@ -219,6 +249,13 @@ func Baseline(
 		// The guard is in-memory. Without this a resumed run believes it has
 		// spent nothing and can consume its cap a second time.
 		opts.Guard.Restore(spent)
+	}
+
+	if err := (&opts).checkFeasible(); err != nil {
+		return nil, err
+	}
+	if err := opts.confirmRun(ctx, len(done)); err != nil {
+		return nil, err
 	}
 
 	cases, err := evals.Cases(ctx)
@@ -393,11 +430,43 @@ func (o BaselineOptions) checkResumable(run *knov1.Run) error {
 	case run.GetAgent().GetRef() != o.AgentRef.GetRef():
 		changed = fmt.Sprintf("a different agent (recorded %q, now %q)",
 			run.GetAgent().GetRef(), o.AgentRef.GetRef())
+	case resolvedModelChanged(run, o.ResolvedModel):
+		// A ref like openai:gpt-4.1 is a moving pointer. A run interrupted on
+		// Monday and resumed on Friday after the alias re-points passes every
+		// check above and blends two models into one AggregateScore.
+		//
+		// Only the RESOLVED model. The provider's build identifier is recorded
+		// and reported but never refused on: it changes whenever the backend
+		// config changes, routinely and with no model change, and refusing on
+		// it would cost the user a full re-run for a false positive — worse
+		// than the blending it prevents.
+		changed = fmt.Sprintf("a different resolved model (recorded %q, now %q)",
+			firstResolvedModel(run), o.ResolvedModel)
 	default:
 		return nil
 	}
 	return errs.ErrCheckpointStale.WithFix(o.staleFix(run)).
 		Wrap(fmt.Errorf("run %s was recorded against %s", o.RunID, changed))
+}
+
+// resolvedModelChanged reports whether the provider is now answering with a
+// different model than the one this run recorded.
+//
+// Empty on either side means unknown — the first process may not have reached a
+// response, or this one has not yet. Unknown is not a mismatch: refusing on
+// absence would make every run that stopped before its first answer
+// unresumable.
+func resolvedModelChanged(run *knov1.Run, now string) bool {
+	recorded := firstResolvedModel(run)
+	return recorded != "" && now != "" && recorded != now
+}
+
+func firstResolvedModel(run *knov1.Run) string {
+	models := run.GetCaseExecution().GetResolvedModels()
+	if len(models) == 0 {
+		return ""
+	}
+	return models[0]
 }
 
 // staleFix names which input changed, rather than only that something did.
@@ -483,6 +552,113 @@ func (o BaselineOptions) unpriceable(c *Case, cause error) error {
 			"against an unknown cost: %w: %w", c.GetId(), errUnpriceable, cause))
 }
 
+// confirmRun asks the human about the whole run before any of it is authorized.
+//
+// Computed HERE rather than in the CLI, and after CompletedCases, because this
+// is the only place that knows how many Cases are actually left. The CLI has
+// DevCases but not the completed set, so a run killed at 9,988 of 10,000 would
+// have prompted for the full amount to finish twelve Cases.
+//
+// Bounded by the cap. With --max-cost-usd 5.00 the honest maximum exposure is
+// $5.00, not DevCases x per-Case: showing the larger number when the guard will
+// stop at the smaller one is false in the direction that teaches people to
+// dismiss the prompt.
+func (o BaselineOptions) confirmRun(ctx context.Context, alreadyDone int) error {
+	remaining := int64(o.DevCases - alreadyDone)
+	if remaining <= 0 || o.EstCostPerCallUSDMicros <= 0 {
+		return nil
+	}
+
+	total := budget.Estimate{
+		Calls:         remaining,
+		CostUSDMicros: remaining * o.EstCostPerCallUSDMicros,
+	}
+	// Never quote more than the cap can permit.
+	if ceiling := o.Guard.Limits().MaxCostUSDMicros; ceiling > 0 && total.CostUSDMicros > ceiling {
+		total.CostUSDMicros = ceiling
+	}
+
+	ok, err := o.Guard.PreConfirm(ctx, total)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errs.ErrBudgetExceeded.WithFix(
+			"re-run with --yes to proceed, or lower --max-cost-usd").
+			Wrap(fmt.Errorf("the run was not confirmed; nothing was spent"))
+	}
+	return nil
+}
+
+// feasibleHeadroomFraction bounds how much of a cost cap may be held as
+// un-spendable reservation at once.
+//
+// A pessimistic reservation holds concurrency x estimate of the cap in flight.
+// If that exceeds the cap, the guard denies before anything settles and the run
+// stops having done almost nothing: measured at a 32k output ceiling against
+// --max-cost-usd 1.00 at concurrency 8, the FOURTH Case was denied with $0.00
+// spent.
+//
+// A quarter, so a run never holds more than that back. Chosen against the
+// measured forfeiture — 4.7% of a $5 cap at concurrency 8, 19.5% at 32 — and
+// written down as a decision rather than left as a constant to reverse-engineer.
+const feasibleHeadroomFraction = 0.25
+
+// checkFeasible reduces concurrency, or refuses, when the caps cannot admit the
+// run as configured.
+//
+// It runs AFTER Guard.Restore, against the headroom a resumed run actually has
+// rather than against the cap it was originally given. Placing it before would
+// be the same defect this file already fixed for the confirmation prompt:
+// computing against a number the run is not operating under.
+//
+// A refusal exits 2, not 1. An exhausted cap is a resumable stop with nothing
+// wrong with the data, and reporting it as a broken build is what trains people
+// to ignore exit 1.
+func (o *BaselineOptions) checkFeasible() error {
+	limits := o.Guard.Limits()
+	if limits.MaxCostUSDMicros <= 0 || o.EstCostPerCallUSDMicros <= 0 {
+		return nil // no dollar cap, or nothing to compute against
+	}
+
+	remaining := o.Guard.Remaining().CostUSDMicros
+	if remaining <= 0 {
+		return errs.ErrBudgetExceeded.WithFix(
+			"raise --max-cost-usd, or start a fresh run without --resume").
+			Wrap(fmt.Errorf("the cost cap is already spent, so no Case can be authorized"))
+	}
+
+	perCall := o.EstCostPerCallUSDMicros
+	if perCall > remaining {
+		return errs.ErrBudgetExceeded.WithFix(fmt.Sprintf(
+			"raise --max-cost-usd above %s, or lower --max-output-tokens",
+			formatUSDMicros(perCall))).
+			Wrap(fmt.Errorf("one Case is estimated at %s and only %s remains, so "+
+				"not a single Case can be authorized",
+				formatUSDMicros(perCall), formatUSDMicros(remaining)))
+	}
+
+	// How many in-flight reservations the headroom admits.
+	affordable := int(float64(remaining) * feasibleHeadroomFraction / float64(perCall))
+	if affordable < 1 {
+		affordable = 1
+	}
+	if o.Concurrency > 0 && o.Concurrency <= affordable {
+		return nil
+	}
+	if o.Concurrency == 0 {
+		return nil // the executor picks a conservative default
+	}
+
+	o.Concurrency = affordable
+	return nil
+}
+
+// formatUSDMicros renders micro-USD for a human.
+func formatUSDMicros(micros int64) string {
+	return fmt.Sprintf("$%.4f", float64(micros)/1_000_000)
+}
+
 // workFunc invokes the agent under the budget guard and scores the response.
 //
 // It does not touch the aggregator: counting happens after persistence, in
@@ -497,14 +673,14 @@ func (o BaselineOptions) workFunc() executor.WorkFunc[*Case, caseOutcome] {
 			return nil, err
 		}
 
-		resp, invokeErr := o.invokeWithRetry(ctx, c, est)
+		resp, attempts, invokeErr := o.invokeWithRetry(ctx, c, est)
 		if invokeErr != nil {
-			return &caseOutcome{Response: nil, Err: invokeErr}, invokeErr
+			return &caseOutcome{Response: nil, Err: invokeErr, Attempts: attempts}, invokeErr
 		}
 
 		score, scoreErr := o.Goal.Score(ctx, c, resp)
 		if scoreErr != nil {
-			return &caseOutcome{Response: resp, Err: scoreErr}, scoreErr
+			return &caseOutcome{Response: resp, Err: scoreErr, Attempts: attempts}, scoreErr
 		}
 
 		// NOT counted here. An earlier version incremented the scored count on
@@ -513,7 +689,7 @@ func (o BaselineOptions) workFunc() executor.WorkFunc[*Case, caseOutcome] {
 		// claiming more scored Cases than the outcomes table held, and that
 		// inflated count was the last thing durably recorded. Counting happens
 		// after persistence, in emit, where errored Cases are already counted.
-		return &caseOutcome{Response: resp, Score: score}, nil
+		return &caseOutcome{Response: resp, Score: score, Attempts: attempts}, nil
 	}
 }
 
@@ -530,40 +706,102 @@ func (o BaselineOptions) workFunc() executor.WorkFunc[*Case, caseOutcome] {
 // max_error_rate and mark a perfectly good baseline unusable for no
 // statistical reason. An agent that returned a 500 or malformed output did
 // fail, and retrying it burns budget on a Case that will fail again.
+// invokeWithRetry returns the response, how many provider calls it took, and
+// the error.
+//
+// The attempt count is returned because store.Outcome.Spend is documented as
+// "including any failed attempts preceding a successful retry" and did not
+// include them: the guard settled each attempt while the store persisted one,
+// so Guard.Restore under-restored the call cap by (attempts-1) for every
+// retried Case. Harmless while only a fake agent ran; a real 429 makes it
+// routine.
 func (o BaselineOptions) invokeWithRetry(
 	ctx context.Context,
 	c *Case,
 	est budget.Estimate,
-) (*Response, error) {
+) (*Response, int, error) {
 	backoff := o.retryBackoff()
+	deadline := o.now().Add(o.retryBudget())
 	var lastErr error
 
+	attempts := 0
 	for attempt := 1; attempt <= o.maxAttempts(); attempt++ {
+		attempts++
 		resp, err := o.invokeOnce(ctx, c, est)
 		if err == nil {
-			return resp, nil
+			return resp, attempts, nil
 		}
 		lastErr = err
 
-		// A budget refusal is not retryable: the cap will not have moved, and
-		// re-authorizing would spin.
-		if !errors.Is(err, errs.ErrRateLimited) || errors.Is(err, errs.ErrBudgetExceeded) {
-			return nil, err
+		if !retryable(err) {
+			return nil, attempts, err
 		}
 		if attempt == o.maxAttempts() {
+			break
+		}
+
+		wait := backoff
+		// A provider that says how long to wait is the authority on its own
+		// limits; our doubling is only a guess for when it does not say.
+		if after, ok := retryAfterOf(err); ok {
+			wait = after
+		}
+
+		// Both bounds, whichever binds first. Stopping here rather than after
+		// the wait means the budget is a bound on time SPENT, not on time
+		// spent plus one more sleep.
+		if o.now().Add(wait).After(deadline) {
 			break
 		}
 
 		// A ctx-aware wait. Sleeping through a cancellation would keep a
 		// stopped run alive for the length of the backoff.
 		select {
-		case <-time.After(backoff):
+		case <-time.After(wait):
 			backoff *= 2
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, attempts, ctx.Err()
 		}
 	}
-	return nil, lastErr
+	return nil, attempts, lastErr
+}
+
+// retryable reports whether an error may succeed on another attempt.
+//
+// Two kinds, and both must be here. ErrRateLimited is the provider deliberately
+// refusing. ErrTransportTransient is the request never reaching a handler — a
+// stale pooled connection, a reset before any bytes were written. Treating the
+// second as terminal marks a healthy baseline unusable over an idle timeout,
+// because at concurrency any pause in a long run produces a handful of them.
+//
+// A budget refusal is explicitly not retryable: the cap will not have moved,
+// and re-authorizing would spin.
+func retryable(err error) bool {
+	if errors.Is(err, errs.ErrBudgetExceeded) {
+		return false
+	}
+	return errors.Is(err, errs.ErrRateLimited) || errors.Is(err, errs.ErrTransportTransient)
+}
+
+// retryAfterOf extracts a provider-requested wait, if the error carries one.
+//
+// The transport parses Retry-After in both RFC 9110 forms and clamps it; this
+// only reads what it decided. An adapter signals it by wrapping a RetryAfter.
+func retryAfterOf(err error) (time.Duration, bool) {
+	var ra interface{ RetryAfter() time.Duration }
+	if errors.As(err, &ra) {
+		d := ra.RetryAfter()
+		return d, d > 0
+	}
+	return 0, false
+}
+
+// retryBudget is the configured wall-clock bound, or the default.
+func (o BaselineOptions) retryBudget() time.Duration {
+	if o.RetryBudget > 0 {
+		return o.RetryBudget
+	}
+	return DefaultRetryBudget
 }
 
 // invokeOnce is a single authorized attempt.
@@ -667,7 +905,7 @@ func (o BaselineOptions) sinkFunc(runCtx context.Context, draining *atomic.Bool,
 		case r.Done():
 			out.Response = r.Value.Response
 			out.Score = r.Value.Score
-			out.Spend = spendOf(r.Value.Response)
+			out.Spend = spendOfN(r.Value.Response, int64(r.Value.Attempts))
 		default:
 			out.Err = codeOf(r.Err)
 			// A Case can fail AFTER a paid call — a Goal erroring on malformed
@@ -677,7 +915,7 @@ func (o BaselineOptions) sinkFunc(runCtx context.Context, draining *atomic.Bool,
 			// spent than really was, reopening the amnesia M1-0 closed.
 			if r.Value != nil && r.Value.Response != nil {
 				out.Response = r.Value.Response
-				out.Spend = spendOf(r.Value.Response)
+				out.Spend = spendOfN(r.Value.Response, int64(r.Value.Attempts))
 			} else {
 				out.Spend = budget.Spend{Calls: 1}
 			}
@@ -793,9 +1031,15 @@ func codeOf(err error) string {
 	return "AGENT_ERROR"
 }
 
-func spendOf(r *knov1.Response) budget.Spend {
+func spendOf(r *knov1.Response) budget.Spend { return spendOfN(r, 1) }
+
+// spendOfN is spendOf for a Case that took n provider calls.
+func spendOfN(r *knov1.Response, n int64) budget.Spend {
+	if n < 1 {
+		n = 1
+	}
 	return budget.Spend{
-		Calls:         1,
+		Calls:         n,
 		CostUSDMicros: r.GetCostUsdMicros(),
 		Tokens:        r.GetPromptTokens() + r.GetCompletionTokens(),
 	}
@@ -803,6 +1047,10 @@ func spendOf(r *knov1.Response) budget.Spend {
 
 // caseOutcome is one Case's result inside the executor.
 type caseOutcome struct {
+	// Attempts is how many provider calls this Case took. Persisted so the
+	// store's spend matches what the guard actually settled.
+	Attempts int
+
 	Response *Response
 	Score    *Score
 	Err      error
