@@ -116,10 +116,15 @@ covenants — breaking any of them requires a major version.
 - A retried Case now persists **every call it paid for**. `store.Outcome.Spend` was documented as
   including failed attempts and did not: the guard settled each attempt while the store recorded
   one, so `Guard.Restore` under-restored the call cap by (attempts − 1) per retried Case.
-- A resume is refused when the **resolved model** changed. A ref like `openai:gpt-4.1` is a moving
+- A resume is refused when the **resolved model** changed — a ref like `openai:gpt-4.1` is a moving
   pointer, and a run resumed after the alias re-points would blend two models into one
-  `AggregateScore`. The provider's build identifier is recorded but never refused on — it changes
+  `AggregateScore`. The provider's build identifier is recorded but never refused on: it changes
   routinely with no model change, and a false refusal costs a full re-run.
+
+  **The check cannot fire yet.** It reads `Run.case_execution.resolved_models`, and nothing writes
+  that field until M2-10 — so this lands ahead of the data it needs, deliberately, because the
+  adapter that produces a resolved model arrives in M2-7 and the check has to exist before it does.
+  See `docs/debt.md#42`.
 - **`adapters/agent/pricing`**, the dated price table and the pessimistic estimate the budget guard
   reserves against. Prices as published on 2026-08-21 for Anthropic and OpenAI models; the table is
   **static and never fetched at runtime**, because an endpoint that is down leaves the engine
