@@ -1226,6 +1226,12 @@ func (p *pricingAgent) Estimate(_ context.Context, c *core.Case) (budget.Estimat
 	return budget.Estimate{Calls: 1, CostUSDMicros: p.unit * (caseIndex(c) + 1)}, nil
 }
 
+// WorstCase is the most any Case could cost, for planning. The harness makes 20
+// dev Cases, so the last one is the dearest.
+func (p *pricingAgent) WorstCase() budget.Estimate {
+	return budget.Estimate{Calls: 1, CostUSDMicros: p.unit * 20}
+}
+
 // caseIndex extracts the trailing number from a harness Case ID ("dev-007").
 func caseIndex(c *core.Case) int64 {
 	id := c.GetId()
@@ -1366,6 +1372,11 @@ func (e *everythingUnpriceable) Estimate(context.Context, *core.Case) (budget.Es
 	return budget.Estimate{}, errors.New("model not in the pricing table")
 }
 
+// WorstCase reports nothing, which is what an adapter that cannot price the
+// model should say. Planning then falls back to the scalar, and the per-Case
+// refusal is what actually stops the run.
+func (e *everythingUnpriceable) WorstCase() budget.Estimate { return budget.Estimate{} }
+
 // TestEstimatorFailureRunsWhenNoCostCapIsSet: refusing the whole run because a
 // price is unknown, when the user asked for no dollar cap, would be worse than
 // running uncapped. The call cap still applies.
@@ -1498,6 +1509,8 @@ func (f *fixedEstimate) Invoke(ctx context.Context, c *core.Case) (*core.Respons
 func (f *fixedEstimate) Estimate(context.Context, *core.Case) (budget.Estimate, error) {
 	return f.est, nil
 }
+
+func (f *fixedEstimate) WorstCase() budget.Estimate { return f.est }
 
 // TestABudgetStopDoesNotLoseInFlightCases.
 //
@@ -1729,6 +1742,11 @@ func TestTheQuoteIsBoundedByTheCap(t *testing.T) {
 
 	_, _ = core.Baseline(ctx, h.evals, h.opts)
 
+	// Without this the assertion below is vacuous: a zero-value Estimate is
+	// never greater than the cap, so the test passed if the prompt never fired.
+	if asked.Calls == 0 {
+		t.Fatal("the confirmation never fired, so the bound below proves nothing")
+	}
 	if asked.CostUSDMicros > capUSDMicros {
 		t.Errorf("the prompt quoted %d micro-USD against a cap of %d; the guard "+
 			"cannot spend more than the cap, so quoting more is false",
@@ -1966,11 +1984,17 @@ func TestTheRetryBudgetBoundsTimeAsWellAsAttempts(t *testing.T) {
 	if got := int(res.Run.GetErroredCaseCount()); got == 0 {
 		t.Fatal("every call was throttled but nothing errored, so the budget was never reached")
 	}
-	// 4 Cases, each bounded at ~50ms, with concurrency. Generous ceiling: the
-	// point is that 100 attempts did not run.
+	// Assert the ATTEMPT count, not elapsed time. A wall-clock ceiling with
+	// 78x headroom passes whether the bound is cumulative or per-sleep, which
+	// is exactly the distinction a frozen clock used to destroy.
+	calls := h.agent.Calls()
+	if maxIfBudgetIgnored := int64(4 * h.opts.MaxAttempts); calls >= maxIfBudgetIgnored {
+		t.Errorf("the agent was called %d times; with MaxAttempts %d over 4 "+
+			"Cases the attempt count alone permits %d, so the time budget did "+
+			"not bind", calls, h.opts.MaxAttempts, maxIfBudgetIgnored)
+	}
 	if elapsed > 5*time.Second {
-		t.Errorf("the run took %v; the retry budget did not bound it and the "+
-			"attempt count was doing the work", elapsed)
+		t.Errorf("the run took %v", elapsed)
 	}
 }
 
@@ -2054,6 +2078,152 @@ func TestAnUnconfirmedRunSpendsNothing(t *testing.T) {
 		t.Errorf("the refusal does not say the run cost nothing:\n%s", err)
 	}
 	if spent := h.opts.Guard.Spent(); spent.Calls != 0 || spent.CostUSDMicros != 0 {
+		t.Errorf("a declined run spent %+v", spent)
+	}
+}
+
+// TestRetryExhaustionPersistsEveryCallItPaidFor.
+//
+// The sibling test uses ThrottleFirstAttempt, so it succeeds on attempt two and
+// takes the has-a-Response branch. This one exhausts retries — every attempt
+// fails, there is no Response, and that branch hardcoded one call.
+//
+// It is the branch retries actually take under a 429 storm, and it is the one
+// the headline fix missed: measured 5 persisted against 15 settled.
+func TestRetryExhaustionPersistsEveryCallItPaidFor(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const devCases = 5
+	const attempts = 3
+
+	h := newHarness(t, devCases, 2, fake.Options{RateLimitEvery: 1}) // every call throttled
+	h.opts.Guard = budget.New(budget.Limits{MaxLLMCalls: 1_000}, nil, 0)
+	h.opts.MaxAttempts = attempts
+	h.opts.RetryBackoff = time.Millisecond
+
+	res, err := core.Baseline(ctx, h.evals, h.opts)
+	if err != nil {
+		t.Fatalf("Baseline: %v", err)
+	}
+	if got := int(res.Run.GetErroredCaseCount()); got != devCases {
+		t.Fatalf("errored %d of %d; the Cases did not exhaust their retries",
+			got, devCases)
+	}
+
+	persisted, err := h.store.SettledSpend(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("SettledSpend: %v", err)
+	}
+	inMemory := h.opts.Guard.Spent()
+
+	if persisted.Calls != inMemory.Calls {
+		t.Errorf("the store recorded %d calls and the guard settled %d; "+
+			"Guard.Restore reads the store, so a resume re-authorizes %d calls "+
+			"that were already made and paid for",
+			persisted.Calls, inMemory.Calls, inMemory.Calls-persisted.Calls)
+	}
+	if want := int64(devCases * attempts); persisted.Calls != want {
+		t.Errorf("persisted %d calls, want %d (%d Cases x %d attempts)",
+			persisted.Calls, want, devCases, attempts)
+	}
+}
+
+// TestTheDefaultConcurrencyIsPlannedFor.
+//
+// Zero is not "no concurrency" — it is the CLI's default, and the executor
+// turns it into min(NumCPU, 8), the exact figure in the measurement the
+// feasibility check exists for. Treating it as a bypass meant the guard still
+// denied its way to a halt on the path almost every user takes: 0 of 60 Cases
+// scored, $0.00 spent, against a $1.00 cap.
+func TestTheDefaultConcurrencyIsPlannedFor(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const devCases = 30
+
+	h := newHarness(t, devCases, 5, fake.Options{
+		Latency:              5 * time.Millisecond,
+		CostPerCallUSDMicros: 1_000,
+	})
+	// A per-Case estimate large enough that the executor's default concurrency
+	// would hold more than the cap in flight at once.
+	h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 1_000_000}, nil, 0)
+	h.opts.EstCostPerCallUSDMicros = 200_000
+	h.opts.Concurrency = 0 // exactly what the CLI passes
+
+	res, err := core.Baseline(ctx, h.evals, h.opts)
+	if err != nil {
+		t.Fatalf("a run at the default concurrency was refused: %v", err)
+	}
+	if got := int(res.Run.GetScoredCaseCount()); got != devCases {
+		t.Errorf("scored %d of %d at the DEFAULT concurrency; the feasibility "+
+			"check was bypassed and the guard denied its way to a halt",
+			got, devCases)
+	}
+}
+
+// TestARefusedRunLeavesNoDanglingRecord.
+//
+// Both new checks used to refuse after openRun, leaving a row permanently in
+// RUNNING with no outcomes and no events — and the interactive path declines by
+// default, so every above-threshold invocation minted a fresh orphan. A CI gate
+// reading exit 2 as "not a failure" then reported green for a run that never
+// started.
+func TestARefusedRunLeavesNoDanglingRecord(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	declined := func(context.Context, budget.Estimate, budget.Remaining) (bool, error) {
+		return false, nil
+	}
+
+	h := newHarness(t, 20, 5, fake.Options{CostPerCallUSDMicros: 40_000})
+	h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 100_000_000}, declined, 10_000)
+	h.opts.EstCostPerCallUSDMicros = 40_000
+
+	if _, err := core.Baseline(ctx, h.evals, h.opts); !errors.Is(err, errs.ErrBudgetExceeded) {
+		t.Fatalf("error = %v, want ErrBudgetExceeded", err)
+	}
+
+	if _, err := h.store.GetRun(ctx, "run-1"); !errors.Is(err, store.ErrRunNotFound) {
+		t.Errorf("a declined run left a Run record (err = %v); it never started, "+
+			"so a later reader would see it stuck in RUNNING forever", err)
+	}
+}
+
+// TestADeclinedRunCannotBeReAskedIntoSpending.
+//
+// A refusal used to leave the guard's confirmed flag false, so the next
+// Authorize prompted again — and on a yes, authorized the spend the user had
+// just declined.
+func TestADeclinedRunCannotBeReAskedIntoSpending(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	var prompts atomic.Int64
+	confirm := func(context.Context, budget.Estimate, budget.Remaining) (bool, error) {
+		prompts.Add(1)
+		return false, nil
+	}
+
+	g := budget.New(budget.Limits{MaxCostUSDMicros: 10_000_000}, confirm, 10_000)
+
+	if ok, _ := g.PreConfirm(ctx, budget.Estimate{Calls: 100, CostUSDMicros: 1_000_000}); ok {
+		t.Fatal("a declined run reported agreement")
+	}
+	if !g.Declined() {
+		t.Error("the refusal was not recorded")
+	}
+
+	// The per-operation path must not offer a second chance.
+	if _, err := g.Authorize(ctx, budget.Estimate{Calls: 1, CostUSDMicros: 500_000}); err == nil {
+		t.Error("a Case was authorized after the run was declined")
+	}
+	if got := prompts.Load(); got != 1 {
+		t.Errorf("the human was prompted %d times; a decline must be final", got)
+	}
+	if spent := g.Spent(); spent.Calls != 0 {
 		t.Errorf("a declined run spent %+v", spent)
 	}
 }

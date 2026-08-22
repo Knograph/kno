@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync/atomic"
 	"time"
 
@@ -230,15 +231,18 @@ func Baseline(
 		return nil, err
 	}
 
-	run, err := opts.openRun(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	// Resume needs two things from the store, and both must happen before any
-	// work is dispatched: what is already done, and what was already spent.
+	// Resume state first: both guards below need it. checkFeasible must see the
+	// headroom a resume actually has, and confirmRun must quote only the Cases
+	// that are left.
 	done := map[string]struct{}{}
 	if opts.Resume {
+		probe, err := opts.Store.GetRun(ctx, opts.RunID)
+		if err != nil {
+			return nil, fmt.Errorf("loading run %s: %w", opts.RunID, err)
+		}
+		if err := opts.checkResumable(probe); err != nil {
+			return nil, err
+		}
 		if done, err = opts.Store.CompletedCases(ctx, opts.RunID); err != nil {
 			return nil, fmt.Errorf("loading completed cases: %w", err)
 		}
@@ -251,10 +255,21 @@ func Baseline(
 		opts.Guard.Restore(spent)
 	}
 
-	if err := (&opts).checkFeasible(); err != nil {
+	// Both refusals happen BEFORE the Run record exists. Refusing after
+	// openRun left a row permanently in RUNNING with no outcomes and no
+	// events — and since the interactive path declines by default, every
+	// above-threshold `kno baseline` minted a fresh orphan. A CI gate reading
+	// exit 2 as "not a failure" then reported green for a run that never
+	// started.
+	if err := (&opts).checkFeasible(len(done)); err != nil {
 		return nil, err
 	}
 	if err := opts.confirmRun(ctx, len(done)); err != nil {
+		return nil, err
+	}
+
+	run, err := opts.openRun(ctx)
+	if err != nil {
 		return nil, err
 	}
 
@@ -565,13 +580,14 @@ func (o BaselineOptions) unpriceable(c *Case, cause error) error {
 // dismiss the prompt.
 func (o BaselineOptions) confirmRun(ctx context.Context, alreadyDone int) error {
 	remaining := int64(o.DevCases - alreadyDone)
-	if remaining <= 0 || o.EstCostPerCallUSDMicros <= 0 {
+	perCall := o.planningCostPerCall()
+	if remaining <= 0 || perCall <= 0 {
 		return nil
 	}
 
 	total := budget.Estimate{
 		Calls:         remaining,
-		CostUSDMicros: remaining * o.EstCostPerCallUSDMicros,
+		CostUSDMicros: saturatingMul(remaining, perCall),
 	}
 	// Never quote more than the cap can permit.
 	if ceiling := o.Guard.Limits().MaxCostUSDMicros; ceiling > 0 && total.CostUSDMicros > ceiling {
@@ -588,6 +604,39 @@ func (o BaselineOptions) confirmRun(ctx context.Context, alreadyDone int) error 
 			Wrap(fmt.Errorf("the run was not confirmed; nothing was spent"))
 	}
 	return nil
+}
+
+// planningCostPerCall is what one Case may cost, for planning rather than for
+// authorizing.
+//
+// An Estimator prices each Case from the Case, so a scalar supplied by the
+// caller is not what the guard will reserve. Both the feasibility check and the
+// consent prompt have to plan against the number that will actually be
+// reserved, or they answer a different question than the one being asked — and
+// the consent prompt in particular then shows a human a figure that is wrong by
+// whatever the two differ by.
+func (o BaselineOptions) planningCostPerCall() int64 {
+	if e, ok := o.Agent.(Estimator); ok {
+		if w := e.WorstCase(); w.CostUSDMicros > 0 {
+			return w.CostUSDMicros
+		}
+	}
+	return o.EstCostPerCallUSDMicros
+}
+
+// saturatingMul multiplies without wrapping.
+//
+// An overflowed product goes negative, sails past the cap clamp and under the
+// confirmation threshold, so PreConfirm silently returns true and the run falls
+// back to the per-call prompt — a consent path skipped by arithmetic.
+func saturatingMul(a, b int64) int64 {
+	if a <= 0 || b <= 0 {
+		return 0
+	}
+	if a > math.MaxInt64/b {
+		return math.MaxInt64
+	}
+	return a * b
 }
 
 // feasibleHeadroomFraction bounds how much of a cost cap may be held as
@@ -615,9 +664,18 @@ const feasibleHeadroomFraction = 0.25
 // A refusal exits 2, not 1. An exhausted cap is a resumable stop with nothing
 // wrong with the data, and reporting it as a broken build is what trains people
 // to ignore exit 1.
-func (o *BaselineOptions) checkFeasible() error {
+func (o *BaselineOptions) checkFeasible(alreadyDone int) error {
+	// A resume of a finished run has nothing left to authorize, so an exhausted
+	// cap is not a problem to report — it is the expected state. Refusing here
+	// turned an idempotent `--resume` in CI from a clean exit 0 into exit 2,
+	// with a fix line telling the user to re-run and pay for all of it again.
+	if o.DevCases > 0 && o.DevCases-alreadyDone <= 0 {
+		return nil
+	}
+
 	limits := o.Guard.Limits()
-	if limits.MaxCostUSDMicros <= 0 || o.EstCostPerCallUSDMicros <= 0 {
+	perCall := o.planningCostPerCall()
+	if limits.MaxCostUSDMicros <= 0 || perCall <= 0 {
 		return nil // no dollar cap, or nothing to compute against
 	}
 
@@ -628,11 +686,14 @@ func (o *BaselineOptions) checkFeasible() error {
 			Wrap(fmt.Errorf("the cost cap is already spent, so no Case can be authorized"))
 	}
 
-	perCall := o.EstCostPerCallUSDMicros
-	if perCall > remaining {
+	// Refusing outright only makes sense when every Case costs the same, which
+	// is true of the scalar and false of an Estimator: it prices each Case from
+	// the Case, so the worst one exceeding the cap says nothing about whether
+	// the cheap ones fit. Refusing there would reject a run where most Cases
+	// are affordable, and the per-Case guard already stops the dear ones.
+	if _, perCase := o.Agent.(Estimator); !perCase && perCall > remaining {
 		return errs.ErrBudgetExceeded.WithFix(fmt.Sprintf(
-			"raise --max-cost-usd above %s, or lower --max-output-tokens",
-			formatUSDMicros(perCall))).
+			"raise --max-cost-usd above %s", formatUSDMicros(perCall))).
 			Wrap(fmt.Errorf("one Case is estimated at %s and only %s remains, so "+
 				"not a single Case can be authorized",
 				formatUSDMicros(perCall), formatUSDMicros(remaining)))
@@ -643,11 +704,17 @@ func (o *BaselineOptions) checkFeasible() error {
 	if affordable < 1 {
 		affordable = 1
 	}
-	if o.Concurrency > 0 && o.Concurrency <= affordable {
-		return nil
+	// Zero is not "no concurrency", it is the CLI's default and the executor
+	// turns it into min(NumCPU, 8) — the exact figure in the measurement this
+	// check exists for. Treating it as a bypass meant the guard still denied
+	// its way to a halt on the path almost every user takes: measured 0 of 60
+	// Cases scored, $0.00 spent, on a $1.00 cap.
+	requested := o.Concurrency
+	if requested <= 0 {
+		requested = executor.DefaultConcurrency()
 	}
-	if o.Concurrency == 0 {
-		return nil // the executor picks a conservative default
+	if requested <= affordable {
+		return nil
 	}
 
 	o.Concurrency = affordable
@@ -700,12 +767,16 @@ func (o BaselineOptions) workFunc() executor.WorkFunc[*Case, caseOutcome] {
 // and pretending otherwise would let a throttled run spend past its cap
 // invisibly.
 //
-// Only ErrRateLimited is retried. A 429 is the provider asking us to slow
-// down, not the Case failing — recording it as terminal throws away capacity
-// already paid for, and ordinary throttling would push a run past
-// max_error_rate and mark a perfectly good baseline unusable for no
-// statistical reason. An agent that returned a 500 or malformed output did
+// Which errors are retried is decided by retryable, below. A 429 is the
+// provider asking us to slow down, not the Case failing — recording it as
+// terminal throws away capacity already paid for, and ordinary throttling would
+// push a run past max_error_rate and mark a perfectly good baseline unusable
+// for no statistical reason. A dropped connection is the same shape: the
+// request never reached a handler.
+//
+// An agent that answered badly — malformed output a Goal cannot score — did
 // fail, and retrying it burns budget on a Case that will fail again.
+
 // invokeWithRetry returns the response, how many provider calls it took, and
 // the error.
 //
@@ -721,7 +792,13 @@ func (o BaselineOptions) invokeWithRetry(
 	est budget.Estimate,
 ) (*Response, int, error) {
 	backoff := o.retryBackoff()
-	deadline := o.now().Add(o.retryBudget())
+	// time.Now, not o.now. The budget bounds real elapsed time, and o.now is
+	// injectable — a frozen clock (which BaselineOptions.Now's own godoc
+	// invites for stable golden tests) made "now + wait > now + budget"
+	// collapse to "wait > budget", turning a cumulative bound into a per-sleep
+	// one. Measured under a frozen clock: 40 provider calls for one Case
+	// against a 50ms budget.
+	deadline := time.Now().Add(o.retryBudget())
 	var lastErr error
 
 	attempts := 0
@@ -750,7 +827,7 @@ func (o BaselineOptions) invokeWithRetry(
 		// Both bounds, whichever binds first. Stopping here rather than after
 		// the wait means the budget is a bound on time SPENT, not on time
 		// spent plus one more sleep.
-		if o.now().Add(wait).After(deadline) {
+		if time.Now().Add(wait).After(deadline) {
 			break
 		}
 
@@ -917,7 +994,11 @@ func (o BaselineOptions) sinkFunc(runCtx context.Context, draining *atomic.Bool,
 				out.Response = r.Value.Response
 				out.Spend = spendOfN(r.Value.Response, int64(r.Value.Attempts))
 			} else {
-				out.Spend = budget.Spend{Calls: 1}
+				// No Response, which is the retry-EXHAUSTED path — every
+				// attempt failed. Hardcoding one call here is what made the
+				// headline fix miss the branch it was written for: measured 5
+				// persisted against 15 settled with MaxAttempts 3.
+				out.Spend = budget.Spend{Calls: attemptsOf(r.Value)}
 			}
 		}
 
@@ -1032,6 +1113,17 @@ func codeOf(err error) string {
 }
 
 func spendOf(r *knov1.Response) budget.Spend { return spendOfN(r, 1) }
+
+// attemptsOf reports how many provider calls an outcome took, floored at one.
+//
+// A nil outcome means the work never produced one, which is still one call's
+// worth of exposure at most.
+func attemptsOf(o *caseOutcome) int64 {
+	if o == nil || o.Attempts < 1 {
+		return 1
+	}
+	return int64(o.Attempts)
+}
 
 // spendOfN is spendOf for a Case that took n provider calls.
 func spendOfN(r *knov1.Response, n int64) budget.Spend {

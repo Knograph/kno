@@ -92,8 +92,19 @@ func (o Options) concurrency() int {
 	if o.Concurrency > 0 {
 		return o.Concurrency
 	}
-	// Modest by default. The work is I/O against a rate-limited provider, so
-	// the useful ceiling is set by that provider, not by this machine.
+	return DefaultConcurrency()
+}
+
+// DefaultConcurrency is what a zero Concurrency resolves to.
+//
+// Exported because a caller planning against a budget has to know the number it
+// will actually run at. Treating zero as "unset, skip the check" let core's
+// feasibility guard be bypassed on the CLI's default path — the one almost
+// every user takes.
+//
+// Modest by default. The work is I/O against a rate-limited provider, so the
+// useful ceiling is set by that provider, not by this machine.
+func DefaultConcurrency() int {
 	if n := runtime.NumCPU(); n < 8 {
 		return n
 	}
