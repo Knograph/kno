@@ -91,6 +91,22 @@ type Estimator interface {
 	// zero-cost answer under a cost cap exactly as it treats an error. Report
 	// the error; do not invent a cheap number.
 	Estimate(ctx context.Context, c *Case) (budget.Estimate, error)
+
+	// WorstCase reports the most any single Case could cost, before any Case is
+	// seen.
+	//
+	// Planning needs a number and per-Case estimates need a Case, so without
+	// this the engine plans against BaselineOptions.EstCostPerCallUSDMicros —
+	// a scalar an Estimator does not use. Measured with an adapter pricing at
+	// $0.20 against a scalar of $0.001: the consent prompt quoted $0.06 for a
+	// run whose real exposure was $12.00, and the feasibility check computed
+	// enough headroom for 250 in-flight Cases while the run stalled at 0 of 60.
+	//
+	// An adapter can answer because the output term dominates and is known up
+	// front: the output ceiling times the output rate, plus whatever the
+	// largest plausible prompt costs. It must be an upper bound, for the same
+	// reason Estimate must be.
+	WorstCase() budget.Estimate
 }
 
 // KnowledgeInjector is an Agent whose knowledge index Kno can write.

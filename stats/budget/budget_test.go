@@ -5,7 +5,9 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/knograph/kno/core/errs"
 	"github.com/knograph/kno/stats/budget"
@@ -670,5 +672,203 @@ func TestAuthorizeAcceptsAZeroCostEstimate(t *testing.T) {
 	g := budget.New(budget.Limits{MaxLLMCalls: 5}, nil, 0)
 	if _, err := g.Authorize(context.Background(), budget.Estimate{Calls: 1}); err != nil {
 		t.Fatalf("a zero-cost estimate under a call-only cap was refused: %v", err)
+	}
+}
+
+// TestPreConfirmAsksOnceAboutTheWholeRun.
+//
+// The per-operation prompt shows one call's estimate and records agreement for
+// the life of the run, so a user shown "$0.04" consented to all of it. This is
+// the seam that lets a caller quote the whole thing instead.
+func TestPreConfirmAsksOnceAboutTheWholeRun(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	var asked []budget.Estimate
+	confirm := func(_ context.Context, est budget.Estimate, _ budget.Remaining) (bool, error) {
+		asked = append(asked, est)
+		return true, nil
+	}
+	g := budget.New(budget.Limits{MaxCostUSDMicros: 10_000_000}, confirm, 10_000)
+
+	total := budget.Estimate{Calls: 400, CostUSDMicros: 4_000_000}
+	ok, err := g.PreConfirm(ctx, total)
+	if err != nil || !ok {
+		t.Fatalf("PreConfirm = %v, %v", ok, err)
+	}
+	if len(asked) != 1 || asked[0].CostUSDMicros != total.CostUSDMicros {
+		t.Fatalf("asked %v, want one prompt quoting the whole run", asked)
+	}
+
+	// A second call is a no-op: a resumed run must not re-ask about work
+	// already agreed to.
+	if ok, err := g.PreConfirm(ctx, total); err != nil || !ok {
+		t.Errorf("second PreConfirm = %v, %v", ok, err)
+	}
+	if len(asked) != 1 {
+		t.Errorf("asked %d times, want 1", len(asked))
+	}
+
+	// And per-operation Authorize does not ask again either.
+	res, err := g.Authorize(ctx, budget.Estimate{Calls: 1, CostUSDMicros: 50_000})
+	if err != nil {
+		t.Fatalf("Authorize: %v", err)
+	}
+	res.Settle(budget.Spend{Calls: 1, CostUSDMicros: 50_000})
+	if len(asked) != 1 {
+		t.Errorf("Authorize prompted again after PreConfirm agreed; the user "+
+			"would be asked twice for one run (%d prompts)", len(asked))
+	}
+}
+
+// TestPreConfirmStaysQuietBelowTheThreshold and when there is nobody to ask.
+func TestPreConfirmStaysQuietBelowTheThreshold(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	var asked int
+	confirm := func(context.Context, budget.Estimate, budget.Remaining) (bool, error) {
+		asked++
+		return true, nil
+	}
+
+	t.Run("below the threshold", func(t *testing.T) {
+		g := budget.New(budget.Limits{MaxCostUSDMicros: 1_000_000}, confirm, 500_000)
+		if ok, err := g.PreConfirm(ctx, budget.Estimate{CostUSDMicros: 1_000}); !ok || err != nil {
+			t.Fatalf("PreConfirm = %v, %v", ok, err)
+		}
+		if asked != 0 {
+			t.Errorf("prompted for a run below the threshold")
+		}
+	})
+
+	t.Run("no ConfirmFunc", func(t *testing.T) {
+		g := budget.New(budget.Limits{MaxCostUSDMicros: 1_000_000}, nil, 500_000)
+		if ok, err := g.PreConfirm(ctx, budget.Estimate{CostUSDMicros: 999_000}); !ok || err != nil {
+			t.Errorf("PreConfirm = %v, %v; with nobody to ask, proceeding is the "+
+				"caller's decision to have made already", ok, err)
+		}
+	})
+}
+
+// TestPreConfirmRefusalIsHonored: declining must stop the run, and must not
+// record agreement.
+func TestPreConfirmRefusalIsHonored(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	g := budget.New(budget.Limits{MaxCostUSDMicros: 10_000_000},
+		func(context.Context, budget.Estimate, budget.Remaining) (bool, error) {
+			return false, nil
+		}, 10_000)
+
+	ok, err := g.PreConfirm(ctx, budget.Estimate{Calls: 100, CostUSDMicros: 1_000_000})
+	if err != nil {
+		t.Fatalf("PreConfirm: %v", err)
+	}
+	if ok {
+		t.Error("a declined run reported agreement")
+	}
+}
+
+// TestPreConfirmLatchesEvenWhenItDoesNotAsk.
+//
+// Returning true without latching left the per-operation prompt armed, so a run
+// whose total fell below the threshold could still be stopped at its first
+// expensive Case and asked about THAT one Case — which then counted as consent
+// for all of them. That is verbatim the failure PreConfirm exists to replace,
+// reachable straight past it.
+func TestPreConfirmLatchesEvenWhenItDoesNotAsk(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	var prompts int
+	confirm := func(context.Context, budget.Estimate, budget.Remaining) (bool, error) {
+		prompts++
+		return true, nil
+	}
+	// Threshold above the run total, so PreConfirm does not ask...
+	g := budget.New(budget.Limits{MaxCostUSDMicros: 10_000_000}, confirm, 5_000_000)
+
+	if ok, err := g.PreConfirm(ctx, budget.Estimate{Calls: 10, CostUSDMicros: 100_000}); !ok || err != nil {
+		t.Fatalf("PreConfirm = %v, %v", ok, err)
+	}
+	if prompts != 0 {
+		t.Fatalf("prompted %d times for a run below the threshold", prompts)
+	}
+
+	// ...and one expensive Case must not now be asked about on its own.
+	res, err := g.Authorize(ctx, budget.Estimate{Calls: 1, CostUSDMicros: 6_000_000})
+	if err != nil {
+		t.Fatalf("Authorize: %v", err)
+	}
+	res.Settle(budget.Spend{Calls: 1, CostUSDMicros: 6_000_000})
+
+	if prompts != 0 {
+		t.Errorf("the human was asked about ONE Case after the run-level "+
+			"decision was already made; that consent would cover every Case "+
+			"that follows (%d prompts)", prompts)
+	}
+}
+
+// TestPreConfirmIsSingleFlight.
+//
+// ConfirmFunc's contract is that it is never called concurrently with itself.
+// Reading confirmed under mu alone does not provide that: every goroutine reads
+// false, releases, and prompts.
+func TestPreConfirmIsSingleFlight(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	var prompts atomic.Int64
+	var inFlight atomic.Int64
+	confirm := func(context.Context, budget.Estimate, budget.Remaining) (bool, error) {
+		if n := inFlight.Add(1); n > 1 {
+			t.Errorf("ConfirmFunc was called concurrently with itself (%d in flight)", n)
+		}
+		time.Sleep(5 * time.Millisecond)
+		inFlight.Add(-1)
+		prompts.Add(1)
+		return true, nil
+	}
+	g := budget.New(budget.Limits{MaxCostUSDMicros: 100_000_000}, confirm, 10_000)
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := g.PreConfirm(ctx, budget.Estimate{Calls: 10, CostUSDMicros: 1_000_000}); err != nil {
+				t.Errorf("PreConfirm: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if got := prompts.Load(); got != 1 {
+		t.Errorf("the human was prompted %d times for one run, want 1", got)
+	}
+}
+
+// TestEstimateReportsWhatAReservationHolds covers the accessor a caller uses to
+// compare what was reserved against what settled.
+func TestEstimateReportsWhatAReservationHolds(t *testing.T) {
+	t.Parallel()
+
+	g := budget.New(budget.Limits{MaxCostUSDMicros: 1_000_000}, nil, 0)
+	est := budget.Estimate{Calls: 1, CostUSDMicros: 250_000, Tokens: 42}
+
+	res, err := g.Authorize(context.Background(), est)
+	if err != nil {
+		t.Fatalf("Authorize: %v", err)
+	}
+	if got := res.Estimate(); got != est {
+		t.Errorf("Estimate() = %+v, want %+v", got, est)
+	}
+	res.Settle(budget.Spend{Calls: 1, CostUSDMicros: 300_000})
+
+	// The overshoot is computable from the two, which is the point.
+	if over := g.Spent().CostUSDMicros - est.CostUSDMicros; over != 50_000 {
+		t.Errorf("settled minus reserved = %d, want 50000", over)
 	}
 }

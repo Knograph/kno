@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1225,6 +1226,12 @@ func (p *pricingAgent) Estimate(_ context.Context, c *core.Case) (budget.Estimat
 	return budget.Estimate{Calls: 1, CostUSDMicros: p.unit * (caseIndex(c) + 1)}, nil
 }
 
+// WorstCase is the most any Case could cost, for planning. The harness makes 20
+// dev Cases, so the last one is the dearest.
+func (p *pricingAgent) WorstCase() budget.Estimate {
+	return budget.Estimate{Calls: 1, CostUSDMicros: p.unit * 20}
+}
+
 // caseIndex extracts the trailing number from a harness Case ID ("dev-007").
 func caseIndex(c *core.Case) int64 {
 	id := c.GetId()
@@ -1365,6 +1372,11 @@ func (e *everythingUnpriceable) Estimate(context.Context, *core.Case) (budget.Es
 	return budget.Estimate{}, errors.New("model not in the pricing table")
 }
 
+// WorstCase reports nothing, which is what an adapter that cannot price the
+// model should say. Planning then falls back to the scalar, and the per-Case
+// refusal is what actually stops the run.
+func (e *everythingUnpriceable) WorstCase() budget.Estimate { return budget.Estimate{} }
+
 // TestEstimatorFailureRunsWhenNoCostCapIsSet: refusing the whole run because a
 // price is unknown, when the user asked for no dollar cap, would be worse than
 // running uncapped. The call cap still applies.
@@ -1498,6 +1510,8 @@ func (f *fixedEstimate) Estimate(context.Context, *core.Case) (budget.Estimate, 
 	return f.est, nil
 }
 
+func (f *fixedEstimate) WorstCase() budget.Estimate { return f.est }
+
 // TestABudgetStopDoesNotLoseInFlightCases.
 //
 // A budget stop drains the workers, and a Case cancelled mid-call has no result
@@ -1563,5 +1577,653 @@ func TestABudgetStopDoesNotLoseInFlightCases(t *testing.T) {
 	if got := int(resumed.Run.GetScoredCaseCount()); got != devCases {
 		t.Errorf("the completed run scored %d of %d dev Cases; the ones the "+
 			"budget stop cancelled were never re-attempted", got, devCases)
+	}
+}
+
+// TestAnUnaffordableRunIsRefusedRatherThanStarted.
+//
+// A pessimistic reservation holds concurrency x estimate of the cap in flight.
+// When that exceeds the cap the guard denies before anything settles, and the
+// run stops having done almost nothing — measured at a 32k output ceiling
+// against a $1.00 cap at concurrency 8: the fourth Case denied, $0.00 spent.
+//
+// Exit 2, not 1. An exhausted cap is a resumable stop with nothing wrong with
+// the data, and reporting it as a broken build is what trains people to ignore
+// exit 1.
+func TestAnUnaffordableRunIsRefusedRatherThanStarted(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	h := newHarness(t, 20, 5, fake.Options{})
+	// One Case costs more than the whole cap.
+	h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 100_000}, nil, 0)
+	h.opts.EstCostPerCallUSDMicros = 256_000
+	h.opts.Concurrency = 8
+
+	_, err := core.Baseline(ctx, h.evals, h.opts)
+	if !errors.Is(err, errs.ErrBudgetExceeded) {
+		t.Fatalf("error = %v, want ErrBudgetExceeded", err)
+	}
+	if got := errs.ExitCodeOf(err); got != errs.ExitBudgetStopped {
+		t.Errorf("exit code = %d, want %d; an unaffordable run is a resumable "+
+			"stop, not a broken build", got, errs.ExitBudgetStopped)
+	}
+	if !strings.Contains(err.Error(), "not a single Case") {
+		t.Errorf("the refusal does not say what is wrong:\n%s", err)
+	}
+	if !strings.Contains(err.Error(), "fix:") {
+		t.Errorf("no fix line:\n%s", err)
+	}
+}
+
+// TestConcurrencyIsReducedRatherThanStalling.
+//
+// When the cap admits some Cases but not `concurrency` of them at once, the run
+// should proceed at a lower concurrency rather than deny its way to a halt.
+func TestConcurrencyIsReducedRatherThanStalling(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const devCases = 20
+
+	h := newHarness(t, devCases, 5, fake.Options{CostPerCallUSDMicros: 1_000})
+	// $1.00 cap, $0.05 per Case: a quarter of the cap admits 5 in flight, so a
+	// requested concurrency of 32 is reduced rather than refused.
+	h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 1_000_000}, nil, 0)
+	h.opts.EstCostPerCallUSDMicros = 50_000
+	h.opts.Concurrency = 32
+
+	res, err := core.Baseline(ctx, h.evals, h.opts)
+	if err != nil {
+		t.Fatalf("a run that could proceed at lower concurrency was refused: %v", err)
+	}
+	if got := int(res.Run.GetScoredCaseCount()); got != devCases {
+		t.Errorf("scored %d of %d; the run stalled instead of proceeding more "+
+			"slowly", got, devCases)
+	}
+}
+
+// TestFeasibilityIsCheckedAgainstWhatARESUMEHasLeft.
+//
+// The check runs after Guard.Restore, so it sees the headroom the resumed run
+// actually has rather than the cap it was originally given. Checking before
+// would be the same defect this file already fixed for the confirmation prompt.
+func TestFeasibilityIsCheckedAgainstWhatARESUMEHasLeft(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	h := newHarness(t, 20, 5, fake.Options{CostPerCallUSDMicros: 40_000})
+	h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 500_000}, nil, 0)
+	h.opts.EstCostPerCallUSDMicros = 40_000
+	h.opts.Concurrency = 2
+
+	// Burn most of the cap.
+	if _, err := core.Baseline(ctx, h.evals, h.opts); !errors.Is(err, errs.ErrBudgetExceeded) {
+		t.Fatalf("first run: %v", err)
+	}
+
+	// Resume with the SAME cap. Restore reseeds the spend, so almost nothing
+	// remains — and the check must see that rather than the full cap.
+	opts := h.opts
+	opts.Resume = true
+	opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 500_000}, nil, 0)
+
+	_, err := core.Baseline(ctx, h.evals, opts)
+	if !errors.Is(err, errs.ErrBudgetExceeded) {
+		t.Errorf("error = %v; the resume was admitted against the ORIGINAL cap "+
+			"rather than what Restore left", err)
+	}
+}
+
+// TestTheHumanIsAskedAboutTheWholeRun.
+//
+// The per-operation prompt was the wrong instrument. ConfirmFunc receives one
+// call's estimate and the guard records agreement for the life of the run, so a
+// user shown "$0.04" for the first Case that crossed the threshold consented to
+// all of it — 10,000 Cases at that price is $400, asked once, at four cents.
+func TestTheHumanIsAskedAboutTheWholeRun(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const devCases = 40
+	const perCall = 40_000 // $0.04
+
+	var asked budget.Estimate
+	var times atomic.Int64
+	confirm := func(_ context.Context, est budget.Estimate, _ budget.Remaining) (bool, error) {
+		times.Add(1)
+		asked = est
+		return true, nil
+	}
+
+	h := newHarness(t, devCases, 5, fake.Options{CostPerCallUSDMicros: perCall})
+	h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 100_000_000}, confirm, 10_000)
+	h.opts.EstCostPerCallUSDMicros = perCall
+
+	if _, err := core.Baseline(ctx, h.evals, h.opts); err != nil {
+		t.Fatalf("Baseline: %v", err)
+	}
+
+	if times.Load() != 1 {
+		t.Errorf("the human was asked %d times, want exactly 1", times.Load())
+	}
+	if want := int64(devCases) * perCall; asked.CostUSDMicros != want {
+		t.Errorf("the prompt quoted %d micro-USD, want %d (%d Cases x %d); "+
+			"quoting one Case's price for a whole run is how a user approves "+
+			"four cents and pays for forty",
+			asked.CostUSDMicros, want, devCases, perCall)
+	}
+	if asked.Calls != devCases {
+		t.Errorf("the prompt quoted %d calls, want %d", asked.Calls, devCases)
+	}
+}
+
+// TestTheQuoteIsBoundedByTheCap.
+//
+// With a cap set, the honest maximum exposure is the cap. Quoting DevCases x
+// per-Case when the guard will stop far earlier is false in the direction that
+// teaches people to dismiss the prompt.
+func TestTheQuoteIsBoundedByTheCap(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const capUSDMicros = 500_000 // $0.50, far below 40 x $0.04
+
+	var asked budget.Estimate
+	confirm := func(_ context.Context, est budget.Estimate, _ budget.Remaining) (bool, error) {
+		asked = est
+		return true, nil
+	}
+
+	h := newHarness(t, 40, 5, fake.Options{CostPerCallUSDMicros: 40_000})
+	h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: capUSDMicros}, confirm, 10_000)
+	h.opts.EstCostPerCallUSDMicros = 40_000
+	h.opts.Concurrency = 2
+
+	_, _ = core.Baseline(ctx, h.evals, h.opts)
+
+	// Without this the assertion below is vacuous: a zero-value Estimate is
+	// never greater than the cap, so the test passed if the prompt never fired.
+	if asked.Calls == 0 {
+		t.Fatal("the confirmation never fired, so the bound below proves nothing")
+	}
+	if asked.CostUSDMicros > capUSDMicros {
+		t.Errorf("the prompt quoted %d micro-USD against a cap of %d; the guard "+
+			"cannot spend more than the cap, so quoting more is false",
+			asked.CostUSDMicros, capUSDMicros)
+	}
+}
+
+// TestAResumeQuotesOnlyWhatIsLeft.
+//
+// The CLI has DevCases but not the completed set, so computing the quote there
+// meant a run killed at 9,988 of 10,000 prompted for the full amount to finish
+// twelve Cases. This is why the quote is computed in core, after
+// CompletedCases.
+func TestAResumeQuotesOnlyWhatIsLeft(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const devCases = 40
+	const perCall = 40_000
+
+	h := newHarness(t, devCases, 5, fake.Options{CostPerCallUSDMicros: perCall})
+	h.opts.Guard = budget.New(budget.Limits{MaxLLMCalls: 10}, nil, 0)
+	h.opts.EstCostPerCallUSDMicros = perCall
+
+	if _, err := core.Baseline(ctx, h.evals, h.opts); !errors.Is(err, errs.ErrBudgetExceeded) {
+		t.Fatalf("first run: %v", err)
+	}
+	done, err := h.store.CompletedCases(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("CompletedCases: %v", err)
+	}
+	if len(done) == 0 {
+		t.Fatal("the first run recorded nothing, so the resume has nothing to skip")
+	}
+
+	var asked budget.Estimate
+	confirm := func(_ context.Context, est budget.Estimate, _ budget.Remaining) (bool, error) {
+		asked = est
+		return true, nil
+	}
+	opts := h.opts
+	opts.Resume = true
+	opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 100_000_000}, confirm, 10_000)
+
+	if _, err := core.Baseline(ctx, h.evals, opts); err != nil {
+		t.Fatalf("resumed run: %v", err)
+	}
+
+	if want := int64(devCases - len(done)); asked.Calls != want {
+		t.Errorf("the resume quoted %d calls, want %d (%d dev Cases minus %d "+
+			"already done); quoting the full run asks a user to approve work "+
+			"they already paid for", asked.Calls, want, devCases, len(done))
+	}
+}
+
+// TestARetriedCasePersistsEveryCallItPaidFor.
+//
+// store.Outcome.Spend is documented as "including any failed attempts preceding
+// a successful retry", and it did not: the guard settled each attempt while the
+// store persisted one call. Guard.Restore reads the store, so a resumed run
+// under-restored the call cap by (attempts-1) for every retried Case — and a
+// real provider makes retries routine where a fake never did.
+func TestARetriedCasePersistsEveryCallItPaidFor(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const devCases = 10
+
+	// ThrottleFirstAttempt makes each Case's FIRST attempt fail with a rate
+	// limit, so every Case takes exactly two provider calls.
+	h := newHarness(t, devCases, 2, fake.Options{
+		ThrottleFirstAttempt: true,
+		CostPerCallUSDMicros: 1_000,
+	})
+	h.opts.Guard = budget.New(budget.Limits{MaxLLMCalls: 1_000}, nil, 0)
+	h.opts.RetryBackoff = time.Millisecond
+
+	res, err := core.Baseline(ctx, h.evals, h.opts)
+	if err != nil {
+		t.Fatalf("Baseline: %v", err)
+	}
+	if got := int(res.Run.GetScoredCaseCount()); got != devCases {
+		t.Fatalf("scored %d of %d; the retries did not recover", got, devCases)
+	}
+
+	persisted, err := h.store.SettledSpend(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("SettledSpend: %v", err)
+	}
+	inMemory := h.opts.Guard.Spent()
+
+	if persisted.Calls != inMemory.Calls {
+		t.Errorf("the store recorded %d calls and the guard settled %d; "+
+			"Guard.Restore reads the store, so a resume would believe %d fewer "+
+			"calls were made than really were",
+			persisted.Calls, inMemory.Calls, inMemory.Calls-persisted.Calls)
+	}
+	if want := int64(devCases * 2); persisted.Calls != want {
+		t.Errorf("persisted %d calls, want %d (two per Case)", persisted.Calls, want)
+	}
+}
+
+// TestATransientTransportFailureIsRetried.
+//
+// A stale pooled connection is not the agent failing. At concurrency, any pause
+// in a long run produces a handful of them, and treating them as terminal marks
+// a healthy baseline unusable over an idle timeout. The transport classifies;
+// core is what decides to try again.
+func TestATransientTransportFailureIsRetried(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	h := newHarness(t, 5, 2, fake.Options{})
+	agent := &transientOnce{Agent: h.agent}
+	h.opts.Agent = agent
+	h.opts.RetryBackoff = time.Millisecond
+
+	res, err := core.Baseline(ctx, h.evals, h.opts)
+	if err != nil {
+		t.Fatalf("Baseline: %v", err)
+	}
+	if got := int(res.Run.GetErroredCaseCount()); got != 0 {
+		t.Errorf("%d Case(s) errored on a transient transport failure that a "+
+			"retry recovers; a dropped connection would mark a healthy "+
+			"baseline unusable", got)
+	}
+	if agent.calls.Load() <= int64(res.Run.GetScoredCaseCount()) {
+		t.Error("no Case was actually retried, so this test proves nothing")
+	}
+}
+
+// transientOnce fails each Case's first call the way a dropped connection does.
+type transientOnce struct {
+	core.Agent
+	calls atomic.Int64
+	seen  sync.Map
+}
+
+func (a *transientOnce) Invoke(ctx context.Context, c *core.Case) (*core.Response, error) {
+	a.calls.Add(1)
+	if _, been := a.seen.LoadOrStore(c.GetId(), true); !been {
+		return nil, errs.ErrTransportTransient.Wrap(errors.New("connection reset by peer"))
+	}
+	return a.Agent.Invoke(ctx, c)
+}
+
+// TestAResumeAfterTheAliasMovesIsRefused.
+//
+// A ref like openai:gpt-4.1 is a moving pointer. A run interrupted on Monday
+// and resumed on Friday after the alias re-points passes every other resume
+// check and blends two models into one AggregateScore — the corrupted-reference
+// failure checkResumable exists to prevent, arriving through the one input it
+// could not see.
+func TestAResumeAfterTheAliasMovesIsRefused(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	h := newHarness(t, 10, 3, fake.Options{})
+	h.opts.ResolvedModel = "gpt-4.1-2026-05-01"
+	if _, err := core.Baseline(ctx, h.evals, h.opts); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+
+	// Record what the first run resolved to, the way an adapter will.
+	run, err := h.store.GetRun(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	run.CaseExecution = &knov1.CaseExecution{ResolvedModels: []string{"gpt-4.1-2026-05-01"}}
+	if err := h.store.FinishRun(ctx, run); err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	opts := h.opts
+	opts.Resume = true
+	opts.ResolvedModel = "gpt-4.1-2026-08-01" // the alias moved
+
+	_, err = core.Baseline(ctx, h.evals, opts)
+	if !errors.Is(err, errs.ErrCheckpointStale) {
+		t.Fatalf("error = %v, want ErrCheckpointStale; the run resumed against a "+
+			"different model and would average two of them into one score", err)
+	}
+	if !strings.Contains(err.Error(), "resolved model") {
+		t.Errorf("the refusal does not name what changed:\n%s", err)
+	}
+}
+
+// TestAnUnknownResolvedModelDoesNotBlockAResume.
+//
+// Empty on either side means unknown — the first process may not have reached a
+// response. Refusing on absence would make every run that stopped before its
+// first answer unresumable.
+func TestAnUnknownResolvedModelDoesNotBlockAResume(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	h := newHarness(t, 10, 3, fake.Options{})
+	if _, err := core.Baseline(ctx, h.evals, h.opts); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+
+	opts := h.opts
+	opts.Resume = true
+	opts.ResolvedModel = "gpt-4.1-2026-08-01" // known now, unknown then
+
+	if _, err := core.Baseline(ctx, h.evals, opts); err != nil {
+		t.Errorf("a resume was refused because the FIRST run never recorded a "+
+			"resolved model: %v", err)
+	}
+}
+
+// TestTheRetryBudgetBoundsTimeAsWellAsAttempts.
+//
+// Three attempts at 500ms doubling is a 1.5-second window, and a real
+// provider's sustained 429 window is minutes — so a rate-limited account marked
+// a good baseline unusable. Time alone is also wrong: each attempt takes its own
+// reservation, so a long window lets one Case consume dozens of calls. Both
+// bounds, whichever binds first.
+func TestTheRetryBudgetBoundsTimeAsWellAsAttempts(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	h := newHarness(t, 4, 2, fake.Options{RateLimitEvery: 1}) // every call throttled
+	h.opts.MaxAttempts = 100                                  // attempts would never bind
+	h.opts.RetryBudget = 50 * time.Millisecond
+	h.opts.RetryBackoff = 20 * time.Millisecond
+
+	start := time.Now()
+	res, err := core.Baseline(ctx, h.evals, h.opts)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("Baseline: %v", err)
+	}
+	if got := int(res.Run.GetErroredCaseCount()); got == 0 {
+		t.Fatal("every call was throttled but nothing errored, so the budget was never reached")
+	}
+	// Assert the ATTEMPT count, not elapsed time. A wall-clock ceiling with
+	// 78x headroom passes whether the bound is cumulative or per-sleep, which
+	// is exactly the distinction a frozen clock used to destroy.
+	calls := h.agent.Calls()
+	if maxIfBudgetIgnored := int64(4 * h.opts.MaxAttempts); calls >= maxIfBudgetIgnored {
+		t.Errorf("the agent was called %d times; with MaxAttempts %d over 4 "+
+			"Cases the attempt count alone permits %d, so the time budget did "+
+			"not bind", calls, h.opts.MaxAttempts, maxIfBudgetIgnored)
+	}
+	if elapsed > 5*time.Second {
+		t.Errorf("the run took %v", elapsed)
+	}
+}
+
+// TestAProviderRequestedWaitOverridesOurGuess.
+//
+// A provider that says how long to wait is the authority on its own limits; the
+// doubling backoff is only a guess for when it does not say. The transport
+// parses Retry-After in both RFC 9110 forms and clamps it — core only reads
+// what it decided.
+func TestAProviderRequestedWaitOverridesOurGuess(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	h := newHarness(t, 3, 1, fake.Options{})
+	agent := &retryAfterAgent{Agent: h.agent, wait: 5 * time.Millisecond}
+	h.opts.Agent = agent
+	// A backoff far longer than the provider's ask. If ours won, the run would
+	// take seconds rather than milliseconds.
+	h.opts.RetryBackoff = 2 * time.Second
+	h.opts.RetryBudget = time.Second
+
+	start := time.Now()
+	res, err := core.Baseline(ctx, h.evals, h.opts)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("Baseline: %v", err)
+	}
+	if got := int(res.Run.GetScoredCaseCount()); got != 3 {
+		t.Fatalf("scored %d of 3; the retries did not recover", got)
+	}
+	if elapsed > time.Second {
+		t.Errorf("the run took %v; the provider asked for %v and our own "+
+			"backoff was used instead", elapsed, agent.wait)
+	}
+}
+
+// retryAfterAgent throttles each Case once, carrying a requested wait.
+type retryAfterAgent struct {
+	core.Agent
+	wait time.Duration
+	seen sync.Map
+}
+
+func (a *retryAfterAgent) Invoke(ctx context.Context, c *core.Case) (*core.Response, error) {
+	if _, been := a.seen.LoadOrStore(c.GetId(), true); !been {
+		return nil, &waitErr{wait: a.wait}
+	}
+	return a.Agent.Invoke(ctx, c)
+}
+
+// waitErr is a rate-limit error carrying the provider's requested delay, the
+// shape an adapter produces from a Retry-After header.
+type waitErr struct{ wait time.Duration }
+
+func (e *waitErr) Error() string             { return "rate limited" }
+func (e *waitErr) Unwrap() error             { return errs.ErrRateLimited }
+func (e *waitErr) RetryAfter() time.Duration { return e.wait }
+
+// TestAnUnconfirmedRunSpendsNothing.
+//
+// Declining the prompt must stop before any Case is authorized, and say so
+// without implying something broke.
+func TestAnUnconfirmedRunSpendsNothing(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	declined := func(context.Context, budget.Estimate, budget.Remaining) (bool, error) {
+		return false, nil
+	}
+
+	h := newHarness(t, 20, 5, fake.Options{CostPerCallUSDMicros: 40_000})
+	h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 100_000_000}, declined, 10_000)
+	h.opts.EstCostPerCallUSDMicros = 40_000
+
+	_, err := core.Baseline(ctx, h.evals, h.opts)
+	if !errors.Is(err, errs.ErrBudgetExceeded) {
+		t.Fatalf("error = %v, want ErrBudgetExceeded", err)
+	}
+	if !strings.Contains(err.Error(), "nothing was spent") {
+		t.Errorf("the refusal does not say the run cost nothing:\n%s", err)
+	}
+	if spent := h.opts.Guard.Spent(); spent.Calls != 0 || spent.CostUSDMicros != 0 {
+		t.Errorf("a declined run spent %+v", spent)
+	}
+}
+
+// TestRetryExhaustionPersistsEveryCallItPaidFor.
+//
+// The sibling test uses ThrottleFirstAttempt, so it succeeds on attempt two and
+// takes the has-a-Response branch. This one exhausts retries — every attempt
+// fails, there is no Response, and that branch hardcoded one call.
+//
+// It is the branch retries actually take under a 429 storm, and it is the one
+// the headline fix missed: measured 5 persisted against 15 settled.
+func TestRetryExhaustionPersistsEveryCallItPaidFor(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const devCases = 5
+	const attempts = 3
+
+	h := newHarness(t, devCases, 2, fake.Options{RateLimitEvery: 1}) // every call throttled
+	h.opts.Guard = budget.New(budget.Limits{MaxLLMCalls: 1_000}, nil, 0)
+	h.opts.MaxAttempts = attempts
+	h.opts.RetryBackoff = time.Millisecond
+
+	res, err := core.Baseline(ctx, h.evals, h.opts)
+	if err != nil {
+		t.Fatalf("Baseline: %v", err)
+	}
+	if got := int(res.Run.GetErroredCaseCount()); got != devCases {
+		t.Fatalf("errored %d of %d; the Cases did not exhaust their retries",
+			got, devCases)
+	}
+
+	persisted, err := h.store.SettledSpend(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("SettledSpend: %v", err)
+	}
+	inMemory := h.opts.Guard.Spent()
+
+	if persisted.Calls != inMemory.Calls {
+		t.Errorf("the store recorded %d calls and the guard settled %d; "+
+			"Guard.Restore reads the store, so a resume re-authorizes %d calls "+
+			"that were already made and paid for",
+			persisted.Calls, inMemory.Calls, inMemory.Calls-persisted.Calls)
+	}
+	if want := int64(devCases * attempts); persisted.Calls != want {
+		t.Errorf("persisted %d calls, want %d (%d Cases x %d attempts)",
+			persisted.Calls, want, devCases, attempts)
+	}
+}
+
+// TestTheDefaultConcurrencyIsPlannedFor.
+//
+// Zero is not "no concurrency" — it is the CLI's default, and the executor
+// turns it into min(NumCPU, 8), the exact figure in the measurement the
+// feasibility check exists for. Treating it as a bypass meant the guard still
+// denied its way to a halt on the path almost every user takes: 0 of 60 Cases
+// scored, $0.00 spent, against a $1.00 cap.
+func TestTheDefaultConcurrencyIsPlannedFor(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const devCases = 30
+
+	h := newHarness(t, devCases, 5, fake.Options{
+		Latency:              5 * time.Millisecond,
+		CostPerCallUSDMicros: 1_000,
+	})
+	// A per-Case estimate large enough that the executor's default concurrency
+	// would hold more than the cap in flight at once.
+	h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 1_000_000}, nil, 0)
+	h.opts.EstCostPerCallUSDMicros = 200_000
+	h.opts.Concurrency = 0 // exactly what the CLI passes
+
+	res, err := core.Baseline(ctx, h.evals, h.opts)
+	if err != nil {
+		t.Fatalf("a run at the default concurrency was refused: %v", err)
+	}
+	if got := int(res.Run.GetScoredCaseCount()); got != devCases {
+		t.Errorf("scored %d of %d at the DEFAULT concurrency; the feasibility "+
+			"check was bypassed and the guard denied its way to a halt",
+			got, devCases)
+	}
+}
+
+// TestARefusedRunLeavesNoDanglingRecord.
+//
+// Both new checks used to refuse after openRun, leaving a row permanently in
+// RUNNING with no outcomes and no events — and the interactive path declines by
+// default, so every above-threshold invocation minted a fresh orphan. A CI gate
+// reading exit 2 as "not a failure" then reported green for a run that never
+// started.
+func TestARefusedRunLeavesNoDanglingRecord(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	declined := func(context.Context, budget.Estimate, budget.Remaining) (bool, error) {
+		return false, nil
+	}
+
+	h := newHarness(t, 20, 5, fake.Options{CostPerCallUSDMicros: 40_000})
+	h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 100_000_000}, declined, 10_000)
+	h.opts.EstCostPerCallUSDMicros = 40_000
+
+	if _, err := core.Baseline(ctx, h.evals, h.opts); !errors.Is(err, errs.ErrBudgetExceeded) {
+		t.Fatalf("error = %v, want ErrBudgetExceeded", err)
+	}
+
+	if _, err := h.store.GetRun(ctx, "run-1"); !errors.Is(err, store.ErrRunNotFound) {
+		t.Errorf("a declined run left a Run record (err = %v); it never started, "+
+			"so a later reader would see it stuck in RUNNING forever", err)
+	}
+}
+
+// TestADeclinedRunCannotBeReAskedIntoSpending.
+//
+// A refusal used to leave the guard's confirmed flag false, so the next
+// Authorize prompted again — and on a yes, authorized the spend the user had
+// just declined.
+func TestADeclinedRunCannotBeReAskedIntoSpending(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	var prompts atomic.Int64
+	confirm := func(context.Context, budget.Estimate, budget.Remaining) (bool, error) {
+		prompts.Add(1)
+		return false, nil
+	}
+
+	g := budget.New(budget.Limits{MaxCostUSDMicros: 10_000_000}, confirm, 10_000)
+
+	if ok, _ := g.PreConfirm(ctx, budget.Estimate{Calls: 100, CostUSDMicros: 1_000_000}); ok {
+		t.Fatal("a declined run reported agreement")
+	}
+	if !g.Declined() {
+		t.Error("the refusal was not recorded")
+	}
+
+	// The per-operation path must not offer a second chance.
+	if _, err := g.Authorize(ctx, budget.Estimate{Calls: 1, CostUSDMicros: 500_000}); err == nil {
+		t.Error("a Case was authorized after the run was declined")
+	}
+	if got := prompts.Load(); got != 1 {
+		t.Errorf("the human was prompted %d times; a decline must be final", got)
+	}
+	if spent := g.Spent(); spent.Calls != 0 {
+		t.Errorf("a declined run spent %+v", spent)
 	}
 }

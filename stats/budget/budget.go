@@ -108,6 +108,10 @@ type Guard struct {
 	// staring at a prompt cannot block every other worker's accounting.
 	confirmMu sync.Mutex
 	confirmed bool
+
+	// declined records a refused run-level confirmation, so a later Authorize
+	// cannot re-ask and authorize what was already refused.
+	declined bool
 }
 
 // New returns a Guard.
@@ -245,6 +249,12 @@ func (g *Guard) tryReserve(est Estimate) (res *Reservation, needsConfirm bool, r
 
 	rem = g.remainingLocked()
 
+	// A run-level refusal is final. Asking again per-operation would let a
+	// user who declined be re-prompted and, on a yes, authorize the spend they
+	// had just refused.
+	if g.declined {
+		return nil, false, rem
+	}
 	if g.confirm != nil && g.threshold > 0 && est.CostUSDMicros >= g.threshold && !g.confirmed {
 		return nil, true, rem
 	}
@@ -448,6 +458,82 @@ func (g *Guard) Restore(spent Spend) {
 
 // Limits reports the caps this Guard enforces.
 func (g *Guard) Limits() Limits { return g.limits }
+
+// PreConfirm asks the human about a WHOLE run before any of it is authorized,
+// and records that they agreed.
+//
+// The per-operation prompt is the wrong instrument for this. ConfirmFunc
+// receives one call's estimate and askOnce sets confirmed for the life of the
+// run, so a user shown "$0.04" for the first Case that crossed the threshold
+// consented to the whole run — 10,000 Cases at that price is $400, asked once,
+// at four cents.
+//
+// The estimate passed here should be bounded by the cap, since that is the
+// honest maximum exposure: showing $328 when the guard stops at $5 is false in
+// the direction that trains people to ignore the prompt.
+//
+// Idempotent. A second call after agreement is a no-op, so a resumed run does
+// not re-ask about work it already paid for.
+func (g *Guard) PreConfirm(ctx context.Context, total Estimate) (bool, error) {
+	// The same singleflight Authorize uses. ConfirmFunc's contract is that it
+	// is never called concurrently with itself, and reading g.confirmed under
+	// mu alone does not provide that: eight goroutines all read false, all
+	// released, and all prompted.
+	g.confirmMu.Lock()
+	defer g.confirmMu.Unlock()
+
+	g.mu.Lock()
+	already := g.confirmed
+	confirm := g.confirm
+	threshold := g.threshold
+	rem := g.remainingLocked()
+	g.mu.Unlock()
+
+	if already {
+		return true, nil
+	}
+
+	// Below the threshold, or nobody to ask: the run proceeds, and the
+	// per-operation prompt is DISARMED anyway.
+	//
+	// Latching here is the point. Returning true without it left askOnce live,
+	// so a run whose total fell below the threshold could still be stopped at
+	// the first expensive Case and asked about that one Case — which then
+	// counted as consent for all of them. That is verbatim the failure this
+	// method exists to replace, reachable straight past it.
+	if confirm == nil || threshold <= 0 || total.CostUSDMicros < threshold {
+		g.mu.Lock()
+		g.confirmed = true
+		g.mu.Unlock()
+		return true, nil
+	}
+
+	ok, err := confirm(ctx, total, rem)
+	if err != nil || !ok {
+		// A refusal is recorded too. Leaving confirmed false let a later
+		// Authorize on the same Guard prompt again and, on a yes, authorize
+		// spend the user had just declined.
+		g.mu.Lock()
+		g.declined = true
+		g.mu.Unlock()
+		return false, err
+	}
+
+	g.mu.Lock()
+	g.confirmed = true
+	g.mu.Unlock()
+	return true, nil
+}
+
+// Declined reports whether a run-level confirmation was refused.
+//
+// Exported so a caller can tell "not asked yet" from "asked and told no",
+// which the confirmed flag alone cannot express.
+func (g *Guard) Declined() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.declined
+}
 
 // Overshoot reports how far settled spend has passed the cost cap, or zero
 // while it is still within it.
