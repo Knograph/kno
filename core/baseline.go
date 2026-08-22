@@ -293,16 +293,13 @@ func Baseline(
 		// THIS process did, so a run interrupted after 24 Cases and resumed for
 		// 36 more would report 36 — losing the Cases the first run paid for and
 		// understating the denominator behind every later delta.
-		//
-		// Both the counts and the score sum, so the aggregate spans the whole
-		// run rather than the tail of it.
 		priorScored, priorErrored, err := opts.Store.OutcomeCounts(ctx, opts.RunID)
 		if err != nil {
 			return nil, fmt.Errorf("loading prior outcome counts: %w", err)
 		}
 		// The score SUM too, not only the counts. Seeding one without the other
-		// left the denominator spanning the whole run while the numerator
-		// spanned the tail.
+		// leaves the denominator spanning the whole run while the numerator
+		// spans the tail — the defect this repays.
 		priorSum, _, unrecoverable, err := opts.Store.ScoreSum(ctx, opts.RunID)
 		if err != nil {
 			return nil, fmt.Errorf("loading prior scores: %w", err)

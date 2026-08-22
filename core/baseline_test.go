@@ -691,6 +691,8 @@ type failingStore struct {
 	failDone   bool
 	failSpend  bool
 	failMaxSeq bool
+	failCounts bool
+	failScores bool
 }
 
 var errStore = errors.New("store is unavailable")
@@ -751,6 +753,20 @@ func (f *failingStore) MaxEventSequence(ctx context.Context, id string) (int64, 
 	return f.Store.MaxEventSequence(ctx, id)
 }
 
+func (f *failingStore) OutcomeCounts(ctx context.Context, id string) (int, int, error) {
+	if f.failCounts {
+		return 0, 0, errStore
+	}
+	return f.Store.OutcomeCounts(ctx, id)
+}
+
+func (f *failingStore) ScoreSum(ctx context.Context, id string) (float64, int, int, error) {
+	if f.failScores {
+		return 0, 0, 0, errStore
+	}
+	return f.Store.ScoreSum(ctx, id)
+}
+
 // TestStoreFailuresSurfaceRatherThanCorrupting.
 //
 // Every one of these paths ends a run. None may silently continue: a run that
@@ -772,6 +788,11 @@ func TestStoreFailuresSurfaceRatherThanCorrupting(t *testing.T) {
 		{"cannot load prior spend", func(f *failingStore) { f.failSpend = true }, true},
 		{"cannot read the event sequence", func(f *failingStore) { f.failMaxSeq = true }, true},
 		{"cannot load the run", func(f *failingStore) { f.failGet = true }, true},
+		{"cannot load prior outcome counts", func(f *failingStore) { f.failCounts = true }, true},
+		// A resumed run whose prior scores cannot be read must stop, not carry
+		// on with an aggregate that silently spans only the tail. That is the
+		// exact defect docs/debt.md#27 repaid.
+		{"cannot load prior scores", func(f *failingStore) { f.failScores = true }, true},
 	}
 
 	for _, tc := range tests {
