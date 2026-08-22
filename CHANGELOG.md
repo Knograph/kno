@@ -90,6 +90,33 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
+- **`adapters/agent/pricing`**, the dated price table and the pessimistic estimate the budget guard
+  reserves against. Prices as published on 2026-08-21 for Anthropic and OpenAI models; the table is
+  **static and never fetched at runtime**, because an endpoint that is down leaves the engine
+  choosing between refusing to run and running with no ceiling, and one that is wrong is a spend
+  path with no ceiling at all.
+  - **An unknown model is unpriced, not free.** A zero estimate makes a dollar cap unenforceable —
+    the failure that overshot a cap in M1 — so a model with no row is refused under a cost cap
+    rather than authorized against a guess. Models reached through a base URL (OpenRouter, a
+    self-hosted server) are deliberately absent: their prices are not these.
+  - **Every term is pessimistic.** Input is charged at the fresh rate, never the cached one, because
+    whether a prompt hits the provider's cache is not knowable before the call — and assuming a hit
+    under-reserves exactly when a run repeats similar prompts. Output is charged at the full
+    ceiling, because the ceiling is what the request permits.
+  - **Claude 4.7 and later, and Mythos, are priced for their denser tokenizer**, which produces
+    roughly 30% more tokens for the same text. Applying the old ratio under-counts every input by
+    about a quarter.
+  - **A dated model identifier resolves to its base row by longest prefix.** `claude-sonnet-4-5-20250929`
+    is the canonical API ID and `claude-sonnet-4-5` is the alias; pricing only the alias meant every
+    user who pinned a version had their run refused under a cost cap.
+  - Token counting is bytes divided by a constant, with a stated safety margin — not a vendored
+    tokenizer. The divisor is set from measurements against the real tokenizer, and it is set by the
+    **tail** rather than the average: base64 runs 1.47 bytes/token against English prose at 3.6, and
+    machine-shaped text is exactly what an Asset embedded in a Case looks like. It bounds a
+    reservation; settlement reconciles against the provider's own reported usage.
+  - `Prompt` names the parts the provider bills — system, context, history, input — rather than
+    taking one string. The injected Asset is the largest term and the entire point of the product,
+    and a single `input` parameter made omitting it the path of least resistance.
 - **`adapters/agent/agentref`**, the parser for `scheme:target[@base-url]` — one grammar for flags,
   `kno.yaml`, the API, and the SDKs. Parsing is separate from resolution, so a typo and an
   unsupported provider produce different errors rather than the same one.
