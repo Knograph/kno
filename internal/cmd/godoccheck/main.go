@@ -68,7 +68,13 @@ func walk(root string) ([]finding, error) {
 		}
 		if d.IsDir() {
 			name := d.Name()
-			if name == ".git" || name == "bin" || name == "testdata" {
+			// Dot-directories are not source. The go tool ignores them, so a
+			// nested checkout of this module — an agent worktree under
+			// .claude/, say — would otherwise be scanned as our own code, and
+			// its generated .pb.go files reported as undocumented. The root
+			// itself is exempt: this tool is invoked with ".".
+			if (path != root && strings.HasPrefix(name, ".")) ||
+				name == "bin" || name == "testdata" {
 				return filepath.SkipDir
 			}
 			return nil

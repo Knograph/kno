@@ -8,7 +8,7 @@ Publishing this is deliberate. A measurement tool that hides its epistemics is a
 
 | Number | What it claims | What it does not claim |
 |---|---|---|
-| Baseline score | The agent's mean score over the Cases it successfully answered | Anything about Cases it failed to answer, or about the holdout |
+| Baseline score | The agent's mean score over the Cases it successfully answered, across the whole run including any resumed part | Anything about Cases it failed to answer, or about the holdout |
 | Δgoal on an Asset | The change on the slices that Asset was routed to, in the mode stated | That the same change happens in deployment, unless the mode is `knowledge_add` |
 | Δ on controls | Whether the Asset hurt slices it wasn't meant to help | That no regression exists outside the measured controls |
 | Portfolio dev estimate | The selected set's gain **on the slice it was selected against** | That you will see this gain. It is inflated. See below |
@@ -59,6 +59,21 @@ Exclusion has its own hazard: if the errors aren't random — if hard Cases are 
 - Reports all three counts, so exclusion is visible.
 - Marks a run whose error rate exceeds a threshold (5% by default) as **not a usable baseline**, so later stages refuse to treat it as a clean reference.
 - Requires that any delta be computed over the intersection of Cases scored in both runs, so a provider outage in one run can't silently change the population being compared.
+
+## A purged run has no baseline score
+
+`kno purge` erases stored conversation content. It preserves the numbers — the score of
+each Case survives the blob it arrived in — so a purged run still reports its baseline.
+
+Runs purged by a build older than the score column are the exception. Those Cases are
+complete and their scores are gone, and there is no way to recompute them without
+re-running the agent. Kno reports **no baseline score at all** for such a run, and says
+why, rather than reporting the mean over the Cases that happen to still have numbers.
+
+That mean would be a real number describing a population nobody chose: whichever Cases
+escaped a purge. Its counts would span the whole run and its value would span a subset,
+which is the same defect as the resumed-run bug this replaced — a number and its
+denominator describing different things.
 
 ## Context injection is an upper bound
 

@@ -220,6 +220,64 @@ func TestWalk(t *testing.T) {
 	}
 }
 
+// TestWalkSkipsDotDirectoriesButNotItsOwnRoot pins both halves of the
+// dot-directory exclusion. A nested checkout of this module under .claude/ is
+// invisible to the go tool, so scanning it reports another tree's generated
+// code as our undocumented API. The root exemption matters just as much: this
+// tool is invoked as ".", and skipping that would make the gate pass by
+// traversing nothing.
+func TestWalkSkipsDotDirectoriesButNotItsOwnRoot(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, body string) {
+		t.Helper()
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o750); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o600); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+
+	write("real/real.go", "// Package real is documented.\npackage real\n\nfunc Undocumented() {}\n")
+	write(".claude/worktrees/wt/other/other.go",
+		"// Package other is documented.\npackage other\n\nfunc AlsoUndocumented() {}\n")
+
+	got, err := walk(root)
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	for _, f := range got {
+		if strings.Contains(f.pos, ".claude") {
+			t.Errorf("walk reported %s from a dot-directory; that tree is not our source", f.pos)
+		}
+	}
+	if len(got) != 1 {
+		t.Fatalf("want exactly the 1 real finding, got %d: %+v", len(got), got)
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(cwd); err != nil {
+			t.Fatalf("restoring cwd: %v", err)
+		}
+	})
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	relative, err := walk(".")
+	if err != nil {
+		t.Fatalf("walk(\".\"): %v", err)
+	}
+	if len(relative) == 0 {
+		t.Fatal("walk of \".\" found nothing; the walker skipped its own root, so the " +
+			"gate would report a clean tree without reading a single file")
+	}
+}
+
 // TestWalkCleanTreeIsSilent guards against the failure mode where the walker
 // reports nothing because it traversed nothing.
 func TestWalkCleanTreeIsSilent(t *testing.T) {

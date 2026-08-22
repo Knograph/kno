@@ -2,6 +2,7 @@ package core_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"iter"
@@ -19,6 +20,8 @@ import (
 	knov1 "github.com/knograph/kno/gen/kno/v1"
 	"github.com/knograph/kno/goal/exactmatch"
 	"github.com/knograph/kno/stats/budget"
+	_ "modernc.org/sqlite"
+
 	"github.com/knograph/kno/store"
 )
 
@@ -34,6 +37,7 @@ type harness struct {
 	cases  []*core.Case
 	opts   core.BaselineOptions
 	holdIn []string // ids deliberately marked holdout
+	dbPath string   // for tests that must reach the file directly
 }
 
 // splitCases yields Cases, marking a fixed slice of them holdout.
@@ -64,7 +68,8 @@ func (s *splitCases) Cases(ctx context.Context) (iter.Seq2[*core.Case, error], e
 func newHarness(t *testing.T, devCount, holdoutCount int, agentOpts fake.Options) *harness {
 	t.Helper()
 
-	st, err := store.NewSQLite(context.Background(), filepath.Join(t.TempDir(), "kno.db"))
+	dbPath := filepath.Join(t.TempDir(), "kno.db")
+	st, err := store.NewSQLite(context.Background(), dbPath)
 	if err != nil {
 		t.Fatalf("opening store: %v", err)
 	}
@@ -88,6 +93,7 @@ func newHarness(t *testing.T, devCount, holdoutCount int, agentOpts fake.Options
 
 	h := &harness{
 		store:  st,
+		dbPath: dbPath,
 		guard:  budget.New(budget.Limits{}, nil, 0),
 		agent:  fake.New(agentOpts),
 		goal:   &exactmatch.Goal{},
@@ -2225,5 +2231,132 @@ func TestADeclinedRunCannotBeReAskedIntoSpending(t *testing.T) {
 	}
 	if spent := g.Spent(); spent.Calls != 0 {
 		t.Errorf("a declined run spent %+v", spent)
+	}
+}
+
+// TestResumedRunReportsTheWholeRunsMean is docs/debt.md#27.
+//
+// The counts spanned the whole run while the mean spanned only the tail, so a
+// run interrupted after some Cases and resumed for the rest reported a
+// denominator and a numerator describing different populations. That number is
+// printed on every run, put in --json, and carried on the event stream.
+func TestResumedRunReportsTheWholeRunsMean(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const devCases = 40
+
+	// Scores alternate 1 and 0 by Case index, so the true mean is 0.5 and any
+	// partial window over a contiguous slice is measurably different.
+	scoreByIndex := func(c *core.Case) string {
+		if caseIndex(c)%2 == 0 {
+			return c.GetExpected() // exact match scores 1
+		}
+		return "wrong"
+	}
+
+	h := newHarness(t, devCases, 10, fake.Options{Answer: scoreByIndex})
+	h.opts.Guard = budget.New(budget.Limits{MaxLLMCalls: 15}, nil, 0)
+	h.opts.Concurrency = 1
+
+	if _, err := core.Baseline(ctx, h.evals, h.opts); !errors.Is(err, errs.ErrBudgetExceeded) {
+		t.Fatalf("first run: %v", err)
+	}
+	done, err := h.store.CompletedCases(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("CompletedCases: %v", err)
+	}
+	if len(done) == 0 || len(done) >= devCases {
+		t.Fatalf("the first run recorded %d of %d Cases; the test needs a "+
+			"genuine partial run", len(done), devCases)
+	}
+
+	opts := h.opts
+	opts.Resume = true
+	opts.Guard = budget.New(budget.Limits{MaxLLMCalls: 1_000}, nil, 0)
+
+	res, err := core.Baseline(ctx, h.evals, opts)
+	if err != nil {
+		t.Fatalf("resumed run: %v", err)
+	}
+	if got := int(res.Run.GetScoredCaseCount()); got != devCases {
+		t.Fatalf("scored %d of %d", got, devCases)
+	}
+	if res.AggregateScore == nil {
+		t.Fatal("the completed run reported no aggregate")
+	}
+
+	// The truth, computed from the store rather than from the aggregator.
+	sum, counted, _, err := h.store.ScoreSum(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("ScoreSum: %v", err)
+	}
+	want := sum / float64(counted)
+
+	if diff := *res.AggregateScore - want; diff > 1e-9 || diff < -1e-9 {
+		t.Errorf("the resumed run reported a mean of %v; the whole run's mean is "+
+			"%v over %d Cases. The counts span the run and the mean spans the "+
+			"tail, so they describe different populations",
+			*res.AggregateScore, want, counted)
+	}
+}
+
+// TestAPurgedRunReportsNoAggregateRatherThanAWrongOne.
+//
+// A Case purged before its score lived in its own column has an unrecoverable
+// number. Averaging it in as zero drags the mean down and presents the result
+// as the run's actual aggregate — worse than reporting nothing, because it
+// looks like a measurement.
+func TestAPurgedRunReportsNoAggregateRatherThanAWrongOne(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	h := newHarness(t, 20, 5, fake.Options{})
+	h.opts.Guard = budget.New(budget.Limits{MaxLLMCalls: 10}, nil, 0)
+
+	if _, err := core.Baseline(ctx, h.evals, h.opts); !errors.Is(err, errs.ErrBudgetExceeded) {
+		t.Fatalf("first run: %v", err)
+	}
+
+	// The pre-M2-1 shape: a scored outcome whose number is gone. There is no
+	// production path that produces this — purging today preserves the number —
+	// so it is written directly.
+	clearScoreValues(t, h.dbPath, "run-1")
+
+	opts := h.opts
+	opts.Resume = true
+	opts.Guard = budget.New(budget.Limits{MaxLLMCalls: 1_000}, nil, 0)
+
+	res, err := core.Baseline(ctx, h.evals, opts)
+	if err != nil {
+		t.Fatalf("resumed run: %v", err)
+	}
+	if res.AggregateScore != nil {
+		t.Errorf("a run with unrecoverable scores reported an aggregate of %v; "+
+			"it is computed over only the Cases whose numbers survived, so it "+
+			"is a mean of a different population than the counts describe",
+			*res.AggregateScore)
+	}
+	if !strings.Contains(res.Run.GetIncompleteReason(), "purged") {
+		t.Errorf("the run does not say why it has no aggregate: %q",
+			res.Run.GetIncompleteReason())
+	}
+}
+
+// clearScoreValues nulls the numeric score column while leaving the rows,
+// reproducing a run purged before the score had a column of its own.
+func clearScoreValues(t *testing.T, dbPath, runID string) {
+	t.Helper()
+
+	db, err := sql.Open("sqlite", "file:"+dbPath)
+	if err != nil {
+		t.Fatalf("opening %s: %v", dbPath, err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if _, err := db.Exec(
+		`UPDATE outcomes SET score_value = NULL, score_proto = NULL WHERE run_id = ?`,
+		runID); err != nil {
+		t.Fatalf("clearing score values: %v", err)
 	}
 }

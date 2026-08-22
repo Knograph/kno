@@ -294,14 +294,20 @@ func Baseline(
 		// 36 more would report 36 — losing the Cases the first run paid for and
 		// understating the denominator behind every later delta.
 		//
-		// DEBT(docs/debt.md#27): only the COUNTS are seeded. The mean is not,
-		// so a resumed run's AggregateScore is the mean over the Cases this
-		// process scored, not over the whole run.
+		// Both the counts and the score sum, so the aggregate spans the whole
+		// run rather than the tail of it.
 		priorScored, priorErrored, err := opts.Store.OutcomeCounts(ctx, opts.RunID)
 		if err != nil {
 			return nil, fmt.Errorf("loading prior outcome counts: %w", err)
 		}
-		agg.seedCounts(priorScored, priorErrored)
+		// The score SUM too, not only the counts. Seeding one without the other
+		// left the denominator spanning the whole run while the numerator
+		// spanned the tail.
+		priorSum, _, unrecoverable, err := opts.Store.ScoreSum(ctx, opts.RunID)
+		if err != nil {
+			return nil, fmt.Errorf("loading prior scores: %w", err)
+		}
+		agg.seedCounts(priorScored, priorErrored, priorSum, unrecoverable)
 	}
 	if err := opts.emitRunStarted(ctx, agg, opts.DevCases); err != nil {
 		return nil, err
@@ -1033,6 +1039,15 @@ func (o BaselineOptions) closeRun(
 	run.AttemptedCaseCount = int32(attempted) //nolint:gosec // bounded by the eval set
 	run.ScoredCaseCount = int32(scored)       //nolint:gosec // bounded by the eval set
 	run.ErroredCaseCount = int32(errored)     //nolint:gosec // bounded by the eval set
+
+	// A purged run cannot produce an aggregate, and saying so is the point.
+	// Reporting the partial mean would present a number nobody can reproduce
+	// beside counts that describe a larger population.
+	if agg.aggregateUnavailable() {
+		run.IncompleteReason = "some Cases were purged before their score was " +
+			"stored separately, so this run has no reportable aggregate; the " +
+			"Cases themselves are intact and resume normally"
+	}
 
 	// A run whose error rate is too high is completed but not clean. Later
 	// stages must refuse to treat it as a reference rather than computing

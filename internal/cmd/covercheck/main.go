@@ -232,7 +232,12 @@ func sourceDirs(root string) ([]string, error) {
 		}
 		if d.IsDir() {
 			name := d.Name()
-			if name == ".git" || name == "bin" || name == "testdata" {
+			// Dot-directories are not source. The go tool ignores them, so a
+			// package under one is unbuildable and untestable by ./... — but
+			// this walk is its own, and would report agent worktrees under
+			// .claude/ as uncovered packages of this module.
+			if (path != root && strings.HasPrefix(name, ".")) ||
+				name == "bin" || name == "testdata" {
 				return filepath.SkipDir
 			}
 			return nil

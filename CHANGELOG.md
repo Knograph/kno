@@ -16,6 +16,19 @@ covenants — breaking any of them requires a major version.
 
 ## [Unreleased]
 
+### Fixed
+
+- A resumed run's baseline score now spans the whole run. Previously the case counts spanned
+  the run and the mean spanned only the Cases the resuming process scored, so the two described
+  different populations — a run resumed halfway reported `0.48` where the whole run's mean was
+  `0.5`. Repays [debt #27](docs/debt.md#27).
+- A run holding Cases whose scores were purged by a pre-`score_value` build now reports **no**
+  baseline score, with a reason naming the purge, rather than the mean over whichever Cases
+  still have numbers.
+- `make check`'s coverage and godoc gates no longer descend into dot-directories. A nested
+  checkout of this module — an agent worktree under `.claude/`, for instance — was scanned as
+  our own source, reporting 998 undocumented symbols and every package as uncovered.
+
 ### Changed
 
 - A malformed `--agent` now exits with `INVALID_INPUT` rather than `CAPABILITY_UNSUPPORTED`. Both

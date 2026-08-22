@@ -31,6 +31,22 @@ type aggregator struct {
 	// whole run rather than only the resumed portion.
 	priorScored  int
 	priorErrored int
+
+	// priorSum is the score total from Cases earlier processes recorded.
+	//
+	// Seeded alongside the counts. Without it the counts spanned the whole run
+	// while the mean spanned only the tail, so a run interrupted after 24 Cases
+	// and resumed for 36 reported "60 scored" beside a mean of the last 36 —
+	// a denominator and a numerator describing different populations.
+	priorSum float64
+
+	// unrecoverable counts Cases that scored but whose number is gone, because
+	// they were purged before the score lived in its own column.
+	//
+	// They cannot be averaged in as zero: that drags the mean toward zero and
+	// presents the result as the run's actual aggregate, which is worse than
+	// reporting nothing. The mean refuses instead.
+	unrecoverable int
 }
 
 func (a *aggregator) add(value float64) {
@@ -56,15 +72,35 @@ func (a *aggregator) counts() (scored, errored int) {
 //
 // Nil rather than zero: a run that scored nothing has no mean, and a zero here
 // would be indistinguishable from a real mean of zero.
+// mean reports the aggregate over every scored Case in the run, or nil.
+//
+// Nil for two different reasons, and conflating them would be dishonest in
+// opposite directions. Nothing scored: there is no mean. Something scored but
+// its number is unrecoverable: there is a mean and we cannot compute it, so
+// reporting the partial one would present a number nobody can reproduce.
 func (a *aggregator) mean() *float64 {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if a.scored == 0 {
+	if a.unrecoverable > 0 {
 		return nil
 	}
-	m := a.sum / float64(a.scored)
+	total := a.scored + a.priorScored
+	if total == 0 {
+		return nil
+	}
+	m := (a.sum + a.priorSum) / float64(total)
 	return &m
+}
+
+// aggregateUnavailable reports whether a mean exists but cannot be computed.
+//
+// Distinct from "nothing scored", so a caller can say which it is rather than
+// showing the same blank for both.
+func (a *aggregator) aggregateUnavailable() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.unrecoverable > 0
 }
 
 // next returns the next event sequence number.
@@ -81,11 +117,18 @@ func (a *aggregator) next() int64 {
 // and are not re-read, so a resumed run's aggregate is the mean over the Cases
 // IT scored. That is recorded as debt rather than silently presented as the
 // whole run's mean — see docs/debt.md#27.
-func (a *aggregator) seedCounts(scored, errored int) {
+// seedCounts carries an interrupted run's totals into this process.
+//
+// sum and unrecoverable come from the store's score column, which is why
+// docs/debt.md#25 requires a purge to null the trace blobs and never the row:
+// the number survives a purge precisely so this can read it.
+func (a *aggregator) seedCounts(scored, errored int, sum float64, unrecoverable int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.priorScored = scored
 	a.priorErrored = errored
+	a.priorSum = sum
+	a.unrecoverable = unrecoverable
 }
 
 // seedSequence continues numbering after a resume rather than restarting at 1,

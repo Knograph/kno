@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -308,6 +309,64 @@ func TestSourceDirs(t *testing.T) {
 	}
 	if found["onlytests"] {
 		t.Error("sourceDirs included a directory holding only _test.go files")
+	}
+}
+
+// TestSourceDirsSkipsDotDirectories pins the exclusion that agent worktrees
+// under .claude/ made load-bearing. A checkout of this module nested inside a
+// dot-directory is invisible to the go tool, so its packages can never appear
+// in a coverage profile — counting them reports the whole module as uncovered.
+func TestSourceDirsSkipsDotDirectories(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "core"), "a.go", "package core\n\nfunc A() {}\n")
+	writeFile(t, filepath.Join(root, ".claude", "worktrees", "wt", "core"), "a.go",
+		"package core\n\nfunc A() {}\n")
+
+	got, err := sourceDirs(root)
+	if err != nil {
+		t.Fatalf("sourceDirs: %v", err)
+	}
+	for _, d := range got {
+		if strings.Contains(d, ".claude") {
+			t.Errorf("sourceDirs returned %q; a dot-directory is not source, and the "+
+				"go tool cannot build or test it", d)
+		}
+	}
+	if len(got) != 1 {
+		t.Errorf("sourceDirs = %v, want only the real core package", got)
+	}
+}
+
+// TestSourceDirsWalksARelativeRoot guards the root exemption in the
+// dot-directory skip: the tool is invoked as ".", whose own base name starts
+// with a dot. Skipping it would silently return no packages at all — every
+// coverage floor passing because nothing was checked.
+func TestSourceDirsWalksARelativeRoot(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "core"), "a.go", "package core\n\nfunc A() {}\n")
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(cwd); err != nil {
+			t.Fatalf("restoring cwd: %v", err)
+		}
+	})
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	got, err := sourceDirs(".")
+	if err != nil {
+		t.Fatalf("sourceDirs: %v", err)
+	}
+	if len(got) == 0 {
+		t.Fatal("sourceDirs(\".\") returned nothing; the walk skipped its own root, " +
+			"so every coverage floor would pass vacuously")
 	}
 }
 
