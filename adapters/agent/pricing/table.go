@@ -13,10 +13,19 @@
 package pricing
 
 import (
+	"sort"
+	"strings"
+
+	"google.golang.org/protobuf/proto"
+
 	knov1 "github.com/knograph/kno/gen/kno/v1"
 )
 
-// Version identifies the table, and is recorded on every Run.
+// Version identifies the table.
+//
+// Run.pricing_table_version exists to carry it, and NOTHING writes that field
+// yet — the wiring lands with the adapter. Said plainly because the previous
+// wording claimed it was already recorded on every Run.
 //
 // A date, because that is the only honest thing to call it: these are the
 // prices as published on this day, and a run's cost figures mean "reported
@@ -64,6 +73,9 @@ var table = map[string]map[string]*knov1.Price{
 		// docs/debt.md#41 for the trigger to revisit.
 		"claude-opus-5":     price(usd(5), usd(0.50), usd(6.25), usd(25)),
 		"claude-opus-4-8":   price(usd(5), usd(0.50), usd(6.25), usd(25)),
+		"claude-opus-4-7":   price(usd(5), usd(0.50), usd(6.25), usd(25)),
+		"claude-opus-4-6":   price(usd(5), usd(0.50), usd(6.25), usd(25)),
+		"claude-opus-4-5":   price(usd(5), usd(0.50), usd(6.25), usd(25)),
 		"claude-sonnet-5":   price(usd(2), usd(0.20), usd(2.50), usd(10)),
 		"claude-sonnet-4-6": price(usd(3), usd(0.30), usd(3.75), usd(15)),
 		"claude-sonnet-4-5": price(usd(3), usd(0.30), usd(3.75), usd(15)),
@@ -86,13 +98,46 @@ var table = map[string]map[string]*knov1.Price{
 // The second return is false for an unknown model, and the caller must not
 // substitute a zero: with a cost cap set, an unpriceable Case is refused rather
 // than authorized against a guess.
+//
+// A COPY, always. Returning the table's own pointer let a caller re-price the
+// model for every worker in the process by writing through it — and the
+// obvious implementation of a --price override does exactly that. Measured:
+// one write turned 128k output tokens of Opus 5 from $3.20 into $0.000020,
+// which budget.validate accepts because it is positive. It was also a genuine
+// data race, since workers read the table concurrently.
+//
+// An exact match is tried first, then the longest matching prefix. Providers
+// publish dated identifiers — claude-sonnet-4-5-20250929 is the canonical API
+// ID and claude-sonnet-4-5 is the alias — and pricing only the alias means a
+// user who pins a version gets their run refused under a cost cap.
 func Lookup(scheme, model string) (*knov1.Price, bool) {
 	byModel, ok := table[scheme]
 	if !ok {
 		return nil, false
 	}
-	p, ok := byModel[model]
-	return p, ok
+	if p, ok := byModel[model]; ok {
+		return proto.CloneOf(p), true
+	}
+	if base, ok := longestPrefix(model, byModel); ok {
+		return proto.CloneOf(byModel[base]), true
+	}
+	return nil, false
+}
+
+// longestPrefix finds the most specific table key that model starts with.
+//
+// Longest rather than first: if both "claude-opus-4" and "claude-opus-4-5"
+// were priced, "claude-opus-4-5-20251101" must resolve to the second. Shared
+// with usesNewTokenizer so the two cannot answer differently about the same
+// name, which is how the price and the tokenizer drifted apart before.
+func longestPrefix[V any](model string, keys map[string]V) (string, bool) {
+	best := ""
+	for k := range keys {
+		if strings.HasPrefix(model, k) && len(k) > len(best) {
+			best = k
+		}
+	}
+	return best, best != ""
 }
 
 // Models lists what is priced for a scheme, so a refusal can say what IS known
@@ -106,5 +151,9 @@ func Models(scheme string) []string {
 	for m := range byModel {
 		out = append(out, m)
 	}
+	// Sorted: this goes into a refusal message, and CLI output is snapshot
+	// tested. Map order would flake the snapshot and read differently to a
+	// user on every run.
+	sort.Strings(out)
 	return out
 }

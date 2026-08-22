@@ -103,12 +103,20 @@ covenants — breaking any of them requires a major version.
     whether a prompt hits the provider's cache is not knowable before the call — and assuming a hit
     under-reserves exactly when a run repeats similar prompts. Output is charged at the full
     ceiling, because the ceiling is what the request permits.
-  - **Claude 4.7 and later are priced for their denser tokenizer**, which produces roughly 30% more
-    tokens for the same text. Applying the old ratio would under-count every input by about a
-    quarter. Matched by prefix, so a pinned `claude-sonnet-5-20260514` keeps it.
-  - Token counting is an approximation over bytes with a stated safety margin, not a vendored
-    tokenizer — it bounds a reservation, and settlement reconciles against the provider's own
-    reported usage.
+  - **Claude 4.7 and later, and Mythos, are priced for their denser tokenizer**, which produces
+    roughly 30% more tokens for the same text. Applying the old ratio under-counts every input by
+    about a quarter.
+  - **A dated model identifier resolves to its base row by longest prefix.** `claude-sonnet-4-5-20250929`
+    is the canonical API ID and `claude-sonnet-4-5` is the alias; pricing only the alias meant every
+    user who pinned a version had their run refused under a cost cap.
+  - Token counting is bytes divided by a constant, with a stated safety margin — not a vendored
+    tokenizer. The divisor is set from measurements against the real tokenizer, and it is set by the
+    **tail** rather than the average: base64 runs 1.47 bytes/token against English prose at 3.6, and
+    machine-shaped text is exactly what an Asset embedded in a Case looks like. It bounds a
+    reservation; settlement reconciles against the provider's own reported usage.
+  - `Prompt` names the parts the provider bills — system, context, history, input — rather than
+    taking one string. The injected Asset is the largest term and the entire point of the product,
+    and a single `input` parameter made omitting it the path of least resistance.
 - **`adapters/agent/agentref`**, the parser for `scheme:target[@base-url]` — one grammar for flags,
   `kno.yaml`, the API, and the SDKs. Parsing is separate from resolution, so a typo and an
   unsupported provider produce different errors rather than the same one.

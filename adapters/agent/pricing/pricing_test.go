@@ -2,6 +2,7 @@ package pricing_test
 
 import (
 	"errors"
+	"math"
 	"strings"
 	"testing"
 
@@ -14,26 +15,39 @@ import (
 // Pinned against the provider pages as published on the table's own date. A
 // pricing table nobody checks is a table that silently rots, and every number
 // here is one the budget guard reserves against.
+// publishedPrices is the table as printed on the provider pages on the date
+// pricing.Version names, in dollars per million tokens.
+//
+// Package-level so that both the "does the table match" test and the "is every
+// row checked" test read one list. An earlier version populated it from inside
+// the first test, which made the second depend on running after it — an
+// ordering dependency under t.Parallel, which is a flake waiting for a shuffle.
+var publishedPrices = []struct {
+	scheme, model             string
+	input, cachedRead, output float64
+	cacheWrite                float64
+	hasCacheWrite             bool
+}{
+	{scheme: "anthropic", model: "claude-opus-5", input: 5, cachedRead: 0.50, cacheWrite: 6.25, hasCacheWrite: true, output: 25},
+	{scheme: "anthropic", model: "claude-opus-4-8", input: 5, cachedRead: 0.50, cacheWrite: 6.25, hasCacheWrite: true, output: 25},
+	{scheme: "anthropic", model: "claude-opus-4-7", input: 5, cachedRead: 0.50, cacheWrite: 6.25, hasCacheWrite: true, output: 25},
+	{scheme: "anthropic", model: "claude-opus-4-6", input: 5, cachedRead: 0.50, cacheWrite: 6.25, hasCacheWrite: true, output: 25},
+	{scheme: "anthropic", model: "claude-opus-4-5", input: 5, cachedRead: 0.50, cacheWrite: 6.25, hasCacheWrite: true, output: 25},
+	{scheme: "anthropic", model: "claude-sonnet-5", input: 2, cachedRead: 0.20, cacheWrite: 2.50, hasCacheWrite: true, output: 10},
+	{scheme: "anthropic", model: "claude-sonnet-4-6", input: 3, cachedRead: 0.30, cacheWrite: 3.75, hasCacheWrite: true, output: 15},
+	{scheme: "anthropic", model: "claude-sonnet-4-5", input: 3, cachedRead: 0.30, cacheWrite: 3.75, hasCacheWrite: true, output: 15},
+	{scheme: "anthropic", model: "claude-haiku-4-5", input: 1, cachedRead: 0.10, cacheWrite: 1.25, hasCacheWrite: true, output: 5},
+	{scheme: "anthropic", model: "claude-fable-5", input: 10, cachedRead: 1, cacheWrite: 12.50, hasCacheWrite: true, output: 50},
+	// OpenAI publishes no separate cache-WRITE rate. Unset, not zero.
+	{scheme: "openai", model: "gpt-5.6-sol", input: 4, cachedRead: 0.40, output: 20},
+	{scheme: "openai", model: "gpt-5.6-terra", input: 2, cachedRead: 0.20, output: 12},
+	{scheme: "openai", model: "gpt-5.6-luna", input: 0.20, cachedRead: 0.02, output: 1.20},
+}
+
 func TestTableMatchesThePublishedPrices(t *testing.T) {
 	t.Parallel()
 
-	// dollars per million tokens, as published.
-	tests := []struct {
-		scheme, model             string
-		input, cachedRead, output float64
-		cacheWrite                float64
-		hasCacheWrite             bool
-	}{
-		{scheme: "anthropic", model: "claude-opus-5", input: 5, cachedRead: 0.50, cacheWrite: 6.25, hasCacheWrite: true, output: 25},
-		{scheme: "anthropic", model: "claude-sonnet-5", input: 2, cachedRead: 0.20, cacheWrite: 2.50, hasCacheWrite: true, output: 10},
-		{scheme: "anthropic", model: "claude-sonnet-4-5", input: 3, cachedRead: 0.30, cacheWrite: 3.75, hasCacheWrite: true, output: 15},
-		{scheme: "anthropic", model: "claude-haiku-4-5", input: 1, cachedRead: 0.10, cacheWrite: 1.25, hasCacheWrite: true, output: 5},
-		{scheme: "anthropic", model: "claude-fable-5", input: 10, cachedRead: 1, cacheWrite: 12.50, hasCacheWrite: true, output: 50},
-		// OpenAI publishes no separate cache-WRITE rate. Unset, not zero.
-		{scheme: "openai", model: "gpt-5.6-sol", input: 4, cachedRead: 0.40, output: 20},
-		{scheme: "openai", model: "gpt-5.6-terra", input: 2, cachedRead: 0.20, output: 12},
-		{scheme: "openai", model: "gpt-5.6-luna", input: 0.20, cachedRead: 0.02, output: 1.20},
-	}
+	tests := publishedPrices
 
 	micros := func(usd float64) int64 { return int64(usd*1_000_000 + 0.5) }
 
@@ -86,7 +100,7 @@ func TestAnUnknownModelIsUnpricedNotFree(t *testing.T) {
 		if _, ok := pricing.Lookup(tc.scheme, tc.model); ok {
 			t.Errorf("%s:%s reported a price", tc.scheme, tc.model)
 		}
-		_, err := pricing.Estimate(tc.scheme, tc.model, "hello", 1000)
+		_, err := pricing.Estimate(tc.scheme, tc.model, pricing.Prompt{Input: "hello"}, 1000)
 		if !errors.Is(err, pricing.ErrUnpriced) {
 			t.Errorf("Estimate(%s:%s) = %v, want ErrUnpriced", tc.scheme, tc.model, err)
 		}
@@ -102,7 +116,7 @@ func TestTheEstimateIsPessimisticOnEveryTerm(t *testing.T) {
 	const model = "gpt-5.6-terra" // $2/MTok in, $12/MTok out
 	input := strings.Repeat("a", 3_000)
 
-	est, err := pricing.Estimate("openai", model, input, 1_000)
+	est, err := pricing.Estimate("openai", model, pricing.Prompt{Input: input}, 1_000)
 	if err != nil {
 		t.Fatalf("Estimate: %v", err)
 	}
@@ -113,7 +127,7 @@ func TestTheEstimateIsPessimisticOnEveryTerm(t *testing.T) {
 	// Input is charged at the FRESH rate. Assuming a cache hit would
 	// under-reserve exactly when a run repeats similar prompts, which is most
 	// of the time.
-	cheaper, err := pricing.Estimate("openai", model, input, 1_000)
+	cheaper, err := pricing.Estimate("openai", model, pricing.Prompt{Input: input}, 1_000)
 	if err != nil {
 		t.Fatalf("Estimate: %v", err)
 	}
@@ -124,7 +138,7 @@ func TestTheEstimateIsPessimisticOnEveryTerm(t *testing.T) {
 
 	// A bigger output ceiling costs more, because the ceiling is what the
 	// request permits rather than what a typical answer uses.
-	bigger, err := pricing.Estimate("openai", model, input, 10_000)
+	bigger, err := pricing.Estimate("openai", model, pricing.Prompt{Input: input}, 10_000)
 	if err != nil {
 		t.Fatalf("Estimate: %v", err)
 	}
@@ -134,7 +148,7 @@ func TestTheEstimateIsPessimisticOnEveryTerm(t *testing.T) {
 	}
 
 	// And longer input costs more.
-	longer, err := pricing.Estimate("openai", model, strings.Repeat("a", 30_000), 1_000)
+	longer, err := pricing.Estimate("openai", model, pricing.Prompt{Input: strings.Repeat("a", 30_000)}, 1_000)
 	if err != nil {
 		t.Fatalf("Estimate: %v", err)
 	}
@@ -155,11 +169,11 @@ func TestTheDenserTokenizerIsPricedAsDenser(t *testing.T) {
 	input := strings.Repeat("the quick brown fox ", 200)
 
 	// Same price per token ($3 vs $2 input differ, so compare TOKENS).
-	newer, err := pricing.Estimate("anthropic", "claude-sonnet-5", input, 1_000)
+	newer, err := pricing.Estimate("anthropic", "claude-sonnet-5", pricing.Prompt{Input: input}, 1_000)
 	if err != nil {
 		t.Fatalf("Estimate: %v", err)
 	}
-	older, err := pricing.Estimate("anthropic", "claude-sonnet-4-5", input, 1_000)
+	older, err := pricing.Estimate("anthropic", "claude-sonnet-4-5", pricing.Prompt{Input: input}, 1_000)
 	if err != nil {
 		t.Fatalf("Estimate: %v", err)
 	}
@@ -184,11 +198,11 @@ func TestAPinnedModelVersionKeepsItsTokenizer(t *testing.T) {
 	}
 	input := strings.Repeat("the quick brown fox ", 200)
 
-	base, err := pricing.EstimateWithPrice(p, "claude-sonnet-5", input, 1_000)
+	base, err := pricing.EstimateWithPrice(p, "claude-sonnet-5", pricing.Prompt{Input: input}, 1_000)
 	if err != nil {
 		t.Fatalf("EstimateWithPrice: %v", err)
 	}
-	pinned, err := pricing.EstimateWithPrice(p, "claude-sonnet-5-20260514", input, 1_000)
+	pinned, err := pricing.EstimateWithPrice(p, "claude-sonnet-5-20260514", pricing.Prompt{Input: input}, 1_000)
 	if err != nil {
 		t.Fatalf("EstimateWithPrice: %v", err)
 	}
@@ -204,7 +218,7 @@ func TestAnOutputCeilingIsRequired(t *testing.T) {
 	t.Parallel()
 
 	for _, ceiling := range []int64{0, -1} {
-		if _, err := pricing.Estimate("openai", "gpt-5.6-luna", "hi", ceiling); err == nil {
+		if _, err := pricing.Estimate("openai", "gpt-5.6-luna", pricing.Prompt{Input: "hi"}, ceiling); err == nil {
 			t.Errorf("an output ceiling of %d was accepted", ceiling)
 		}
 	}
@@ -223,57 +237,79 @@ func TestModelsListsWhatIsKnown(t *testing.T) {
 	}
 }
 
-// TestTokenCountingErrsHighButNotAbsurdly.
+// TestTokenCountingNeverUndercountsRealContent.
 //
-// Two failure modes, opposite directions, and both matter. Under-counting is
-// how a run walks past its cap. Over-counting forfeits headroom: a pessimistic
-// reservation holds `concurrency x estimate` of the cap un-spendable, so a
-// 4x over-estimate makes a cap four times harder to use.
+// The samples ARE the specification. Ground-truth counts were measured with
+// tiktoken (o200k_base) during the Phase-3 review of this package; the ratios
+// they exposed are why the divisor is 2 rather than 3.
 //
-// An earlier version floored the count at the rune count, which for ASCII
-// estimated one token per character — about four times reality. It passed every
-// test that only checked "bigger input costs more". Sanity-checking a realistic
-// prompt is what caught it, so the ratio is pinned here.
-func TestTokenCountingErrsHighButNotAbsurdly(t *testing.T) {
+// The failure this guards is asymmetric. Under-counting walks a run past its
+// cap — measured at 39% under on base64 with the old ratio, which priced a
+// 200 KB attachment at $0.42 against a true ceiling of $0.64. Over-counting
+// forfeits headroom, which the feasibility check compensates for by reducing
+// concurrency. So the assertion is one-sided by design: never under, and a
+// generous ceiling on how far over.
+//
+// Note what the tail is. It is not a script — Chinese prose measures 3.4
+// bytes/token and is perfectly safe. It is machine-shaped text, which is
+// exactly what an Asset embedded in a Case looks like.
+func TestTokenCountingNeverUndercountsRealContent(t *testing.T) {
 	t.Parallel()
 
-	// ~4 characters per token is the published English rule of thumb, so this
-	// prompt is roughly 90 tokens.
-	const prompt = "How do I get a refund for my order? " // 36 chars
-	input := strings.Repeat(prompt, 10)                   // 360 chars, ~90 tokens
-	const roughlyReal = 90
-
-	est, err := pricing.Estimate("openai", "gpt-5.6-luna", input, 0+1)
-	if err != nil {
-		t.Fatalf("Estimate: %v", err)
+	tests := []struct {
+		name string
+		text string
+		real int64 // measured with tiktoken o200k_base
+	}{
+		{"base64", strings.Repeat("SGVsbG8gV29ybGQhIFRoaXMgaXMgYQ==", 25), 546},
+		{"random hex", strings.Repeat("a3f9c2e18b7d4056", 50), 448},
+		{"UUIDs", strings.Repeat("3f2504e0-4f89-11d3-9a0c-0305e82c3301\n", 40), 759},
+		{"minified JSON", strings.Repeat(`{"id":1,"name":"x","v":[1,2,3]},`, 75), 1142},
+		{"English prose", strings.Repeat("How do I get a refund for my order? ", 10), 101},
 	}
-	inputTokens := est.Tokens - 1 // the output ceiling was 1
 
-	if inputTokens < roughlyReal {
-		t.Errorf("estimated %d input tokens for text worth roughly %d; "+
-			"under-counting is how a run walks past its cap",
-			inputTokens, roughlyReal)
-	}
-	if ratio := float64(inputTokens) / roughlyReal; ratio > 2.5 {
-		t.Errorf("estimated %d input tokens for text worth roughly %d (%.1fx); "+
-			"a pessimistic reservation holds concurrency x estimate of the cap "+
-			"un-spendable, so over-counting makes the cap harder to use",
-			inputTokens, roughlyReal, ratio)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Output ceiling of 1 so the reported total is input + 1.
+			est, err := pricing.Estimate("openai", "gpt-5.6-luna", pricing.Prompt{Input: tc.text}, 1)
+			if err != nil {
+				t.Fatalf("Estimate: %v", err)
+			}
+			got := est.Tokens - 1
+
+			if got < tc.real {
+				t.Errorf("estimated %d tokens for content worth %d (%.2fx); "+
+					"under-counting is how a run walks past its cap, and this "+
+					"shape of content is what an Asset looks like",
+					got, tc.real, float64(got)/float64(tc.real))
+			}
+			if ratio := float64(got) / float64(tc.real); ratio > 6 {
+				t.Errorf("estimated %d tokens for content worth %d (%.1fx); "+
+					"over-reserving forfeits concurrency x estimate of the cap",
+					got, tc.real, ratio)
+			}
+		})
 	}
 }
 
 // TestNonASCIITextIsNotUnderCounted.
 //
-// CJK runs about one token per character at three UTF-8 bytes each, so a
-// byte-based count that works for English has to hold up here too — this is the
-// script where under-counting is easiest.
+// Included for coverage of the multi-byte path, NOT because it is the risky
+// case — the review measured Chinese prose at 3.4 bytes/token, comfortably
+// safe. An earlier version of this test claimed CJK was "the script where
+// under-counting is easiest", which was measurably false, and it used a
+// repeated single character, which BPE merges aggressively and which is
+// therefore the best case rather than the worst. The real tail is base64, and
+// it has its own case above.
 func TestNonASCIITextIsNotUnderCounted(t *testing.T) {
 	t.Parallel()
 
 	const chars = 200
 	cjk := strings.Repeat("日", chars) // 3 bytes each, ~1 token each
 
-	est, err := pricing.Estimate("openai", "gpt-5.6-luna", cjk, 1)
+	est, err := pricing.Estimate("openai", "gpt-5.6-luna", pricing.Prompt{Input: cjk}, 1)
 	if err != nil {
 		t.Fatalf("Estimate: %v", err)
 	}
@@ -306,7 +342,7 @@ func TestARowMissingARateCannotProduceAnEstimate(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if _, err := pricing.EstimateWithPrice(tc.price, "m", "hello", 100); !errors.Is(err, pricing.ErrUnpriced) {
+			if _, err := pricing.EstimateWithPrice(tc.price, "m", pricing.Prompt{Input: "hello"}, 100); !errors.Is(err, pricing.ErrUnpriced) {
 				t.Errorf("err = %v, want ErrUnpriced", err)
 			}
 		})
@@ -325,7 +361,7 @@ func TestCostRoundsUpNotDown(t *testing.T) {
 	rate := int64(1) // 1 micro-USD per million tokens
 	p := &knov1.Price{InputPerMtokUsdMicros: &rate, OutputPerMtokUsdMicros: &rate}
 
-	est, err := pricing.EstimateWithPrice(p, "m", "a", 1)
+	est, err := pricing.EstimateWithPrice(p, "m", pricing.Prompt{Input: "a"}, 1)
 	if err != nil {
 		t.Fatalf("EstimateWithPrice: %v", err)
 	}
@@ -342,7 +378,7 @@ func TestCostRoundsUpNotDown(t *testing.T) {
 func TestEmptyInputIsPricedForItsOutputOnly(t *testing.T) {
 	t.Parallel()
 
-	est, err := pricing.Estimate("openai", "gpt-5.6-terra", "", 1_000)
+	est, err := pricing.Estimate("openai", "gpt-5.6-terra", pricing.Prompt{Input: ""}, 1_000)
 	if err != nil {
 		t.Fatalf("Estimate: %v", err)
 	}
@@ -351,5 +387,176 @@ func TestEmptyInputIsPricedForItsOutputOnly(t *testing.T) {
 	}
 	if est.CostUSDMicros <= 0 {
 		t.Error("a Case with no prompt reserved nothing, though it may still answer")
+	}
+}
+
+// TestADatedModelIdentifierIsPriced.
+//
+// Providers publish a dated ID as canonical and the bare name as an alias —
+// claude-sonnet-4-5-20250929 is the "Claude API ID" column, and
+// claude-sonnet-4-5 is the alias. Pricing only the alias meant every user who
+// pinned a version got their run refused under a cost cap, while the CHANGELOG
+// said pinning worked.
+//
+// It "worked" for the tokenizer, which prefix-matched, and not for the price,
+// which did not — and the test that named the property called EstimateWithPrice
+// with a pre-fetched price, bypassing Lookup, so it passed on the one path
+// where it could not fail. This one goes through Estimate.
+func TestADatedModelIdentifierIsPriced(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct{ scheme, dated, alias string }{
+		{"anthropic", "claude-sonnet-4-5-20250929", "claude-sonnet-4-5"},
+		{"anthropic", "claude-haiku-4-5-20251001", "claude-haiku-4-5"},
+		{"anthropic", "claude-opus-4-5-20251101", "claude-opus-4-5"},
+		{"anthropic", "claude-sonnet-5-20260514", "claude-sonnet-5"},
+		{"openai", "gpt-5.6-terra-2026-03-01", "gpt-5.6-terra"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.dated, func(t *testing.T) {
+			t.Parallel()
+
+			dated, err := pricing.Estimate(tc.scheme, tc.dated, pricing.Prompt{Input: "hello world"}, 1_000)
+			if err != nil {
+				t.Fatalf("a pinned version is unpriced, so a cost-capped run "+
+					"using the canonical API identifier is refused: %v", err)
+			}
+			alias, err := pricing.Estimate(tc.scheme, tc.alias, pricing.Prompt{Input: "hello world"}, 1_000)
+			if err != nil {
+				t.Fatalf("Estimate(%s): %v", tc.alias, err)
+			}
+			// Same model, same price AND same tokenizer. The two used to be
+			// resolved by different rules, which is how they drifted apart.
+			if dated.CostUSDMicros != alias.CostUSDMicros || dated.Tokens != alias.Tokens {
+				t.Errorf("%s estimated %d micros / %d tokens but %s estimated "+
+					"%d / %d; the price and the tokenizer resolve the model "+
+					"differently", tc.dated, dated.CostUSDMicros, dated.Tokens,
+					tc.alias, alias.CostUSDMicros, alias.Tokens)
+			}
+		})
+	}
+}
+
+// TestLookupCannotBeUsedToRepriceTheTable.
+//
+// Lookup used to return the table's own pointer, so writing through it
+// re-priced the model for every worker in the process — and the natural
+// implementation of a --price override does exactly that. Measured: one write
+// turned 128k output tokens of Opus 5 from $3.20 into $0.000020, which
+// budget.validate accepts because it is positive. It was a data race too.
+func TestLookupCannotBeUsedToRepriceTheTable(t *testing.T) {
+	t.Parallel()
+
+	before, ok := pricing.Lookup("anthropic", "claude-opus-5")
+	if !ok {
+		t.Fatal("claude-opus-5 is not priced")
+	}
+	original := before.GetOutputPerMtokUsdMicros()
+
+	zero := int64(0)
+	before.OutputPerMtokUsdMicros = &zero
+
+	after, ok := pricing.Lookup("anthropic", "claude-opus-5")
+	if !ok {
+		t.Fatal("claude-opus-5 is not priced")
+	}
+	if got := after.GetOutputPerMtokUsdMicros(); got != original {
+		t.Errorf("output rate is now %d, was %d; a caller re-priced the model "+
+			"for every worker in the process", got, original)
+	}
+}
+
+// TestAnAbsurdOutputCeilingIsRefusedNotWrapped.
+//
+// A caller-supplied ceiling has no upper bound of its own, and int64 overflow
+// can land small and POSITIVE — which reads as a cheap call rather than as an
+// error, and nothing downstream catches it. budget.validate rejects negatives,
+// not wrapped ones.
+func TestAnAbsurdOutputCeilingIsRefusedNotWrapped(t *testing.T) {
+	t.Parallel()
+
+	for _, ceiling := range []int64{math.MaxInt64, math.MaxInt64 / 2, 100_000_000} {
+		est, err := pricing.Estimate("anthropic", "claude-opus-5", pricing.Prompt{Input: "hi"}, ceiling)
+		if err == nil {
+			t.Errorf("an output ceiling of %d was accepted, reserving %d micros",
+				ceiling, est.CostUSDMicros)
+		}
+	}
+}
+
+// TestEveryPricedModelIsCoveredByTheExpectations guards the price table from
+// growing rows nobody checks against the published sources.
+func TestEveryPricedModelIsCoveredByTheExpectations(t *testing.T) {
+	t.Parallel()
+
+	checked := map[string]bool{}
+	for _, e := range publishedPrices {
+		checked[e.scheme+":"+e.model] = true
+	}
+
+	for _, scheme := range []string{"anthropic", "openai"} {
+		for _, model := range pricing.Models(scheme) {
+			if !checked[scheme+":"+model] {
+				t.Errorf("%s:%s is priced but no test pins it against the "+
+					"published rate; a transposed digit here is a wrong "+
+					"reservation nobody would notice", scheme, model)
+			}
+		}
+	}
+}
+
+// TestEveryPromptPartIsBilled.
+//
+// The billed prompt is not Case.input. It is the system prompt plus the
+// injected Asset plus the Case's history plus its input — and the Asset is the
+// largest term and the entire point of the product.
+//
+// The signature used to take one string named "input", which made
+// `pricing.Estimate(scheme, model, c.GetInput(), max)` the path of least
+// resistance. That omits the Asset, produces a systematically low reservation,
+// and looks correct in review. This asserts each part actually moves the number.
+func TestEveryPromptPartIsBilled(t *testing.T) {
+	t.Parallel()
+
+	const filler = "some text that costs tokens "
+
+	base, err := pricing.Estimate("openai", "gpt-5.6-terra", pricing.Prompt{}, 100)
+	if err != nil {
+		t.Fatalf("Estimate: %v", err)
+	}
+
+	parts := map[string]pricing.Prompt{
+		"system":  {System: filler},
+		"context": {Context: filler},
+		"history": {History: filler},
+		"input":   {Input: filler},
+	}
+	for name, p := range parts {
+		est, err := pricing.Estimate("openai", "gpt-5.6-terra", p, 100)
+		if err != nil {
+			t.Fatalf("Estimate(%s): %v", name, err)
+		}
+		if est.Tokens <= base.Tokens {
+			t.Errorf("the %s part did not change the estimate (%d vs %d); a term "+
+				"the provider bills is not being reserved for", name,
+				est.Tokens, base.Tokens)
+		}
+	}
+
+	// And they add up rather than one shadowing another.
+	all, err := pricing.Estimate("openai", "gpt-5.6-terra", pricing.Prompt{
+		System: filler, Context: filler, History: filler, Input: filler,
+	}, 100)
+	if err != nil {
+		t.Fatalf("Estimate: %v", err)
+	}
+	one, err := pricing.Estimate("openai", "gpt-5.6-terra", pricing.Prompt{Input: filler}, 100)
+	if err != nil {
+		t.Fatalf("Estimate: %v", err)
+	}
+	if all.Tokens <= one.Tokens {
+		t.Errorf("four parts estimated %d tokens against %d for one; the parts "+
+			"are not summed", all.Tokens, one.Tokens)
 	}
 }
