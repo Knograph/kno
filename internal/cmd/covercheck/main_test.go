@@ -323,19 +323,50 @@ func TestSourceDirsSkipsDotDirectories(t *testing.T) {
 	writeFile(t, filepath.Join(root, "core"), "a.go", "package core\n\nfunc A() {}\n")
 	writeFile(t, filepath.Join(root, ".claude", "worktrees", "wt", "core"), "a.go",
 		"package core\n\nfunc A() {}\n")
+	// The go tool ignores underscore-prefixed directories for the same reason.
+	writeFile(t, filepath.Join(root, "_scratch", "core"), "a.go",
+		"package core\n\nfunc A() {}\n")
 
 	got, err := sourceDirs(root)
 	if err != nil {
 		t.Fatalf("sourceDirs: %v", err)
 	}
 	for _, d := range got {
-		if strings.Contains(d, ".claude") {
-			t.Errorf("sourceDirs returned %q; a dot-directory is not source, and the "+
-				"go tool cannot build or test it", d)
+		if strings.Contains(d, ".claude") || strings.Contains(d, "_scratch") {
+			t.Errorf("sourceDirs returned %q; the go tool ignores dot- and "+
+				"underscore-prefixed directories, so it cannot build or test that "+
+				"package and no profile can ever cover it", d)
 		}
 	}
 	if len(got) != 1 {
 		t.Errorf("sourceDirs = %v, want only the real core package", got)
+	}
+}
+
+// TestSourceDirsWalksAnAbsoluteRootHoldingADotComponent.
+//
+// The skip inspects d.Name(), the BASE name, so a dot elsewhere in an absolute
+// path is not a dot-directory as far as the walk is concerned. A checkout under
+// ~/.config or any other dotted parent must still be scanned in full — the
+// alternative is a gate that silently covers nothing for those users.
+func TestSourceDirsWalksAnAbsoluteRootHoldingADotComponent(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join(t.TempDir(), ".config", "repo")
+	writeFile(t, filepath.Join(root, "core"), "a.go", "package core\n\nfunc A() {}\n")
+	writeFile(t, filepath.Join(root, ".claude", "wt", "core"), "a.go",
+		"package core\n\nfunc A() {}\n")
+
+	got, err := sourceDirs(root)
+	if err != nil {
+		t.Fatalf("sourceDirs: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("sourceDirs = %v, want the one real package; a dotted PARENT of the "+
+			"repo must not suppress the whole walk", got)
+	}
+	if strings.Contains(got[0], ".claude") {
+		t.Errorf("sourceDirs returned %q; nested dot-directories are still skipped", got[0])
 	}
 }
 

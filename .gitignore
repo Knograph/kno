@@ -134,3 +134,7 @@ Thumbs.db
 # one would recurse; the tree-walking gates skip them explicitly (see
 # internal/cmd/covercheck and godoccheck).
 .claude/worktrees/
+# Built gate binaries. `make check` runs these with `go run`; the compiled
+# artifacts were committed by accident (3.5 MB each) and nothing reads them.
+/covercheck
+/godoccheck

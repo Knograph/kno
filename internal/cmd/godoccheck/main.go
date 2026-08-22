@@ -73,7 +73,10 @@ func walk(root string) ([]finding, error) {
 			// .claude/, say — would otherwise be scanned as our own code, and
 			// its generated .pb.go files reported as undocumented. The root
 			// itself is exempt: this tool is invoked with ".".
-			if (path != root && strings.HasPrefix(name, ".")) ||
+			// Dot and underscore prefixes both, matching the go tool: it
+			// ignores each, so a package under either is never built,
+			// imported by ./..., or present in a coverage profile.
+			if (path != root && (strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_"))) ||
 				name == "bin" || name == "testdata" {
 				return filepath.SkipDir
 			}

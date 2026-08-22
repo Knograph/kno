@@ -149,7 +149,14 @@ func warningsFor(res *core.BaselineResult, counts jsonl.SplitCounts) []string {
 	if res.Run.GetErrorRateExceeded() {
 		w = append(w, "too many cases errored for this to be a usable baseline")
 	}
-	if res.AggregateScore == nil {
+	// Two different absences. Saying "no cases scored" on a run that scored
+	// every Case contradicts the count printed three lines above it, and sends
+	// the user looking for a failure that did not happen.
+	switch {
+	case res.AggregateUnavailable:
+		w = append(w, "some cases' scores cannot be read back, so this run has "+
+			"no baseline number — the cases themselves are intact")
+	case res.AggregateScore == nil:
 		w = append(w, "no cases scored, so this run has no baseline number")
 	}
 	return w

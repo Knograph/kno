@@ -65,10 +65,15 @@ Exclusion has its own hazard: if the errors aren't random — if hard Cases are 
 `kno purge` erases stored conversation content. It preserves the numbers — the score of
 each Case survives the blob it arrived in — so a purged run still reports its baseline.
 
-Runs purged by a build older than the score column are the exception. Those Cases are
-complete and their scores are gone, and there is no way to recompute them without
-re-running the agent. Kno reports **no baseline score at all** for such a run, and says
-why, rather than reporting the mean over the Cases that happen to still have numbers.
+Two cases are the exception, and they produce the same state. A run purged by a build
+older than the score column lost its numbers with the blob they lived in. A Score that
+cannot be read back — a corrupt row, or one written by a build this one does not
+understand — is equally gone. Either way the Cases are complete and there is no way to
+recompute the scores without re-running the agent.
+
+Kno reports **no baseline score at all** for such a run, says why, and says how many
+Cases are affected — one lost Case in 10,000 and 10,000 lost out of 10,000 are the same
+sentence otherwise, and only one of them is worth paying to re-run.
 
 That mean would be a real number describing a population nobody chose: whichever Cases
 escaped a purge. Its counts would span the whole run and its value would span a subset,

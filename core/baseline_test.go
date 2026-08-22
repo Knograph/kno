@@ -2381,3 +2381,103 @@ func clearScoreValues(t *testing.T, dbPath, runID string) {
 		t.Fatalf("clearing score values: %v", err)
 	}
 }
+
+// TestBothIncompleteReasonsSurvive.
+//
+// A run can be both unscoreable and too error-prone. Assigning
+// IncompleteReason twice left whichever branch ran second, and the one it lost
+// is the one the user cannot infer from anything else on screen: the error rate
+// is already visible in the printed counts and in ErrorRateExceeded, while a
+// missing aggregate has no other signal at all.
+func TestBothIncompleteReasonsSurvive(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// Half the Cases error, well above the default threshold.
+	h := newHarness(t, 20, 5, fake.Options{FailEvery: 2})
+	h.opts.Concurrency = 1
+	h.opts.Guard = budget.New(budget.Limits{MaxLLMCalls: 8}, nil, 0)
+	if _, err := core.Baseline(ctx, h.evals, h.opts); err != nil &&
+		!errors.Is(err, errs.ErrBudgetExceeded) {
+		t.Fatalf("first pass: %v", err)
+	}
+
+	clearScoreValues(t, h.dbPath, "run-1")
+
+	opts := h.opts
+	opts.Resume = true
+	opts.Guard = budget.New(budget.Limits{MaxLLMCalls: 1_000}, nil, 0)
+	res, err := core.Baseline(ctx, h.evals, opts)
+	if err != nil {
+		t.Fatalf("resumed run: %v", err)
+	}
+
+	reason := res.Run.GetIncompleteReason()
+	if !res.Run.GetErrorRateExceeded() {
+		t.Fatalf("the fixture did not trip the error-rate threshold; reason = %q", reason)
+	}
+	if !strings.Contains(reason, "above the") {
+		t.Errorf("IncompleteReason = %q, want it to state the error rate", reason)
+	}
+	if !strings.Contains(reason, "no reportable aggregate") {
+		t.Errorf("IncompleteReason = %q, want it to ALSO state that the aggregate is "+
+			"gone; that half has no other signal in the report", reason)
+	}
+}
+
+// TestAResumedRunDoesNotInheritAStaleVerdict.
+//
+// ErrorRateExceeded and IncompleteReason are recomputed over the whole run on
+// every close, but were only ever set, never cleared. A process that errored
+// past the threshold and stopped stamped the stored Run; a resume that went on
+// to score cleanly recomputed a passing rate, skipped the branch, and left the
+// stamp standing. The run then reported "not a usable baseline" forever, and
+// no amount of further clean work could clear it.
+func TestAResumedRunDoesNotInheritAStaleVerdict(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// Every Case in the first pass errors, and the budget stops it after four.
+	h := newHarness(t, 100, 10, fake.Options{FailEvery: 1})
+	h.opts.Concurrency = 1
+	h.opts.Guard = budget.New(budget.Limits{MaxLLMCalls: 4}, nil, 0)
+	if _, err := core.Baseline(ctx, h.evals, h.opts); err != nil &&
+		!errors.Is(err, errs.ErrBudgetExceeded) {
+		t.Fatalf("first pass: %v", err)
+	}
+
+	stored, err := h.store.GetRun(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("loading the interrupted run: %v", err)
+	}
+	if !stored.GetErrorRateExceeded() {
+		t.Skipf("the fixture did not trip the threshold on the first pass "+
+			"(%d errored of %d attempted); nothing stale to inherit",
+			stored.GetErroredCaseCount(), stored.GetAttemptedCaseCount())
+	}
+
+	// The resume runs clean, bringing the whole run's rate under the threshold.
+	opts := h.opts
+	opts.Resume = true
+	opts.Guard = budget.New(budget.Limits{MaxLLMCalls: 1_000}, nil, 0)
+	opts.Agent = fake.New(fake.Options{})
+	res, err := core.Baseline(ctx, h.evals, opts)
+	if err != nil {
+		t.Fatalf("resumed run: %v", err)
+	}
+
+	scored, errored := res.Run.GetScoredCaseCount(), res.Run.GetErroredCaseCount()
+	rate := float64(errored) / float64(scored+errored)
+	if rate > core.DefaultMaxErrorRate {
+		t.Fatalf("the whole run's rate is %.2f, still above threshold; this test needs "+
+			"a run that recovers", rate)
+	}
+	if res.Run.GetErrorRateExceeded() {
+		t.Errorf("ErrorRateExceeded is still set after the whole run came in at %.2f; "+
+			"the flag is set by a branch with no matching clear", rate)
+	}
+	if strings.Contains(res.Run.GetIncompleteReason(), "not a usable baseline") {
+		t.Errorf("IncompleteReason = %q, carried over from the process that stopped",
+			res.Run.GetIncompleteReason())
+	}
+}
