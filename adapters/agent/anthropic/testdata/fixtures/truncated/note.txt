@@ -1,0 +1,4 @@
+A well-formed 200 carrying a truncated answer. Scored as a wrong answer, it
+means Kno's own --max-output-tokens depresses the baseline invisibly: nothing
+in the record would say the answer was cut off. The list stops at 991 rather
+than 997 because the output ceiling was reached mid-list.

@@ -1,0 +1,4 @@
+529 is Anthropic's "temporarily overloaded", and it is not in net/http's
+status constants — which is exactly why an adapter that switches on named
+constants drops it into the terminal branch. Retryable: the provider accepted
+the request and failed to answer it.

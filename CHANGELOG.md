@@ -18,6 +18,16 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
+- **The `anthropic` provider adapter** (`adapters/agent/anthropic`) for the Messages API,
+  implementing `core.Agent`, `core.Capable`, and `core.Estimator`. Not the OpenAI-compatible
+  adapter with a different base URL: the system prompt is a top-level field, `max_tokens` is
+  required, `input_tokens` counts only what follows the last cache breakpoint (so billed input
+  is the sum of three fields), `stop_reason: "refusal"` is scored rather than errored, and
+  authentication is `x-api-key`, which Go's redirect handling does not strip. Each difference
+  produces a wrong number rather than a loud failure. Capabilities are static and per model, so
+  `New` refuses `--temperature` for a model that rejects sampling parameters instead of failing
+  every Case with a 400.
+
 - **The first provider adapter.** `adapters/agent/openaicompat` speaks the OpenAI Chat
   Completions shape and is `base_url`-configurable, so it also reaches OpenAI-compatible
   servers. Static capabilities (no probing), a pessimistic per-Case `Estimate` with a bounded
@@ -28,6 +38,9 @@ covenants — breaking any of them requires a major version.
 
 ### Fixed
 
+- A spend-cap 429 (`enforced_spend_limit_reached`) is terminal rather than retried. It never
+  clears within a run, so retrying burned each Case's whole retry budget and settled one call
+  per attempt against `--max-calls`.
 - A failed call the provider billed for is no longer observed as free. A 200 carrying both an
   `error` object and a `usage` block — a shape several OpenAI-compatible gateways produce — was
   parsed, its usage discarded, and settled at $0 against the cost cap. The reported charge now
