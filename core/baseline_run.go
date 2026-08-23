@@ -9,9 +9,18 @@ import (
 	knov1 "github.com/knograph/kno/gen/kno/v1"
 )
 
-// Resuming a Run: loading the record, and refusing to continue one whose
-// inputs no longer match. A resume that silently accepts changed inputs
-// produces a Run whose parts were measured against different things.
+// Opening a Run: creating the record for a fresh one, or reloading an
+// interrupted one and refusing a resume whose measurement configuration no
+// longer matches.
+//
+// Both, not just the resume half. openRun's fresh branch is the ONLY place a
+// knov1.Run is constructed, holdout provenance included — split seed, holdout
+// fraction, and the underpowered flag. Someone adding a field to Run comes
+// here, so the file is named for opening rather than for resuming.
+//
+// A resume that silently accepts changed inputs produces a Run whose parts
+// were measured against different things, which is what checkResumable exists
+// to prevent.
 
 // openRun creates or reloads the Run record.
 func (o BaselineOptions) openRun(ctx context.Context) (*knov1.Run, error) {

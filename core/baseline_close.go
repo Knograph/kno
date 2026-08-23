@@ -14,7 +14,10 @@ import (
 )
 
 // Ending a Run: the verdict it records, the status it carries, and how a
-// run-ending error is classified for the exit code.
+// RUN-ending error is classified for the exit code.
+//
+// Per-CASE error classification is not here — codeOf lives in
+// baseline_record.go beside the two places that call it.
 
 // closeRun records how the run ended and computes its aggregate.
 func (o BaselineOptions) closeRun(
@@ -107,10 +110,6 @@ func (o BaselineOptions) closeRun(
 	return result, runErr
 }
 
-// statusFor maps a run error to how the run ended.
-//
-// The distinction matters to CI: a budget stop means the run did what it was
-// told and can continue, while a failure means something is broken.
 // classifyRunErr gives a run-ending error the CLI grammar and an exit code
 // chosen deliberately, rather than the unclassified default.
 func classifyRunErr(err error) error {
@@ -126,6 +125,10 @@ func classifyRunErr(err error) error {
 	}
 }
 
+// statusFor maps a run error to how the run ended.
+//
+// The distinction matters to CI: a budget stop means the run did what it was
+// told and can continue, while a failure means something is broken.
 func statusFor(err error) knov1.RunStatus {
 	switch {
 	case err == nil:
@@ -137,16 +140,4 @@ func statusFor(err error) knov1.RunStatus {
 	default:
 		return knov1.RunStatus_RUN_STATUS_FAILED
 	}
-}
-
-// codeOf extracts a machine-readable code, never verbatim provider text.
-func codeOf(err error) string {
-	var a *errs.Actionable
-	if errors.As(err, &a) {
-		return a.Code
-	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return "INTERRUPTED"
-	}
-	return "AGENT_ERROR"
 }

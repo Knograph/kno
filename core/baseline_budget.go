@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/knograph/kno/core/errs"
 	"github.com/knograph/kno/executor"
@@ -12,13 +13,24 @@ import (
 	"github.com/knograph/kno/stats/budget"
 )
 
-// Everything between a Case and the budget guard: what a call is estimated
-// to cost, whether the run is affordable at all, what the human is asked to
-// consent to, and what is settled afterwards.
+// Budget planning and spend arithmetic: what a Case is estimated to cost,
+// whether the run fits under its caps, what the human is asked to consent to,
+// and how a settled budget.Spend is derived from a Response.
 //
-// Grouped because prime directive 4 makes this one concern rather than
-// several: every path here can spend the user's money, and a reviewer
-// checking that claim should not have to read the whole stage to do it.
+// The authorization and the settlement themselves are NOT here — Guard.Authorize,
+// Reservation.Settle and Reservation.Release appear only in invokeOnce, in
+// baseline_invoke.go. An earlier version of this comment claimed every path
+// here could spend money, which sent a reviewer auditing prime directive 4 to
+// the one file that cannot spend anything: everything below either plans a
+// number or computes one from a Response already received.
+
+// estimateTimeout bounds an Estimator call.
+//
+// Estimating is arithmetic over a local pricing table — the Estimator godoc
+// says so — and this exists for the adapter that does not honor that. Generous
+// enough that no honest implementation notices, short enough that a hung one
+// costs a single Case rather than the run.
+const estimateTimeout = 5 * time.Second
 
 // estimate reports what one invocation of c may cost.
 //
@@ -60,7 +72,8 @@ func (o BaselineOptions) estimate(ctx context.Context, c *Case) (budget.Estimate
 		return budget.Estimate{}, o.unpriceable(c,
 			errors.New("the estimate is zero, which a cost cap cannot be enforced against"))
 
-	// One Invoke settles as exactly one call (see spendOf), so an Estimate
+	// One Invoke settles as exactly one call (enforced in invokeOnce, in
+	// baseline_invoke.go — spendOf only shapes the number), so an Estimate
 	// reserving more would reserve N and settle 1, and the call cap would drift
 	// by (N-1) per Case. Measured at 18 real calls against a cap of 10.
 	// Rejected rather than coerced: silently rewriting one out-of-contract

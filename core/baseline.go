@@ -53,14 +53,6 @@ const DefaultRetryBudget = 90 * time.Second
 // each attempt.
 const DefaultRetryBackoff = 500 * time.Millisecond
 
-// estimateTimeout bounds an Estimator call.
-//
-// Estimating is arithmetic over a local pricing table — the Estimator godoc
-// says so — and this exists for the adapter that does not honor that. Generous
-// enough that no honest implementation notices, short enough that a hung one
-// costs a single Case rather than the run.
-const estimateTimeout = 5 * time.Second
-
 // BaselineOptions configures a Baseline run.
 type BaselineOptions struct {
 	// RunID identifies this run. Required.
@@ -190,6 +182,14 @@ func (o BaselineOptions) maxErrorRate() float64 {
 		return o.MaxErrorRate
 	}
 	return DefaultMaxErrorRate
+}
+
+// retryBudget is the configured wall-clock bound, or the default.
+func (o BaselineOptions) retryBudget() time.Duration {
+	if o.RetryBudget > 0 {
+		return o.RetryBudget
+	}
+	return DefaultRetryBudget
 }
 
 // BaselineResult reports what a Baseline run produced.
