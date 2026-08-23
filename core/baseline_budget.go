@@ -113,11 +113,15 @@ func (o BaselineOptions) unpriceable(c *Case, cause error) error {
 // DevCases but not the completed set, so a run killed at 9,988 of 10,000 would
 // have prompted for the full amount to finish twelve Cases.
 //
-// Bounded by what the guard will permit. With --max-cost-usd 5.00 on a fresh
-// run the honest maximum exposure is $5.00, not DevCases x per-Case; on a
-// resume with $0.10 left it is $0.10, not $5.00. Showing a larger number than
-// the guard will stop at is false in the direction that teaches people to
-// dismiss the prompt.
+// The total is the INTENT — every remaining Case at the planning rate. Bounding
+// it to what the guard will actually authorize is PreConfirm's job, because
+// only the guard can read both caps and the live headroom in one snapshot.
+//
+// That bound is why a resume is quoted honestly: with $0.10 left of a $5.00
+// cap the exposure is $0.10, not $5.00. Showing a larger number than the guard
+// will stop at is false in the direction that teaches people to dismiss the
+// prompt — and the bounded figure is also what the threshold is compared
+// against, so a run that can only spend $0.10 no longer asks about $5.00.
 func (o BaselineOptions) confirmRun(ctx context.Context, alreadyDone int) error {
 	remaining := int64(o.DevCases - alreadyDone)
 	perCall := o.planningCostPerCall()
@@ -129,22 +133,14 @@ func (o BaselineOptions) confirmRun(ctx context.Context, alreadyDone int) error 
 		Calls:         remaining,
 		CostUSDMicros: saturatingMul(remaining, perCall),
 	}
-	// Never quote more than the guard will actually permit — which on a resume
-	// is the headroom LEFT, not the cap the run was originally given.
+	// NOT bounded here. PreConfirm bounds it against both caps under the same
+	// lock that produces the "remaining" figure shown beside it, so the two
+	// numbers the CLI prints in one sentence cannot come from two instants.
 	//
-	// Limits() is the static cap and was wrong here. Baseline calls
-	// Guard.Restore before this, so a run resumed with $0.10 of a $5.00 cap
-	// left was quoted against $5.00: measured at $5.00 shown with $0.10
-	// remaining, 50x. The CLI prints both numbers in one sentence, so the
-	// contradiction reaches the user intact.
-	//
-	// checkFeasible, twenty lines below, already used Remaining() for exactly
-	// this reason. The two sat in one file answering the same question two
-	// ways, which is what splitting the file surfaced.
-	if ceiling := o.Guard.Remaining().CostUSDMicros; ceiling > 0 && total.CostUSDMicros > ceiling {
-		total.CostUSDMicros = ceiling
-	}
-
+	// core did bound it, against Limits() alone, which on a resume is the cap
+	// the run STARTED with rather than what it has left. checkFeasible below
+	// gets this right by gating on Limits() and computing with Remaining();
+	// doing either alone is wrong, which is why neither is done here.
 	ok, err := o.Guard.PreConfirm(ctx, total)
 	if err != nil {
 		return err

@@ -2502,11 +2502,15 @@ func TestAResumedRunIsNotQuotedAgainstTheCapItAlreadySpent(t *testing.T) {
 	const costCap = 5_000_000 // $5.00
 
 	h := newHarness(t, 200, 20, fake.Options{CostPerCallUSDMicros: 50_000}) // $0.05/Case
+	// Concurrency 1 so at most one reservation is outstanding and the arithmetic
+	// below is exact; Remaining subtracts reserved as well as spent.
 	h.opts.Concurrency = 1
 	h.opts.EstCostPerCallUSDMicros = 50_000
-	// Stopped by the CALL cap, not the cost cap, so the run ends with most of
-	// the money gone but some left — which is what makes a resume possible at
-	// all, and what the quote must be computed against.
+	// 98 is load-bearing arithmetic, not a round number. The cost cap admits
+	// exactly 100 calls at $0.05, so stopping at 98 leaves $0.10 — enough for a
+	// resume to be possible, little enough that quoting the whole cap is
+	// obviously wrong. Stopped by the CALL cap so the money, not the calls, is
+	// what the resume is bounded by.
 	h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: costCap, MaxLLMCalls: 98}, nil, 0)
 
 	if _, err := core.Baseline(ctx, h.evals, h.opts); !errors.Is(err, errs.ErrBudgetExceeded) {
@@ -2533,8 +2537,17 @@ func TestAResumedRunIsNotQuotedAgainstTheCapItAlreadySpent(t *testing.T) {
 
 	opts := h.opts
 	opts.Resume = true
-	// A threshold of 1 micro-USD arms the prompt for any non-trivial run.
-	opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: costCap}, confirm, 1)
+	// The call cap is RAISED, which is the actual story of this resume: the
+	// user hit --max-calls, saw it was too low, and lifted it. Re-passing the
+	// exhausted 98 would leave no calls either, so nothing would be quoted and
+	// the fixture would prove nothing. The COST cap is unchanged, because that
+	// is the one under test.
+	//
+	// A threshold of 1 micro-USD arms the prompt for any non-trivial run. What
+	// happens at the real $1.00 threshold is a separate test — see
+	// TestAResumeUnderTheConfirmThresholdProceedsWithoutAsking.
+	opts.Guard = budget.New(
+		budget.Limits{MaxCostUSDMicros: costCap, MaxLLMCalls: 1_000}, confirm, 1)
 	if _, err := core.Baseline(ctx, h.evals, opts); err != nil &&
 		!errors.Is(err, errs.ErrBudgetExceeded) {
 		t.Fatalf("resumed run: %v", err)
@@ -2544,12 +2557,18 @@ func TestAResumedRunIsNotQuotedAgainstTheCapItAlreadySpent(t *testing.T) {
 		t.Fatal("the human was never asked, so there is no quoted figure to check; " +
 			"the fixture no longer exercises the confirmation path")
 	}
+	// Exactly the headroom, not merely "no more than" it. The fixture spends
+	// 98 calls x $0.05 = $4.90 of a $5.00 cap, so $0.10 is left and $0.10 is
+	// the only correct quote. An inequality would pass a fix that clamped to
+	// half the remaining budget.
+	if want := int64(100_000); quoted.CostUSDMicros != want {
+		t.Errorf("the prompt quoted %d micro-USD, want %d — the CLI renders this "+
+			"beside %d remaining in one sentence, so a mismatch is a "+
+			"self-contradiction the user reads intact",
+			quoted.CostUSDMicros, want, left.CostUSDMicros)
+	}
 	if quoted.CostUSDMicros > left.CostUSDMicros {
-		t.Errorf("the prompt quoted %d micro-USD with only %d remaining. The CLI "+
-			"renders these in one sentence, so the user is told the run would "+
-			"spend %.2fx what the guard will actually permit",
-			quoted.CostUSDMicros, left.CostUSDMicros,
-			float64(quoted.CostUSDMicros)/float64(max(left.CostUSDMicros, 1)))
+		t.Errorf("quoted %d with only %d remaining", quoted.CostUSDMicros, left.CostUSDMicros)
 	}
 }
 
@@ -2575,7 +2594,16 @@ func TestAFreshRunIsStillQuotedAgainstItsWholeCap(t *testing.T) {
 			want:   5_000_000,
 		},
 		{
-			name:   "a call-only cap does not clamp the dollar figure",
+			// 200 Cases at $0.05 is $10.00 of intent, but 10 calls is all the
+			// guard will authorize — $0.50. Quoting $10.00 overstates by 20x,
+			// the same class and direction of error as the resume bug, one
+			// field over in the same struct.
+			name:   "a call cap bounds the dollar figure too",
+			limits: budget.Limits{MaxLLMCalls: 10},
+			want:   500_000,
+		},
+		{
+			name:   "a call cap wider than the run does not bound it",
 			limits: budget.Limits{MaxLLMCalls: 1_000},
 			want:   10_000_000,
 		},
@@ -2611,5 +2639,83 @@ func TestAFreshRunIsStillQuotedAgainstItsWholeCap(t *testing.T) {
 				t.Errorf("quoted %d micro-USD, want %d", quoted.CostUSDMicros, tt.want)
 			}
 		})
+	}
+}
+
+// TestAResumeUnderTheConfirmThresholdProceedsWithoutAsking.
+//
+// This is a deliberate change in WHEN consent is required, not a side effect,
+// and it is pinned here because Phase 3 caught it going unnoticed.
+//
+// The prompt fires when the quoted total is at or above --confirm-threshold
+// ($1.00 in the CLI). Bounding the quote to what the guard will actually
+// permit means a resume with $0.10 of headroom now quotes $0.10, which is
+// below the threshold, so it proceeds without asking and spends that $0.10.
+//
+// Before, it quoted the whole $5.00 cap, crossed the threshold, and prompted —
+// and since the current confirmFunc always declines, the run refused. So the
+// old behaviour was: refuse a $0.10 run because it was described as a $5.00
+// one. That is not consent, it is a wrong number producing an accidental
+// refusal.
+//
+// The threshold means "ask me before spending more than this". A run that
+// cannot spend more than this should not ask. What the user set still binds:
+// the $5.00 cap is enforced, and the $0.10 is inside it.
+func TestAResumeUnderTheConfirmThresholdProceedsWithoutAsking(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const costCap = 5_000_000   // $5.00
+	const threshold = 1_000_000 // $1.00 — the CLI's real confirmThresholdUSD
+
+	h := newHarness(t, 200, 20, fake.Options{CostPerCallUSDMicros: 50_000})
+	h.opts.Concurrency = 1
+	h.opts.EstCostPerCallUSDMicros = 50_000
+	h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: costCap, MaxLLMCalls: 98}, nil, 0)
+
+	if _, err := core.Baseline(ctx, h.evals, h.opts); !errors.Is(err, errs.ErrBudgetExceeded) {
+		t.Fatalf("the first run was meant to stop on the call cap: %v", err)
+	}
+
+	var asked bool
+	confirm := func(context.Context, budget.Estimate, budget.Remaining) (bool, error) {
+		asked = true
+		return false, nil // decline, as the current CLI always does
+	}
+
+	opts := h.opts
+	opts.Resume = true
+	opts.Guard = budget.New(
+		budget.Limits{MaxCostUSDMicros: costCap, MaxLLMCalls: 1_000}, confirm, threshold)
+
+	before, err := h.store.CompletedCases(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("CompletedCases: %v", err)
+	}
+
+	if _, err := core.Baseline(ctx, h.evals, opts); err != nil &&
+		!errors.Is(err, errs.ErrBudgetExceeded) {
+		t.Fatalf("resumed run: %v", err)
+	}
+
+	if asked {
+		t.Error("the run asked for consent to spend $0.10 against a $1.00 threshold; " +
+			"the threshold means 'ask before spending more than this'")
+	}
+
+	after, err := h.store.CompletedCases(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("CompletedCases: %v", err)
+	}
+	if len(after) <= len(before) {
+		t.Errorf("completed %d Cases before and %d after; the run did not proceed, "+
+			"so this test is not about a run that runs without asking", len(before), len(after))
+	}
+
+	// Guard.Spent() is cumulative across the resume — Baseline restores the
+	// prior spend into it — so the cap binding is the assertion, not the delta.
+	if spent := opts.Guard.Spent().CostUSDMicros; spent > costCap {
+		t.Errorf("spent %d micro-USD against a %d cap; the cap must still bind "+
+			"even when the prompt does not fire", spent, costCap)
 	}
 }

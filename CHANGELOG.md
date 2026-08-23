@@ -38,12 +38,19 @@ covenants — breaking any of them requires a major version.
 
 ### Fixed
 
-- A resumed run's confirmation prompt no longer quotes a figure the guard will never permit.
-  The total was clamped against the static `--max-cost-usd` rather than the headroom actually
-  left, so a run resumed with $0.10 of a $5.00 cap remaining was quoted at **$5.00** — and the
-  CLI prints both numbers in one sentence, so the user read "would spend about $5.00 ($0.10
-  remaining)". Measured at 50x. Overstating is the direction that matters: a prompt that
-  routinely names an impossible number is a prompt people learn to dismiss.
+- The confirmation prompt no longer quotes a figure the guard will never permit. The total was
+  bounded against the static `--max-cost-usd` rather than what the run could actually still
+  spend, so a run resumed with $0.10 of a $5.00 cap left was quoted at **$5.00** — and the CLI
+  prints both numbers in one sentence, so the user read "would spend about $5.00 ($0.10
+  remaining)". Measured at 50x. A `--max-calls` cap was not applied to the dollar figure at all:
+  200 Cases against `--max-calls 10` quoted $10.00 for $0.50 of permitted spend, 20x.
+
+  **This changes when the prompt fires.** It is compared against the bounded figure, so a run
+  that can only spend $0.10 no longer asks about a `--confirm-threshold` of $1.00 — it proceeds
+  and spends the $0.10. Previously it quoted the whole cap, crossed the threshold, and (since
+  the current prompt always declines) refused. That refusal was an accident of a wrong number,
+  not consent: the threshold means "ask before spending more than this", and the cap still
+  binds regardless.
 
 - A spend-cap 429 (`enforced_spend_limit_reached`) is terminal rather than retried. It never
   clears within a run, so retrying burned each Case's whole retry budget and settled one call
