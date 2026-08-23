@@ -113,10 +113,15 @@ func (o BaselineOptions) unpriceable(c *Case, cause error) error {
 // DevCases but not the completed set, so a run killed at 9,988 of 10,000 would
 // have prompted for the full amount to finish twelve Cases.
 //
-// Bounded by the cap. With --max-cost-usd 5.00 the honest maximum exposure is
-// $5.00, not DevCases x per-Case: showing the larger number when the guard will
-// stop at the smaller one is false in the direction that teaches people to
-// dismiss the prompt.
+// The total is the INTENT — every remaining Case at the planning rate. Bounding
+// it to what the guard will actually authorize is PreConfirm's job, because
+// only the guard can read both caps and the live headroom in one snapshot.
+//
+// That bound is why a resume is quoted honestly: with $0.10 left of a $5.00
+// cap the exposure is $0.10, not $5.00. Showing a larger number than the guard
+// will stop at is false in the direction that teaches people to dismiss the
+// prompt — and the bounded figure is also what the threshold is compared
+// against, so a run that can only spend $0.10 no longer asks about $5.00.
 func (o BaselineOptions) confirmRun(ctx context.Context, alreadyDone int) error {
 	remaining := int64(o.DevCases - alreadyDone)
 	perCall := o.planningCostPerCall()
@@ -128,11 +133,14 @@ func (o BaselineOptions) confirmRun(ctx context.Context, alreadyDone int) error 
 		Calls:         remaining,
 		CostUSDMicros: saturatingMul(remaining, perCall),
 	}
-	// Never quote more than the cap can permit.
-	if ceiling := o.Guard.Limits().MaxCostUSDMicros; ceiling > 0 && total.CostUSDMicros > ceiling {
-		total.CostUSDMicros = ceiling
-	}
-
+	// NOT bounded here. PreConfirm bounds it against both caps under the same
+	// lock that produces the "remaining" figure shown beside it, so the two
+	// numbers the CLI prints in one sentence cannot come from two instants.
+	//
+	// core did bound it, against Limits() alone, which on a resume is the cap
+	// the run STARTED with rather than what it has left. checkFeasible below
+	// gets this right by gating on Limits() and computing with Remaining();
+	// doing either alone is wrong, which is why neither is done here.
 	ok, err := o.Guard.PreConfirm(ctx, total)
 	if err != nil {
 		return err

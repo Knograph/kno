@@ -459,6 +459,46 @@ func (g *Guard) Restore(spent Spend) {
 // Limits reports the caps this Guard enforces.
 func (g *Guard) Limits() Limits { return g.limits }
 
+// permitted bounds an estimate by what a Guard can still authorize.
+//
+// Both dimensions, because a run stopped by its CALL cap is just as bounded as
+// one stopped by its dollar cap, and quoting the dollar figure of 200 Cases to
+// someone whose --max-calls admits 10 overstates by the same multiple in the
+// same direction. Calls first, then cost: bounding the call count reduces the
+// cost, and bounding the cost does not reduce the call count.
+//
+// Gated on the LIMIT existing, not on the headroom being positive. Remaining
+// reports zero both for "no cap" and for "cap exhausted" — skipping the bound
+// is right for the first and maximally wrong for the second, where it would
+// restore the full unbounded figure.
+func permitted(est Estimate, limits Limits, rem Remaining) Estimate {
+	if limits.MaxLLMCalls > 0 && est.Calls > rem.LLMCalls {
+		// Derived from the estimate itself: the Guard does not know a per-call
+		// rate, but an estimate of N calls at a total cost implies one.
+		var perCall int64
+		if est.Calls > 0 {
+			perCall = est.CostUSDMicros / est.Calls
+		}
+		est.Calls = rem.LLMCalls
+		// Cannot overflow, and so does not need a saturating multiply: this
+		// branch is only entered when rem.LLMCalls < est.Calls, and perCall is
+		// est.CostUSDMicros / est.Calls, so the product is strictly less than
+		// est.CostUSDMicros — a number that was already an int64.
+		est.CostUSDMicros = rem.LLMCalls * perCall
+	}
+	if limits.MaxCostUSDMicros > 0 {
+		// min of the two, not the headroom alone. Restore is additive and does
+		// not validate, so a negative settled spend read back from the store
+		// would make Remaining exceed the cap, and the quote would then sit
+		// ABOVE a limit the guard will still enforce.
+		ceiling := min(rem.CostUSDMicros, limits.MaxCostUSDMicros)
+		if est.CostUSDMicros > ceiling {
+			est.CostUSDMicros = ceiling
+		}
+	}
+	return est
+}
+
 // PreConfirm asks the human about a WHOLE run before any of it is authorized,
 // and records that they agreed.
 //
@@ -468,9 +508,17 @@ func (g *Guard) Limits() Limits { return g.limits }
 // consented to the whole run — 10,000 Cases at that price is $400, asked once,
 // at four cents.
 //
-// The estimate passed here should be bounded by the cap, since that is the
-// honest maximum exposure: showing $328 when the guard stops at $5 is false in
-// the direction that trains people to ignore the prompt.
+// The estimate passed in is the caller's INTENT — every Case it means to run.
+// Bounding it to the honest maximum exposure happens here, in permitted,
+// because only the Guard can read both caps and the live headroom in one
+// snapshot: showing $328 when the guard stops at $5 is false in the direction
+// that trains people to ignore the prompt.
+//
+// The bounded figure is also what the threshold is compared against, so a run
+// that CANNOT spend more than the threshold does not ask about it. That is
+// deliberate: the threshold means "ask before spending more than this", and a
+// resume with $0.10 of headroom asking about $5.00 is the wrong number
+// producing an accidental refusal rather than consent.
 //
 // Idempotent. A second call after agreement is a no-op, so a resumed run does
 // not re-ask about work it already paid for.
@@ -486,12 +534,29 @@ func (g *Guard) PreConfirm(ctx context.Context, total Estimate) (bool, error) {
 	already := g.confirmed
 	confirm := g.confirm
 	threshold := g.threshold
+	limits := g.limits
 	rem := g.remainingLocked()
 	g.mu.Unlock()
 
 	if already {
 		return true, nil
 	}
+
+	// Bound the quote to what this Guard will actually authorize, here rather
+	// than in the caller.
+	//
+	// The caller cannot do it correctly: it would need both the static limits
+	// and the live headroom, and it would read them in a second snapshot, so
+	// the figure quoted and the "remaining" shown beside it could come from
+	// two different instants. They appear in one sentence — "would spend about
+	// X (Y remaining)" — so they have to come from one read.
+	//
+	// core did do it, against Limits() alone, and a resume with $0.10 left of
+	// a $5.00 cap was quoted $5.00. Fixing that in core against Remaining()
+	// alone traded one wrong number for another: Remaining() is 0 both when
+	// there is no cap and when the cap is exhausted, and those need opposite
+	// handling.
+	total = permitted(total, limits, rem)
 
 	// Below the threshold, or nobody to ask: the run proceeds, and the
 	// per-operation prompt is DISARMED anyway.
