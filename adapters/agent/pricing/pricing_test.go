@@ -560,3 +560,60 @@ func TestEveryPromptPartIsBilled(t *testing.T) {
 			"are not summed", all.Tokens, one.Tokens)
 	}
 }
+
+// TestAVariantSuffixIsUnpricedRatherThanGuessed.
+//
+// Longest-prefix matching exists so a pinned dated version resolves to its
+// base row. Providers also append suffixes that CHANGE the price, and those
+// look identical to the matcher: "claude-opus-5-fast" is fast mode, published
+// well above base, and it existed on the provider's model list while this
+// table priced it at the base rate.
+//
+// The two failures are not symmetric. An unpriced model is refused under a
+// cost cap and the user is told which models are known. A model priced at a
+// fraction of its true rate authorizes the run, reserves too little, and the
+// cap the user set is not the cap they get.
+func TestAVariantSuffixIsUnpricedRatherThanGuessed(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		scheme string
+		model  string
+		want   bool
+	}{
+		{"the base model itself", "anthropic", "claude-opus-5", true},
+		{"a pinned dated version resolves to its base", "anthropic", "claude-opus-5-20260514", true},
+		{"another dated version", "anthropic", "claude-sonnet-4-5-20250929", true},
+		// OpenAI writes the same thing with separators.
+		{"a hyphenated date is still a date", "openai", "gpt-5.6-terra-2026-03-01", true},
+		{"nine digits is not a date", "anthropic", "claude-opus-5-202605141", false},
+		{"separators alone are not a date", "anthropic", "claude-opus-5----", false},
+		{"fast mode is a different price", "anthropic", "claude-opus-5-fast", false},
+		{"so is fast mode on sonnet", "anthropic", "claude-sonnet-5-fast", false},
+		{"a pro tier is a different product", "openai", "gpt-5.6-sol-pro", false},
+		{"a moving alias names no version we can price", "anthropic", "claude-opus-5-latest", false},
+		{"a truncated date is not a date", "anthropic", "claude-opus-5-2026051", false},
+		{"a date with a trailing variant is not a date", "anthropic", "claude-opus-5-20260514-fast", false},
+		{"letters in the date position are not a date", "anthropic", "claude-opus-5-2026051x", false},
+		{"an unrelated model stays unknown", "anthropic", "llama-3", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			p, ok := pricing.Lookup(tt.scheme, tt.model)
+			if ok != tt.want {
+				t.Fatalf("pricing.Lookup(%q, %q) priced = %v, want %v", tt.scheme, tt.model, ok, tt.want)
+			}
+			if !ok {
+				return
+			}
+			base, _ := pricing.Lookup(tt.scheme, strings.Split(tt.model, "-2026")[0])
+			if base != nil && p.GetInputPerMtokUsdMicros() != base.GetInputPerMtokUsdMicros() {
+				t.Errorf("a dated version priced differently from its base: %d vs %d",
+					p.GetInputPerMtokUsdMicros(), base.GetInputPerMtokUsdMicros())
+			}
+		})
+	}
+}

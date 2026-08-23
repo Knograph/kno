@@ -18,6 +18,13 @@ covenants — breaking any of them requires a major version.
 
 ### Fixed
 
+- A model whose name extends a priced one is no longer priced at that model's rate unless the
+  extension is a dated version. `claude-opus-5-fast` exists on the provider's model list and
+  resolved to `claude-opus-5` by longest-prefix match, authorizing runs at a fraction of fast
+  mode's published rate — a cost cap that is not the cap the user set. Variants are now
+  unpriced, which refuses visibly under a cap instead. Pinned dated identifiers still resolve,
+  in both published forms (`-20260514` and `-2026-03-01`).
+
 - A resumed run's baseline score now spans the whole run. Previously the case counts spanned
   the run and the mean spanned only the Cases the resuming process scored, so the two described
   different populations — a run resumed halfway reported `0.48` where the whole run's mean was
