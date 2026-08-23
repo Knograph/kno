@@ -46,6 +46,15 @@ var floors = []struct {
 	// stronger security boundary than bridge, and it would otherwise inherit
 	// only the 70% repo-wide floor.
 	{"adapters/agent/internal/transport", 85},
+
+	// Adapters are the code that actually spends the user's money: they build
+	// the estimate the budget guard authorizes against and the settlement it
+	// records. A gap here is not a missing test, it is an unmeasured path
+	// between a reservation and a charge. Same argument as transport above,
+	// and they would otherwise inherit only the 70% repo-wide floor.
+	{"adapters/agent/openaicompat", 85},
+	{"adapters/agent/anthropic", 85},
+	{"adapters/agent/pricing", 85},
 }
 
 const repoWideFloor = 70

@@ -1,0 +1,26 @@
+HAND-AUTHORED, NOT RECORDED. Read this before trusting it.
+
+This file reports `input_tokens: 0` for a request whose prompt the model
+demonstrably processed — it had to, in order to decline it. That is what
+Anthropic's documentation says a pre-output refusal bills (nothing at all: no
+input tokens, no output tokens, no rate-limit consumption), but no live call
+produced these bytes. So this fixture tests the ADAPTER'S BELIEF about
+Anthropic's billing, not Anthropic's billing.
+
+Until `make record-fixtures` replaces it with a real exchange, the zero-settle
+path rests on a documentation claim rather than on evidence. If the real
+response turns out to report non-zero input tokens, the adapter is
+under-settling every refused Case and `settle` must drop the exemption — see
+docs/debt.md#43.
+
+What the fixture is for once it is real:
+
+HTTP 200 with stop_reason "refusal" and no output. Two ways to get this wrong,
+and both produce a clean-looking number: returning an error makes a refusing
+account look like a broken provider, and scoring it without setting
+Response.refused makes it look like a measured 0.000. Settling it at the
+pessimistic estimate would burn the run's whole cost cap having spent nothing.
+
+The "pre-output" half is load-bearing on its own. The MID-output form of the
+same refusal bills the text it already produced, and the two differ only in
+whether `content` is empty.

@@ -1,0 +1,9 @@
+The usage shape an OpenAI-compatible reading gets wrong. input_tokens counts
+only what follows the last cache breakpoint, so billed input is the SUM of
+input_tokens, cache_creation_input_tokens, and cache_read_input_tokens — and
+the cache read is priced at a tenth of the fresh input rate.
+
+Kno never sets cache_control (docs/debt.md#41), so a cache READ can still
+happen — the provider caches on its own — while a cache WRITE billed to us
+cannot. Recorded because the read path is the one that must not settle at the
+fresh input rate.

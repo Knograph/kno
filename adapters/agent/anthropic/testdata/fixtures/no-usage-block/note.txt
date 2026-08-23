@@ -1,0 +1,7 @@
+A 200 with the usage block missing. Anthropic's own API always returns one;
+a proxy or gateway in front of --base-url does not always pass it through.
+
+Settled at the pessimistic reservation and marked usage_estimated, never at
+zero. A zero settlement is what makes a dollar cap unenforceable, and the
+adapter — not core — stamps the number, because core derives spend from the
+Response and the store persists that same derivation.

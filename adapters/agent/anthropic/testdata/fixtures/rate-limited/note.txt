@@ -1,0 +1,8 @@
+An ordinary throttle. Retryable, and the Retry-After header the live response
+carries is NOT recorded here — headers are not part of what a fixture may
+contain, and the header's handling is exercised against the misbehaving server
+in errors_test.go, where both RFC 9110 forms can be driven deterministically.
+
+Contrast the spend-cap 429, which carries the same status and error type,
+no Retry-After, and details.error_code "enforced_spend_limit_reached" — and
+which never clears within a run.
