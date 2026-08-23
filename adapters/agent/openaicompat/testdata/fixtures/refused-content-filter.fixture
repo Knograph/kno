@@ -1,0 +1,22 @@
+# kno adapter fixture v1
+name: refused-content-filter
+source: hand-authored from the documented Chat Completions shape
+note: a filtered generation. Scored AND flagged: erroring it would inflate the error rate, scoring it silently would produce a clean-looking baseline of 0.000
+status: 200
+content-type: application/json
+
+{
+  "id": "chatcmpl-fixture-filtered",
+  "object": "chat.completion",
+  "created": 1787000001,
+  "model": "gpt-5.6-luna-2026-07-01",
+  "system_fingerprint": "fp_2f1a9c",
+  "choices": [
+    {
+      "index": 0,
+      "message": {"role": "assistant", "content": "I can't help with that."},
+      "finish_reason": "content_filter"
+    }
+  ],
+  "usage": {"prompt_tokens": 51, "completion_tokens": 7, "total_tokens": 58}
+}

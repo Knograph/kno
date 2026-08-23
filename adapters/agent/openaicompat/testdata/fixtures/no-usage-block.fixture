@@ -1,0 +1,20 @@
+# kno adapter fixture v1
+name: no-usage-block
+source: hand-authored; the shape several OpenAI-compatible servers return
+note: no usage at all. Settles at the reservation and sets usage_estimated; settling zero is what made a dollar cap unenforceable in M1
+status: 200
+content-type: application/json
+
+{
+  "id": "chatcmpl-fixture-nousage",
+  "object": "chat.completion",
+  "created": 1787000004,
+  "model": "gpt-5.6-luna",
+  "choices": [
+    {
+      "index": 0,
+      "message": {"role": "assistant", "content": "one, two, three, four, five"},
+      "finish_reason": "stop"
+    }
+  ]
+}

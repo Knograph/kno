@@ -1,0 +1,26 @@
+# kno adapter fixture v1
+name: refused-by-the-model
+source: hand-authored from the documented Chat Completions shape
+note: a model-side decline: finish_reason is ordinary and message.refusal carries the decline, so a refusal count derived from stop_reason alone would miss it
+status: 200
+content-type: application/json
+
+{
+  "id": "chatcmpl-fixture-refusal",
+  "object": "chat.completion",
+  "created": 1787000002,
+  "model": "gpt-5.6-luna-2026-07-01",
+  "system_fingerprint": "fp_2f1a9c",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": null,
+        "refusal": "I'm not able to help with that request."
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {"prompt_tokens": 63, "completion_tokens": 11, "total_tokens": 74}
+}

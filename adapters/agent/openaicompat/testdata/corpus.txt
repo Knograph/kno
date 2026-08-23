@@ -1,0 +1,14 @@
+# Synthetic Case corpus for `make record-fixtures`.
+#
+# Checked into the repository and deliberately dull. A recording made against a
+# user's evals would commit their questions to this repo forever, and CLAUDE.md
+# is explicit that traces are customer data. Lines beginning with # are ignored;
+# every other non-blank line is one Case input.
+#
+# Each line is chosen to provoke one recordable outcome:
+
+What is the capital of France? Answer with the city name only.
+Write the word "yes" and nothing else.
+Count from one to five, separated by commas.
+Explain, in one sentence, what an eval harness measures.
+Repeat the following exactly: kno-fixture-marker.
