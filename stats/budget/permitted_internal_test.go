@@ -1,6 +1,9 @@
 package budget
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 // TestPermittedBoundsAQuoteToWhatTheGuardWillAuthorize.
 //
@@ -91,5 +94,100 @@ func TestPermittedBoundsAQuoteToWhatTheGuardWillAuthorize(t *testing.T) {
 					got.Calls, got.CostUSDMicros, tt.want.Calls, tt.want.CostUSDMicros)
 			}
 		})
+	}
+}
+
+// TestDeclinedDistinguishesRefusalFromNotYetAsked.
+//
+// The confirmed flag alone cannot express it: false means both "nobody has
+// been asked" and "somebody said no". A caller that conflated them would
+// re-prompt after a refusal and, on a yes, authorize spend the user had just
+// declined — which is why PreConfirm records the refusal at all.
+func TestDeclinedDistinguishesRefusalFromNotYetAsked(t *testing.T) {
+	t.Parallel()
+
+	limits := Limits{MaxCostUSDMicros: 10_000_000}
+	over := Estimate{Calls: 1, CostUSDMicros: 5_000_000}
+
+	t.Run("not asked yet", func(t *testing.T) {
+		t.Parallel()
+		g := New(limits, func(context.Context, Estimate, Remaining) (bool, error) {
+			return true, nil
+		}, 1_000_000)
+		if g.Declined() {
+			t.Error("Declined before anyone was asked")
+		}
+	})
+
+	t.Run("asked and agreed", func(t *testing.T) {
+		t.Parallel()
+		g := New(limits, func(context.Context, Estimate, Remaining) (bool, error) {
+			return true, nil
+		}, 1_000_000)
+		if ok, err := g.PreConfirm(context.Background(), over); !ok || err != nil {
+			t.Fatalf("PreConfirm = %v, %v", ok, err)
+		}
+		if g.Declined() {
+			t.Error("Declined after the user agreed")
+		}
+	})
+
+	t.Run("asked and refused", func(t *testing.T) {
+		t.Parallel()
+		g := New(limits, func(context.Context, Estimate, Remaining) (bool, error) {
+			return false, nil
+		}, 1_000_000)
+		if ok, _ := g.PreConfirm(context.Background(), over); ok {
+			t.Fatal("PreConfirm returned true on a refusal")
+		}
+		if !g.Declined() {
+			t.Error("a refusal was not recorded, so a later prompt could authorize " +
+				"spend the user had just declined")
+		}
+	})
+
+	t.Run("below the threshold, never asked", func(t *testing.T) {
+		t.Parallel()
+		g := New(limits, func(context.Context, Estimate, Remaining) (bool, error) {
+			t.Error("asked about a total below the threshold")
+			return false, nil
+		}, 1_000_000)
+		if ok, err := g.PreConfirm(context.Background(),
+			Estimate{Calls: 1, CostUSDMicros: 1}); !ok || err != nil {
+			t.Fatalf("PreConfirm = %v, %v", ok, err)
+		}
+		if g.Declined() {
+			t.Error("Declined for a run nobody was asked about")
+		}
+	})
+}
+
+// TestFormatUSDRendersCentsAndSigns.
+//
+// It appears in refusal messages, which are the last thing a user reads before
+// deciding the tool is wrong about their money. A negative is reachable:
+// Overshoot's own godoc describes a resume under a lower cap reading as over
+// immediately.
+func TestFormatUSDRendersCentsAndSigns(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		micros int64
+		want   string
+	}{
+		{0, "$0.00"},
+		{1, "$0.00"}, // sub-cent truncates rather than rounding up
+		{9_999, "$0.00"},
+		{10_000, "$0.01"},
+		{1_000_000, "$1.00"},
+		{5_432_100, "$5.43"},
+		{-2_500_000, "-$2.50"},
+		{-1, "-$0.00"},
+	}
+
+	for _, tt := range tests {
+		if got := formatUSD(tt.micros); got != tt.want {
+			t.Errorf("formatUSD(%d) = %q, want %q", tt.micros, got, tt.want)
+		}
 	}
 }

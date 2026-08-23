@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"sync"
 
 	"github.com/knograph/kno/core/errs"
@@ -481,7 +480,11 @@ func permitted(est Estimate, limits Limits, rem Remaining) Estimate {
 			perCall = est.CostUSDMicros / est.Calls
 		}
 		est.Calls = rem.LLMCalls
-		est.CostUSDMicros = saturatingMul(rem.LLMCalls, perCall)
+		// Cannot overflow, and so does not need a saturating multiply: this
+		// branch is only entered when rem.LLMCalls < est.Calls, and perCall is
+		// est.CostUSDMicros / est.Calls, so the product is strictly less than
+		// est.CostUSDMicros — a number that was already an int64.
+		est.CostUSDMicros = rem.LLMCalls * perCall
 	}
 	if limits.MaxCostUSDMicros > 0 {
 		// min of the two, not the headroom alone. Restore is additive and does
@@ -494,18 +497,6 @@ func permitted(est Estimate, limits Limits, rem Remaining) Estimate {
 		}
 	}
 	return est
-}
-
-// saturatingMul multiplies without wrapping. A wrapped product goes negative,
-// which would clear both the cap comparison and the confirmation threshold.
-func saturatingMul(a, b int64) int64 {
-	if a <= 0 || b <= 0 {
-		return 0
-	}
-	if a > math.MaxInt64/b {
-		return math.MaxInt64
-	}
-	return a * b
 }
 
 // PreConfirm asks the human about a WHOLE run before any of it is authorized,
