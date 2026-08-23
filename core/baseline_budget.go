@@ -113,9 +113,10 @@ func (o BaselineOptions) unpriceable(c *Case, cause error) error {
 // DevCases but not the completed set, so a run killed at 9,988 of 10,000 would
 // have prompted for the full amount to finish twelve Cases.
 //
-// Bounded by the cap. With --max-cost-usd 5.00 the honest maximum exposure is
-// $5.00, not DevCases x per-Case: showing the larger number when the guard will
-// stop at the smaller one is false in the direction that teaches people to
+// Bounded by what the guard will permit. With --max-cost-usd 5.00 on a fresh
+// run the honest maximum exposure is $5.00, not DevCases x per-Case; on a
+// resume with $0.10 left it is $0.10, not $5.00. Showing a larger number than
+// the guard will stop at is false in the direction that teaches people to
 // dismiss the prompt.
 func (o BaselineOptions) confirmRun(ctx context.Context, alreadyDone int) error {
 	remaining := int64(o.DevCases - alreadyDone)
@@ -128,8 +129,19 @@ func (o BaselineOptions) confirmRun(ctx context.Context, alreadyDone int) error 
 		Calls:         remaining,
 		CostUSDMicros: saturatingMul(remaining, perCall),
 	}
-	// Never quote more than the cap can permit.
-	if ceiling := o.Guard.Limits().MaxCostUSDMicros; ceiling > 0 && total.CostUSDMicros > ceiling {
+	// Never quote more than the guard will actually permit — which on a resume
+	// is the headroom LEFT, not the cap the run was originally given.
+	//
+	// Limits() is the static cap and was wrong here. Baseline calls
+	// Guard.Restore before this, so a run resumed with $0.10 of a $5.00 cap
+	// left was quoted against $5.00: measured at $5.00 shown with $0.10
+	// remaining, 50x. The CLI prints both numbers in one sentence, so the
+	// contradiction reaches the user intact.
+	//
+	// checkFeasible, twenty lines below, already used Remaining() for exactly
+	// this reason. The two sat in one file answering the same question two
+	// ways, which is what splitting the file surfaced.
+	if ceiling := o.Guard.Remaining().CostUSDMicros; ceiling > 0 && total.CostUSDMicros > ceiling {
 		total.CostUSDMicros = ceiling
 	}
 

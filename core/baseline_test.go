@@ -2481,3 +2481,135 @@ func TestAResumedRunDoesNotInheritAStaleVerdict(t *testing.T) {
 			res.Run.GetIncompleteReason())
 	}
 }
+
+// TestAResumedRunIsNotQuotedAgainstTheCapItAlreadySpent.
+//
+// The confirmation prompt asks the human to consent to a figure. On a resume
+// that figure was clamped against the STATIC cap rather than the headroom the
+// run actually has, so a run with $0.10 left under a $5.00 cap was quoted
+// against $5.00. The CLI renders both numbers in one sentence — "would spend
+// about $3.00 ($0.10 remaining)" — so the contradiction reaches the user
+// intact.
+//
+// Overstating is the direction that matters. confirmRun's own godoc says
+// showing a larger number than the guard will permit "is false in the
+// direction that teaches people to dismiss the prompt", and a dismissed prompt
+// is prime directive 4 defeated by boredom.
+func TestAResumedRunIsNotQuotedAgainstTheCapItAlreadySpent(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const costCap = 5_000_000 // $5.00
+
+	h := newHarness(t, 200, 20, fake.Options{CostPerCallUSDMicros: 50_000}) // $0.05/Case
+	h.opts.Concurrency = 1
+	h.opts.EstCostPerCallUSDMicros = 50_000
+	// Stopped by the CALL cap, not the cost cap, so the run ends with most of
+	// the money gone but some left — which is what makes a resume possible at
+	// all, and what the quote must be computed against.
+	h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: costCap, MaxLLMCalls: 98}, nil, 0)
+
+	if _, err := core.Baseline(ctx, h.evals, h.opts); !errors.Is(err, errs.ErrBudgetExceeded) {
+		t.Fatalf("the first run was meant to stop on the call cap: %v", err)
+	}
+
+	spent, err := h.store.SettledSpend(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("SettledSpend: %v", err)
+	}
+	if spent.CostUSDMicros < costCap/2 {
+		t.Fatalf("the first run spent %d of a %d cap; the test needs a run that "+
+			"consumed most of it", spent.CostUSDMicros, costCap)
+	}
+
+	// Resume under the same cap, capturing what the human is asked to approve.
+	var quoted budget.Estimate
+	var left budget.Remaining
+	var asked bool
+	confirm := func(_ context.Context, est budget.Estimate, rem budget.Remaining) (bool, error) {
+		quoted, left, asked = est, rem, true
+		return true, nil
+	}
+
+	opts := h.opts
+	opts.Resume = true
+	// A threshold of 1 micro-USD arms the prompt for any non-trivial run.
+	opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: costCap}, confirm, 1)
+	if _, err := core.Baseline(ctx, h.evals, opts); err != nil &&
+		!errors.Is(err, errs.ErrBudgetExceeded) {
+		t.Fatalf("resumed run: %v", err)
+	}
+
+	if !asked {
+		t.Fatal("the human was never asked, so there is no quoted figure to check; " +
+			"the fixture no longer exercises the confirmation path")
+	}
+	if quoted.CostUSDMicros > left.CostUSDMicros {
+		t.Errorf("the prompt quoted %d micro-USD with only %d remaining. The CLI "+
+			"renders these in one sentence, so the user is told the run would "+
+			"spend %.2fx what the guard will actually permit",
+			quoted.CostUSDMicros, left.CostUSDMicros,
+			float64(quoted.CostUSDMicros)/float64(max(left.CostUSDMicros, 1)))
+	}
+}
+
+// TestAFreshRunIsStillQuotedAgainstItsWholeCap.
+//
+// The resume fix swapped Limits() for Remaining() in the confirmation clamp.
+// On a fresh run those are equal, and this pins that: a change that made the
+// prompt quote less than the run can actually spend would be wrong in the
+// other direction, and understating exposure is how a surprise bill happens.
+func TestAFreshRunIsStillQuotedAgainstItsWholeCap(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	tests := []struct {
+		name   string
+		limits budget.Limits
+		want   int64 // the quoted cost, or -1 for "not clamped"
+	}{
+		{
+			// 200 Cases at $0.05 is $10.00 of intent against a $5.00 cap.
+			name:   "a cost cap clamps the quote to the cap",
+			limits: budget.Limits{MaxCostUSDMicros: 5_000_000},
+			want:   5_000_000,
+		},
+		{
+			name:   "a call-only cap does not clamp the dollar figure",
+			limits: budget.Limits{MaxLLMCalls: 1_000},
+			want:   10_000_000,
+		},
+		{
+			name:   "no cap does not clamp",
+			limits: budget.Limits{},
+			want:   10_000_000,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var quoted budget.Estimate
+			var asked bool
+			confirm := func(_ context.Context, est budget.Estimate, _ budget.Remaining) (bool, error) {
+				quoted, asked = est, true
+				return false, nil // decline, so nothing is spent
+			}
+
+			h := newHarness(t, 200, 20, fake.Options{CostPerCallUSDMicros: 50_000})
+			h.opts.EstCostPerCallUSDMicros = 50_000
+			h.opts.Guard = budget.New(tt.limits, confirm, 1)
+
+			if _, err := core.Baseline(ctx, h.evals, h.opts); !errors.Is(err, errs.ErrBudgetExceeded) {
+				t.Fatalf("a declined run must refuse: %v", err)
+			}
+			if !asked {
+				t.Fatal("the human was never asked; the fixture no longer reaches the prompt")
+			}
+			if quoted.CostUSDMicros != tt.want {
+				t.Errorf("quoted %d micro-USD, want %d", quoted.CostUSDMicros, tt.want)
+			}
+		})
+	}
+}

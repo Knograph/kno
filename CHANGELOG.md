@@ -38,6 +38,13 @@ covenants — breaking any of them requires a major version.
 
 ### Fixed
 
+- A resumed run's confirmation prompt no longer quotes a figure the guard will never permit.
+  The total was clamped against the static `--max-cost-usd` rather than the headroom actually
+  left, so a run resumed with $0.10 of a $5.00 cap remaining was quoted at **$5.00** — and the
+  CLI prints both numbers in one sentence, so the user read "would spend about $5.00 ($0.10
+  remaining)". Measured at 50x. Overstating is the direction that matters: a prompt that
+  routinely names an impossible number is a prompt people learn to dismiss.
+
 - A spend-cap 429 (`enforced_spend_limit_reached`) is terminal rather than retried. It never
   clears within a run, so retrying burned each Case's whole retry budget and settled one call
   per attempt against `--max-calls`.
