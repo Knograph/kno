@@ -18,6 +18,19 @@ covenants — breaking any of them requires a major version.
 
 ### Fixed
 
+- A model whose name extends a priced one is no longer priced at that model's rate unless the
+  extension names a **version** rather than a variant. `claude-opus-5-fast` exists on the
+  provider's model list and resolved to `claude-opus-5` by longest-prefix match, authorizing
+  runs at a fraction of fast mode's published rate — a cost cap that is not the cap the user
+  set.
+
+  The rule is orthographic: versions are numbers, variants are words. Every published pin still
+  resolves — `-20250805`, `-2026-03-01`, `-0613`, `-1-20250805` for a point release, `@20250929`
+  on Vertex, `-20250929-v1:0` on Bedrock, and `-latest`. Suffixes that name a different product
+  (`-fast`, `-pro`, `-preview`) are now **unpriced**, which under `--max-cost-usd` refuses the
+  run visibly rather than reserving against the wrong rate. Without a cost cap, nothing changes:
+  an unpriced model still falls back to `--est-cost-per-call`.
+
 - A resumed run's baseline score now spans the whole run. Previously the case counts spanned
   the run and the mean spanned only the Cases the resuming process scored, so the two described
   different populations — a run resumed halfway reported `0.48` where the whole run's mean was

@@ -118,18 +118,88 @@ func Lookup(scheme, model string) (*knov1.Price, bool) {
 	if p, ok := byModel[model]; ok {
 		return proto.CloneOf(p), true
 	}
-	if base, ok := longestPrefix(model, byModel); ok {
+	// Only a VERSION suffix inherits the base row. A provider also appends
+	// suffixes that change the price — "claude-opus-5-fast" is fast mode, and
+	// Anthropic prices it well above base — and inheriting there authorizes a
+	// run at a fraction of its true rate with no signal at all. An unpriced
+	// model refuses under a cost cap, which the user sees; a confidently wrong
+	// ceiling is the failure prime directive 4 exists to prevent.
+	if base, ok := longestPrefix(model, byModel); ok && isVersionSuffix(model[len(base):]) {
 		return proto.CloneOf(byModel[base]), true
 	}
 	return nil, false
 }
 
+// isVersionSuffix reports whether suffix names a VERSION of the base model
+// rather than a different product.
+//
+// The distinction providers actually draw is orthographic: **versions are
+// numbers, variants are words.** Every published pin is digits and separators
+// — "-20250805", "-2026-03-01", "-0613", "-1-20250805" for a point release,
+// "@20250929" on Vertex, "-20250929-v1:0" on Bedrock — and every variant that
+// carries its own price is a word: "-fast", "-pro", "-mini", "-preview". The
+// one word that is a version is "latest", which providers document as an alias
+// to the current snapshot at the same rate.
+//
+// Deliberately NOT a date parser. An earlier rule required exactly eight
+// digits, which refused "claude-opus-4-1-20250805" — a shipped identifier
+// whose point-release segment makes nine — while accepting "-2026-13-45",
+// which is not a date. Counting digits described neither versions nor dates.
+// Validating a date would still refuse the point-release form, and the table
+// already carries claude-opus-4-5 and claude-opus-4-8, so point releases are
+// not hypothetical here.
+//
+// A suffix with no digit at all is refused, so a bare "-" or "-v" cannot pass.
+func isVersionSuffix(suffix string) bool {
+	if len(suffix) < 2 || (suffix[0] != '-' && suffix[0] != '@') {
+		return false
+	}
+	body := suffix[1:]
+	if body == "latest" {
+		return true
+	}
+
+	digits := false
+	for _, seg := range strings.FieldsFunc(body, isVersionSeparator) {
+		switch {
+		case isAllDigits(seg):
+			digits = true
+		// A platform revision tag: Bedrock's "-v1:0" trails the date.
+		case len(seg) > 1 && seg[0] == 'v' && isAllDigits(seg[1:]):
+			digits = true
+		default:
+			return false
+		}
+	}
+	return digits
+}
+
+// isVersionSeparator reports whether r divides one version segment from the
+// next. Providers use all four across their pinned identifiers.
+func isVersionSeparator(r rune) bool {
+	return r == '-' || r == '.' || r == ':' || r == '@'
+}
+
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // longestPrefix finds the most specific table key that model starts with.
 //
 // Longest rather than first: if both "claude-opus-4" and "claude-opus-4-5"
-// were priced, "claude-opus-4-5-20251101" must resolve to the second. Shared
-// with usesNewTokenizer so the two cannot answer differently about the same
-// name, which is how the price and the tokenizer drifted apart before.
+// were priced, "claude-opus-4-5-20251101" must resolve to the second.
+//
+// Finding a base is not the same as accepting it: Lookup additionally requires
+// the remainder to be a version suffix. This function only answers "which row
+// is the longest prefix".
 func longestPrefix[V any](model string, keys map[string]V) (string, bool) {
 	best := ""
 	for k := range keys {
