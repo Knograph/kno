@@ -1,0 +1,22 @@
+# kno adapter fixture v1
+name: truncated-by-the-output-ceiling
+source: hand-authored from the documented Chat Completions shape
+note: a well-formed 200 with an incomplete answer. Kno's own max_output_tokens cut it off, and without stop_reason the low score reads as a wrong answer
+status: 200
+content-type: application/json
+
+{
+  "id": "chatcmpl-fixture-length",
+  "object": "chat.completion",
+  "created": 1787000003,
+  "model": "gpt-5.6-luna-2026-07-01",
+  "system_fingerprint": "fp_2f1a9c",
+  "choices": [
+    {
+      "index": 0,
+      "message": {"role": "assistant", "content": "An eval harness measures how"},
+      "finish_reason": "length"
+    }
+  ],
+  "usage": {"prompt_tokens": 44, "completion_tokens": 16, "total_tokens": 60}
+}

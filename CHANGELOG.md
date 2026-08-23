@@ -16,7 +16,29 @@ covenants — breaking any of them requires a major version.
 
 ## [Unreleased]
 
+### Added
+
+- **The first provider adapter.** `adapters/agent/openaicompat` speaks the OpenAI Chat
+  Completions shape and is `base_url`-configurable, so it also reaches OpenAI-compatible
+  servers. Static capabilities (no probing), a pessimistic per-Case `Estimate` with a bounded
+  `WorstCase`, a prompt ceiling enforced on both the estimate and the call, and recorded
+  fixtures. Repays [debt #11](docs/debt.md#11), [#18](docs/debt.md#18), [#23](docs/debt.md#23),
+  [#38](docs/debt.md#38), [#39](docs/debt.md#39); investigates [#20](docs/debt.md#20) and
+  [#43](docs/debt.md#43).
+
 ### Fixed
+
+- A failed call the provider billed for is no longer observed as free. A 200 carrying both an
+  `error` object and a `usage` block — a shape several OpenAI-compatible gateways produce — was
+  parsed, its usage discarded, and settled at $0 against the cost cap. The reported charge now
+  rides on the error. Partly repays [debt #43](docs/debt.md#43); the remaining halves are in
+  `core` and `transport` and are named in that entry.
+- `latency_ms` no longer includes the rate limiter's own hold, so the figure describes the
+  provider rather than our pacing. Measured before the fix: `1002ms` for a call the server
+  answered instantly, after one 429 with `Retry-After: 1`.
+- The provider's `error.code` is bounded and flattened like `error.message`, so it cannot forge
+  a `fix:` line in the CLI's error grammar. Demonstrated before the fix with an 8470-byte error
+  whose `code` field carried a newline and a fabricated `fix:` instruction.
 
 - A model whose name extends a priced one is no longer priced at that model's rate unless the
   extension names a **version** rather than a variant. `claude-opus-5-fast` exists on the
@@ -60,6 +82,10 @@ covenants — breaking any of them requires a major version.
   accident; they are removed and ignored.
 
 ### Changed
+
+- `make record-fixtures` and `make test-live` no longer grep Go source for `KNO_MAX_COST_USD`.
+  The cap is now read and enforced by code ([debt #11](docs/debt.md#11)), and a grep that a
+  comment could satisfy would only mislead once real enforcement existed.
 
 - A malformed `--agent` now exits with `INVALID_INPUT` rather than `CAPABILITY_UNSUPPORTED`. Both
   exit 1, so no CI gate changes, but the message now distinguishes a typo from a provider this

@@ -118,26 +118,31 @@ endef
 
 # live_spend_guard <target name>
 #
-# Every target that sets KNO_LIVE_TESTS=1 must call this FIRST. Two checks,
-# both of which fail closed:
-#
-#   1. KNO_MAX_COST_USD must be set, so a live run always has a stated ceiling.
-#   2. Some Go file must actually read it, so the ceiling is enforced by code
-#      rather than asserted by a comment. See docs/debt.md#11 — the nightly job
-#      was once armed with real credentials and a cap nothing read.
+# Every target that sets KNO_LIVE_TESTS=1 must call this FIRST: KNO_MAX_COST_USD
+# must be set, so a live run always has a stated ceiling.
 #
 # This lived inline in test-live only, which is how record-fixtures came to set
 # KNO_LIVE_TESTS=1 itself while passing neither check. A guard that one target
 # implements privately is a guard the next target forgets.
+#
+# It used to carry a SECOND check: a grep for the string KNO_MAX_COST_USD in any
+# .go file, standing in for "some code enforces this". That interlock is gone,
+# deleted in the same change that made it unnecessary — docs/debt.md#11 required
+# both in one PR precisely so neither could land alone. The cap is now read by
+# adapters/agent/openaicompat/live_test.go, which parses it into a budget.Guard
+# and authorizes every live call against it, so a call that would breach the
+# ceiling is denied rather than merely counted afterwards.
+#
+# Deleting the grep rather than keeping it as belt-and-braces is deliberate. It
+# matched a COMMENT as readily as an enforcement, so once real enforcement
+# existed the check could only mislead: it would keep passing after someone
+# deleted the guard and left the mention behind, which is the exact failure mode
+# entry 11 records. A proxy that outlives the thing it proxies for reads as
+# green while protecting nothing.
 define live_spend_guard
 	if [ -z "$${KNO_MAX_COST_USD:-}" ]; then \
 		printf '\033[31m FAIL \033[0m %s: refusing to run without KNO_MAX_COST_USD set.\n' "$(1)"; \
-		exit 1; \
-	fi; \
-	if ! grep -rqs 'KNO_MAX_COST_USD' --include='*.go' .; then \
-		printf '\033[31m FAIL \033[0m %s: KNO_MAX_COST_USD is set but NO CODE READS IT.\n' "$(1)"; \
-		printf '        The cap is not enforced by anything. Refusing to spend.\n'; \
-		printf '        See docs/debt.md#11.\n'; \
+		printf '        A live run has no ceiling unless one is stated. See docs/debt.md#11.\n'; \
 		exit 1; \
 	fi
 endef

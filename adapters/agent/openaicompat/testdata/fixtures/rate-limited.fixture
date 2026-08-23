@@ -1,0 +1,16 @@
+# kno adapter fixture v1
+name: rate-limited
+source: hand-authored from the documented error shape
+note: a 429 with the provider's own window. core paces the retry from this rather than from our doubling backoff, whose whole budget is shorter than one real 429 window
+status: 429
+content-type: application/json
+retry-after: 20
+
+{
+  "error": {
+    "message": "Rate limit reached for gpt-5.6-luna in organization on requests per min (RPM): Limit 500, Used 500, Requested 1.",
+    "type": "requests",
+    "param": null,
+    "code": "rate_limit_exceeded"
+  }
+}
