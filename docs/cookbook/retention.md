@@ -43,18 +43,38 @@ Purge removes the agent's output and the judge's rationale. It keeps the Case ID
 
 That is not Kno hedging about deletion — it is the difference between "what was said" and "what it measured." A score of `0.82` is not conversation content, and neither is `$0.003`.
 
-**One thing that will look wrong.** Resume a purged run and the report says `score none`:
+**Purging today does not cost you the baseline.** Resume a purged run and the report reads normally:
+
+```
+Baseline demo
+  cases      44 scored, 0 errored (of 44 dev; 6 held back)
+  score      0.818
+  status     completed
+```
+
+The score lives in its own column, not inside the blob a purge nulls, so it survives and a resumed run reports the mean over the whole run.
+
+**The exception is a run purged by an older build.** Before the score had a column of its own, it lived inside the response blob — so a purge from that era took the numbers with it. Those Cases are complete, and their scores are unrecoverable without paying to run them again. That run reports:
 
 ```
 Baseline demo
   cases      44 scored, 0 errored (of 44 dev; 6 held back)
   score      none
   status     completed
+
+  warning: some cases' scores cannot be read back, so this run has no
+           baseline number — the cases themselves are intact
+
+  12 of 44 scored Cases can no longer contribute a number — purged before
+  scores were stored separately, or holding a Score that could not be read
+  back — so this run has no reportable aggregate
 ```
 
-The scores are still there — verified in the database, all 44 of them. What you are seeing is a separate, known limitation: a resumed run's reported aggregate covers only the Cases *that process* scored, and a run that was already finished scores none. It has nothing to do with purge and happens on any completed run you resume. It is [`docs/debt.md#27`](../debt.md#27), and it is fixed when the aggregate starts reading the stored scores instead of in-memory counters.
+Kno reports no number rather than the mean over the 32 Cases that still have one. That mean would be a real number describing a population nobody chose, printed beside a count that spans the whole run. `--json` carries the same distinction as `"score": null` with `"score_unavailable": true`, so a machine consumer can tell it from a run that genuinely scored nothing.
 
-We would rather write that down than let you conclude purge ate your numbers.
+The same message covers a Score blob that fails to read back for any other reason — a corrupt row, or one written by a build this one does not understand. The count tells you how much of the run is affected, which is what decides whether re-running is worth the money.
+
+See [What the numbers mean](../what-the-numbers-mean.md#a-purged-run-has-no-baseline-score) for why refusing beats averaging the survivors.
 
 Keeping them is also load-bearing. **Kno has no separate "this Case is done" marker: the recorded outcome _is_ the marker.** Delete those rows and a resumed run has no way to know the work happened, so it runs every Case again and pays for every Case again. A purge that reopened the double-spend hole would be a privacy feature that costs you money.
 

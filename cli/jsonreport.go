@@ -29,19 +29,25 @@ import (
 // person's jq pipeline, and it should not shift underneath them when the
 // schema gains a field.
 type jsonReport struct {
-	RunID      string   `json:"run_id"`
-	Status     string   `json:"status"`
-	Agent      string   `json:"agent"`
-	Goal       string   `json:"goal"`
-	DevCases   int      `json:"dev_cases"`
-	Holdout    int      `json:"holdout_cases"`
-	Attempted  int32    `json:"attempted"`
-	Scored     int32    `json:"scored"`
-	Errored    int32    `json:"errored"`
-	Score      *float64 `json:"score"`
-	SpentUSD   string   `json:"spent_usd"`
-	Incomplete string   `json:"incomplete_reason,omitempty"`
-	Warnings   []string `json:"warnings,omitempty"`
+	RunID     string   `json:"run_id"`
+	Status    string   `json:"status"`
+	Agent     string   `json:"agent"`
+	Goal      string   `json:"goal"`
+	DevCases  int      `json:"dev_cases"`
+	Holdout   int      `json:"holdout_cases"`
+	Attempted int32    `json:"attempted"`
+	Scored    int32    `json:"scored"`
+	Errored   int32    `json:"errored"`
+	Score     *float64 `json:"score"`
+	// ScoreUnavailable distinguishes the two reasons score can be null. A
+	// machine consumer reading only `"score": null` beside `"scored": 20`
+	// cannot tell a run that scored nothing from one whose numbers cannot be
+	// read back, and those call for different responses: the first is a broken
+	// run, the second is intact data with a lost measurement.
+	ScoreUnavailable bool     `json:"score_unavailable,omitempty"`
+	SpentUSD         string   `json:"spent_usd"`
+	Incomplete       string   `json:"incomplete_reason,omitempty"`
+	Warnings         []string `json:"warnings,omitempty"`
 }
 
 func renderJSON(
@@ -53,19 +59,20 @@ func renderJSON(
 	warnings []string,
 ) error {
 	rep := jsonReport{
-		RunID:      runID,
-		Status:     statusName(res.Run.GetStatus()),
-		Agent:      f.agentRef,
-		Goal:       f.goalName,
-		DevCases:   counts.Dev,
-		Holdout:    counts.Holdout,
-		Attempted:  res.Run.GetAttemptedCaseCount(),
-		Scored:     res.Run.GetScoredCaseCount(),
-		Errored:    res.Run.GetErroredCaseCount(),
-		Score:      res.AggregateScore,
-		SpentUSD:   formatUSD(res.Spent.CostUSDMicros),
-		Incomplete: res.Run.GetIncompleteReason(),
-		Warnings:   warnings,
+		RunID:            runID,
+		Status:           statusName(res.Run.GetStatus()),
+		Agent:            f.agentRef,
+		Goal:             f.goalName,
+		DevCases:         counts.Dev,
+		Holdout:          counts.Holdout,
+		Attempted:        res.Run.GetAttemptedCaseCount(),
+		Scored:           res.Run.GetScoredCaseCount(),
+		Errored:          res.Run.GetErroredCaseCount(),
+		Score:            res.AggregateScore,
+		ScoreUnavailable: res.AggregateUnavailable,
+		SpentUSD:         formatUSD(res.Spent.CostUSDMicros),
+		Incomplete:       res.Run.GetIncompleteReason(),
+		Warnings:         warnings,
 	}
 
 	enc := json.NewEncoder(out)

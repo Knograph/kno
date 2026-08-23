@@ -2,9 +2,14 @@ package cli
 
 import (
 	"context"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/knograph/kno/adapters/evals/jsonl"
+	"github.com/knograph/kno/core"
+	knov1 "github.com/knograph/kno/gen/kno/v1"
 )
 
 // TestSignalHandlerIsUnregisteredOnTheFirstSignal.
@@ -63,5 +68,57 @@ func TestSignalWatcherExitsWhenNoSignalArrives(t *testing.T) {
 
 	if !stopped.Load() {
 		t.Error("the watcher returned without restoring the default behavior")
+	}
+}
+
+// TestWarningsDistinguishTheTwoEmptyScores.
+//
+// A nil AggregateScore has meant "nothing scored" since the field existed. It
+// now has a second meaning, and reporting the old sentence for the new case
+// contradicts the count printed three lines above it in the same report: "20
+// scored" beside "no cases scored". The user is sent looking for a run failure
+// that did not happen.
+func TestWarningsDistinguishTheTwoEmptyScores(t *testing.T) {
+	t.Parallel()
+
+	counts := jsonl.SplitCounts{Dev: 20, Holdout: 20}
+
+	tests := []struct {
+		name    string
+		res     *core.BaselineResult
+		want    string
+		notWant string
+	}{
+		{
+			name: "nothing scored",
+			res: &core.BaselineResult{
+				Run: &knov1.Run{ScoredCaseCount: 0, ErroredCaseCount: 0},
+			},
+			want:    "no cases scored",
+			notWant: "cannot be read back",
+		},
+		{
+			name: "scored, but the numbers are gone",
+			res: &core.BaselineResult{
+				Run:                  &knov1.Run{ScoredCaseCount: 20},
+				AggregateUnavailable: true,
+			},
+			want:    "cannot be read back",
+			notWant: "no cases scored",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := strings.Join(warningsFor(tt.res, counts), "\n")
+			if !strings.Contains(got, tt.want) {
+				t.Errorf("warnings = %q, want it to mention %q", got, tt.want)
+			}
+			if strings.Contains(got, tt.notWant) {
+				t.Errorf("warnings = %q, must NOT say %q — it contradicts the case "+
+					"count printed beside it", got, tt.notWant)
+			}
+		})
 	}
 }

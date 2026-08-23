@@ -130,3 +130,11 @@ Thumbs.db
 .claude/settings.local.json
 .claude/*.local.md
 .claude/sessions/
+# Agent worktrees are full checkouts of this module nested inside it. Committing
+# one would recurse; the tree-walking gates skip them explicitly (see
+# internal/cmd/covercheck and godoccheck).
+.claude/worktrees/
+# Built gate binaries. `make check` runs these with `go run`; the compiled
+# artifacts were committed by accident (3.5 MB each) and nothing reads them.
+/covercheck
+/godoccheck

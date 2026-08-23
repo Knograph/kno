@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -308,6 +309,95 @@ func TestSourceDirs(t *testing.T) {
 	}
 	if found["onlytests"] {
 		t.Error("sourceDirs included a directory holding only _test.go files")
+	}
+}
+
+// TestSourceDirsSkipsDotDirectories pins the exclusion that agent worktrees
+// under .claude/ made load-bearing. A checkout of this module nested inside a
+// dot-directory is invisible to the go tool, so its packages can never appear
+// in a coverage profile — counting them reports the whole module as uncovered.
+func TestSourceDirsSkipsDotDirectories(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "core"), "a.go", "package core\n\nfunc A() {}\n")
+	writeFile(t, filepath.Join(root, ".claude", "worktrees", "wt", "core"), "a.go",
+		"package core\n\nfunc A() {}\n")
+	// The go tool ignores underscore-prefixed directories for the same reason.
+	writeFile(t, filepath.Join(root, "_scratch", "core"), "a.go",
+		"package core\n\nfunc A() {}\n")
+
+	got, err := sourceDirs(root)
+	if err != nil {
+		t.Fatalf("sourceDirs: %v", err)
+	}
+	for _, d := range got {
+		if strings.Contains(d, ".claude") || strings.Contains(d, "_scratch") {
+			t.Errorf("sourceDirs returned %q; the go tool ignores dot- and "+
+				"underscore-prefixed directories, so it cannot build or test that "+
+				"package and no profile can ever cover it", d)
+		}
+	}
+	if len(got) != 1 {
+		t.Errorf("sourceDirs = %v, want only the real core package", got)
+	}
+}
+
+// TestSourceDirsWalksAnAbsoluteRootHoldingADotComponent.
+//
+// The skip inspects d.Name(), the BASE name, so a dot elsewhere in an absolute
+// path is not a dot-directory as far as the walk is concerned. A checkout under
+// ~/.config or any other dotted parent must still be scanned in full — the
+// alternative is a gate that silently covers nothing for those users.
+func TestSourceDirsWalksAnAbsoluteRootHoldingADotComponent(t *testing.T) {
+	t.Parallel()
+
+	root := filepath.Join(t.TempDir(), ".config", "repo")
+	writeFile(t, filepath.Join(root, "core"), "a.go", "package core\n\nfunc A() {}\n")
+	writeFile(t, filepath.Join(root, ".claude", "wt", "core"), "a.go",
+		"package core\n\nfunc A() {}\n")
+
+	got, err := sourceDirs(root)
+	if err != nil {
+		t.Fatalf("sourceDirs: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("sourceDirs = %v, want the one real package; a dotted PARENT of the "+
+			"repo must not suppress the whole walk", got)
+	}
+	if strings.Contains(got[0], ".claude") {
+		t.Errorf("sourceDirs returned %q; nested dot-directories are still skipped", got[0])
+	}
+}
+
+// TestSourceDirsWalksARelativeRoot guards the root exemption in the
+// dot-directory skip: the tool is invoked as ".", whose own base name starts
+// with a dot. Skipping it would silently return no packages at all — every
+// coverage floor passing because nothing was checked.
+func TestSourceDirsWalksARelativeRoot(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "core"), "a.go", "package core\n\nfunc A() {}\n")
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(cwd); err != nil {
+			t.Fatalf("restoring cwd: %v", err)
+		}
+	})
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	got, err := sourceDirs(".")
+	if err != nil {
+		t.Fatalf("sourceDirs: %v", err)
+	}
+	if len(got) == 0 {
+		t.Fatal("sourceDirs(\".\") returned nothing; the walk skipped its own root, " +
+			"so every coverage floor would pass vacuously")
 	}
 }
 

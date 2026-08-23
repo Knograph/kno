@@ -16,6 +16,36 @@ covenants — breaking any of them requires a major version.
 
 ## [Unreleased]
 
+### Fixed
+
+- A resumed run's baseline score now spans the whole run. Previously the case counts spanned
+  the run and the mean spanned only the Cases the resuming process scored, so the two described
+  different populations — a run resumed halfway reported `0.48` where the whole run's mean was
+  `0.5`. Repays [debt #27](docs/debt.md#27).
+- A run holding Cases whose scores were purged by a pre-`score_value` build now reports **no**
+  baseline score, with a reason naming the purge, rather than the mean over whichever Cases
+  still have numbers.
+- The CLI no longer warns "no cases scored" on a run that scored every Case. A nil
+  aggregate now has two meanings, and `BaselineResult.AggregateUnavailable` (plus
+  `"score_unavailable"` in `--json`) distinguishes them: nothing scored, versus scores that
+  cannot be read back. The counts stay accurate in both.
+- A run that is both unscoreable and over the error-rate threshold reports both reasons.
+  `IncompleteReason` was assigned twice, and the half that lost is the one with no other
+  signal in the report.
+- `ErrorRateExceeded` and `IncompleteReason` are cleared before being recomputed. Both are
+  derived from the whole run, but were only ever set — so a process that errored past the
+  threshold and stopped stamped the run permanently, and no amount of clean resumed work
+  could clear it.
+- A NaN or infinite score no longer becomes the run's permanent aggregate. NaN propagates
+  through SQL `SUM`, so a single bad Goal result would have been read back by every
+  subsequent resume of that run.
+- `make check`'s coverage and godoc gates no longer descend into dot- or
+  underscore-prefixed directories. A nested
+  checkout of this module — an agent worktree under `.claude/`, for instance — was scanned as
+  our own source, reporting 998 undocumented symbols and every package as uncovered. The
+  built `covercheck` and `godoccheck` binaries (3.5 MB each) were also tracked in git by
+  accident; they are removed and ignored.
+
 ### Changed
 
 - A malformed `--agent` now exits with `INVALID_INPUT` rather than `CAPABILITY_UNSUPPORTED`. Both

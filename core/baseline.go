@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -196,10 +197,25 @@ type BaselineResult struct {
 	// Run is the persisted record.
 	Run *knov1.Run
 
-	// AggregateScore is the mean over SCORED Cases only. Absent when nothing
-	// scored: a run that scored nothing has no mean, and zero would be
-	// indistinguishable from a real mean of zero.
+	// AggregateScore is the mean over SCORED Cases across the whole run,
+	// including any part completed by an earlier process before a resume.
+	//
+	// Absent for two distinct reasons, and a caller that renders the absence
+	// must say which — see AggregateUnavailable. Either nothing scored, in
+	// which case there is no mean and zero would be indistinguishable from a
+	// real mean of zero; or Cases scored but their numbers cannot be read
+	// back, in which case a mean exists and we cannot compute it.
 	AggregateScore *float64
+
+	// AggregateUnavailable distinguishes "there is a mean and we cannot
+	// compute it" from "nothing scored", when AggregateScore is nil.
+	//
+	// True when scored Cases can no longer contribute a number: purged before
+	// scores were stored separately, or holding a Score that failed to
+	// unmarshal. The counts remain accurate — those Cases really did score —
+	// so a caller that reports "no cases scored" on a nil aggregate would
+	// contradict the count it prints beside it.
+	AggregateUnavailable bool
 
 	// Stats is what the executor did.
 	Stats executor.Stats
@@ -293,15 +309,21 @@ func Baseline(
 		// THIS process did, so a run interrupted after 24 Cases and resumed for
 		// 36 more would report 36 — losing the Cases the first run paid for and
 		// understating the denominator behind every later delta.
-		//
-		// DEBT(docs/debt.md#27): only the COUNTS are seeded. The mean is not,
-		// so a resumed run's AggregateScore is the mean over the Cases this
-		// process scored, not over the whole run.
 		priorScored, priorErrored, err := opts.Store.OutcomeCounts(ctx, opts.RunID)
 		if err != nil {
 			return nil, fmt.Errorf("loading prior outcome counts: %w", err)
 		}
-		agg.seedCounts(priorScored, priorErrored)
+		// The score SUM too, not only the counts. Seeding one without the other
+		// leaves the denominator spanning the whole run while the numerator
+		// spans the tail — the defect this repays.
+		// priorCounted, not priorScored, is priorSum's denominator: it comes
+		// from the same query over the same predicate. Dividing by the count
+		// from the OTHER query would reintroduce the defect one level down.
+		priorSum, priorCounted, unrecoverable, err := opts.Store.ScoreSum(ctx, opts.RunID)
+		if err != nil {
+			return nil, fmt.Errorf("loading prior scores: %w", err)
+		}
+		agg.seedCounts(priorScored, priorErrored, priorSum, priorCounted, unrecoverable)
 	}
 	if err := opts.emitRunStarted(ctx, agg, opts.DevCases); err != nil {
 		return nil, err
@@ -1017,7 +1039,7 @@ func (o BaselineOptions) closeRun(
 	stats executor.Stats,
 	runErr error,
 ) (*BaselineResult, error) {
-	scored, errored := agg.counts()
+	scored, errored, mean, aggregateLost, lostCount := agg.snapshot()
 	attempted := scored + errored
 
 	// Classify before anything reads runErr. A bare context.Canceled leaving
@@ -1034,6 +1056,36 @@ func (o BaselineOptions) closeRun(
 	run.ScoredCaseCount = int32(scored)       //nolint:gosec // bounded by the eval set
 	run.ErroredCaseCount = int32(errored)     //nolint:gosec // bounded by the eval set
 
+	// Both fields are derived entirely from state recomputed here over the
+	// WHOLE run, so both are cleared before recomputing. A resumed run
+	// otherwise inherits the verdict of the process that stopped: one that
+	// errored 6 of 10 Cases and quit leaves ErrorRateExceeded set, and a
+	// resume that goes on to score 200 cleanly still reports "not a usable
+	// baseline" forever, because the branch that sets the flag has no branch
+	// that unsets it.
+	run.ErrorRateExceeded = false
+	run.IncompleteReason = ""
+
+	// Reasons accumulate. A run can be both unscoreable and too error-prone,
+	// and overwriting left whichever ran second — losing the one the user
+	// cannot infer from anything else on screen.
+	var reasons []string
+
+	// A run missing scores cannot produce an aggregate, and saying so is the
+	// point. Reporting the partial mean would present a number nobody can
+	// reproduce beside counts that describe a larger population. The count is
+	// included because one lost Case in 10,000 and 10,000 lost out of 10,000
+	// are the same sentence otherwise, and only one of them is worth paying to
+	// re-run.
+	if aggregateLost {
+		reasons = append(reasons, fmt.Sprintf(
+			"%d of %d scored Cases can no longer contribute a number — purged "+
+				"before scores were stored separately, or holding a Score that "+
+				"could not be read back — so this run has no reportable "+
+				"aggregate; the Cases themselves are intact and resume normally",
+			lostCount, scored))
+	}
+
 	// A run whose error rate is too high is completed but not clean. Later
 	// stages must refuse to treat it as a reference rather than computing
 	// deltas against a partial sample.
@@ -1041,18 +1093,20 @@ func (o BaselineOptions) closeRun(
 		rate := float64(errored) / float64(attempted)
 		if rate > o.maxErrorRate() {
 			run.ErrorRateExceeded = true
-			run.IncompleteReason = fmt.Sprintf(
+			reasons = append(reasons, fmt.Sprintf(
 				"%d of %d Cases errored (%.1f%%), above the %.1f%% threshold; "+
 					"this run is not a usable baseline",
-				errored, attempted, rate*100, o.maxErrorRate()*100)
+				errored, attempted, rate*100, o.maxErrorRate()*100))
 		}
 	}
+	run.IncompleteReason = strings.Join(reasons, "; also: ")
 
 	result := &BaselineResult{
-		Run:            run,
-		Stats:          stats,
-		AggregateScore: agg.mean(),
-		Spent:          o.Guard.Spent(),
+		Run:                  run,
+		Stats:                stats,
+		AggregateScore:       mean,
+		AggregateUnavailable: aggregateLost,
+		Spent:                o.Guard.Spent(),
 	}
 
 	// Recording how the run ended must survive the cancellation that ended it:

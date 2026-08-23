@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -31,6 +32,51 @@ type aggregator struct {
 	// whole run rather than only the resumed portion.
 	priorScored  int
 	priorErrored int
+
+	// priorSum is the score total from Cases earlier processes recorded.
+	//
+	// Seeded alongside the counts. Without it the counts spanned the whole run
+	// while the mean spanned only the tail, so a run interrupted after 24 Cases
+	// and resumed for 36 reported "60 scored" beside a mean of the last 36 —
+	// a denominator and a numerator describing different populations.
+	priorSum float64
+
+	// priorCounted is how many prior Cases actually contributed to priorSum.
+	//
+	// NOT priorScored. The two come from different queries over different
+	// predicates: priorScored counts rows marked scored, priorCounted counts
+	// rows holding a number. They agree only while every scored row has a
+	// score, which nothing in the schema enforces. Dividing priorSum by
+	// priorScored would put a numerator and a denominator from two separate
+	// reads into one number — the defect this whole change repays, one level
+	// down. The store returns both from a single query for that reason.
+	priorCounted int
+
+	// unrecoverable counts Cases that scored but whose number is gone —
+	// purged before the score lived in its own column, or holding a Score blob
+	// that could not be read back.
+	//
+	// They cannot be averaged in as zero: that drags the mean toward zero and
+	// presents the result as the run's actual aggregate, which is worse than
+	// reporting nothing. The mean refuses instead.
+	unrecoverable int
+}
+
+// snapshot reads every reported number under one lock.
+//
+// Taken together rather than through separate accessors: the counts, the mean
+// and the refusal are rendered side by side, and reading them at three
+// instants lets a live consumer print a mean over a denominator it never had.
+// Today closeRun runs after the executor has drained, so nothing tears — this
+// keeps that true when a progress view reads the aggregator mid-run.
+func (a *aggregator) snapshot() (scored, errored int, mean *float64, unavailable bool, lost int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.scored + a.priorScored,
+		a.errored + a.priorErrored,
+		a.meanLocked(),
+		a.unrecoverable > 0,
+		a.unrecoverable
 }
 
 func (a *aggregator) add(value float64) {
@@ -52,18 +98,35 @@ func (a *aggregator) counts() (scored, errored int) {
 	return a.scored + a.priorScored, a.errored + a.priorErrored
 }
 
-// mean returns the aggregate over scored Cases, or nil when nothing scored.
+// mean reports the aggregate over every scored Case in the run, or nil.
 //
-// Nil rather than zero: a run that scored nothing has no mean, and a zero here
-// would be indistinguishable from a real mean of zero.
+// Nil for three different reasons, and conflating them would be dishonest in
+// different directions. Nothing scored: there is no mean. Something scored but
+// its number is unrecoverable: there is a mean and we cannot compute it, so
+// reporting the partial one would present a number nobody can reproduce. A
+// score arrived as NaN: every later arithmetic result is NaN too, and a
+// resumed run would carry it forward through the stored sum forever.
+//
+// Callers that also report the counts should use snapshot instead, so the two
+// come from one read.
 func (a *aggregator) mean() *float64 {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	return a.meanLocked()
+}
 
-	if a.scored == 0 {
+func (a *aggregator) meanLocked() *float64 {
+	if a.unrecoverable > 0 {
 		return nil
 	}
-	m := a.sum / float64(a.scored)
+	total := a.scored + a.priorCounted
+	if total == 0 {
+		return nil
+	}
+	m := (a.sum + a.priorSum) / float64(total)
+	if math.IsNaN(m) || math.IsInf(m, 0) {
+		return nil
+	}
 	return &m
 }
 
@@ -75,17 +138,19 @@ func (a *aggregator) next() int64 {
 	return a.seq
 }
 
-// seedCounts carries a prior run's outcome counts into this process.
+// seedCounts carries an interrupted run's totals into this process.
 //
-// Only the counts, not the score sum: the individual Scores live in the store
-// and are not re-read, so a resumed run's aggregate is the mean over the Cases
-// IT scored. That is recorded as debt rather than silently presented as the
-// whole run's mean — see docs/debt.md#27.
-func (a *aggregator) seedCounts(scored, errored int) {
+// sum and unrecoverable come from the store's score column, which is why
+// docs/debt.md#25 requires a purge to null the trace blobs and never the row:
+// the number survives a purge precisely so this can read it.
+func (a *aggregator) seedCounts(scored, errored int, sum float64, counted, unrecoverable int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.priorScored = scored
 	a.priorErrored = errored
+	a.priorSum = sum
+	a.priorCounted = counted
+	a.unrecoverable = unrecoverable
 }
 
 // seedSequence continues numbering after a resume rather than restarting at 1,
