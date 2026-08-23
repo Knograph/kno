@@ -251,6 +251,9 @@ func Baseline(
 	// headroom a resume actually has, and confirmRun must quote only the Cases
 	// that are left.
 	done := map[string]struct{}{}
+	// Hoisted: emitRunResumed reports it, and it is declared inside the block
+	// that loads it.
+	var restored budget.Spend
 	if opts.Resume {
 		probe, err := opts.Store.GetRun(ctx, opts.RunID)
 		if err != nil {
@@ -262,13 +265,13 @@ func Baseline(
 		if done, err = opts.Store.CompletedCases(ctx, opts.RunID); err != nil {
 			return nil, fmt.Errorf("loading completed cases: %w", err)
 		}
-		spent, err := opts.Store.SettledSpend(ctx, opts.RunID)
+		restored, err = opts.Store.SettledSpend(ctx, opts.RunID)
 		if err != nil {
 			return nil, fmt.Errorf("loading prior spend: %w", err)
 		}
 		// The guard is in-memory. Without this a resumed run believes it has
 		// spent nothing and can consume its cap a second time.
-		opts.Guard.Restore(spent)
+		opts.Guard.Restore(restored)
 	}
 
 	// Both refusals happen BEFORE the Run record exists. Refusing after
@@ -295,11 +298,14 @@ func Baseline(
 	}
 
 	agg := &aggregator{}
+	// Hoisted: the opening event gates on whether the stream already has one,
+	// not on whether the user passed --resume.
+	var maxSeq int64
 	if opts.Resume {
 		// Continue numbering rather than restarting at 1, which would collide
 		// with events from before the interruption and silently defeat the
 		// gap detection Event.sequence exists for.
-		maxSeq, err := opts.Store.MaxEventSequence(ctx, opts.RunID)
+		maxSeq, err = opts.Store.MaxEventSequence(ctx, opts.RunID)
 		if err != nil {
 			return nil, fmt.Errorf("reading event sequence: %w", err)
 		}
@@ -325,7 +331,21 @@ func Baseline(
 		}
 		agg.seedCounts(priorScored, priorErrored, priorSum, priorCounted, unrecoverable)
 	}
-	if err := opts.emitRunStarted(ctx, agg, opts.DevCases); err != nil {
+	// RunResumed continues a stream; RunStarted opens one. The predicate is
+	// therefore the STREAM's state, not the user's flag.
+	//
+	// Gating on opts.Resume loses the run's identity entirely when the first
+	// process died before emitting anything — reading the evals can fail
+	// without changing the content hash, so that resume is accepted. The
+	// stream would then contain no RunStarted at all, and RunResumed carries
+	// no stage, agent, goal, or goal direction: a consumer could never learn
+	// which way "better" points. Before this change the resumed process
+	// re-emitted RunStarted with a stale total, which was the bug being fixed
+	// but did at least supply those fields.
+	//
+	// The old shape's actual defect — a SECOND RunStarted carrying the
+	// ORIGINAL total — is what maxSeq > 0 rules out. docs/debt.md#29.
+	if err := opts.emitOpening(ctx, agg, maxSeq, len(done), restored); err != nil {
 		return nil, err
 	}
 	// draining is set the moment a fatal error starts the shutdown, and read by

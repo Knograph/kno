@@ -23,6 +23,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/knograph/kno/store"
+	"google.golang.org/protobuf/proto"
 )
 
 // fixedNow makes Run records stable across test runs.
@@ -440,9 +441,37 @@ func TestEventsAreEmittedAndSequenced(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MaxEventSequence: %v", err)
 	}
-	// RunStarted + 15 outcomes + RunFinished.
-	if want := int64(17); maxSeq != want {
-		t.Errorf("max sequence = %d, want %d (started + 15 cases + finished)", maxSeq, want)
+
+	// Counted by payload type rather than asserted as one magic total.
+	//
+	// The old form required maxSeq == 17 exactly. M2-10 adds run-level
+	// emitters — a progress heartbeat among them — whose count depends on how
+	// long the run took, which makes an exact total NONDETERMINISTIC rather
+	// than merely a different number. What this test is about is that the
+	// stream opens once, covers every Case once, and closes once.
+	log := eventLog(t, h.dbPath, "run-1")
+
+	counts := map[string]int{}
+	for _, ev := range log {
+		counts[payloadName(ev)]++
+	}
+	if counts["RunStarted"] != 1 {
+		t.Errorf("%d RunStarted, want 1", counts["RunStarted"])
+	}
+	if counts["RunFinished"] != 1 {
+		t.Errorf("%d RunFinished, want 1", counts["RunFinished"])
+	}
+	if counts["RunResumed"] != 0 {
+		t.Errorf("%d RunResumed on a fresh run, want 0", counts["RunResumed"])
+	}
+	if got := counts["CaseScored"] + counts["CaseErrored"]; got != 15 {
+		t.Errorf("%d per-Case events, want 15 — one per Case, exactly once", got)
+	}
+	// The sequence still numbers every event that was written, with no gap
+	// between the last one and the reported maximum.
+	if maxSeq != int64(len(log)) {
+		t.Errorf("max sequence %d but %d events recorded; a consumer reading the "+
+			"maximum would expect events this run never wrote", maxSeq, len(log))
 	}
 }
 
@@ -793,6 +822,10 @@ func TestStoreFailuresSurfaceRatherThanCorrupting(t *testing.T) {
 		// on with an aggregate that silently spans only the tail. That is the
 		// exact defect docs/debt.md#27 repaid.
 		{"cannot load prior scores", func(f *failingStore) { f.failScores = true }, true},
+		// The resumed twin of the fresh-run case above: emitRunResumed's error
+		// path had no coverage, and it is the only emitter whose failure
+		// happens before the executor starts.
+		{"cannot append the resumed run's opening event", func(f *failingStore) { f.failEvent = true }, true},
 	}
 
 	for _, tc := range tests {
@@ -2717,5 +2750,309 @@ func TestAResumeUnderTheConfirmThresholdProceedsWithoutAsking(t *testing.T) {
 	if spent := opts.Guard.Spent().CostUSDMicros; spent > costCap {
 		t.Errorf("spent %d micro-USD against a %d cap; the cap must still bind "+
 			"even when the prompt does not fire", spent, costCap)
+	}
+}
+
+// eventLog reads every event for a run, in sequence order, decoded.
+//
+// Read from the database rather than from a spy, because the invariants under
+// test — no gaps, RunFinished last — are properties of what was DURABLY
+// recorded. An in-memory recorder would pass while the store held gaps.
+func eventLog(t *testing.T, dbPath, runID string) []*knov1.Event {
+	t.Helper()
+
+	// busy_timeout, because the store's own DSN sets it and its comment says
+	// leaving it at zero "turns write contention into an immediate SQLITE_BUSY".
+	// Safe today only because every caller reads after the run has returned;
+	// M2-10c needs this helper mid-run, with a ticker writing.
+	db, err := sql.Open("sqlite", "file:"+dbPath+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatalf("opening %s: %v", dbPath, err)
+	}
+	defer func() { _ = db.Close() }()
+
+	rows, err := db.Query(
+		`SELECT proto FROM events WHERE run_id = ? ORDER BY sequence`, runID)
+	if err != nil {
+		t.Fatalf("reading events: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []*knov1.Event
+	for rows.Next() {
+		var blob []byte
+		if err := rows.Scan(&blob); err != nil {
+			t.Fatalf("scanning event: %v", err)
+		}
+		ev := &knov1.Event{}
+		if err := proto.Unmarshal(blob, ev); err != nil {
+			t.Fatalf("unmarshaling event: %v", err)
+		}
+		out = append(out, ev)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterating events: %v", err)
+	}
+	return out
+}
+
+// payloadName is the payload's type, for assertions that read like the schema.
+func payloadName(ev *knov1.Event) string {
+	switch ev.GetPayload().(type) {
+	case *knov1.Event_RunStarted:
+		return "RunStarted"
+	case *knov1.Event_RunResumed:
+		return "RunResumed"
+	case *knov1.Event_CaseScored:
+		return "CaseScored"
+	case *knov1.Event_CaseErrored:
+		return "CaseErrored"
+	case *knov1.Event_RunFinished:
+		return "RunFinished"
+	case nil:
+		return "<no payload>"
+	default:
+		return fmt.Sprintf("%T", ev.GetPayload())
+	}
+}
+
+// TestTheEventSequenceHasNoGaps.
+//
+// Event.sequence exists so a consumer that sees a gap knows it lost events
+// rather than silently under-reporting. A number allocated before a path that
+// returns without writing burns it, and the gap is permanent: it survives
+// every resume, and MaxEventSequence never heals it.
+//
+// What this actually pins is that a resumed process continues numbering from
+// MaxEventSequence with no off-by-one — seedSequence(maxSeq+1) fails it, and
+// no other test covers a resumed stream at all.
+//
+// It does NOT pin the burn this PR is named for. A budget refusal never
+// reaches emit: sinkFunc returns first on the same predicate, so emit's own
+// check is dead code and reverting the allocation order leaves this green.
+// The burn becomes reachable with M2-10c's ticker, and the refusal path is
+// covered directly by TestNothingIsAppendedAfterRunFinished.
+func TestTheEventSequenceHasNoGaps(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const devCases = 30
+
+	h := newHarness(t, devCases, 10, fake.Options{FailEvery: 4})
+	h.opts.Concurrency = 1
+	h.opts.Guard = budget.New(budget.Limits{MaxLLMCalls: 12}, nil, 0)
+
+	if _, err := core.Baseline(ctx, h.evals, h.opts); !errors.Is(err, errs.ErrBudgetExceeded) {
+		t.Fatalf("the first run was meant to stop on the call cap: %v", err)
+	}
+
+	opts := h.opts
+	opts.Resume = true
+	opts.Guard = budget.New(budget.Limits{MaxLLMCalls: 1_000}, nil, 0)
+	if _, err := core.Baseline(ctx, h.evals, opts); err != nil {
+		t.Fatalf("resumed run: %v", err)
+	}
+
+	log := eventLog(t, h.dbPath, "run-1")
+	if len(log) == 0 {
+		t.Fatal("no events were recorded at all; the fixture proves nothing")
+	}
+	for i, ev := range log {
+		if want := int64(i + 1); ev.GetSequence() != want {
+			t.Fatalf("event %d has sequence %d, want %d — a gap here is permanent, "+
+				"and a consumer reading it cannot tell a lost event from none",
+				i, ev.GetSequence(), want)
+		}
+	}
+}
+
+// TestAResumedRunOpensWithRunResumedNotASecondRunStarted.
+//
+// A second RunStarted carries the ORIGINAL total, so a live view that resets
+// progress on it jumps backward on every resume — docs/debt.md#29. It also
+// made RunStarted's own proto comment ("Always sequence 1") false the moment a
+// run was resumed once.
+//
+// Asserts the absence as well as the presence: emitting BOTH would satisfy a
+// test that only looked for RunResumed, and an early draft of this change did
+// exactly that.
+func TestAResumedRunOpensWithRunResumedNotASecondRunStarted(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const devCases = 20
+
+	h := newHarness(t, devCases, 10, fake.Options{CostPerCallUSDMicros: 1_000})
+	h.opts.Concurrency = 1
+	h.opts.Guard = budget.New(budget.Limits{MaxLLMCalls: 8}, nil, 0)
+
+	if _, err := core.Baseline(ctx, h.evals, h.opts); !errors.Is(err, errs.ErrBudgetExceeded) {
+		t.Fatalf("the first run was meant to stop early: %v", err)
+	}
+
+	opts := h.opts
+	opts.Resume = true
+	opts.Guard = budget.New(budget.Limits{MaxLLMCalls: 1_000}, nil, 0)
+	if _, err := core.Baseline(ctx, h.evals, opts); err != nil {
+		t.Fatalf("resumed run: %v", err)
+	}
+
+	log := eventLog(t, h.dbPath, "run-1")
+
+	var started, resumed int
+	var got *knov1.RunResumed
+	for _, ev := range log {
+		switch p := ev.GetPayload().(type) {
+		case *knov1.Event_RunStarted:
+			started++
+		case *knov1.Event_RunResumed:
+			resumed++
+			got = p.RunResumed
+		}
+	}
+
+	if started != 1 {
+		t.Errorf("%d RunStarted events, want exactly 1 — the fresh run's", started)
+	}
+	if resumed != 1 {
+		t.Fatalf("%d RunResumed events, want exactly 1", resumed)
+	}
+
+	// NOT the identity already+remaining == total: over the code as written
+	// that is a + (t-a) == t, a tautology that cannot fail. The bounds are
+	// what a renderer actually depends on — remaining is the denominator of
+	// SESSION progress, so a negative divides wrongly, and already exceeding
+	// total inverts OVERALL progress.
+	if got.GetRemaining() < 0 {
+		t.Errorf("remaining=%d is negative; it is a denominator", got.GetRemaining())
+	}
+	if got.GetAlreadyCompleted() > got.GetTotalCases() {
+		t.Errorf("already=%d exceeds total=%d", got.GetAlreadyCompleted(), got.GetTotalCases())
+	}
+	if got.GetAlreadyCompleted()+got.GetRemaining() != got.GetTotalCases() {
+		t.Errorf("already=%d + remaining=%d != total=%d",
+			got.GetAlreadyCompleted(), got.GetRemaining(), got.GetTotalCases())
+	}
+	if got.GetAlreadyCompleted() == 0 {
+		t.Error("RunResumed reports nothing already completed, so the fixture did " +
+			"not actually resume partial work")
+	}
+	if got.GetRestoredCostUsdMicros() <= 0 {
+		t.Error("RunResumed reports no restored spend; a resumed run that believed " +
+			"it had spent nothing could consume its cap a second time, and this " +
+			"field exists so a consumer can see that it did not")
+	}
+}
+
+// TestRunFinishedIsAlwaysTheLastEvent.
+//
+// The payload's own comment promises it. Nothing enforced it, and M2-10's
+// later PRs add a ticker-driven emitter that can take a sequence number
+// concurrently with close — so the invariant needs a test before the thing
+// that can break it exists.
+func TestRunFinishedIsAlwaysTheLastEvent(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	h := newHarness(t, 15, 5, fake.Options{FailEvery: 5})
+	if _, err := core.Baseline(ctx, h.evals, h.opts); err != nil {
+		t.Fatalf("Baseline: %v", err)
+	}
+
+	log := eventLog(t, h.dbPath, "run-1")
+	if len(log) < 2 {
+		t.Fatalf("only %d events; the fixture proves nothing", len(log))
+	}
+	if got := payloadName(log[len(log)-1]); got != "RunFinished" {
+		t.Errorf("the last event is %s, want RunFinished", got)
+	}
+	for i, ev := range log[:len(log)-1] {
+		if payloadName(ev) == "RunFinished" {
+			t.Errorf("RunFinished at position %d of %d; it must be last",
+				i, len(log))
+		}
+	}
+}
+
+// TestAResumeWhoseSplitShrankDoesNotEmitNegativeProgress.
+//
+// remaining is the denominator of SESSION progress. Its operands are each
+// bounded by the eval set; their difference is not. A resume with a larger
+// holdout fraction has fewer dev Cases than the first process already
+// completed, and checkResumable does not compare the split — it checks the
+// eval CONTENT hash, the goal, and the agent, all of which are unchanged.
+func TestAResumeWhoseSplitShrankDoesNotEmitNegativeProgress(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	h := newHarness(t, 40, 10, fake.Options{})
+	if _, err := core.Baseline(ctx, h.evals, h.opts); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+
+	// The same Cases, but this process believes far fewer of them are dev.
+	opts := h.opts
+	opts.Resume = true
+	opts.DevCases = 5
+	if _, err := core.Baseline(ctx, h.evals, opts); err != nil {
+		t.Fatalf("resumed run: %v", err)
+	}
+
+	for _, ev := range eventLog(t, h.dbPath, "run-1") {
+		p, ok := ev.GetPayload().(*knov1.Event_RunResumed)
+		if !ok {
+			continue
+		}
+		r := p.RunResumed
+		if r.GetRemaining() < 0 {
+			t.Errorf("remaining=%d on the wire; a renderer divides by this",
+				r.GetRemaining())
+		}
+		if r.GetAlreadyCompleted() > r.GetTotalCases() {
+			t.Errorf("already=%d of total=%d inverts overall progress",
+				r.GetAlreadyCompleted(), r.GetTotalCases())
+		}
+	}
+}
+
+// TestAStreamWithNoOpeningEventStillGetsOne.
+//
+// The opening event is chosen by the STREAM's state, not by --resume. A first
+// process that died before emitting anything leaves an empty stream, and that
+// resume is accepted — reading the evals can fail without changing the content
+// hash checkResumable compares.
+//
+// Gating on the flag instead would emit RunResumed into an empty stream, and
+// RunResumed carries no stage, agent, goal_name, or goal_direction. A consumer
+// could never learn which way "better" points, which is what goal_direction's
+// own proto comment says it is for.
+func TestAStreamWithNoOpeningEventStillGetsOne(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	h := newHarness(t, 20, 5, fake.Options{})
+	// Fail the very first AppendEvent, so the Run row exists with no events.
+	opts := h.opts
+	opts.Store = &failingStore{Store: h.store, failEvent: true}
+	if _, err := core.Baseline(ctx, h.evals, opts); err == nil {
+		t.Fatal("the first run was meant to fail on its opening event")
+	}
+	if log := eventLog(t, h.dbPath, "run-1"); len(log) != 0 {
+		t.Fatalf("%d events recorded; the fixture needs an empty stream", len(log))
+	}
+
+	resumed := h.opts
+	resumed.Resume = true
+	if _, err := core.Baseline(ctx, h.evals, resumed); err != nil {
+		t.Fatalf("resumed run: %v", err)
+	}
+
+	log := eventLog(t, h.dbPath, "run-1")
+	if len(log) == 0 {
+		t.Fatal("the resumed run recorded no events")
+	}
+	if got := payloadName(log[0]); got != "RunStarted" {
+		t.Errorf("the stream opens with %s; an empty stream needs RunStarted, "+
+			"which is the only payload carrying the run's identity", got)
 	}
 }
