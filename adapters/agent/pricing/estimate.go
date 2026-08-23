@@ -229,6 +229,12 @@ const bytesPerToken = 2.0
 // "claude-opus-5-20260514" is the same tokenizer as "claude-opus-5", and an
 // exact match would silently fall back to the old ratio for every pinned
 // version.
+//
+// Unlike Lookup, this accepts ANY suffix, including a variant Lookup refuses.
+// The directions differ: the denser tokenizer produces a larger count, so
+// inheriting it for an unknown variant over-reserves, and over-reserving is
+// recoverable where under-reserving spends past a cap. Lookup refuses instead
+// because a wrong RATE has no safe direction.
 func usesNewTokenizer(model string) bool {
 	for _, m := range newTokenizerModels {
 		if strings.HasPrefix(model, m) {

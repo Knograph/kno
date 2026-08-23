@@ -1,3 +1,27 @@
+> **SUPERSEDED on 2026-08-22 by [2026-08-22-pricing-drift-detector.md](2026-08-22-pricing-drift-detector.md).**
+>
+> Kept as a decision record, per `CLAUDE.md`: plans are not deleted when they are rejected.
+> Phase 1 blocked this design. The four findings that killed it, recorded here so the
+> reasoning is not lost with the plan:
+>
+> 1. The proposed gate failed on price moves **>50%**. Anthropic's batch-pricing table is
+>    **exactly −50%** on every row, and the modal scraper error is picking the wrong table
+>    for the right model name — so the gate passes the error it exists to catch.
+> 2. Generating `table.go` destroys hand-written rationale a generator has no source for,
+>    including the only in-code pointer to `docs/debt.md#41`, and has no memory of deliberate
+>    omissions like `claude-mythos-5`.
+> 3. The "round-trip byte-identity proves the generator cannot bury a change in reformatting
+>    noise" claim is **false**: the first legitimate formatting change regenerates the golden
+>    and reformats every line in that same diff.
+> 4. "OpenRouter carries a margin" was asserted without measurement and is **wrong** for
+>    Anthropic — identical to the cent across all five dimensions. The correct reason not to
+>    trust it as a price of record is that it *can* disagree, and does.
+>
+> The replacement is a detector: fetch, compare, file an issue. No code generation, no write
+> token, no PR-opening workflow.
+
+---
+
 # Pricing refresh worker
 
 Repays [`docs/debt.md#40`](../debt.md#40). Requested directly: *"We should probably store

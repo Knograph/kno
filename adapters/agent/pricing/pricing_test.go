@@ -582,38 +582,82 @@ func TestAVariantSuffixIsUnpricedRatherThanGuessed(t *testing.T) {
 		model  string
 		want   bool
 	}{
+		// Versions are numbers. Every one of these is a published pin of the
+		// base model, billed at the base rate.
 		{"the base model itself", "anthropic", "claude-opus-5", true},
-		{"a pinned dated version resolves to its base", "anthropic", "claude-opus-5-20260514", true},
-		{"another dated version", "anthropic", "claude-sonnet-4-5-20250929", true},
-		// OpenAI writes the same thing with separators.
-		{"a hyphenated date is still a date", "openai", "gpt-5.6-terra-2026-03-01", true},
-		{"nine digits is not a date", "anthropic", "claude-opus-5-202605141", false},
-		{"separators alone are not a date", "anthropic", "claude-opus-5----", false},
+		{"an Anthropic dated pin", "anthropic", "claude-opus-5-20260514", true},
+		{"another dated pin", "anthropic", "claude-sonnet-4-5-20250929", true},
+		{"a point release before the date", "anthropic", "claude-opus-5-1-20260514", true},
+		{"an OpenAI hyphenated date", "openai", "gpt-5.6-terra-2026-03-01", true},
+		{"an OpenAI legacy MMDD pin", "openai", "gpt-5.6-luna-0613", true},
+		{"a Vertex at-pin", "anthropic", "claude-opus-5@20250929", true},
+		{"a Bedrock revision tail", "anthropic", "claude-opus-5-20250929-v1:0", true},
+		{"latest is an alias to the current snapshot", "anthropic", "claude-opus-5-latest", true},
+
+		// Variants are words, and these carry their own price.
 		{"fast mode is a different price", "anthropic", "claude-opus-5-fast", false},
 		{"so is fast mode on sonnet", "anthropic", "claude-sonnet-5-fast", false},
 		{"a pro tier is a different product", "openai", "gpt-5.6-sol-pro", false},
-		{"a moving alias names no version we can price", "anthropic", "claude-opus-5-latest", false},
-		{"a truncated date is not a date", "anthropic", "claude-opus-5-2026051", false},
-		{"a date with a trailing variant is not a date", "anthropic", "claude-opus-5-20260514-fast", false},
-		{"letters in the date position are not a date", "anthropic", "claude-opus-5-2026051x", false},
+		{"a preview is not the released model", "anthropic", "claude-opus-5-preview", false},
+		{"a date with a trailing word is a variant", "anthropic", "claude-opus-5-20260514-fast", false},
+
+		// Shape guards.
+		{"a suffix with no digits at all", "anthropic", "claude-opus-5-v", false},
+		{"a bare separator", "anthropic", "claude-opus-5-", false},
+		// Separators only: FieldsFunc yields no segments at all, so nothing
+		// rejects this except the requirement that a version contain a number.
+		{"separators with no version in them", "anthropic", "claude-opus-5-.-.-", false},
+		{"the suffix must be separated from the base", "anthropic", "claude-opus-520260514", false},
 		{"an unrelated model stays unknown", "anthropic", "llama-3", false},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			p, ok := pricing.Lookup(tt.scheme, tt.model)
+			got, ok := pricing.Lookup(tt.scheme, tt.model)
 			if ok != tt.want {
-				t.Fatalf("pricing.Lookup(%q, %q) priced = %v, want %v", tt.scheme, tt.model, ok, tt.want)
+				t.Fatalf("Lookup(%q, %q) priced = %v, want %v", tt.scheme, tt.model, ok, tt.want)
 			}
 			if !ok {
 				return
 			}
-			base, _ := pricing.Lookup(tt.scheme, strings.Split(tt.model, "-2026")[0])
-			if base != nil && p.GetInputPerMtokUsdMicros() != base.GetInputPerMtokUsdMicros() {
-				t.Errorf("a dated version priced differently from its base: %d vs %d",
-					p.GetInputPerMtokUsdMicros(), base.GetInputPerMtokUsdMicros())
+
+			// Compare against the base row by NAME, not by re-deriving the
+			// base from the model string — an earlier version of this test
+			// split on a hardcoded "-2026", which for claude-sonnet-4-5-20250929
+			// yielded the whole string back and compared the value to itself.
+			base, baseOK := pricing.Lookup(tt.scheme, baseOf(tt.model))
+			if !baseOK {
+				t.Fatalf("the base row %q is not priced; the fixture is wrong, not the code",
+					baseOf(tt.model))
+			}
+			// EVERY rate, not just input: a wrong resolution can agree on one
+			// dimension and differ on the rest.
+			if got.GetInputPerMtokUsdMicros() != base.GetInputPerMtokUsdMicros() ||
+				got.GetOutputPerMtokUsdMicros() != base.GetOutputPerMtokUsdMicros() ||
+				got.GetCachedInputPerMtokUsdMicros() != base.GetCachedInputPerMtokUsdMicros() ||
+				got.GetCacheWritePerMtokUsdMicros() != base.GetCacheWritePerMtokUsdMicros() {
+				t.Errorf("%s resolved to a different price than its base %s:\n got %v\nwant %v",
+					tt.model, baseOf(tt.model), got, base)
 			}
 		})
 	}
+}
+
+// baseOf names the table row each fixture model must resolve to. Written out
+// rather than derived, so the test cannot agree with the code by using the
+// same rule the code uses.
+func baseOf(model string) string {
+	bases := map[string]string{
+		"claude-opus-5":               "claude-opus-5",
+		"claude-opus-5-20260514":      "claude-opus-5",
+		"claude-sonnet-4-5-20250929":  "claude-sonnet-4-5",
+		"claude-opus-5-1-20260514":    "claude-opus-5",
+		"gpt-5.6-terra-2026-03-01":    "gpt-5.6-terra",
+		"gpt-5.6-luna-0613":           "gpt-5.6-luna",
+		"claude-opus-5@20250929":      "claude-opus-5",
+		"claude-opus-5-20250929-v1:0": "claude-opus-5",
+		"claude-opus-5-latest":        "claude-opus-5",
+	}
+	return bases[model]
 }
