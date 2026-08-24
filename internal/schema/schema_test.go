@@ -154,11 +154,13 @@ func TestMoneyIsAlwaysInt64MicroUSD(t *testing.T) {
 		"kno.v1.SettlementOvershoot.settled_usd_micros",
 		"kno.v1.SettlementOvershoot.cumulative_overshoot_usd_micros",
 		"kno.v1.RunFinished.total_cost_usd_micros",
-		// M2-10b: the headroom that forced a concurrency reduction. Carried so
-		// the reduction is checkable rather than asserted — a user told their
-		// concurrency was cut can see it was cut against $0.40 remaining, and
-		// decide whether to raise the cap or accept the pace.
-		"kno.v1.ConcurrencyReduced.remaining_cost_usd_micros",
+		// M2-10b: the two terms of the concurrency reduction's arithmetic. Both
+		// are carried because one is not enough: the engine divides a fraction
+		// of the headroom by the per-Case estimate, and a consumer given only
+		// the headroom can solve for the product of what they were not told
+		// rather than check the result.
+		"kno.v1.ConcurrencyDecision.headroom_usd_micros",
+		"kno.v1.ConcurrencyDecision.per_case_estimate_usd_micros",
 	}
 	slices.Sort(wantMoneyFields)
 	if diff := cmp.Diff(wantMoneyFields, found); diff != "" {

@@ -173,6 +173,7 @@ func (RunStatus) EnumDescriptor() ([]byte, []int) {
 type ConcurrencyReason int32
 
 const (
+	// No reduction was made, or the reason is one this build does not name.
 	ConcurrencyReason_CONCURRENCY_REASON_UNSPECIFIED ConcurrencyReason = 0
 	// The cost cap could not admit the requested width. Reserving N Cases at
 	// once holds N pessimistic estimates against the cap, so a narrow cap and a
@@ -332,16 +333,18 @@ type Run struct {
 	// reported usage at a dated price, which is not the same thing as an
 	// invoice.
 	PricingTableVersion string `protobuf:"bytes,24,opt,name=pricing_table_version,json=pricingTableVersion,proto3" json:"pricing_table_version,omitempty"`
-	// How this Run was scheduled, when the engine chose that rather than the
-	// user.
+	// The concurrency this Run executed at, and whether the engine chose it.
+	//
+	// NOT POPULATED YET. Nothing writes this before M2-10c; an absent field
+	// today means "not yet recorded", NOT "this Run ran at what it asked for".
+	// ADR-0004 requires that disambiguation here rather than only in the ADR,
+	// because this comment is the published API reference.
 	//
 	// On Run rather than on CaseExecution deliberately. CaseExecution's presence
-	// bit means "this Run executed Cases" (ADR-0004), and scheduling is decided
-	// before any Case runs — by checkFeasible, before the Run record exists.
-	// Putting it there would make "we considered concurrency and did not reduce
-	// it" and "no Cases ran" share one presence bit, which is the ambiguity that
-	// message was created to remove.
-	Scheduling    *Scheduling `protobuf:"bytes,25,opt,name=scheduling,proto3,oneof" json:"scheduling,omitempty"`
+	// bit means "this Run executed Cases" (ADR-0004), and concurrency is decided
+	// before any Case runs — before the Run record exists. Putting it there
+	// would make a scheduling fact share a presence bit with an execution fact.
+	Concurrency   *ConcurrencyDecision `protobuf:"bytes,25,opt,name=concurrency,proto3,oneof" json:"concurrency,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -544,51 +547,68 @@ func (x *Run) GetPricingTableVersion() string {
 	return ""
 }
 
-func (x *Run) GetScheduling() *Scheduling {
+func (x *Run) GetConcurrency() *ConcurrencyDecision {
 	if x != nil {
-		return x.Scheduling
+		return x.Concurrency
 	}
 	return nil
 }
 
-// Scheduling records a concurrency the engine chose rather than the user.
+// ConcurrencyDecision is the width a Run executed at, and why.
 //
-// Absent when nothing was decided: a stage that does not execute Cases has no
-// concurrency, and a run that got exactly what it asked for has nothing to
-// explain. Present with equal fields when the engine considered a reduction
-// and did not make one — "considered and declined" is a different fact from
-// "never considered", and only presence can carry it.
-type Scheduling struct {
+// Written for every Run whose stage executes Cases, reduced or not. Presence
+// means "this stage had a concurrency" — a fact the message can establish —
+// rather than "a reduction happened", which `requested != effective` already
+// says. Recording it only on reduction would leave a Run that ran at 32 and
+// one that ran at 8 byte-identical, so the record could not answer whether two
+// Runs are comparable.
+//
+// Absent for a stage that invokes no agent: Value works over Assets and has no
+// concurrency to report.
+type ConcurrencyDecision struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// What the user asked for, either explicitly or as the built-in default.
-	RequestedConcurrency int32 `protobuf:"varint,1,opt,name=requested_concurrency,json=requestedConcurrency,proto3" json:"requested_concurrency,omitempty"`
-	// What the Run actually used.
+	// What the user asked for.
 	//
-	// Lower than requested means the cost cap could not admit the requested
-	// width. A user seeing a 6x slowdown they did not ask for should be able to
-	// find out why from the Run record, not only from a live event they may not
-	// have been watching.
-	EffectiveConcurrency int32 `protobuf:"varint,2,opt,name=effective_concurrency,json=effectiveConcurrency,proto3" json:"effective_concurrency,omitempty"`
-	// Why the engine reduced it.
-	Reason        ConcurrencyReason `protobuf:"varint,3,opt,name=reason,proto3,enum=kno.v1.ConcurrencyReason" json:"reason,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// ABSENT when they did not ask and the built-in default applied — which is
+	// the path almost every user takes. The distinction is load-bearing for the
+	// report docs/debt.md#44 requires: telling someone "you requested 8, we gave
+	// you 5" when they requested nothing trains them to distrust the message.
+	Requested *int32 `protobuf:"varint,1,opt,name=requested,proto3,oneof" json:"requested,omitempty"`
+	// What the Run actually used.
+	Effective int32 `protobuf:"varint,2,opt,name=effective,proto3" json:"effective,omitempty"`
+	// Why the engine reduced it, or UNSPECIFIED when it did not.
+	Reason ConcurrencyReason `protobuf:"varint,3,opt,name=reason,proto3,enum=kno.v1.ConcurrencyReason" json:"reason,omitempty"`
+	// The cost-cap headroom at the moment of the decision, in micro-USD.
+	//
+	// Named for WHEN it was read. SpendRecorded carries a field of the same
+	// shape for the LIVE remaining budget, and mixing a one-shot open-time
+	// snapshot into that series would plot a lie.
+	HeadroomUsdMicros int64 `protobuf:"varint,4,opt,name=headroom_usd_micros,json=headroomUsdMicros,proto3" json:"headroom_usd_micros,omitempty"`
+	// What one Case was estimated to cost when the decision was made.
+	//
+	// Carried so the arithmetic is reproducible rather than asserted. The engine
+	// divides a fraction of the headroom by this to get an affordable width, and
+	// a consumer given only the headroom cannot check the result — they can only
+	// solve for the terms they were not told.
+	PerCaseEstimateUsdMicros int64 `protobuf:"varint,5,opt,name=per_case_estimate_usd_micros,json=perCaseEstimateUsdMicros,proto3" json:"per_case_estimate_usd_micros,omitempty"`
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
 }
 
-func (x *Scheduling) Reset() {
-	*x = Scheduling{}
+func (x *ConcurrencyDecision) Reset() {
+	*x = ConcurrencyDecision{}
 	mi := &file_kno_v1_run_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *Scheduling) String() string {
+func (x *ConcurrencyDecision) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*Scheduling) ProtoMessage() {}
+func (*ConcurrencyDecision) ProtoMessage() {}
 
-func (x *Scheduling) ProtoReflect() protoreflect.Message {
+func (x *ConcurrencyDecision) ProtoReflect() protoreflect.Message {
 	mi := &file_kno_v1_run_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -600,30 +620,44 @@ func (x *Scheduling) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use Scheduling.ProtoReflect.Descriptor instead.
-func (*Scheduling) Descriptor() ([]byte, []int) {
+// Deprecated: Use ConcurrencyDecision.ProtoReflect.Descriptor instead.
+func (*ConcurrencyDecision) Descriptor() ([]byte, []int) {
 	return file_kno_v1_run_proto_rawDescGZIP(), []int{1}
 }
 
-func (x *Scheduling) GetRequestedConcurrency() int32 {
-	if x != nil {
-		return x.RequestedConcurrency
+func (x *ConcurrencyDecision) GetRequested() int32 {
+	if x != nil && x.Requested != nil {
+		return *x.Requested
 	}
 	return 0
 }
 
-func (x *Scheduling) GetEffectiveConcurrency() int32 {
+func (x *ConcurrencyDecision) GetEffective() int32 {
 	if x != nil {
-		return x.EffectiveConcurrency
+		return x.Effective
 	}
 	return 0
 }
 
-func (x *Scheduling) GetReason() ConcurrencyReason {
+func (x *ConcurrencyDecision) GetReason() ConcurrencyReason {
 	if x != nil {
 		return x.Reason
 	}
 	return ConcurrencyReason_CONCURRENCY_REASON_UNSPECIFIED
+}
+
+func (x *ConcurrencyDecision) GetHeadroomUsdMicros() int64 {
+	if x != nil {
+		return x.HeadroomUsdMicros
+	}
+	return 0
+}
+
+func (x *ConcurrencyDecision) GetPerCaseEstimateUsdMicros() int64 {
+	if x != nil {
+		return x.PerCaseEstimateUsdMicros
+	}
+	return 0
 }
 
 // CaseExecution carries the facts that only mean something for a Run that
@@ -788,7 +822,7 @@ var File_kno_v1_run_proto protoreflect.FileDescriptor
 
 const file_kno_v1_run_proto_rawDesc = "" +
 	"\n" +
-	"\x10kno/v1/run.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/portfolio.proto\"\x86\t\n" +
+	"\x10kno/v1/run.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/portfolio.proto\"\x92\t\n" +
 	"\x03Run\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12#\n" +
 	"\x05stage\x18\x02 \x01(\x0e2\r.kno.v1.StageR\x05stage\x12\x1d\n" +
@@ -819,19 +853,20 @@ const file_kno_v1_run_proto_rawDesc = "" +
 	"\n" +
 	"generation\x18\x17 \x01(\v2\x12.kno.v1.GenerationH\x02R\n" +
 	"generation\x88\x01\x01\x122\n" +
-	"\x15pricing_table_version\x18\x18 \x01(\tR\x13pricingTableVersion\x127\n" +
-	"\n" +
-	"scheduling\x18\x19 \x01(\v2\x12.kno.v1.SchedulingH\x03R\n" +
-	"scheduling\x88\x01\x01B\x0e\n" +
+	"\x15pricing_table_version\x18\x18 \x01(\tR\x13pricingTableVersion\x12B\n" +
+	"\vconcurrency\x18\x19 \x01(\v2\x1b.kno.v1.ConcurrencyDecisionH\x03R\vconcurrency\x88\x01\x01B\x0e\n" +
 	"\f_finished_atB\x11\n" +
 	"\x0f_case_executionB\r\n" +
-	"\v_generationB\r\n" +
-	"\v_scheduling\"\xa9\x01\n" +
+	"\v_generationB\x0e\n" +
+	"\f_concurrency\"\x87\x02\n" +
+	"\x13ConcurrencyDecision\x12!\n" +
+	"\trequested\x18\x01 \x01(\x05H\x00R\trequested\x88\x01\x01\x12\x1c\n" +
+	"\teffective\x18\x02 \x01(\x05R\teffective\x121\n" +
+	"\x06reason\x18\x03 \x01(\x0e2\x19.kno.v1.ConcurrencyReasonR\x06reason\x12.\n" +
+	"\x13headroom_usd_micros\x18\x04 \x01(\x03R\x11headroomUsdMicros\x12>\n" +
+	"\x1cper_case_estimate_usd_micros\x18\x05 \x01(\x03R\x18perCaseEstimateUsdMicrosB\f\n" +
 	"\n" +
-	"Scheduling\x123\n" +
-	"\x15requested_concurrency\x18\x01 \x01(\x05R\x14requestedConcurrency\x123\n" +
-	"\x15effective_concurrency\x18\x02 \x01(\x05R\x14effectiveConcurrency\x121\n" +
-	"\x06reason\x18\x03 \x01(\x0e2\x19.kno.v1.ConcurrencyReasonR\x06reason\"\xef\x03\n" +
+	"_requested\"\xef\x03\n" +
 	"\rCaseExecution\x12$\n" +
 	"\x0edev_case_count\x18\x01 \x01(\x05R\fdevCaseCount\x12,\n" +
 	"\x12holdout_case_count\x18\x02 \x01(\x05R\x10holdoutCaseCount\x120\n" +
@@ -879,16 +914,16 @@ func file_kno_v1_run_proto_rawDescGZIP() []byte {
 var file_kno_v1_run_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
 var file_kno_v1_run_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_kno_v1_run_proto_goTypes = []any{
-	(Stage)(0),             // 0: kno.v1.Stage
-	(RunStatus)(0),         // 1: kno.v1.RunStatus
-	(ConcurrencyReason)(0), // 2: kno.v1.ConcurrencyReason
-	(*Run)(nil),            // 3: kno.v1.Run
-	(*Scheduling)(nil),     // 4: kno.v1.Scheduling
-	(*CaseExecution)(nil),  // 5: kno.v1.CaseExecution
-	(*AgentRef)(nil),       // 6: kno.v1.AgentRef
-	(Direction)(0),         // 7: kno.v1.Direction
-	(*Budget)(nil),         // 8: kno.v1.Budget
-	(*Generation)(nil),     // 9: kno.v1.Generation
+	(Stage)(0),                  // 0: kno.v1.Stage
+	(RunStatus)(0),              // 1: kno.v1.RunStatus
+	(ConcurrencyReason)(0),      // 2: kno.v1.ConcurrencyReason
+	(*Run)(nil),                 // 3: kno.v1.Run
+	(*ConcurrencyDecision)(nil), // 4: kno.v1.ConcurrencyDecision
+	(*CaseExecution)(nil),       // 5: kno.v1.CaseExecution
+	(*AgentRef)(nil),            // 6: kno.v1.AgentRef
+	(Direction)(0),              // 7: kno.v1.Direction
+	(*Budget)(nil),              // 8: kno.v1.Budget
+	(*Generation)(nil),          // 9: kno.v1.Generation
 }
 var file_kno_v1_run_proto_depIdxs = []int32{
 	0, // 0: kno.v1.Run.stage:type_name -> kno.v1.Stage
@@ -898,8 +933,8 @@ var file_kno_v1_run_proto_depIdxs = []int32{
 	1, // 4: kno.v1.Run.status:type_name -> kno.v1.RunStatus
 	5, // 5: kno.v1.Run.case_execution:type_name -> kno.v1.CaseExecution
 	9, // 6: kno.v1.Run.generation:type_name -> kno.v1.Generation
-	4, // 7: kno.v1.Run.scheduling:type_name -> kno.v1.Scheduling
-	2, // 8: kno.v1.Scheduling.reason:type_name -> kno.v1.ConcurrencyReason
+	4, // 7: kno.v1.Run.concurrency:type_name -> kno.v1.ConcurrencyDecision
+	2, // 8: kno.v1.ConcurrencyDecision.reason:type_name -> kno.v1.ConcurrencyReason
 	9, // [9:9] is the sub-list for method output_type
 	9, // [9:9] is the sub-list for method input_type
 	9, // [9:9] is the sub-list for extension type_name
@@ -915,6 +950,7 @@ func file_kno_v1_run_proto_init() {
 	file_kno_v1_common_proto_init()
 	file_kno_v1_portfolio_proto_init()
 	file_kno_v1_run_proto_msgTypes[0].OneofWrappers = []any{}
+	file_kno_v1_run_proto_msgTypes[1].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

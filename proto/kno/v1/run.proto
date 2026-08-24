@@ -195,39 +195,60 @@ message Run {
   // invoice.
   string pricing_table_version = 24;
 
-  // How this Run was scheduled, when the engine chose that rather than the
-  // user.
+  // The concurrency this Run executed at, and whether the engine chose it.
+  //
+  // NOT POPULATED YET. Nothing writes this before M2-10c; an absent field
+  // today means "not yet recorded", NOT "this Run ran at what it asked for".
+  // ADR-0004 requires that disambiguation here rather than only in the ADR,
+  // because this comment is the published API reference.
   //
   // On Run rather than on CaseExecution deliberately. CaseExecution's presence
-  // bit means "this Run executed Cases" (ADR-0004), and scheduling is decided
-  // before any Case runs — by checkFeasible, before the Run record exists.
-  // Putting it there would make "we considered concurrency and did not reduce
-  // it" and "no Cases ran" share one presence bit, which is the ambiguity that
-  // message was created to remove.
-  optional Scheduling scheduling = 25;
+  // bit means "this Run executed Cases" (ADR-0004), and concurrency is decided
+  // before any Case runs — before the Run record exists. Putting it there
+  // would make a scheduling fact share a presence bit with an execution fact.
+  optional ConcurrencyDecision concurrency = 25;
 }
 
-// Scheduling records a concurrency the engine chose rather than the user.
+// ConcurrencyDecision is the width a Run executed at, and why.
 //
-// Absent when nothing was decided: a stage that does not execute Cases has no
-// concurrency, and a run that got exactly what it asked for has nothing to
-// explain. Present with equal fields when the engine considered a reduction
-// and did not make one — "considered and declined" is a different fact from
-// "never considered", and only presence can carry it.
-message Scheduling {
-  // What the user asked for, either explicitly or as the built-in default.
-  int32 requested_concurrency = 1;
+// Written for every Run whose stage executes Cases, reduced or not. Presence
+// means "this stage had a concurrency" — a fact the message can establish —
+// rather than "a reduction happened", which `requested != effective` already
+// says. Recording it only on reduction would leave a Run that ran at 32 and
+// one that ran at 8 byte-identical, so the record could not answer whether two
+// Runs are comparable.
+//
+// Absent for a stage that invokes no agent: Value works over Assets and has no
+// concurrency to report.
+message ConcurrencyDecision {
+  // What the user asked for.
+  //
+  // ABSENT when they did not ask and the built-in default applied — which is
+  // the path almost every user takes. The distinction is load-bearing for the
+  // report docs/debt.md#44 requires: telling someone "you requested 8, we gave
+  // you 5" when they requested nothing trains them to distrust the message.
+  optional int32 requested = 1;
 
   // What the Run actually used.
-  //
-  // Lower than requested means the cost cap could not admit the requested
-  // width. A user seeing a 6x slowdown they did not ask for should be able to
-  // find out why from the Run record, not only from a live event they may not
-  // have been watching.
-  int32 effective_concurrency = 2;
+  int32 effective = 2;
 
-  // Why the engine reduced it.
+  // Why the engine reduced it, or UNSPECIFIED when it did not.
   ConcurrencyReason reason = 3;
+
+  // The cost-cap headroom at the moment of the decision, in micro-USD.
+  //
+  // Named for WHEN it was read. SpendRecorded carries a field of the same
+  // shape for the LIVE remaining budget, and mixing a one-shot open-time
+  // snapshot into that series would plot a lie.
+  int64 headroom_usd_micros = 4;
+
+  // What one Case was estimated to cost when the decision was made.
+  //
+  // Carried so the arithmetic is reproducible rather than asserted. The engine
+  // divides a fraction of the headroom by this to get an affordable width, and
+  // a consumer given only the headroom cannot check the result — they can only
+  // solve for the terms they were not told.
+  int64 per_case_estimate_usd_micros = 5;
 }
 
 // ConcurrencyReason names why an effective concurrency differs from what was
@@ -238,6 +259,7 @@ message Scheduling {
 // as UNSPECIFIED, which is honest — better than a string that reads like an
 // explanation and cannot be branched on.
 enum ConcurrencyReason {
+  // No reduction was made, or the reason is one this build does not name.
   CONCURRENCY_REASON_UNSPECIFIED = 0;
 
   // The cost cap could not admit the requested width. Reserving N Cases at

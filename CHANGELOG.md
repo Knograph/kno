@@ -18,12 +18,19 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
-- `ConcurrencyReduced` event and `Run.scheduling`, for a reduction the engine makes rather than
-  the user. Nothing emits or writes them yet — that lands with the emitter. The two answer the
-  same question at different times: the event answers "why is this slow" while it is happening,
-  the field answers it afterwards from a record. Both carry the cost-cap headroom that forced the
-  choice, so the number is checkable rather than asserted. Proto only, additive, `buf breaking`
-  clean. Toward [debt #44](docs/debt.md#44).
+- `ConcurrencyDecision`, carried by `Run.concurrency` and by a new `ConcurrencyReduced` event, for
+  a concurrency the engine chooses rather than the user. **Nothing emits or writes them yet** —
+  the emitter lands with M2-10c, and until then an absent `Run.concurrency` means "not recorded",
+  not "ran at what it asked for".
+
+  The event embeds the same message the `Run` records rather than restating its fields, so the two
+  cannot drift apart. It carries **both** terms of the arithmetic — the cost-cap headroom and the
+  per-Case estimate — because the engine divides a fraction of the first by the second, and a
+  consumer given only one can solve for what they were not told rather than check the result.
+  `requested` is optional, so a width nobody asked for is distinguishable from one that was
+  overridden.
+
+  Proto only, additive, `buf breaking` clean. Toward [debt #44](docs/debt.md#44).
 
 - **The `anthropic` provider adapter** (`adapters/agent/anthropic`) for the Messages API,
   implementing `core.Agent`, `core.Capable`, and `core.Estimator`. Not the OpenAI-compatible
