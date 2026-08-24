@@ -3263,3 +3263,63 @@ func TestProgressIsOffByDefault(t *testing.T) {
 		}
 	}
 }
+
+// TestThroughputOnAResumeMeasuresThisProcessOnly.
+//
+// attempted spans the whole run — the aggregator is seeded from the store on
+// resume — while the clock starts when this process does. Dividing one by the
+// other reports a resume carrying 900 completed Cases into a one-second-old
+// process as 900 Cases a second.
+//
+// The counts stay whole-run on purpose: they pair with total_cases, which is
+// also whole-run. Only the rate is a session figure.
+func TestThroughputOnAResumeMeasuresThisProcessOnly(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const devCases = 40
+
+	h := newHarness(t, devCases, 10, fake.Options{Latency: 5 * time.Millisecond})
+	h.opts.Concurrency = 1
+	h.opts.Guard = budget.New(budget.Limits{MaxLLMCalls: 30}, nil, 0)
+	if _, err := core.Baseline(ctx, h.evals, h.opts); !errors.Is(err, errs.ErrBudgetExceeded) {
+		t.Fatalf("the first run was meant to stop early: %v", err)
+	}
+
+	opts := h.opts
+	opts.Resume = true
+	opts.ProgressInterval = 2 * time.Millisecond
+	opts.Guard = budget.New(budget.Limits{MaxLLMCalls: 1_000}, nil, 0)
+	// The harness pins a fixed clock, which makes every elapsed interval zero
+	// and every rate zero — so a rate assertion against it proves nothing. A
+	// real clock is the point of this test.
+	opts.Now = func() time.Time { return time.Now().UTC() }
+	if _, err := core.Baseline(ctx, h.evals, opts); err != nil {
+		t.Fatalf("resumed run: %v", err)
+	}
+
+	// The tightest honest bound: this process ran at most 10 Cases at 5ms
+	// each, so it cannot have exceeded 200/s however the clock rounded. A rate
+	// computed from the whole run's 40 would be several times that.
+	const ceiling = 200.0
+	var seen int
+	for _, ev := range eventLog(t, h.dbPath, "run-1") {
+		p, ok := ev.GetPayload().(*knov1.Event_StageProgress)
+		if !ok {
+			continue
+		}
+		seen++
+		if r := p.StageProgress.GetCasesPerSecond(); r > ceiling {
+			t.Errorf("reported %.1f Cases/second; this process ran at most 10 Cases "+
+				"at 5ms each, so the rate is counting the resumed run's prior work "+
+				"against this process's clock", r)
+		}
+		// The COUNTS still span the whole run — they pair with total_cases.
+		if p.StageProgress.GetAttempted() < int32(len(h.holdIn)) {
+			continue
+		}
+	}
+	if seen == 0 {
+		t.Fatal("no heartbeats were emitted on the resumed run")
+	}
+}

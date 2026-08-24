@@ -127,6 +127,18 @@ func (a *aggregator) addError() {
 	a.errored++
 }
 
+// sessionCounts reports what THIS process did, excluding a resumed run's
+// prior work.
+//
+// Distinct from counts, which spans the whole run. A throughput figure needs
+// this one: a resume carrying 900 completed Cases into a process that has run
+// for one second is not doing 900 Cases a second.
+func (a *aggregator) sessionCounts() (scored, errored int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.scored, a.errored
+}
+
 func (a *aggregator) counts() (scored, errored int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -443,12 +455,18 @@ func (o BaselineOptions) emitStageProgress(
 	scored, errored := agg.counts()
 	attempted := scored + errored
 
-	// Cases per second over the whole run so far, not since the last tick.
-	// A rate over a one-second window swings wildly when a single Case takes
-	// longer than the window, which for an LLM call is most of them.
+	// Averaged over THIS PROCESS's work and THIS PROCESS's clock.
+	//
+	// Both halves matter. Over the whole run rather than the last tick,
+	// because a rate measured across one heartbeat swings wildly when a single
+	// Case takes longer than the window — which for an LLM call is most of
+	// them. And over the session rather than the run, because attempted spans
+	// a resume while startedAt does not: a resume carrying 900 completed Cases
+	// into a process one second old would report 900 Cases a second.
+	sessionScored, sessionErrored := agg.sessionCounts()
 	var rate float64
 	if elapsed := o.now().Sub(startedAt).Seconds(); elapsed > 0 {
-		rate = float64(attempted) / elapsed
+		rate = float64(sessionScored+sessionErrored) / elapsed
 	}
 
 	return o.appendEvent(ctx, agg, &knov1.Event{
