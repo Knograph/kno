@@ -77,6 +77,17 @@ const DefaultProgressInterval = time.Second
 // take longer than that — which is every run against a real provider.
 const minProgressInterval = 10 * time.Millisecond
 
+// progressWriteGrace bounds one heartbeat's write.
+//
+// Matched to the store's own busy_timeout: a contended SQLite write waits up
+// to that long and then succeeds, so a shorter bound turns a slow write into a
+// run-ending error of our own making. Measured on a CI runner at a 20ms bound.
+//
+// It exists at all so a hung write cannot make shutdown unbounded — stop()
+// joins the goroutine, and without a deadline a wedged tick would block it
+// forever.
+const progressWriteGrace = 5 * time.Second
+
 // maxConcurrency bounds Concurrency.
 //
 // Recorded as an int32 on the wire, and one goroutine per unit. Without it

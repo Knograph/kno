@@ -447,14 +447,21 @@ func (o BaselineOptions) progressTicker(
 			case <-done:
 				return
 			case <-t.C:
-				// Bounded by its own period. WithoutCancel alone would let a
-				// tick in flight at Ctrl-C add busy_timeout to shutdown for a
-				// write whose only value was live rendering — and unlike
-				// closeRun, which uses WithoutCancel because a Run left in
-				// RUNNING looks like a crash, losing a heartbeat costs
-				// nothing. The executor's sink takes the same bounded form.
+				// Bounded, but by what a legitimate write can cost rather
+				// than by the tick period. Bounding it by the period ended
+				// runs on a slow runner: a 20ms interval against a SQLite
+				// write that took longer produced "context deadline exceeded"
+				// and killed the run, which is a self-inflicted failure
+				// dressed as a store failure. The store's own busy_timeout is
+				// 5s, so a contended write can legitimately take that long.
+				//
+				// Uncancellable, like closeRun, because a budget stop and a
+				// Ctrl-C are when a watcher most wants the last position — but
+				// unlike closeRun this carries a deadline, because losing a
+				// heartbeat costs nothing and a hung write must not make
+				// shutdown unbounded. The executor's sink takes the same form.
 				tickCtx, cancel := context.WithTimeout(
-					context.WithoutCancel(ctx), o.ProgressInterval)
+					context.WithoutCancel(ctx), progressWriteGrace)
 				err := o.emitStageProgress(tickCtx, agg, total, startedAt)
 				cancel()
 				if err != nil {
