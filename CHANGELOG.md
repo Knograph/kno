@@ -18,6 +18,13 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
+- `ConcurrencyReduced` event and `Run.scheduling`, for a reduction the engine makes rather than
+  the user. Nothing emits or writes them yet — that lands with the emitter. The two answer the
+  same question at different times: the event answers "why is this slow" while it is happening,
+  the field answers it afterwards from a record. Both carry the cost-cap headroom that forced the
+  choice, so the number is checkable rather than asserted. Proto only, additive, `buf breaking`
+  clean. Toward [debt #44](docs/debt.md#44).
+
 - **The `anthropic` provider adapter** (`adapters/agent/anthropic`) for the Messages API,
   implementing `core.Agent`, `core.Capable`, and `core.Estimator`. Not the OpenAI-compatible
   adapter with a different base URL: the system prompt is a top-level field, `max_tokens` is

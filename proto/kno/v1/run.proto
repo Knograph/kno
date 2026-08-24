@@ -194,6 +194,56 @@ message Run {
   // reported usage at a dated price, which is not the same thing as an
   // invoice.
   string pricing_table_version = 24;
+
+  // How this Run was scheduled, when the engine chose that rather than the
+  // user.
+  //
+  // On Run rather than on CaseExecution deliberately. CaseExecution's presence
+  // bit means "this Run executed Cases" (ADR-0004), and scheduling is decided
+  // before any Case runs — by checkFeasible, before the Run record exists.
+  // Putting it there would make "we considered concurrency and did not reduce
+  // it" and "no Cases ran" share one presence bit, which is the ambiguity that
+  // message was created to remove.
+  optional Scheduling scheduling = 25;
+}
+
+// Scheduling records a concurrency the engine chose rather than the user.
+//
+// Absent when nothing was decided: a stage that does not execute Cases has no
+// concurrency, and a run that got exactly what it asked for has nothing to
+// explain. Present with equal fields when the engine considered a reduction
+// and did not make one — "considered and declined" is a different fact from
+// "never considered", and only presence can carry it.
+message Scheduling {
+  // What the user asked for, either explicitly or as the built-in default.
+  int32 requested_concurrency = 1;
+
+  // What the Run actually used.
+  //
+  // Lower than requested means the cost cap could not admit the requested
+  // width. A user seeing a 6x slowdown they did not ask for should be able to
+  // find out why from the Run record, not only from a live event they may not
+  // have been watching.
+  int32 effective_concurrency = 2;
+
+  // Why the engine reduced it.
+  ConcurrencyReason reason = 3;
+}
+
+// ConcurrencyReason names why an effective concurrency differs from what was
+// requested.
+//
+// An enum rather than free text: this is rendered by the TUI and serialized by
+// the API, and a sentence is neither. A reason nobody has enumerated arrives
+// as UNSPECIFIED, which is honest — better than a string that reads like an
+// explanation and cannot be branched on.
+enum ConcurrencyReason {
+  CONCURRENCY_REASON_UNSPECIFIED = 0;
+
+  // The cost cap could not admit the requested width. Reserving N Cases at
+  // once holds N pessimistic estimates against the cap, so a narrow cap and a
+  // wide pool deadlock: nothing can be authorized.
+  CONCURRENCY_REASON_COST_CAP = 1;
 }
 
 // CaseExecution carries the facts that only mean something for a Run that

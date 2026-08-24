@@ -70,7 +70,38 @@ message Event {
 
     // Settled cost exceeded what was authorized for it.
     SettlementOvershoot settlement_overshoot = 19;
+
+    // The engine chose a narrower concurrency than the run asked for.
+    ConcurrencyReduced concurrency_reduced = 20;
   }
+}
+
+// ConcurrencyReduced reports that the engine narrowed the run's concurrency.
+//
+// Emitted once, at the start, and also recorded on Run.scheduling. The two
+// answer the same question at different times: the event answers "why is this
+// slow" while it is happening, and the field answers it afterwards from a
+// record. A user who was not watching the stream still gets an answer.
+//
+// docs/debt.md#44: the reduction was silent — no event, no log line, no field
+// — and a 6x slowdown the user did not ask for is user-visible state, which
+// CLAUDE.md says is a new event type and never a side channel.
+message ConcurrencyReduced {
+  // What the user asked for, either explicitly or as the built-in default.
+  int32 requested = 1;
+
+  // What the run will actually use.
+  int32 effective = 2;
+
+  // Why.
+  ConcurrencyReason reason = 3;
+
+  // The cost cap headroom that forced it, in micro-USD.
+  //
+  // Carried so the number is checkable rather than asserted: a user told "your
+  // concurrency was cut to 5" can see it was cut against $0.40 of remaining
+  // budget, and can decide whether to raise the cap or accept the pace.
+  int64 remaining_cost_usd_micros = 4;
 }
 
 // EventError is a failure as it appears ON THE EVENT STREAM.

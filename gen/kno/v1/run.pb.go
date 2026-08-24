@@ -163,6 +163,62 @@ func (RunStatus) EnumDescriptor() ([]byte, []int) {
 	return file_kno_v1_run_proto_rawDescGZIP(), []int{1}
 }
 
+// ConcurrencyReason names why an effective concurrency differs from what was
+// requested.
+//
+// An enum rather than free text: this is rendered by the TUI and serialized by
+// the API, and a sentence is neither. A reason nobody has enumerated arrives
+// as UNSPECIFIED, which is honest — better than a string that reads like an
+// explanation and cannot be branched on.
+type ConcurrencyReason int32
+
+const (
+	ConcurrencyReason_CONCURRENCY_REASON_UNSPECIFIED ConcurrencyReason = 0
+	// The cost cap could not admit the requested width. Reserving N Cases at
+	// once holds N pessimistic estimates against the cap, so a narrow cap and a
+	// wide pool deadlock: nothing can be authorized.
+	ConcurrencyReason_CONCURRENCY_REASON_COST_CAP ConcurrencyReason = 1
+)
+
+// Enum value maps for ConcurrencyReason.
+var (
+	ConcurrencyReason_name = map[int32]string{
+		0: "CONCURRENCY_REASON_UNSPECIFIED",
+		1: "CONCURRENCY_REASON_COST_CAP",
+	}
+	ConcurrencyReason_value = map[string]int32{
+		"CONCURRENCY_REASON_UNSPECIFIED": 0,
+		"CONCURRENCY_REASON_COST_CAP":    1,
+	}
+)
+
+func (x ConcurrencyReason) Enum() *ConcurrencyReason {
+	p := new(ConcurrencyReason)
+	*p = x
+	return p
+}
+
+func (x ConcurrencyReason) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ConcurrencyReason) Descriptor() protoreflect.EnumDescriptor {
+	return file_kno_v1_run_proto_enumTypes[2].Descriptor()
+}
+
+func (ConcurrencyReason) Type() protoreflect.EnumType {
+	return &file_kno_v1_run_proto_enumTypes[2]
+}
+
+func (x ConcurrencyReason) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ConcurrencyReason.Descriptor instead.
+func (ConcurrencyReason) EnumDescriptor() ([]byte, []int) {
+	return file_kno_v1_run_proto_rawDescGZIP(), []int{2}
+}
+
 // Run is one execution of one pipeline stage.
 //
 // It is the correlation key for every trace, score, and event the stage
@@ -276,8 +332,18 @@ type Run struct {
 	// reported usage at a dated price, which is not the same thing as an
 	// invoice.
 	PricingTableVersion string `protobuf:"bytes,24,opt,name=pricing_table_version,json=pricingTableVersion,proto3" json:"pricing_table_version,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// How this Run was scheduled, when the engine chose that rather than the
+	// user.
+	//
+	// On Run rather than on CaseExecution deliberately. CaseExecution's presence
+	// bit means "this Run executed Cases" (ADR-0004), and scheduling is decided
+	// before any Case runs — by checkFeasible, before the Run record exists.
+	// Putting it there would make "we considered concurrency and did not reduce
+	// it" and "no Cases ran" share one presence bit, which is the ambiguity that
+	// message was created to remove.
+	Scheduling    *Scheduling `protobuf:"bytes,25,opt,name=scheduling,proto3,oneof" json:"scheduling,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Run) Reset() {
@@ -478,6 +544,88 @@ func (x *Run) GetPricingTableVersion() string {
 	return ""
 }
 
+func (x *Run) GetScheduling() *Scheduling {
+	if x != nil {
+		return x.Scheduling
+	}
+	return nil
+}
+
+// Scheduling records a concurrency the engine chose rather than the user.
+//
+// Absent when nothing was decided: a stage that does not execute Cases has no
+// concurrency, and a run that got exactly what it asked for has nothing to
+// explain. Present with equal fields when the engine considered a reduction
+// and did not make one — "considered and declined" is a different fact from
+// "never considered", and only presence can carry it.
+type Scheduling struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// What the user asked for, either explicitly or as the built-in default.
+	RequestedConcurrency int32 `protobuf:"varint,1,opt,name=requested_concurrency,json=requestedConcurrency,proto3" json:"requested_concurrency,omitempty"`
+	// What the Run actually used.
+	//
+	// Lower than requested means the cost cap could not admit the requested
+	// width. A user seeing a 6x slowdown they did not ask for should be able to
+	// find out why from the Run record, not only from a live event they may not
+	// have been watching.
+	EffectiveConcurrency int32 `protobuf:"varint,2,opt,name=effective_concurrency,json=effectiveConcurrency,proto3" json:"effective_concurrency,omitempty"`
+	// Why the engine reduced it.
+	Reason        ConcurrencyReason `protobuf:"varint,3,opt,name=reason,proto3,enum=kno.v1.ConcurrencyReason" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Scheduling) Reset() {
+	*x = Scheduling{}
+	mi := &file_kno_v1_run_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Scheduling) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Scheduling) ProtoMessage() {}
+
+func (x *Scheduling) ProtoReflect() protoreflect.Message {
+	mi := &file_kno_v1_run_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Scheduling.ProtoReflect.Descriptor instead.
+func (*Scheduling) Descriptor() ([]byte, []int) {
+	return file_kno_v1_run_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *Scheduling) GetRequestedConcurrency() int32 {
+	if x != nil {
+		return x.RequestedConcurrency
+	}
+	return 0
+}
+
+func (x *Scheduling) GetEffectiveConcurrency() int32 {
+	if x != nil {
+		return x.EffectiveConcurrency
+	}
+	return 0
+}
+
+func (x *Scheduling) GetReason() ConcurrencyReason {
+	if x != nil {
+		return x.Reason
+	}
+	return ConcurrencyReason_CONCURRENCY_REASON_UNSPECIFIED
+}
+
 // CaseExecution carries the facts that only mean something for a Run that
 // actually executed Cases.
 //
@@ -538,7 +686,7 @@ type CaseExecution struct {
 
 func (x *CaseExecution) Reset() {
 	*x = CaseExecution{}
-	mi := &file_kno_v1_run_proto_msgTypes[1]
+	mi := &file_kno_v1_run_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -550,7 +698,7 @@ func (x *CaseExecution) String() string {
 func (*CaseExecution) ProtoMessage() {}
 
 func (x *CaseExecution) ProtoReflect() protoreflect.Message {
-	mi := &file_kno_v1_run_proto_msgTypes[1]
+	mi := &file_kno_v1_run_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -563,7 +711,7 @@ func (x *CaseExecution) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CaseExecution.ProtoReflect.Descriptor instead.
 func (*CaseExecution) Descriptor() ([]byte, []int) {
-	return file_kno_v1_run_proto_rawDescGZIP(), []int{1}
+	return file_kno_v1_run_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *CaseExecution) GetDevCaseCount() int32 {
@@ -640,7 +788,7 @@ var File_kno_v1_run_proto protoreflect.FileDescriptor
 
 const file_kno_v1_run_proto_rawDesc = "" +
 	"\n" +
-	"\x10kno/v1/run.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/portfolio.proto\"\xbe\b\n" +
+	"\x10kno/v1/run.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/portfolio.proto\"\x86\t\n" +
 	"\x03Run\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12#\n" +
 	"\x05stage\x18\x02 \x01(\x0e2\r.kno.v1.StageR\x05stage\x12\x1d\n" +
@@ -671,10 +819,19 @@ const file_kno_v1_run_proto_rawDesc = "" +
 	"\n" +
 	"generation\x18\x17 \x01(\v2\x12.kno.v1.GenerationH\x02R\n" +
 	"generation\x88\x01\x01\x122\n" +
-	"\x15pricing_table_version\x18\x18 \x01(\tR\x13pricingTableVersionB\x0e\n" +
+	"\x15pricing_table_version\x18\x18 \x01(\tR\x13pricingTableVersion\x127\n" +
+	"\n" +
+	"scheduling\x18\x19 \x01(\v2\x12.kno.v1.SchedulingH\x03R\n" +
+	"scheduling\x88\x01\x01B\x0e\n" +
 	"\f_finished_atB\x11\n" +
 	"\x0f_case_executionB\r\n" +
-	"\v_generation\"\xef\x03\n" +
+	"\v_generationB\r\n" +
+	"\v_scheduling\"\xa9\x01\n" +
+	"\n" +
+	"Scheduling\x123\n" +
+	"\x15requested_concurrency\x18\x01 \x01(\x05R\x14requestedConcurrency\x123\n" +
+	"\x15effective_concurrency\x18\x02 \x01(\x05R\x14effectiveConcurrency\x121\n" +
+	"\x06reason\x18\x03 \x01(\x0e2\x19.kno.v1.ConcurrencyReasonR\x06reason\"\xef\x03\n" +
 	"\rCaseExecution\x12$\n" +
 	"\x0edev_case_count\x18\x01 \x01(\x05R\fdevCaseCount\x12,\n" +
 	"\x12holdout_case_count\x18\x02 \x01(\x05R\x10holdoutCaseCount\x120\n" +
@@ -700,7 +857,10 @@ const file_kno_v1_run_proto_rawDesc = "" +
 	"\x14RUN_STATUS_COMPLETED\x10\x02\x12\x15\n" +
 	"\x11RUN_STATUS_FAILED\x10\x03\x12\x1d\n" +
 	"\x19RUN_STATUS_BUDGET_STOPPED\x10\x04\x12\x1a\n" +
-	"\x16RUN_STATUS_INTERRUPTED\x10\x05By\n" +
+	"\x16RUN_STATUS_INTERRUPTED\x10\x05*X\n" +
+	"\x11ConcurrencyReason\x12\"\n" +
+	"\x1eCONCURRENCY_REASON_UNSPECIFIED\x10\x00\x12\x1f\n" +
+	"\x1bCONCURRENCY_REASON_COST_CAP\x10\x01By\n" +
 	"\n" +
 	"com.kno.v1B\bRunProtoP\x01Z(github.com/knograph/kno/gen/kno/v1;knov1\xa2\x02\x03KXX\xaa\x02\x06Kno.V1\xca\x02\x06Kno\\V1\xe2\x02\x12Kno\\V1\\GPBMetadata\xea\x02\aKno::V1b\x06proto3"
 
@@ -716,31 +876,35 @@ func file_kno_v1_run_proto_rawDescGZIP() []byte {
 	return file_kno_v1_run_proto_rawDescData
 }
 
-var file_kno_v1_run_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_kno_v1_run_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_kno_v1_run_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_kno_v1_run_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_kno_v1_run_proto_goTypes = []any{
-	(Stage)(0),            // 0: kno.v1.Stage
-	(RunStatus)(0),        // 1: kno.v1.RunStatus
-	(*Run)(nil),           // 2: kno.v1.Run
-	(*CaseExecution)(nil), // 3: kno.v1.CaseExecution
-	(*AgentRef)(nil),      // 4: kno.v1.AgentRef
-	(Direction)(0),        // 5: kno.v1.Direction
-	(*Budget)(nil),        // 6: kno.v1.Budget
-	(*Generation)(nil),    // 7: kno.v1.Generation
+	(Stage)(0),             // 0: kno.v1.Stage
+	(RunStatus)(0),         // 1: kno.v1.RunStatus
+	(ConcurrencyReason)(0), // 2: kno.v1.ConcurrencyReason
+	(*Run)(nil),            // 3: kno.v1.Run
+	(*Scheduling)(nil),     // 4: kno.v1.Scheduling
+	(*CaseExecution)(nil),  // 5: kno.v1.CaseExecution
+	(*AgentRef)(nil),       // 6: kno.v1.AgentRef
+	(Direction)(0),         // 7: kno.v1.Direction
+	(*Budget)(nil),         // 8: kno.v1.Budget
+	(*Generation)(nil),     // 9: kno.v1.Generation
 }
 var file_kno_v1_run_proto_depIdxs = []int32{
 	0, // 0: kno.v1.Run.stage:type_name -> kno.v1.Stage
-	4, // 1: kno.v1.Run.agent:type_name -> kno.v1.AgentRef
-	5, // 2: kno.v1.Run.goal_direction:type_name -> kno.v1.Direction
-	6, // 3: kno.v1.Run.budget:type_name -> kno.v1.Budget
+	6, // 1: kno.v1.Run.agent:type_name -> kno.v1.AgentRef
+	7, // 2: kno.v1.Run.goal_direction:type_name -> kno.v1.Direction
+	8, // 3: kno.v1.Run.budget:type_name -> kno.v1.Budget
 	1, // 4: kno.v1.Run.status:type_name -> kno.v1.RunStatus
-	3, // 5: kno.v1.Run.case_execution:type_name -> kno.v1.CaseExecution
-	7, // 6: kno.v1.Run.generation:type_name -> kno.v1.Generation
-	7, // [7:7] is the sub-list for method output_type
-	7, // [7:7] is the sub-list for method input_type
-	7, // [7:7] is the sub-list for extension type_name
-	7, // [7:7] is the sub-list for extension extendee
-	0, // [0:7] is the sub-list for field type_name
+	5, // 5: kno.v1.Run.case_execution:type_name -> kno.v1.CaseExecution
+	9, // 6: kno.v1.Run.generation:type_name -> kno.v1.Generation
+	4, // 7: kno.v1.Run.scheduling:type_name -> kno.v1.Scheduling
+	2, // 8: kno.v1.Scheduling.reason:type_name -> kno.v1.ConcurrencyReason
+	9, // [9:9] is the sub-list for method output_type
+	9, // [9:9] is the sub-list for method input_type
+	9, // [9:9] is the sub-list for extension type_name
+	9, // [9:9] is the sub-list for extension extendee
+	0, // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_kno_v1_run_proto_init() }
@@ -756,8 +920,8 @@ func file_kno_v1_run_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kno_v1_run_proto_rawDesc), len(file_kno_v1_run_proto_rawDesc)),
-			NumEnums:      2,
-			NumMessages:   2,
+			NumEnums:      3,
+			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

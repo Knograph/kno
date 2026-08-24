@@ -1,3 +1,28 @@
+> **SUPERSEDED on 2026-08-23 by [2026-08-23-m2-10-the-event-spine.md](2026-08-23-m2-10-the-event-spine.md).**
+>
+> Kept as a decision record. Phase 1 blocked it. The findings that killed it:
+>
+> 1. **The `#42` repayment does not work.** Populating `resolved_models` fills only one operand.
+>    `BaselineOptions.ResolvedModel` — the other — is set nowhere outside tests, and cannot be:
+>    `checkResumable` runs before any provider call, and a resolved model is a property of a
+>    response. The check stays dead, and the plan would have marked the entry repaid.
+> 2. **10d creates a double-spend.** It settles the billed cost into the guard but not into
+>    `sinkFunc`'s retry-exhausted branch, which persists `CostUSDMicros: 0`. `SettledSpend` is
+>    "the only durable record of money spent" and is what `Guard.Restore` reads on resume — so
+>    the resumed run gets headroom the first process already used.
+> 3. **The event volume is a producer-side cost, not a consumer-side one.** `AppendEvent` is a
+>    bare INSERT under `synchronous=FULL` — one fsync per event, on the same serialized writer
+>    as the outcome row that prevents double-spend. Declining to bound the rate because "no
+>    consumer reads it yet" answers the wrong question.
+> 4. **`SettlementOvershoot` was specified twice, differently** — per-settlement in the test
+>    plan, cap-gated in the edge cases.
+> 5. **`observed_backends`** is the name ADR-0004 rejects by name, twice. Prime directive 2.
+>
+> Also: the four-PR split was cut at "emission vs money", but four of the six payloads are
+> emitted from the spend path, so 10b was a spend-path PR labelled "no money".
+
+---
+
 # M2-10 — emitting what the engine already knows
 
 Six ledger entries collapse into one theme: **the engine computes something and tells nobody.**
