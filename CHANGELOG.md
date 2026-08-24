@@ -18,6 +18,20 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
+- `ConcurrencyDecision`, carried by `Run.concurrency` and by a new `ConcurrencyReduced` event, for
+  a concurrency the engine chooses rather than the user. **Nothing emits or writes them yet** —
+  the emitter lands with M2-10c, and until then an absent `Run.concurrency` means "not recorded",
+  not "ran at what it asked for".
+
+  The event embeds the same message the `Run` records rather than restating its fields, so the two
+  cannot drift apart. It carries **both** terms of the arithmetic — the cost-cap headroom and the
+  per-Case estimate — because the engine divides a fraction of the first by the second, and a
+  consumer given only one can solve for what they were not told rather than check the result.
+  `requested` is optional, so a width nobody asked for is distinguishable from one that was
+  overridden.
+
+  Proto only, additive, `buf breaking` clean. Toward [debt #44](docs/debt.md#44).
+
 - **The `anthropic` provider adapter** (`adapters/agent/anthropic`) for the Messages API,
   implementing `core.Agent`, `core.Capable`, and `core.Estimator`. Not the OpenAI-compatible
   adapter with a different base URL: the system prompt is a top-level field, `max_tokens` is
@@ -37,6 +51,25 @@ covenants — breaking any of them requires a major version.
   [#43](docs/debt.md#43).
 
 ### Fixed
+
+- A resumed run no longer emits a second `RunStarted` carrying the original total, which made a
+  live view reset its progress and jump backward on every resume. It emits `RunResumed`, carrying
+  what was already completed, what remains, and the spend restored from disk — so a consumer can
+  see the run did not believe it had spent nothing. The opening event is chosen by whether the
+  stream already has one, not by `--resume`: a run whose first process died before emitting
+  anything still opens with `RunStarted`, which is the only payload carrying the run's identity.
+  Repays [debt #29](docs/debt.md#29).
+- Event sequence numbers are allocated immediately before the write rather than at event
+  construction, and allocation and write happen under one lock. `Event.sequence` exists so a
+  consumer can tell a lost event from none; a number taken on a path that returns without writing
+  burns it, and two emitters can otherwise commit 6 before 5, which an insertion-ordered consumer
+  reads as a gap. Both are unreachable while every emitter is serialized — they become reachable
+  with the progress ticker that follows, which is why the rule lands first.
+- `RunFinished` is refused a successor. The payload has always promised it is the last event and
+  nothing enforced it.
+- `RunResumed` cannot report negative progress. Its operands are each bounded by the eval set but
+  their difference is not, and a resume with a larger holdout fraction completes more Cases than
+  the new dev count — measured at `remaining=-35`, which is the denominator of session progress.
 
 - The confirmation prompt no longer quotes a figure the guard will never permit. The total was
   bounded against the static `--max-cost-usd` rather than what the run could actually still

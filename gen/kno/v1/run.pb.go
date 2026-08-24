@@ -163,6 +163,63 @@ func (RunStatus) EnumDescriptor() ([]byte, []int) {
 	return file_kno_v1_run_proto_rawDescGZIP(), []int{1}
 }
 
+// ConcurrencyReason names why an effective concurrency differs from what was
+// requested.
+//
+// An enum rather than free text: this is rendered by the TUI and serialized by
+// the API, and a sentence is neither. A reason nobody has enumerated arrives
+// as UNSPECIFIED, which is honest — better than a string that reads like an
+// explanation and cannot be branched on.
+type ConcurrencyReason int32
+
+const (
+	// No reduction was made, or the reason is one this build does not name.
+	ConcurrencyReason_CONCURRENCY_REASON_UNSPECIFIED ConcurrencyReason = 0
+	// The cost cap could not admit the requested width. Reserving N Cases at
+	// once holds N pessimistic estimates against the cap, so a narrow cap and a
+	// wide pool deadlock: nothing can be authorized.
+	ConcurrencyReason_CONCURRENCY_REASON_COST_CAP ConcurrencyReason = 1
+)
+
+// Enum value maps for ConcurrencyReason.
+var (
+	ConcurrencyReason_name = map[int32]string{
+		0: "CONCURRENCY_REASON_UNSPECIFIED",
+		1: "CONCURRENCY_REASON_COST_CAP",
+	}
+	ConcurrencyReason_value = map[string]int32{
+		"CONCURRENCY_REASON_UNSPECIFIED": 0,
+		"CONCURRENCY_REASON_COST_CAP":    1,
+	}
+)
+
+func (x ConcurrencyReason) Enum() *ConcurrencyReason {
+	p := new(ConcurrencyReason)
+	*p = x
+	return p
+}
+
+func (x ConcurrencyReason) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ConcurrencyReason) Descriptor() protoreflect.EnumDescriptor {
+	return file_kno_v1_run_proto_enumTypes[2].Descriptor()
+}
+
+func (ConcurrencyReason) Type() protoreflect.EnumType {
+	return &file_kno_v1_run_proto_enumTypes[2]
+}
+
+func (x ConcurrencyReason) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ConcurrencyReason.Descriptor instead.
+func (ConcurrencyReason) EnumDescriptor() ([]byte, []int) {
+	return file_kno_v1_run_proto_rawDescGZIP(), []int{2}
+}
+
 // Run is one execution of one pipeline stage.
 //
 // It is the correlation key for every trace, score, and event the stage
@@ -276,8 +333,20 @@ type Run struct {
 	// reported usage at a dated price, which is not the same thing as an
 	// invoice.
 	PricingTableVersion string `protobuf:"bytes,24,opt,name=pricing_table_version,json=pricingTableVersion,proto3" json:"pricing_table_version,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// The concurrency this Run executed at, and whether the engine chose it.
+	//
+	// NOT POPULATED YET. Nothing writes this before M2-10c; an absent field
+	// today means "not yet recorded", NOT "this Run ran at what it asked for".
+	// ADR-0004 requires that disambiguation here rather than only in the ADR,
+	// because this comment is the published API reference.
+	//
+	// On Run rather than on CaseExecution deliberately. CaseExecution's presence
+	// bit means "this Run executed Cases" (ADR-0004), and concurrency is decided
+	// before any Case runs — before the Run record exists. Putting it there
+	// would make a scheduling fact share a presence bit with an execution fact.
+	Concurrency   *ConcurrencyDecision `protobuf:"bytes,25,opt,name=concurrency,proto3,oneof" json:"concurrency,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Run) Reset() {
@@ -478,6 +547,119 @@ func (x *Run) GetPricingTableVersion() string {
 	return ""
 }
 
+func (x *Run) GetConcurrency() *ConcurrencyDecision {
+	if x != nil {
+		return x.Concurrency
+	}
+	return nil
+}
+
+// ConcurrencyDecision is the width a Run executed at, and why.
+//
+// Written for every Run whose stage executes Cases, reduced or not. Presence
+// means "this stage had a concurrency" — a fact the message can establish —
+// rather than "a reduction happened", which `requested != effective` already
+// says. Recording it only on reduction would leave a Run that ran at 32 and
+// one that ran at 8 byte-identical, so the record could not answer whether two
+// Runs are comparable.
+//
+// Absent for a stage that invokes no agent: Value works over Assets and has no
+// concurrency to report.
+type ConcurrencyDecision struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// What the user asked for.
+	//
+	// ABSENT when they did not ask and the built-in default applied — which is
+	// the path almost every user takes. The distinction is load-bearing for the
+	// report docs/debt.md#44 requires: telling someone "you requested 8, we gave
+	// you 5" when they requested nothing trains them to distrust the message.
+	Requested *int32 `protobuf:"varint,1,opt,name=requested,proto3,oneof" json:"requested,omitempty"`
+	// What the Run actually used.
+	Effective int32 `protobuf:"varint,2,opt,name=effective,proto3" json:"effective,omitempty"`
+	// Why the engine reduced it, or UNSPECIFIED when it did not.
+	Reason ConcurrencyReason `protobuf:"varint,3,opt,name=reason,proto3,enum=kno.v1.ConcurrencyReason" json:"reason,omitempty"`
+	// The cost-cap headroom at the moment of the decision, in micro-USD.
+	//
+	// Named for WHEN it was read. SpendRecorded carries a field of the same
+	// shape for the LIVE remaining budget, and mixing a one-shot open-time
+	// snapshot into that series would plot a lie.
+	HeadroomUsdMicros int64 `protobuf:"varint,4,opt,name=headroom_usd_micros,json=headroomUsdMicros,proto3" json:"headroom_usd_micros,omitempty"`
+	// What one Case was estimated to cost when the decision was made.
+	//
+	// Carried so the arithmetic is reproducible rather than asserted. The engine
+	// divides a fraction of the headroom by this to get an affordable width, and
+	// a consumer given only the headroom cannot check the result — they can only
+	// solve for the terms they were not told.
+	PerCaseEstimateUsdMicros int64 `protobuf:"varint,5,opt,name=per_case_estimate_usd_micros,json=perCaseEstimateUsdMicros,proto3" json:"per_case_estimate_usd_micros,omitempty"`
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
+}
+
+func (x *ConcurrencyDecision) Reset() {
+	*x = ConcurrencyDecision{}
+	mi := &file_kno_v1_run_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConcurrencyDecision) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConcurrencyDecision) ProtoMessage() {}
+
+func (x *ConcurrencyDecision) ProtoReflect() protoreflect.Message {
+	mi := &file_kno_v1_run_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConcurrencyDecision.ProtoReflect.Descriptor instead.
+func (*ConcurrencyDecision) Descriptor() ([]byte, []int) {
+	return file_kno_v1_run_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *ConcurrencyDecision) GetRequested() int32 {
+	if x != nil && x.Requested != nil {
+		return *x.Requested
+	}
+	return 0
+}
+
+func (x *ConcurrencyDecision) GetEffective() int32 {
+	if x != nil {
+		return x.Effective
+	}
+	return 0
+}
+
+func (x *ConcurrencyDecision) GetReason() ConcurrencyReason {
+	if x != nil {
+		return x.Reason
+	}
+	return ConcurrencyReason_CONCURRENCY_REASON_UNSPECIFIED
+}
+
+func (x *ConcurrencyDecision) GetHeadroomUsdMicros() int64 {
+	if x != nil {
+		return x.HeadroomUsdMicros
+	}
+	return 0
+}
+
+func (x *ConcurrencyDecision) GetPerCaseEstimateUsdMicros() int64 {
+	if x != nil {
+		return x.PerCaseEstimateUsdMicros
+	}
+	return 0
+}
+
 // CaseExecution carries the facts that only mean something for a Run that
 // actually executed Cases.
 //
@@ -538,7 +720,7 @@ type CaseExecution struct {
 
 func (x *CaseExecution) Reset() {
 	*x = CaseExecution{}
-	mi := &file_kno_v1_run_proto_msgTypes[1]
+	mi := &file_kno_v1_run_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -550,7 +732,7 @@ func (x *CaseExecution) String() string {
 func (*CaseExecution) ProtoMessage() {}
 
 func (x *CaseExecution) ProtoReflect() protoreflect.Message {
-	mi := &file_kno_v1_run_proto_msgTypes[1]
+	mi := &file_kno_v1_run_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -563,7 +745,7 @@ func (x *CaseExecution) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CaseExecution.ProtoReflect.Descriptor instead.
 func (*CaseExecution) Descriptor() ([]byte, []int) {
-	return file_kno_v1_run_proto_rawDescGZIP(), []int{1}
+	return file_kno_v1_run_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *CaseExecution) GetDevCaseCount() int32 {
@@ -640,7 +822,7 @@ var File_kno_v1_run_proto protoreflect.FileDescriptor
 
 const file_kno_v1_run_proto_rawDesc = "" +
 	"\n" +
-	"\x10kno/v1/run.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/portfolio.proto\"\xbe\b\n" +
+	"\x10kno/v1/run.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/portfolio.proto\"\x92\t\n" +
 	"\x03Run\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12#\n" +
 	"\x05stage\x18\x02 \x01(\x0e2\r.kno.v1.StageR\x05stage\x12\x1d\n" +
@@ -671,10 +853,20 @@ const file_kno_v1_run_proto_rawDesc = "" +
 	"\n" +
 	"generation\x18\x17 \x01(\v2\x12.kno.v1.GenerationH\x02R\n" +
 	"generation\x88\x01\x01\x122\n" +
-	"\x15pricing_table_version\x18\x18 \x01(\tR\x13pricingTableVersionB\x0e\n" +
+	"\x15pricing_table_version\x18\x18 \x01(\tR\x13pricingTableVersion\x12B\n" +
+	"\vconcurrency\x18\x19 \x01(\v2\x1b.kno.v1.ConcurrencyDecisionH\x03R\vconcurrency\x88\x01\x01B\x0e\n" +
 	"\f_finished_atB\x11\n" +
 	"\x0f_case_executionB\r\n" +
-	"\v_generation\"\xef\x03\n" +
+	"\v_generationB\x0e\n" +
+	"\f_concurrency\"\x87\x02\n" +
+	"\x13ConcurrencyDecision\x12!\n" +
+	"\trequested\x18\x01 \x01(\x05H\x00R\trequested\x88\x01\x01\x12\x1c\n" +
+	"\teffective\x18\x02 \x01(\x05R\teffective\x121\n" +
+	"\x06reason\x18\x03 \x01(\x0e2\x19.kno.v1.ConcurrencyReasonR\x06reason\x12.\n" +
+	"\x13headroom_usd_micros\x18\x04 \x01(\x03R\x11headroomUsdMicros\x12>\n" +
+	"\x1cper_case_estimate_usd_micros\x18\x05 \x01(\x03R\x18perCaseEstimateUsdMicrosB\f\n" +
+	"\n" +
+	"_requested\"\xef\x03\n" +
 	"\rCaseExecution\x12$\n" +
 	"\x0edev_case_count\x18\x01 \x01(\x05R\fdevCaseCount\x12,\n" +
 	"\x12holdout_case_count\x18\x02 \x01(\x05R\x10holdoutCaseCount\x120\n" +
@@ -700,7 +892,10 @@ const file_kno_v1_run_proto_rawDesc = "" +
 	"\x14RUN_STATUS_COMPLETED\x10\x02\x12\x15\n" +
 	"\x11RUN_STATUS_FAILED\x10\x03\x12\x1d\n" +
 	"\x19RUN_STATUS_BUDGET_STOPPED\x10\x04\x12\x1a\n" +
-	"\x16RUN_STATUS_INTERRUPTED\x10\x05By\n" +
+	"\x16RUN_STATUS_INTERRUPTED\x10\x05*X\n" +
+	"\x11ConcurrencyReason\x12\"\n" +
+	"\x1eCONCURRENCY_REASON_UNSPECIFIED\x10\x00\x12\x1f\n" +
+	"\x1bCONCURRENCY_REASON_COST_CAP\x10\x01By\n" +
 	"\n" +
 	"com.kno.v1B\bRunProtoP\x01Z(github.com/knograph/kno/gen/kno/v1;knov1\xa2\x02\x03KXX\xaa\x02\x06Kno.V1\xca\x02\x06Kno\\V1\xe2\x02\x12Kno\\V1\\GPBMetadata\xea\x02\aKno::V1b\x06proto3"
 
@@ -716,31 +911,35 @@ func file_kno_v1_run_proto_rawDescGZIP() []byte {
 	return file_kno_v1_run_proto_rawDescData
 }
 
-var file_kno_v1_run_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_kno_v1_run_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_kno_v1_run_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_kno_v1_run_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_kno_v1_run_proto_goTypes = []any{
-	(Stage)(0),            // 0: kno.v1.Stage
-	(RunStatus)(0),        // 1: kno.v1.RunStatus
-	(*Run)(nil),           // 2: kno.v1.Run
-	(*CaseExecution)(nil), // 3: kno.v1.CaseExecution
-	(*AgentRef)(nil),      // 4: kno.v1.AgentRef
-	(Direction)(0),        // 5: kno.v1.Direction
-	(*Budget)(nil),        // 6: kno.v1.Budget
-	(*Generation)(nil),    // 7: kno.v1.Generation
+	(Stage)(0),                  // 0: kno.v1.Stage
+	(RunStatus)(0),              // 1: kno.v1.RunStatus
+	(ConcurrencyReason)(0),      // 2: kno.v1.ConcurrencyReason
+	(*Run)(nil),                 // 3: kno.v1.Run
+	(*ConcurrencyDecision)(nil), // 4: kno.v1.ConcurrencyDecision
+	(*CaseExecution)(nil),       // 5: kno.v1.CaseExecution
+	(*AgentRef)(nil),            // 6: kno.v1.AgentRef
+	(Direction)(0),              // 7: kno.v1.Direction
+	(*Budget)(nil),              // 8: kno.v1.Budget
+	(*Generation)(nil),          // 9: kno.v1.Generation
 }
 var file_kno_v1_run_proto_depIdxs = []int32{
 	0, // 0: kno.v1.Run.stage:type_name -> kno.v1.Stage
-	4, // 1: kno.v1.Run.agent:type_name -> kno.v1.AgentRef
-	5, // 2: kno.v1.Run.goal_direction:type_name -> kno.v1.Direction
-	6, // 3: kno.v1.Run.budget:type_name -> kno.v1.Budget
+	6, // 1: kno.v1.Run.agent:type_name -> kno.v1.AgentRef
+	7, // 2: kno.v1.Run.goal_direction:type_name -> kno.v1.Direction
+	8, // 3: kno.v1.Run.budget:type_name -> kno.v1.Budget
 	1, // 4: kno.v1.Run.status:type_name -> kno.v1.RunStatus
-	3, // 5: kno.v1.Run.case_execution:type_name -> kno.v1.CaseExecution
-	7, // 6: kno.v1.Run.generation:type_name -> kno.v1.Generation
-	7, // [7:7] is the sub-list for method output_type
-	7, // [7:7] is the sub-list for method input_type
-	7, // [7:7] is the sub-list for extension type_name
-	7, // [7:7] is the sub-list for extension extendee
-	0, // [0:7] is the sub-list for field type_name
+	5, // 5: kno.v1.Run.case_execution:type_name -> kno.v1.CaseExecution
+	9, // 6: kno.v1.Run.generation:type_name -> kno.v1.Generation
+	4, // 7: kno.v1.Run.concurrency:type_name -> kno.v1.ConcurrencyDecision
+	2, // 8: kno.v1.ConcurrencyDecision.reason:type_name -> kno.v1.ConcurrencyReason
+	9, // [9:9] is the sub-list for method output_type
+	9, // [9:9] is the sub-list for method input_type
+	9, // [9:9] is the sub-list for extension type_name
+	9, // [9:9] is the sub-list for extension extendee
+	0, // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_kno_v1_run_proto_init() }
@@ -751,13 +950,14 @@ func file_kno_v1_run_proto_init() {
 	file_kno_v1_common_proto_init()
 	file_kno_v1_portfolio_proto_init()
 	file_kno_v1_run_proto_msgTypes[0].OneofWrappers = []any{}
+	file_kno_v1_run_proto_msgTypes[1].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kno_v1_run_proto_rawDesc), len(file_kno_v1_run_proto_rawDesc)),
-			NumEnums:      2,
-			NumMessages:   2,
+			NumEnums:      3,
+			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
