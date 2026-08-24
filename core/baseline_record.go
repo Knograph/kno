@@ -358,6 +358,111 @@ func (o BaselineOptions) emitOpening(
 	return o.emitRunStarted(ctx, agg, o.DevCases)
 }
 
+// emitConcurrencyReduced reports a width the engine chose rather than the user.
+//
+// Only on an actual reduction: a run that got what it asked for has no news,
+// and Run.concurrency records the decision either way. Emitted after the
+// opening event, so a consumer has the run's identity before its caveats.
+//
+// Nothing to report when nothing was decided — a stage that executes no Cases
+// has no concurrency.
+func (o BaselineOptions) emitConcurrencyReduced(ctx context.Context, agg *aggregator) error {
+	d := o.concurrency
+	if d == nil || d.GetReason() == knov1.ConcurrencyReason_CONCURRENCY_REASON_UNSPECIFIED {
+		return nil
+	}
+	return o.appendEvent(ctx, agg, &knov1.Event{
+		Payload: &knov1.Event_ConcurrencyReduced{
+			ConcurrencyReduced: &knov1.ConcurrencyReduced{Decision: d},
+		},
+	}, "concurrency-reduced")
+}
+
+// progressTicker emits StageProgress until stop is called.
+//
+// A ticker rather than a per-Case emission, because AppendEvent is one fsync
+// each under synchronous=FULL, on the same serialized writer as the outcome
+// row that prevents double-spend. Per-Case would put four to six durable
+// writes behind every agent call and queue them in front of the write whose
+// loss costs money.
+//
+// One second, chosen against a stated target rather than picked: a live view
+// is useful at about 1Hz, and a 1M-Case run must not add more than ~10% to
+// durable writes. At 1Hz a run of any length adds one write per second.
+//
+// The returned stop function blocks until the goroutine has finished, which is
+// what keeps RunFinished last. appendEvent refuses a late append anyway, but a
+// refusal is an error nobody reads; joining means there is nothing to refuse.
+func (o BaselineOptions) progressTicker(
+	ctx context.Context,
+	agg *aggregator,
+	total int,
+	startedAt time.Time,
+) (stop func()) {
+	if o.ProgressInterval <= 0 {
+		return func() {}
+	}
+
+	done := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		t := time.NewTicker(o.ProgressInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+				// WithoutCancel: a budget stop and a Ctrl-C are exactly when a
+				// watcher most wants to know where the run got to, and both
+				// cancel the caller's context.
+				_ = o.emitStageProgress(context.WithoutCancel(ctx), agg, total, startedAt)
+			}
+		}
+	}()
+
+	// Idempotent: the caller defers it as a safety net for early returns AND
+	// calls it explicitly before closeRun. Closing a channel twice panics.
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			close(done)
+			<-finished
+		})
+	}
+}
+
+// emitStageProgress reports where the run has got to.
+func (o BaselineOptions) emitStageProgress(
+	ctx context.Context,
+	agg *aggregator,
+	total int,
+	startedAt time.Time,
+) error {
+	scored, errored := agg.counts()
+	attempted := scored + errored
+
+	// Cases per second over the whole run so far, not since the last tick.
+	// A rate over a one-second window swings wildly when a single Case takes
+	// longer than the window, which for an LLM call is most of them.
+	var rate float64
+	if elapsed := o.now().Sub(startedAt).Seconds(); elapsed > 0 {
+		rate = float64(attempted) / elapsed
+	}
+
+	return o.appendEvent(ctx, agg, &knov1.Event{
+		Payload: &knov1.Event_StageProgress{StageProgress: &knov1.StageProgress{
+			Stage:          knov1.Stage_STAGE_BASELINE,
+			Attempted:      int32(attempted), //nolint:gosec // bounded by the eval set
+			Scored:         int32(scored),    //nolint:gosec // bounded by the eval set
+			Errored:        int32(errored),   //nolint:gosec // bounded by the eval set
+			TotalCases:     int32(total),     //nolint:gosec // bounded by the eval set
+			CasesPerSecond: rate,
+		}},
+	}, "stage-progress")
+}
+
 // emitRunResumed reports that this process picked up an interrupted Run.
 //
 // A resumed Run used to emit a second RunStarted carrying the ORIGINAL total,

@@ -51,6 +51,11 @@ func (o BaselineOptions) closeRun(
 	// resume that goes on to score 200 cleanly still reports "not a usable
 	// baseline" forever, because the branch that sets the flag has no branch
 	// that unsets it.
+	// The width this Run executed at, recorded whether or not it was reduced.
+	// A Run that ran at 32 and one that ran at 8 are otherwise identical on
+	// the record, which cannot then answer whether two Runs are comparable.
+	run.Concurrency = o.concurrency
+
 	run.ErrorRateExceeded = false
 	run.IncompleteReason = ""
 

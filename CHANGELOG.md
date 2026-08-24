@@ -18,6 +18,19 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
+- A concurrency the engine chooses is now reported rather than silent. `checkFeasible` narrows the
+  width when the cost cap cannot admit what was asked for; it did so with no event, no log line,
+  and no field on the `Run`. A `ConcurrencyReduced` event now says so while it is happening, and
+  `Run.concurrency` records the decision afterwards — for every Case-executing run, reduced or
+  not, so two runs can be compared. Repays [debt #44](docs/debt.md#44).
+- `StageProgress` heartbeats, **off by default**. Every event is one fsync under
+  `synchronous=FULL` on the same serialized writer as the outcome row that prevents double-spend,
+  so a heartbeat nobody watches is write contention in front of the write whose loss costs money.
+  Nothing turns it on yet — the flag is M2-11. `core.DefaultProgressInterval` is 1 Hz, chosen
+  against two stated bounds rather than picked, and the rate is averaged over the whole run rather
+  than the last interval, because a window shorter than one LLM call produces a number that swings
+  on nothing.
+
 - `ConcurrencyDecision`, carried by `Run.concurrency` and by a new `ConcurrencyReduced` event, for
   a concurrency the engine chooses rather than the user. **Nothing emits or writes them yet** —
   the emitter lands with M2-10c, and until then an absent `Run.concurrency` means "not recorded",

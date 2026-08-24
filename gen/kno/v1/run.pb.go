@@ -577,14 +577,25 @@ type ConcurrencyDecision struct {
 	// What the Run actually used.
 	Effective int32 `protobuf:"varint,2,opt,name=effective,proto3" json:"effective,omitempty"`
 	// Why the engine reduced it, or UNSPECIFIED when it did not.
+	//
+	// Also the discriminator for the two arithmetic fields below: UNSPECIFIED
+	// means no cap was in play and both are zero because there was nothing to
+	// measure, not because the measurement came out at zero.
 	Reason ConcurrencyReason `protobuf:"varint,3,opt,name=reason,proto3,enum=kno.v1.ConcurrencyReason" json:"reason,omitempty"`
 	// The cost-cap headroom at the moment of the decision, in micro-USD.
+	//
+	// ZERO when reason is UNSPECIFIED: no cost cap constrained the width, so
+	// there was no headroom to read. `reason` is the discriminator — read it
+	// before either of the two arithmetic fields below, which are terms of a
+	// computation that only happens under a cap.
 	//
 	// Named for WHEN it was read. SpendRecorded carries a field of the same
 	// shape for the LIVE remaining budget, and mixing a one-shot open-time
 	// snapshot into that series would plot a lie.
 	HeadroomUsdMicros int64 `protobuf:"varint,4,opt,name=headroom_usd_micros,json=headroomUsdMicros,proto3" json:"headroom_usd_micros,omitempty"`
 	// What one Case was estimated to cost when the decision was made.
+	//
+	// ZERO when reason is UNSPECIFIED, for the same reason as the field above.
 	//
 	// Carried so the arithmetic is reproducible rather than asserted. The engine
 	// divides a fraction of the headroom by this to get an affordable width, and

@@ -3056,3 +3056,210 @@ func TestAStreamWithNoOpeningEventStillGetsOne(t *testing.T) {
 			"which is the only payload carrying the run's identity", got)
 	}
 }
+
+// TestAReducedConcurrencyIsReportedRatherThanSilent.
+//
+// checkFeasible narrows the width when the cost cap cannot admit what was
+// asked for. It did so with no event, no log line, and no field on the Run —
+// docs/debt.md#44 — and a 6x slowdown nobody asked for is user-visible state,
+// which CLAUDE.md says is a new event type and never a side channel.
+func TestAReducedConcurrencyIsReportedRatherThanSilent(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// $0.05 a Case against a $1.00 cap: the headroom admits 25% of 20 Cases in
+	// flight, so 5 — well under the 32 asked for.
+	h := newHarness(t, 100, 20, fake.Options{CostPerCallUSDMicros: 50_000})
+	h.opts.Concurrency = 32
+	h.opts.EstCostPerCallUSDMicros = 50_000
+	h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 1_000_000}, nil, 0)
+
+	res, err := core.Baseline(ctx, h.evals, h.opts)
+	if err != nil && !errors.Is(err, errs.ErrBudgetExceeded) {
+		t.Fatalf("Baseline: %v", err)
+	}
+
+	var seen *knov1.ConcurrencyDecision
+	for _, ev := range eventLog(t, h.dbPath, "run-1") {
+		if p, ok := ev.GetPayload().(*knov1.Event_ConcurrencyReduced); ok {
+			seen = p.ConcurrencyReduced.GetDecision()
+		}
+	}
+	if seen == nil {
+		t.Fatal("the run narrowed concurrency and emitted nothing; the reduction " +
+			"is exactly the user-visible state that must not travel in a side channel")
+	}
+	if seen.GetEffective() >= 32 {
+		t.Errorf("effective=%d, want a reduction below the requested 32", seen.GetEffective())
+	}
+	if seen.Requested == nil || seen.GetRequested() != 32 {
+		t.Errorf("requested=%v; an explicit --concurrency must be reported as asked for",
+			seen.GetRequested())
+	}
+	if seen.GetReason() != knov1.ConcurrencyReason_CONCURRENCY_REASON_COST_CAP {
+		t.Errorf("reason=%v, want COST_CAP", seen.GetReason())
+	}
+	// Both terms of the arithmetic, so the number is checkable rather than
+	// asserted: effective is a fraction of headroom divided by the per-Case
+	// estimate, and one term alone lets a reader solve for the other rather
+	// than verify the result.
+	if seen.GetHeadroomUsdMicros() <= 0 || seen.GetPerCaseEstimateUsdMicros() <= 0 {
+		t.Errorf("headroom=%d per-case=%d; both are needed to reproduce the decision",
+			seen.GetHeadroomUsdMicros(), seen.GetPerCaseEstimateUsdMicros())
+	}
+
+	// And the same decision survives on the record, for a user who was not watching.
+	onRun := res.Run.GetConcurrency()
+	if onRun == nil {
+		t.Fatal("the Run records no concurrency; the event is gone once the stream is")
+	}
+	if onRun.GetEffective() != seen.GetEffective() {
+		t.Errorf("the Run says %d and the event said %d", onRun.GetEffective(), seen.GetEffective())
+	}
+}
+
+// TestAnUnreducedRunStillRecordsItsWidth.
+//
+// Presence means "this stage had a concurrency", not "a reduction happened" —
+// requested != effective already says the second. Recording only reductions
+// would leave a Run that ran at 32 and one that ran at 8 byte-identical, so
+// the record could not answer whether two Runs are comparable.
+func TestAnUnreducedRunStillRecordsItsWidth(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	h := newHarness(t, 20, 5, fake.Options{})
+	h.opts.Concurrency = 2
+
+	res, err := core.Baseline(ctx, h.evals, h.opts)
+	if err != nil {
+		t.Fatalf("Baseline: %v", err)
+	}
+
+	d := res.Run.GetConcurrency()
+	if d == nil {
+		t.Fatal("no concurrency recorded on a run that executed Cases")
+	}
+	if d.GetEffective() != 2 {
+		t.Errorf("effective=%d, want 2", d.GetEffective())
+	}
+	if d.GetReason() != knov1.ConcurrencyReason_CONCURRENCY_REASON_UNSPECIFIED {
+		t.Errorf("reason=%v on a run nothing reduced", d.GetReason())
+	}
+	// No event: a run that got what it asked for has no news.
+	for _, ev := range eventLog(t, h.dbPath, "run-1") {
+		if _, ok := ev.GetPayload().(*knov1.Event_ConcurrencyReduced); ok {
+			t.Error("emitted ConcurrencyReduced for a run nothing reduced")
+		}
+	}
+}
+
+// TestADefaultedConcurrencyIsNotReportedAsARequest.
+//
+// checkFeasible substitutes executor.DefaultConcurrency() when --concurrency
+// is unset, and its own comment calls that "the path almost every user takes".
+// Recording the substituted value as what the user asked for would make the
+// report say "you requested 8, we gave you 5" to someone who requested
+// nothing, which is how a report earns distrust.
+func TestADefaultedConcurrencyIsNotReportedAsARequest(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	h := newHarness(t, 20, 5, fake.Options{})
+	h.opts.Concurrency = 0 // unset, as the CLI leaves it by default
+
+	res, err := core.Baseline(ctx, h.evals, h.opts)
+	if err != nil {
+		t.Fatalf("Baseline: %v", err)
+	}
+
+	d := res.Run.GetConcurrency()
+	if d == nil {
+		t.Fatal("no concurrency recorded")
+	}
+	if d.Requested != nil {
+		t.Errorf("requested=%d recorded for a user who set no --concurrency",
+			d.GetRequested())
+	}
+	if d.GetEffective() <= 0 {
+		t.Errorf("effective=%d; the width actually used is always known",
+			d.GetEffective())
+	}
+}
+
+// TestProgressHeartbeatsStopBeforeTheRunCloses.
+//
+// StageProgress is emitted from a ticker goroutine — the first emitter that is
+// not serialized with the sink. RunFinished's payload promises it is always
+// the last event, and a ticker still running when closeRun writes it can take
+// a sequence number after it.
+//
+// The ticker is stopped and JOINED before closeRun rather than deferred after
+// it: a deferred stop runs once closeRun has already returned, leaving the
+// ticker free to take a sequence number during it.
+//
+// This test does NOT deterministically catch that — reverting to a deferred
+// stop leaves it green, because whether a tick lands inside closeRun's window
+// is a race. The deterministic guarantee is appendEvent's `closed` flag, which
+// refuses any append after RunFinished and is tested directly in
+// TestNothingIsAppendedAfterRunFinished. Stopping first is belt to that
+// braces: a refusal is an error nobody reads.
+//
+// What this test does pin is that heartbeats actually fire mid-run, and that
+// the sequence stays contiguous with a concurrent emitter running — which
+// nothing else covers.
+func TestProgressHeartbeatsStopBeforeTheRunCloses(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// Slow Cases and a fast heartbeat, so several ticks land mid-run.
+	h := newHarness(t, 12, 4, fake.Options{Latency: 20 * time.Millisecond})
+	h.opts.Concurrency = 1
+	h.opts.ProgressInterval = 5 * time.Millisecond
+
+	if _, err := core.Baseline(ctx, h.evals, h.opts); err != nil {
+		t.Fatalf("Baseline: %v", err)
+	}
+
+	log := eventLog(t, h.dbPath, "run-1")
+	var progress int
+	for _, ev := range log {
+		if _, ok := ev.GetPayload().(*knov1.Event_StageProgress); ok {
+			progress++
+		}
+	}
+	if progress == 0 {
+		t.Fatal("no heartbeats were emitted, so the ordering this test is about " +
+			"was never exercised")
+	}
+	if got := payloadName(log[len(log)-1]); got != "RunFinished" {
+		t.Errorf("the last event is %s, want RunFinished — a heartbeat outran close", got)
+	}
+	// And the sequence is still contiguous with a concurrent emitter running.
+	for i, ev := range log {
+		if want := int64(i + 1); ev.GetSequence() != want {
+			t.Fatalf("event %d has sequence %d, want %d", i, ev.GetSequence(), want)
+		}
+	}
+}
+
+// TestProgressIsOffByDefault.
+//
+// Every event is one fsync under synchronous=FULL, on the same serialized
+// writer as the outcome row that prevents double-spend. A heartbeat nobody is
+// watching is pure write contention in front of the write whose loss costs
+// money, so it is opt-in.
+func TestProgressIsOffByDefault(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	h := newHarness(t, 10, 4, fake.Options{Latency: 10 * time.Millisecond})
+	if _, err := core.Baseline(ctx, h.evals, h.opts); err != nil {
+		t.Fatalf("Baseline: %v", err)
+	}
+	for _, ev := range eventLog(t, h.dbPath, "run-1") {
+		if _, ok := ev.GetPayload().(*knov1.Event_StageProgress); ok {
+			t.Fatal("a heartbeat was emitted with ProgressInterval unset")
+		}
+	}
+}

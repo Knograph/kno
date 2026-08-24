@@ -80,6 +80,25 @@ type BaselineOptions struct {
 	// Concurrency bounds in-flight work.
 	Concurrency int
 
+	// ProgressInterval is how often a StageProgress heartbeat is emitted.
+	//
+	// Zero disables it, which is the default: every event is one fsync under
+	// synchronous=FULL on the same serialized writer as the outcome row that
+	// prevents double-spend, so a heartbeat nobody watches is pure write
+	// contention. The CLI turns it on when there is something rendering.
+	//
+	// DefaultProgressInterval is the figure to pass, chosen against a stated
+	// target rather than picked.
+	ProgressInterval time.Duration
+
+	// concurrency records what checkFeasible decided, for the event stream and
+	// the Run record.
+	//
+	// Unexported: it is an OUTPUT of the feasibility check, not an input a
+	// caller supplies. A caller setting it would be describing a decision that
+	// had not been made yet.
+	concurrency *knov1.ConcurrencyDecision
+
 	// Resume continues an existing run rather than starting one.
 	Resume bool
 
@@ -348,6 +367,18 @@ func Baseline(
 	if err := opts.emitOpening(ctx, agg, maxSeq, len(done), restored); err != nil {
 		return nil, err
 	}
+	// After the opening event: a consumer should have the run's identity
+	// before its caveats.
+	if err := opts.emitConcurrencyReduced(ctx, agg); err != nil {
+		return nil, err
+	}
+	// Stopped and JOINED before closeRun, so RunFinished is last by
+	// construction rather than by appendEvent refusing a late append. A
+	// refusal is an error nobody reads.
+	stopProgress := opts.progressTicker(ctx, agg, opts.DevCases, opts.now())
+	// The defer is the safety net for the early returns below; the explicit
+	// call before closeRun is what actually orders RunFinished last.
+	defer stopProgress()
 	// draining is set the moment a fatal error starts the shutdown, and read by
 	// the sink to tell "this Case was cancelled BY the stop" from "this Case
 	// timed out on its own".
@@ -375,6 +406,10 @@ func Baseline(
 			},
 		})
 
+	// Before closeRun, not deferred after it: a deferred stop runs once
+	// closeRun has already returned, leaving the ticker free to take a
+	// sequence number during it. RunFinished is documented as the last event.
+	stopProgress()
 	return opts.closeRun(ctx, run, agg, stats, runErr)
 }
 
