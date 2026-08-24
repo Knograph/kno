@@ -569,20 +569,25 @@ func TestPurgeKeepsTheRunResumable(t *testing.T) {
 	//
 	// Asserting on the observable that actually differs, because the first
 	// version of this test passed against a purge that deleted every row.
-	seqBefore, seqAfter := eventSequences(t, db, "r1")
-	if seqAfter != seqBefore {
-		t.Errorf("the event sequence grew from %d to %d across a resume of a "+
+	outcomes, caseEvents := outcomesAndCaseEvents(t, db, "r1")
+	if caseEvents != outcomes {
+		t.Errorf("per-Case events grew from %d to %d across a resume of a "+
 			"fully-completed run; the resume re-executed %d Case(s) and paid "+
 			"for them again, which means the purge destroyed the done-markers",
-			seqBefore, seqAfter, seqAfter-seqBefore)
+			outcomes, caseEvents, caseEvents-outcomes)
 	}
 }
 
-// eventSequences returns the run's max event sequence before and after the
-// caller's resume, by reading the database directly. It is deliberately not
-// routed through the CLI: the report is what the assertion above already
-// showed cannot distinguish the two cases.
-func eventSequences(t *testing.T, dbPath, runID string) (before, after int64) {
+// outcomesAndCaseEvents returns how many outcomes the run recorded and how
+// many PER-CASE events it emitted, by reading the database directly.
+//
+// Not routed through the CLI: the report is what the assertion above already
+// showed cannot distinguish a clean resume from one that re-ran paid work.
+//
+// Named for what it returns. It used to be called eventSequences and to
+// subtract a hardcoded count of run-level events, and neither the name nor the
+// arithmetic survived M2-10 adding run-level emitters.
+func outcomesAndCaseEvents(t *testing.T, dbPath, runID string) (outcomeCount, caseEvents int64) {
 	t.Helper()
 	// The caller has already resumed, so both readings come from the same
 	// database; "before" is reconstructed from the number of scored Cases,
@@ -593,18 +598,43 @@ func eventSequences(t *testing.T, dbPath, runID string) (before, after int64) {
 	}
 	defer func() { _ = db.Close() }()
 
-	var events, outcomes int64
-	if err := db.QueryRow(
-		`SELECT COUNT(*) FROM events WHERE run_id = ?`, runID).Scan(&events); err != nil {
-		t.Fatalf("counting events: %v", err)
-	}
+	var outcomes, perCase int64
 	if err := db.QueryRow(
 		`SELECT COUNT(*) FROM outcomes WHERE run_id = ?`, runID).Scan(&outcomes); err != nil {
 		t.Fatalf("counting outcomes: %v", err)
 	}
-	// One CaseScored per Case, plus RunStarted and RunFinished per process.
-	// A resume that re-ran everything would have twice the per-Case events.
-	return outcomes, events - 4
+	// Count only the PER-CASE events, by decoding each payload, rather than
+	// subtracting a hardcoded number of run-level ones.
+	//
+	// The old form was `events - 4`, meaning two processes x (RunStarted +
+	// RunFinished). Every arm of that arithmetic is now wrong or about to be:
+	// a resume emits RunResumed instead of a second RunStarted, and M2-10 adds
+	// run-level emitters whose count depends on how long the run took. What
+	// this test actually needs is "how many Cases were paid for", which is a
+	// property of the per-Case events alone.
+	rows, err := db.Query(`SELECT proto FROM events WHERE run_id = ?`, runID)
+	if err != nil {
+		t.Fatalf("reading events: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var blob []byte
+		if err := rows.Scan(&blob); err != nil {
+			t.Fatalf("scanning event: %v", err)
+		}
+		ev := &knov1.Event{}
+		if err := proto.Unmarshal(blob, ev); err != nil {
+			t.Fatalf("unmarshaling event: %v", err)
+		}
+		switch ev.GetPayload().(type) {
+		case *knov1.Event_CaseScored, *knov1.Event_CaseErrored:
+			perCase++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterating events: %v", err)
+	}
+	return outcomes, perCase
 }
 
 // TestPurgeRefusesAnUnknownRun: a typo must be a refusal, not a silent no-op

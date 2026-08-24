@@ -66,6 +66,27 @@ type aggregator struct {
 	// down. The store returns both from a single query for that reason.
 	priorCounted int
 
+	// emitMu serializes allocate-then-write so the sequence order and the
+	// INSERTION order are the same.
+	//
+	// next() alone is not enough: two goroutines can take 5 and 6 and commit
+	// them in the other order. A consumer reading by sequence is fine, but the
+	// API streams in insertion order, and it would see 6 then 5 and report a
+	// gap — the false positive Event.sequence exists to prevent.
+	//
+	// Unnecessary today, because every emitter is serialized: the opening
+	// events run before the executor, the sink is documented as one goroutine,
+	// and closeRun runs after it drains. M2-10c adds a ticker, which is the
+	// first emitter that is not.
+	emitMu sync.Mutex
+
+	// closed is set when RunFinished is written.
+	//
+	// The payload promises it is "always the last event" and nothing enforced
+	// it. A ticker that has not been stopped can otherwise append after close,
+	// which is a contract break a consumer cannot detect.
+	closed bool
+
 	// unrecoverable counts Cases that scored but whose number is gone —
 	// purged before the score lived in its own column, or holding a Score blob
 	// that could not be read back.
@@ -144,6 +165,21 @@ func (a *aggregator) meanLocked() *float64 {
 	return &m
 }
 
+// isClosed reports whether RunFinished has been written.
+func (a *aggregator) isClosed() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.closed
+}
+
+// markClosed records that RunFinished was written, so any later append fails
+// rather than silently violating the schema's "always the last event".
+func (a *aggregator) markClosed() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.closed = true
+}
+
 // next returns the next event sequence number.
 func (a *aggregator) next() int64 {
 	a.mu.Lock()
@@ -180,20 +216,67 @@ func (a *aggregator) seedSequence(from int64) {
 // Events carry identifiers and metrics, never content. The Case's input and the
 // agent's output stay in the store, which is the only package that handles
 // trace content.
-func (o BaselineOptions) emit(ctx context.Context, r executor.Result[*Case, caseOutcome], agg *aggregator) error {
-	ev := &knov1.Event{
-		RunId:     o.RunID,
-		EmittedAt: o.now().Format(time.RFC3339),
-		Sequence:  agg.next(),
-	}
+// appendEvent writes one event, allocating its sequence number LAST.
+//
+// The order is the whole point. Event.sequence exists so a consumer that sees
+// a gap knows it lost events rather than silently under-reporting, and a
+// number allocated before a path that returns without writing burns it.
+//
+// How bad a burn is depends on whether anything else has taken a number since.
+// Today nothing can — every emitter is serialized, so a burned number is
+// always the current maximum, MaxEventSequence returns the highest WRITTEN
+// sequence, and a resume reissues it. The gap heals. Once a concurrent emitter
+// exists (M2-10c's ticker) that stops being true, and the gap is then
+// permanent: MaxEventSequence cannot heal a hole below its own maximum.
+//
+// emit had exactly this shape — a sequence at construction, then an early
+// return on a budget refusal — and was safe only because sinkFunc returns
+// first on the same predicate, which is a coincidence of having one caller.
+// Every emitter goes through here so the rule holds when that stops.
+// The caller supplies an Event carrying only its Payload; the run ID, the
+// timestamp, and the sequence are filled here.
+//
+// A payload-carrying Event rather than the oneof interface because protoc
+// generates that interface unexported, so core cannot name it.
+func (o BaselineOptions) appendEvent(
+	ctx context.Context,
+	agg *aggregator,
+	ev *knov1.Event,
+	what string,
+) error {
+	ev.RunId = o.RunID
+	ev.EmittedAt = o.now().Format(time.RFC3339)
 
-	// A budget refusal is not an outcome for this Case — it was never
-	// attempted. Emitting one would put it in the errored count and make the
-	// three counts describe work that did not happen.
+	// Held across BOTH steps, so a concurrent emitter cannot interleave a
+	// lower sequence behind a higher one.
+	agg.emitMu.Lock()
+	defer agg.emitMu.Unlock()
+
+	if agg.isClosed() {
+		return fmt.Errorf("appending %s event: the run already emitted RunFinished, "+
+			"which the schema promises is the last event", what)
+	}
+	// Last, immediately before the write.
+	ev.Sequence = agg.next()
+	if err := o.Store.AppendEvent(ctx, ev); err != nil {
+		return fmt.Errorf("appending %s event: %w", what, err)
+	}
+	if _, done := ev.GetPayload().(*knov1.Event_RunFinished); done {
+		agg.markClosed()
+	}
+	return nil
+}
+
+func (o BaselineOptions) emit(ctx context.Context, r executor.Result[*Case, caseOutcome], agg *aggregator) error {
+	// Decided before any sequence number is taken. A budget refusal is not an
+	// outcome for this Case — it was never attempted. Emitting one would put it
+	// in the errored count and make the three counts describe work that did not
+	// happen.
 	if errors.Is(r.Err, errs.ErrBudgetExceeded) {
 		return nil
 	}
 
+	ev := &knov1.Event{}
 	if r.Done() {
 		// Counted here, after the outcome is persisted, so the Run's counts can
 		// never outrun the outcomes table.
@@ -220,18 +303,12 @@ func (o BaselineOptions) emit(ctx context.Context, r executor.Result[*Case, case
 		}}
 	}
 
-	if err := o.Store.AppendEvent(ctx, ev); err != nil {
-		return fmt.Errorf("appending event for %s: %w", r.Item.GetId(), err)
-	}
-	return nil
+	return o.appendEvent(ctx, agg, ev, "case "+r.Item.GetId())
 }
 
 // emitRunStarted opens the event stream.
 func (o BaselineOptions) emitRunStarted(ctx context.Context, agg *aggregator, total int) error {
-	ev := &knov1.Event{
-		RunId:     o.RunID,
-		EmittedAt: o.now().Format(time.RFC3339),
-		Sequence:  agg.next(),
+	return o.appendEvent(ctx, agg, &knov1.Event{
 		Payload: &knov1.Event_RunStarted{RunStarted: &knov1.RunStarted{
 			Stage:         knov1.Stage_STAGE_BASELINE,
 			Agent:         o.AgentRef,
@@ -239,11 +316,7 @@ func (o BaselineOptions) emitRunStarted(ctx context.Context, agg *aggregator, to
 			GoalDirection: o.Goal.Direction(),
 			TotalCases:    int32(total), //nolint:gosec // bounded by the eval set
 		}},
-	}
-	if err := o.Store.AppendEvent(ctx, ev); err != nil {
-		return fmt.Errorf("appending run-started event: %w", err)
-	}
-	return nil
+	}, "run-started")
 }
 
 // emitRunFinished closes the event stream. Always the last event.
@@ -261,16 +334,67 @@ func (o BaselineOptions) emitRunFinished(ctx context.Context, agg *aggregator, r
 		finished.AggregateScore = proto.Float64(*m)
 	}
 
-	ev := &knov1.Event{
-		RunId:     o.RunID,
-		EmittedAt: o.now().Format(time.RFC3339),
-		Sequence:  agg.next(),
-		Payload:   &knov1.Event_RunFinished{RunFinished: finished},
+	return o.appendEvent(ctx, agg,
+		&knov1.Event{Payload: &knov1.Event_RunFinished{RunFinished: finished}},
+		"run-finished")
+}
+
+// emitOpening writes the event that opens this process's contribution.
+//
+// RunStarted when the stream is empty, RunResumed when it is not — regardless
+// of whether --resume was passed. A resumed run whose first process died
+// before emitting anything still needs its identity on the wire, and a fresh
+// run cannot have a prior sequence to continue from.
+func (o BaselineOptions) emitOpening(
+	ctx context.Context,
+	agg *aggregator,
+	priorSeq int64,
+	alreadyDone int,
+	restored budget.Spend,
+) error {
+	if priorSeq > 0 {
+		return o.emitRunResumed(ctx, agg, alreadyDone, o.DevCases, restored)
 	}
-	if err := o.Store.AppendEvent(ctx, ev); err != nil {
-		return fmt.Errorf("appending run-finished event: %w", err)
+	return o.emitRunStarted(ctx, agg, o.DevCases)
+}
+
+// emitRunResumed reports that this process picked up an interrupted Run.
+//
+// A resumed Run used to emit a second RunStarted carrying the ORIGINAL total,
+// so a live view that resets progress on RunStarted jumped backward on every
+// resume. That is docs/debt.md#29.
+//
+// The two counts are in different coordinate systems and the payload's own
+// comment forbids mixing them: alreadyDone..total is OVERALL progress, and
+// 0..remaining is SESSION progress. Both are carried so a consumer can render
+// either without inventing the other.
+func (o BaselineOptions) emitRunResumed(
+	ctx context.Context,
+	agg *aggregator,
+	alreadyDone, total int,
+	restored budget.Spend,
+) error {
+	// Clamped, because the DIFFERENCE is not bounded by the eval set the way
+	// its operands are. checkResumable compares the eval content hash, the
+	// goal, and the agent — not the split — so a resume with a larger holdout
+	// fraction has fewer dev Cases than the first process already completed.
+	// confirmRun and checkFeasible both already guard this same subtraction;
+	// this is the only place that publishes it, and remaining is the
+	// denominator of SESSION progress, so a renderer divides by it.
+	if alreadyDone > total {
+		alreadyDone = total
 	}
-	return nil
+	return o.appendEvent(ctx, agg, &knov1.Event{
+		Payload: &knov1.Event_RunResumed{RunResumed: &knov1.RunResumed{
+			AlreadyCompleted: int32(alreadyDone),         //nolint:gosec // bounded by the eval set
+			Remaining:        int32(total - alreadyDone), //nolint:gosec // clamped non-negative above
+			TotalCases:       int32(total),               //nolint:gosec // bounded by the eval set
+			// Carried so a consumer can see the resumed run did NOT believe it
+			// had spent nothing — the cap-twice failure Guard.Restore closes.
+			RestoredCostUsdMicros: restored.CostUSDMicros,
+			RestoredCalls:         restored.Calls,
+		}},
+	}, "run-resumed")
 }
 
 // sinkFunc persists each Case's outcome and emits its event.
