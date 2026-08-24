@@ -226,11 +226,11 @@ func (o *BaselineOptions) checkFeasible(alreadyDone int) error {
 	// identical on the record. reason stays UNSPECIFIED and the two arithmetic
 	// fields stay zero, which the schema documents reason as discriminating.
 	o.concurrency = &knov1.ConcurrencyDecision{
-		Effective: int32(o.effectiveConcurrency()), //nolint:gosec // bounded by NumCPU or the flag
+		Effective: int32(o.effectiveConcurrency()), //nolint:gosec // validate bounds Concurrency at maxConcurrency
 		Reason:    knov1.ConcurrencyReason_CONCURRENCY_REASON_UNSPECIFIED,
 	}
 	if o.Concurrency > 0 {
-		o.concurrency.Requested = proto.Int32(int32(o.Concurrency)) //nolint:gosec // bounded by the flag
+		o.concurrency.Requested = proto.Int32(int32(o.Concurrency)) //nolint:gosec // validate bounds Concurrency at maxConcurrency
 	}
 
 	limits := o.Guard.Limits()
@@ -274,14 +274,17 @@ func (o *BaselineOptions) checkFeasible(alreadyDone int) error {
 		requested = executor.DefaultConcurrency()
 	}
 
-	// The terms are meaningful now: a cap was in play, so the arithmetic
-	// happened and a consumer can reproduce it.
-	o.concurrency.HeadroomUsdMicros = remaining
-	o.concurrency.PerCaseEstimateUsdMicros = perCall
-
 	if requested > affordable {
+		// Set together with the reason, because the proto documents reason as
+		// the discriminator for both: UNSPECIFIED means no cap constrained the
+		// width and these are zero because there was nothing to measure.
+		// Setting them for an unreduced run under a cap would falsify that in
+		// the common case — a consumer following the discriminator the schema
+		// told it to trust would read two live numbers it was promised absent.
 		o.concurrency.Reason = knov1.ConcurrencyReason_CONCURRENCY_REASON_COST_CAP
 		o.concurrency.Effective = int32(affordable)
+		o.concurrency.HeadroomUsdMicros = remaining
+		o.concurrency.PerCaseEstimateUsdMicros = perCall
 		o.Concurrency = affordable
 	}
 	return nil

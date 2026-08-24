@@ -256,13 +256,32 @@ func (o BaselineOptions) appendEvent(
 	ev *knov1.Event,
 	what string,
 ) error {
-	ev.RunId = o.RunID
-	ev.EmittedAt = o.now().Format(time.RFC3339)
+	return o.appendEventFunc(ctx, agg, func() *knov1.Event { return ev }, what)
+}
 
-	// Held across BOTH steps, so a concurrent emitter cannot interleave a
-	// lower sequence behind a higher one.
+// appendEventFunc is appendEvent for a payload whose CONTENTS must be read
+// under the same lock that orders the write.
+//
+// The progress heartbeat needs it. Reading the counts before taking emitMu
+// lets the sink write several CaseScored events at lower sequences while the
+// heartbeat waits, so a consumer replaying in order sees ten Cases scored and
+// then a heartbeat claiming five — progress going backwards against events
+// already delivered.
+func (o BaselineOptions) appendEventFunc(
+	ctx context.Context,
+	agg *aggregator,
+	build func() *knov1.Event,
+	what string,
+) error {
+	// Held across ALL of it, so a concurrent emitter cannot interleave a lower
+	// sequence behind a higher one, and cannot change the counts between the
+	// read and the write.
 	agg.emitMu.Lock()
 	defer agg.emitMu.Unlock()
+
+	ev := build()
+	ev.RunId = o.RunID
+	ev.EmittedAt = o.now().Format(time.RFC3339)
 
 	if agg.isClosed() {
 		return fmt.Errorf("appending %s event: the run already emitted RunFinished, "+
@@ -410,13 +429,15 @@ func (o BaselineOptions) progressTicker(
 	agg *aggregator,
 	total int,
 	startedAt time.Time,
-) (stop func()) {
+) (stop func() error) {
 	if o.ProgressInterval <= 0 {
-		return func() {}
+		return func() error { return nil }
 	}
 
 	done := make(chan struct{})
 	finished := make(chan struct{})
+	var failure atomic.Pointer[error]
+
 	go func() {
 		defer close(finished)
 		t := time.NewTicker(o.ProgressInterval)
@@ -426,22 +447,43 @@ func (o BaselineOptions) progressTicker(
 			case <-done:
 				return
 			case <-t.C:
-				// WithoutCancel: a budget stop and a Ctrl-C are exactly when a
-				// watcher most wants to know where the run got to, and both
-				// cancel the caller's context.
-				_ = o.emitStageProgress(context.WithoutCancel(ctx), agg, total, startedAt)
+				// Bounded by its own period. WithoutCancel alone would let a
+				// tick in flight at Ctrl-C add busy_timeout to shutdown for a
+				// write whose only value was live rendering — and unlike
+				// closeRun, which uses WithoutCancel because a Run left in
+				// RUNNING looks like a crash, losing a heartbeat costs
+				// nothing. The executor's sink takes the same bounded form.
+				tickCtx, cancel := context.WithTimeout(
+					context.WithoutCancel(ctx), o.ProgressInterval)
+				err := o.emitStageProgress(tickCtx, agg, total, startedAt)
+				cancel()
+				if err != nil {
+					// NOT swallowed. appendEvent allocates a sequence number
+					// immediately before the write, so a failed append burns
+					// one — and with a concurrent emitter running, that hole
+					// is below the maximum and MaxEventSequence can never heal
+					// it. A consumer reading the stream then correctly
+					// concludes it lost events. Measured: 48 permanent holes
+					// on a 12-Case run, exit 0.
+					failure.CompareAndSwap(nil, &err)
+					return
+				}
 			}
 		}
 	}()
 
-	// Idempotent: the caller defers it as a safety net for early returns AND
-	// calls it explicitly before closeRun. Closing a channel twice panics.
+	// Idempotent: the caller defers it as a panic guard AND calls it
+	// explicitly before closeRun. Closing a channel twice panics.
 	var once sync.Once
-	return func() {
+	return func() error {
 		once.Do(func() {
 			close(done)
 			<-finished
 		})
+		if err := failure.Load(); err != nil {
+			return *err
+		}
+		return nil
 	}
 }
 

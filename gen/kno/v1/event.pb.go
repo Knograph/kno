@@ -745,9 +745,15 @@ type StageProgress struct {
 	TotalCases int32 `protobuf:"varint,5,opt,name=total_cases,json=totalCases,proto3" json:"total_cases,omitempty"`
 	// Throughput, for the ETA a dashboard shows.
 	//
-	// Averaged over the whole run so far, not over the last interval. A rate
-	// measured across one heartbeat swings wildly when a single Case takes
-	// longer than the interval, which for an LLM call is most of them.
+	// Averaged over THIS PROCESS's work and THIS PROCESS's clock.
+	//
+	// Not over the last interval: a rate measured across one heartbeat swings
+	// wildly when a single Case takes longer than it, which for an LLM call is
+	// most of them. And not over the whole run: attempted below spans a resume
+	// while the clock starts when this process does, so a resume carrying 900
+	// completed Cases into a one-second-old process would report 900 a second.
+	//
+	// The counts above DO span the whole run — they pair with total_cases.
 	CasesPerSecond float64 `protobuf:"fixed64,6,opt,name=cases_per_second,json=casesPerSecond,proto3" json:"cases_per_second,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache

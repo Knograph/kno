@@ -3213,9 +3213,11 @@ func TestProgressHeartbeatsStopBeforeTheRunCloses(t *testing.T) {
 	ctx := context.Background()
 
 	// Slow Cases and a fast heartbeat, so several ticks land mid-run.
-	h := newHarness(t, 12, 4, fake.Options{Latency: 20 * time.Millisecond})
+	// Above minProgressInterval, with Cases slow enough that several ticks
+	// still land mid-run.
+	h := newHarness(t, 12, 4, fake.Options{Latency: 40 * time.Millisecond})
 	h.opts.Concurrency = 1
-	h.opts.ProgressInterval = 5 * time.Millisecond
+	h.opts.ProgressInterval = core.DefaultProgressInterval / 50 // 20ms
 
 	if _, err := core.Baseline(ctx, h.evals, h.opts); err != nil {
 		t.Fatalf("Baseline: %v", err)
@@ -3279,7 +3281,7 @@ func TestThroughputOnAResumeMeasuresThisProcessOnly(t *testing.T) {
 
 	const devCases = 40
 
-	h := newHarness(t, devCases, 10, fake.Options{Latency: 5 * time.Millisecond})
+	h := newHarness(t, devCases, 10, fake.Options{Latency: 30 * time.Millisecond})
 	h.opts.Concurrency = 1
 	h.opts.Guard = budget.New(budget.Limits{MaxLLMCalls: 30}, nil, 0)
 	if _, err := core.Baseline(ctx, h.evals, h.opts); !errors.Is(err, errs.ErrBudgetExceeded) {
@@ -3288,7 +3290,7 @@ func TestThroughputOnAResumeMeasuresThisProcessOnly(t *testing.T) {
 
 	opts := h.opts
 	opts.Resume = true
-	opts.ProgressInterval = 2 * time.Millisecond
+	opts.ProgressInterval = core.DefaultProgressInterval / 50 // 20ms, above the floor
 	opts.Guard = budget.New(budget.Limits{MaxLLMCalls: 1_000}, nil, 0)
 	// The harness pins a fixed clock, which makes every elapsed interval zero
 	// and every rate zero — so a rate assertion against it proves nothing. A
@@ -3298,10 +3300,12 @@ func TestThroughputOnAResumeMeasuresThisProcessOnly(t *testing.T) {
 		t.Fatalf("resumed run: %v", err)
 	}
 
-	// The tightest honest bound: this process ran at most 10 Cases at 5ms
-	// each, so it cannot have exceeded 200/s however the clock rounded. A rate
-	// computed from the whole run's 40 would be several times that.
-	const ceiling = 200.0
+	// The tightest honest bound: this process ran at most 10 Cases at 30ms
+	// each, so it cannot have exceeded ~33/s however the clock rounded. A rate
+	// computed from the whole run's 40 would be several times that. Give it
+	// generous headroom for scheduling — load pushes the true rate DOWN, which
+	// is the safe direction for this assertion.
+	const ceiling = 100.0
 	var seen int
 	for _, ev := range eventLog(t, h.dbPath, "run-1") {
 		p, ok := ev.GetPayload().(*knov1.Event_StageProgress)
@@ -3311,15 +3315,95 @@ func TestThroughputOnAResumeMeasuresThisProcessOnly(t *testing.T) {
 		seen++
 		if r := p.StageProgress.GetCasesPerSecond(); r > ceiling {
 			t.Errorf("reported %.1f Cases/second; this process ran at most 10 Cases "+
-				"at 5ms each, so the rate is counting the resumed run's prior work "+
+				"at 30ms each, so the rate is counting the resumed run's prior work "+
 				"against this process's clock", r)
 		}
-		// The COUNTS still span the whole run — they pair with total_cases.
-		if p.StageProgress.GetAttempted() < int32(len(h.holdIn)) {
-			continue
+		// The COUNTS still span the whole run — they pair with total_cases —
+		// so every heartbeat on a resume must already reflect the prior
+		// process's work rather than starting from zero.
+		if got := p.StageProgress.GetAttempted(); got < 20 {
+			t.Errorf("attempted=%d on a resume whose first process completed 30 "+
+				"Cases; the counts must span the run even though the rate does not", got)
 		}
 	}
 	if seen == 0 {
 		t.Fatal("no heartbeats were emitted on the resumed run")
+	}
+}
+
+// TestTheHeartbeatCarriesTheNumbersItExistsFor.
+//
+// Every other progress test asserts an upper bound on the rate or the absence
+// of the event. Nothing asserted the payload's contents, so zeroing any of
+// them — attempted, scored, errored, total_cases, or the stage itself —
+// survived the whole suite. Those numbers are the heartbeat's entire reason
+// for existing.
+func TestTheHeartbeatCarriesTheNumbersItExistsFor(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const devCases = 12
+
+	// Every third Case errors, so scored and errored are both non-zero and a
+	// test that conflated them would fail.
+	h := newHarness(t, devCases, 5, fake.Options{
+		FailEvery: 3,
+		Latency:   40 * time.Millisecond,
+	})
+	h.opts.Concurrency = 1
+	h.opts.ProgressInterval = core.DefaultProgressInterval / 50 // 20ms
+	// A real clock: the harness pins a fixed one, which makes every elapsed
+	// interval zero and every rate zero by construction.
+	h.opts.Now = func() time.Time { return time.Now().UTC() }
+
+	res, err := core.Baseline(ctx, h.evals, h.opts)
+	if err != nil {
+		t.Fatalf("Baseline: %v", err)
+	}
+
+	var last *knov1.StageProgress
+	var sawRate bool
+	for _, ev := range eventLog(t, h.dbPath, "run-1") {
+		p, ok := ev.GetPayload().(*knov1.Event_StageProgress)
+		if !ok {
+			continue
+		}
+		last = p.StageProgress
+		if last.GetCasesPerSecond() > 0 {
+			sawRate = true
+		}
+		if last.GetStage() != knov1.Stage_STAGE_BASELINE {
+			t.Errorf("stage=%v, want BASELINE", last.GetStage())
+		}
+		if last.GetTotalCases() != devCases {
+			t.Errorf("total_cases=%d, want %d", last.GetTotalCases(), devCases)
+		}
+		if got := last.GetScored() + last.GetErrored(); got != last.GetAttempted() {
+			t.Errorf("attempted=%d but scored+errored=%d; the payload's own comment "+
+				"says attempted = scored + errored", last.GetAttempted(), got)
+		}
+	}
+
+	if last == nil {
+		t.Fatal("no heartbeat was emitted")
+	}
+	if !sawRate {
+		t.Error("every heartbeat reported a rate of zero; with a real clock and " +
+			"40ms Cases at least one interval must have elapsed")
+	}
+	// The final heartbeat should have seen most of the run. Not all of it: the
+	// last Cases can complete between the final tick and close.
+	if last.GetAttempted() == 0 {
+		t.Error("the last heartbeat reported nothing attempted")
+	}
+	if last.GetScored() == 0 || last.GetErrored() == 0 {
+		t.Errorf("scored=%d errored=%d; the fixture fails every third Case, so a "+
+			"heartbeat late in the run must have seen both",
+			last.GetScored(), last.GetErrored())
+	}
+	// And the heartbeat's view never exceeds what the run finished with.
+	if last.GetAttempted() > res.Run.GetAttemptedCaseCount() {
+		t.Errorf("a heartbeat reported %d attempted but the run finished with %d",
+			last.GetAttempted(), res.Run.GetAttemptedCaseCount())
 	}
 }
