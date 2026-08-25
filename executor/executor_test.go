@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -66,6 +67,9 @@ func reusingCases(n int) iter.Seq2[*core.Case, error] {
 		}
 	}
 }
+
+// discardSink records nothing, for tests whose subject is not the sink.
+func discardSink(_ context.Context, _ executor.Result[*core.Case, output]) error { return nil }
 
 func echoWork(_ context.Context, c *core.Case) (*output, error) {
 	return &output{id: c.GetId()}, nil
@@ -667,5 +671,247 @@ func TestSinkRecordsAfterCallerCancellation(t *testing.T) {
 	if sawDeadContext.Load() {
 		t.Error("the sink was handed an already-cancelled context; on Ctrl-C it " +
 			"would refuse to record the results it exists to preserve")
+	}
+}
+
+// TestRecordGraceDoesNotBoundTheRun is the regression test for docs/debt.md#54.
+//
+// RecordGrace was a context.WithTimeout built before the first item was
+// dispatched, which made it a deadline on the WHOLE run rather than on the
+// drain after cancellation. On any run longer than the grace the first write
+// failed, sinkBroken latched so every result after it was discarded without
+// being asked, and the caller's completed set was missing work it had already
+// paid for — which a resumed run pays for again.
+//
+// Timings are the ledger's own reproduction, scaled to belong in `make test`:
+// a grace far shorter than the run, with a sink slow enough that the run
+// crosses it several times over.
+func TestRecordGraceDoesNotBoundTheRun(t *testing.T) {
+	t.Parallel()
+
+	const items = 6
+	var mu sync.Mutex
+	var recorded []string
+
+	sink := func(ctx context.Context, r executor.Result[*core.Case, output]) error {
+		// Deliberately longer than the grace. Under the old code the second
+		// call is already past the deadline.
+		select {
+		case <-time.After(30 * time.Millisecond):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		recorded = append(recorded, r.Item.GetId())
+		return nil
+	}
+
+	stats, err := executor.Run(context.Background(), staticCases(items), echoWork, sink, executor.Options{
+		Concurrency: 1,
+		ID:          caseID,
+		RecordGrace: 25 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v — a run longer than the grace is not a failure; the "+
+			"grace bounds the drain after the CALLER cancels", err)
+	}
+
+	mu.Lock()
+	got := len(recorded)
+	mu.Unlock()
+	if got != items {
+		t.Errorf("recorded %d of %d results. The rest were silently discarded — "+
+			"no outcome row, absent from the caller's completed set, and paid "+
+			"for again on resume (docs/debt.md#54)", got, items)
+	}
+	if stats.Recorded() != items {
+		t.Errorf("Recorded() = %d, want %d", stats.Recorded(), items)
+	}
+}
+
+// TestRecordGraceStillBoundsTheDrainAfterCancel is the other half, and the one
+// whose absence would let the Ctrl-C bound vanish with the suite green.
+//
+// The godoc promises recording does not continue indefinitely, because a hung
+// sink would otherwise make Ctrl-C unbounded. Fixing the run-length bug by
+// deleting the deadline entirely would satisfy the test above and quietly
+// retire that promise.
+func TestRecordGraceStillBoundsTheDrainAfterCancel(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	// A sink that HONORS its context but never finishes on its own. That is
+	// the bound the grace actually offers: a sink that ignores its context is
+	// documented as the caller's problem, and Run's godoc says so — asserting
+	// otherwise would be testing a promise this package deliberately declines
+	// to make.
+	var once sync.Once
+	sink := func(sinkCtx context.Context, _ executor.Result[*core.Case, output]) error {
+		once.Do(cancel) // the user hits Ctrl-C mid-run
+		<-sinkCtx.Done()
+		return sinkCtx.Err()
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = executor.Run(ctx, staticCases(4), echoWork, sink, executor.Options{
+			Concurrency:      1,
+			ID:               caseID,
+			RecordGrace:      40 * time.Millisecond,
+			PerRecordTimeout: time.Hour, // the grace must be what stops this
+		})
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run never returned. recordCtx is never cancelled, so the grace " +
+			"is not armed by the caller's cancellation and Ctrl-C against a " +
+			"slow sink hangs — the bound RecordGrace's godoc promises")
+	}
+}
+
+// TestAHungSinkIsBoundedPerCallNotPerRun pins the other half of the split:
+// PerRecordTimeout is what makes one hung write survivable, and it must not
+// accumulate across calls.
+func TestAHungSinkIsBoundedPerCallNotPerRun(t *testing.T) {
+	t.Parallel()
+
+	// Each call sleeps most of its own budget, and the SUM is several times
+	// the budget. That gap is the whole assertion: under a per-run reading the
+	// third call is already past the deadline, under a per-call reading every
+	// call has room. A budget larger than the sum would pass either way, which
+	// is what the first version of this test did.
+	const (
+		perCall = 50 * time.Millisecond
+		perSink = 30 * time.Millisecond
+		items   = 6 // 180ms of sink work against a 50ms budget
+	)
+	sink := func(ctx context.Context, _ executor.Result[*core.Case, output]) error {
+		select {
+		case <-time.After(perSink):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		return nil
+	}
+
+	stats, err := executor.Run(context.Background(), staticCases(items), echoWork, sink, executor.Options{
+		Concurrency:      1,
+		ID:               caseID,
+		PerRecordTimeout: perCall,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if stats.Recorded() != items {
+		t.Errorf("Recorded() = %d, want %d — the per-call budget was consumed as "+
+			"if it were a per-run one", stats.Recorded(), items)
+	}
+}
+
+// TestAfterRecordEndsTheRunAndKeepsTheResult.
+//
+// IsFatal is consulted only on a work ERROR (see the send in Run), so there is
+// no path from a SUCCESSFUL item to shutdown. Some conditions are discovered in
+// an answer the caller has already paid for — a provider resolving a moving
+// alias to a different model mid-run being the case this was built for.
+//
+// The two rejected alternatives are what the assertions here pin. Failing the
+// item would discard a paid, scoreable answer and record it as an error;
+// returning an error from SinkFunc would latch sinkBroken and discard every
+// result after it, which is docs/debt.md#54's failure mode by another route.
+func TestAfterRecordEndsTheRunAndKeepsTheResult(t *testing.T) {
+	t.Parallel()
+
+	errGate := errors.New("the resolved model changed")
+
+	var mu sync.Mutex
+	var recorded []string
+	sink := func(_ context.Context, r executor.Result[*core.Case, output]) error {
+		mu.Lock()
+		defer mu.Unlock()
+		recorded = append(recorded, r.Item.GetId())
+		return nil
+	}
+
+	var seen atomic.Int64
+	stats, err := executor.Run(context.Background(), staticCases(50), echoWork, sink, executor.Options{
+		Concurrency: 1,
+		ID:          caseID,
+		AfterRecord: func(item any, value any, workErr error) error {
+			seen.Add(1)
+			if workErr != nil {
+				t.Errorf("a successful item reported an error: %v", workErr)
+			}
+			if value == nil {
+				t.Error("no value; AfterRecord runs on the recorded result")
+			}
+			if caseID(item) == "case-002" {
+				return errGate
+			}
+			return nil
+		},
+	})
+
+	if !errors.Is(err, errGate) {
+		t.Fatalf("Run error = %v, want the gate's error — AfterRecord must end "+
+			"the run", err)
+	}
+	if stats.Dispatched >= 50 {
+		t.Errorf("dispatched %d of 50; the run did not stop", stats.Dispatched)
+	}
+
+	// The triggering result is durable and counted. This is the whole point:
+	// the item succeeded and the store says so.
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Contains(recorded, "case-002") {
+		t.Error("the triggering result was not recorded. Ending the run must " +
+			"not discard the answer that ended it — it is paid for")
+	}
+	if stats.Failed != 0 {
+		t.Errorf("Failed = %d, want 0. The item succeeded; counting it as a "+
+			"failure is what returning an error from the work would have done",
+			stats.Failed)
+	}
+	if stats.Succeeded < 3 {
+		t.Errorf("Succeeded = %d, want at least 3 (case-000..002)", stats.Succeeded)
+	}
+}
+
+// TestAfterRecordSeesAFailedItemWithoutBeingAskedToJudgeIt keeps the seam
+// honest about its arguments: a failed item still reaches AfterRecord, with the
+// error set and a non-nil `any` holding a nil pointer for the value. Callers
+// must check err first, and the godoc says so.
+func TestAfterRecordSeesAFailedItemWithoutBeingAskedToJudgeIt(t *testing.T) {
+	t.Parallel()
+
+	failing := func(_ context.Context, c *core.Case) (*output, error) {
+		if c.GetId() == "case-001" {
+			return nil, errors.New("boom")
+		}
+		return &output{id: c.GetId()}, nil
+	}
+
+	var sawErr atomic.Bool
+	_, err := executor.Run(context.Background(), staticCases(3), failing, discardSink, executor.Options{
+		Concurrency: 1,
+		ID:          caseID,
+		AfterRecord: func(_ any, _ any, workErr error) error {
+			if workErr != nil {
+				sawErr.Store(true)
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v — a per-item failure is not a run failure", err)
+	}
+	if !sawErr.Load() {
+		t.Error("AfterRecord never saw the failed item")
 	}
 }
