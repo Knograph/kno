@@ -30,14 +30,15 @@ covenants — breaking any of them requires a major version.
 
 ### Changed
 
-- **A resume is now refused when the provider is serving a model the run never saw.** This check
-  has existed since M2-6 and has never run, because nothing wrote the field it compares. A run
-  whose halves were measured against different models produces one aggregate score describing two
-  things, which is why it refuses rather than warns.
+- The resume check for a changed provider model now compares **set membership** rather than the
+  first recorded element. With concurrency there is no "first response", and during a provider
+  rollout two workers in one run legitimately see different builds — so a run that saw `{A, B}`
+  and is now served by `B` has not changed, and comparing against whichever element sorted first
+  would have refused it.
 
-  It compares set membership, not a first element: with concurrency there is no "first response",
-  and during a provider rollout two workers in one run legitimately see different builds — so a
-  run that saw `{A, B}` and is now served by `B` continues.
+  **The check still does not run.** Writing `case_execution` fills the *recorded* half of the
+  comparison; nothing populates the model this process is about to use, because that is a property
+  of a response and the check runs before any call. See [debt #42](docs/debt.md#42).
 
 - **`OrphanSpend`**, naming the Case a charge belonged to when no outcome could carry it. The
   amount is recorded against the run, so without this event the money is an integer nothing
