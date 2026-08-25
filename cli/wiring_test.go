@@ -236,6 +236,30 @@ func TestTheWidthLineAppearsOnlyWhenTheEngineNarrowedIt(t *testing.T) {
 		}
 	})
 
+	t.Run("a narrowed DEFAULT run does not claim a request", func(t *testing.T) {
+		t.Parallel()
+		// The case the reason-gate did not cover, and the one that actually
+		// shipped the bad line: narrowed, with no --concurrency. Requested is
+		// presence-carrying and absent, so printing it said "asked for 0" to
+		// someone who asked for nothing. core deliberately does not record the
+		// defaulted width as a request — there is a test pinning that — so the
+		// fix belongs in the renderer.
+		stdout, _, _ := run(t, "baseline", "--evals", cases, "--agent", "fake:",
+			"--max-cost-usd", "0.05", "--cost-per-call-usd", "0.01", "--yes",
+			"--db", filepath.Join(t.TempDir(), "kno.db"))
+
+		if !strings.Contains(stdout, "width") {
+			t.Fatalf("the run was not narrowed, so this proves nothing:\n%s", stdout)
+		}
+		if strings.Contains(stdout, "asked for 0") {
+			t.Errorf("the report told a user who requested nothing that they "+
+				"requested zero:\n%s", stdout)
+		}
+		if !strings.Contains(stdout, "narrowed from the default") {
+			t.Errorf("the report does not say the default was narrowed:\n%s", stdout)
+		}
+	})
+
 	t.Run("a narrowed run says so, and --json carries it", func(t *testing.T) {
 		t.Parallel()
 		// A cost cap far too small to admit 32 in flight forces the narrowing.
@@ -451,5 +475,203 @@ func TestARunThatCannotStateItsCostIsRefusedAtTheCLI(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "--cost-per-call-usd") {
 		t.Errorf("the fix does not name the other way through:\n%s", stderr)
+	}
+}
+
+// TestTheCLIAndAgentrefAgreeOnWhichURLIsTheBaseURL.
+//
+// --base-url is composed into the ref rather than passed alongside so that
+// agentref.Parse is the ONLY validator. That guarantee holds only if the CLI's
+// "is there already a base URL here" test agrees with agentref's byte for byte.
+//
+// The first version did not: it matched the scheme case-sensitively and
+// without trimming, while agentref lowercases and trims first. So
+// `--agent openai:m@HTTPS://evil/v1 --base-url https://good/v1` slipped past
+// the double-endpoint refusal, composed into one ref, and agentref then took
+// the SECOND URL as the base — the CLI validated good and the adapter dialled
+// evil. The address policy still applied to the real host, so the consequence
+// was a silently wrong endpoint rather than a bypassed refusal, but the
+// guarantee was gone.
+func TestTheCLIAndAgentrefAgreeOnWhichURLIsTheBaseURL(t *testing.T) {
+	t.Parallel()
+
+	cases := writeCases(t, 30)
+	for _, ref := range []string{
+		"openai:m@https://evil.example.com/v1",
+		"openai:m@HTTPS://evil.example.com/v1",
+		"openai:m@ https://evil.example.com/v1",
+		"openai:m@HtTpS://evil.example.com/v1",
+	} {
+		t.Run(ref, func(t *testing.T) {
+			t.Parallel()
+			_, stderr, code := run(t, "baseline", "--evals", cases, "--agent", ref,
+				"--base-url", "https://good.example.com/v1",
+				"--db", filepath.Join(t.TempDir(), "kno.db"))
+			if code == errs.ExitOK {
+				t.Fatal("two endpoints were accepted")
+			}
+			if !strings.Contains(stderr, "already names a base URL") {
+				t.Errorf("the double-endpoint refusal did not fire, so the CLI "+
+					"validated one URL and the adapter would use another:\n%s", stderr)
+			}
+		})
+	}
+}
+
+// TestARefusalNeverEchoesACredential.
+//
+// composeRef refuses before agentref ever sees the ref, so agentref's own
+// non-echoing userinfo refusal cannot help — and this message reaches stderr
+// and therefore the CI log. SECURITY.md asserts the value never appears.
+func TestARefusalNeverEchoesACredential(t *testing.T) {
+	t.Parallel()
+
+	cases := writeCases(t, 30)
+	const secret = "sk-SUPERSECRET-should-never-print"
+
+	_, stderr, code := run(t, "baseline", "--evals", cases,
+		"--agent", "openai:m@https://user:"+secret+"@a.example.com/v1",
+		"--base-url", "https://b.example.com/v1",
+		"--db", filepath.Join(t.TempDir(), "kno.db"))
+
+	if code == errs.ExitOK {
+		t.Fatal("two endpoints were accepted")
+	}
+	if strings.Contains(stderr, secret) {
+		t.Errorf("the refusal echoed the credential into stderr:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "redacted") {
+		t.Errorf("the refusal does not show that something was removed:\n%s", stderr)
+	}
+}
+
+// TestABindingIsValidatedByTheTransportNotByACopyOfIt.
+//
+// The CLI built a raw map from --key-env and the adapter cast it, skipping
+// transport.ParseKeyBindings entirely. Two things broke:
+//
+//   - Resolve looks up a NORMALIZED host — lowercased, port stripped — so a
+//     binding written with a port was stored with it, silently resolved
+//     nothing, and the request went out unauthenticated. That is verbatim the
+//     defect keybinding.go records as already fixed.
+//   - The CLI's replacement key-shape check was a 7-prefix denylist that
+//     missed `gsk_`, which is Groq, which is the worked example in this
+//     project's own cookbook.
+func TestABindingIsValidatedByTheTransportNotByACopyOfIt(t *testing.T) {
+	t.Parallel()
+
+	cases := writeCases(t, 30)
+
+	t.Run("a key pasted where a variable name belongs", func(t *testing.T) {
+		t.Parallel()
+		const secret = "gsk_ABCdefGHIjklMNOpqrSTUvwx"
+		_, stderr, code := run(t, "baseline", "--evals", cases,
+			"--agent", "openai:m", "--base-url", "https://api.groq.com/openai/v1",
+			"--key-env", "api.groq.com="+secret,
+			"--db", filepath.Join(t.TempDir(), "kno.db"))
+
+		if code == errs.ExitOK {
+			t.Fatal("a key was accepted as a variable name")
+		}
+		if !strings.Contains(stderr, "looks like a key") {
+			t.Errorf("a Groq-shaped key was not recognized:\n%s", stderr)
+		}
+		if strings.Contains(stderr, secret) {
+			t.Errorf("the refusal echoed the key:\n%s", stderr)
+		}
+	})
+
+	t.Run("a host written with a port still binds", func(t *testing.T) {
+		t.Parallel()
+		_, stderr, _ := run(t, "baseline", "--evals", cases,
+			"--agent", "openai:m", "--base-url", "https://api.groq.com/openai/v1",
+			"--key-env", "api.groq.com:443=SOME_KEY_VAR",
+			"--db", filepath.Join(t.TempDir(), "kno.db"))
+
+		// The binding resolves, so the run gets past credential resolution and
+		// fails later (on the unknown cost) rather than on "no credential".
+		if strings.Contains(stderr, "no credential") {
+			t.Errorf("a binding written with a port silently resolved nothing, "+
+				"so the request would go out unauthenticated:\n%s", stderr)
+		}
+	})
+
+	t.Run("the same host bound twice", func(t *testing.T) {
+		t.Parallel()
+		_, stderr, code := run(t, "baseline", "--evals", cases,
+			"--agent", "openai:m", "--base-url", "https://gw.example.com/v1",
+			"--key-env", "gw.example.com=FIRST_VARIABLE",
+			"--key-env", "GW.EXAMPLE.COM:443=SECOND_VARIABLE",
+			"--db", filepath.Join(t.TempDir(), "kno.db"))
+
+		if code == errs.ExitOK {
+			t.Fatal("one host bound to two variables was accepted; argv order " +
+				"would decide which key is sent")
+		}
+		_ = stderr
+	})
+}
+
+// TestYesPrintsTheEstimateEvenBelowTheThreshold.
+//
+// The first version printed from inside the ConfirmFunc, which PreConfirm
+// short-circuits below the $1.00 threshold — so --yes was silent for exactly
+// the runs small enough not to prompt, while the flag's help, the cookbook,
+// the CI recipe, and the plan all promised a figure unconditionally.
+func TestYesPrintsTheEstimateEvenBelowTheThreshold(t *testing.T) {
+	t.Parallel()
+
+	cases := writeCases(t, 60)
+
+	stdout, _, code := run(t, "baseline", "--evals", cases, "--agent", "fake:",
+		"--max-cost-usd", "0.50", "--cost-per-call-usd", "0.001", "--yes",
+		"--db", filepath.Join(t.TempDir(), "kno.db"))
+	if code != errs.ExitOK {
+		t.Fatalf("exit = %d:\n%s", code, stdout)
+	}
+	if !strings.Contains(stdout, "Proceeding with --yes") {
+		t.Errorf("--yes printed no figure for a run below the prompt threshold:\n%s", stdout)
+	}
+
+	// In --json mode stdout is a machine contract: a prose line ahead of the
+	// document makes it unparseable. The figure travels in the report.
+	jsonOut, _, _ := run(t, "baseline", "--evals", cases, "--agent", "fake:",
+		"--max-cost-usd", "0.50", "--cost-per-call-usd", "0.001", "--yes", "--json",
+		"--db", filepath.Join(t.TempDir(), "kno.db"))
+	if strings.Contains(jsonOut, "Proceeding with --yes") {
+		t.Errorf("the prose line corrupted --json stdout:\n%s", jsonOut)
+	}
+	rep, err := cli.DecodeRaw([]byte(jsonOut))
+	if err != nil {
+		t.Fatalf("decoding --json: %v\n%s", err, jsonOut)
+	}
+	if _, ok := rep["estimated_usd"]; !ok {
+		t.Errorf("--json records no estimate, so a run that waived the prompt "+
+			"has no record of what it waived:\n%s", jsonOut)
+	}
+}
+
+// TestTheLocalModelServerRecipeRuns, verbatim from the cookbook.
+//
+// The documented recipe passed --cost-per-call-usd 0 and was refused with a fix
+// line naming the flag it had just passed: 0 is also the default, so the value
+// alone could not express "these calls are free". An explicit flag is now the
+// claim.
+func TestTheLocalModelServerRecipeRuns(t *testing.T) {
+	t.Parallel()
+
+	cases := writeCases(t, 30)
+	_, stderr, _ := run(t, "baseline", "--evals", cases,
+		"--agent", "openai:my-local-model",
+		"--base-url", "http://127.0.0.1:1/v1",
+		"--allow-insecure-base-url", "--allow-private-address",
+		"--cost-per-call-usd", "0",
+		"--db", filepath.Join(t.TempDir(), "kno.db"))
+
+	// It reaches the provider (and fails to connect, since nothing is
+	// listening) rather than being refused up front for an unknown cost.
+	if strings.Contains(stderr, "--accept-unknown-cost") {
+		t.Errorf("the documented recipe is still refused, with a fix line "+
+			"naming a flag the user just passed:\n%s", stderr)
 	}
 }

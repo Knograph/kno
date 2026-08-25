@@ -34,10 +34,25 @@ func (a *Agent) Estimate(ctx context.Context, c *core.Case) (budget.Estimate, er
 	return a.estimate(c)
 }
 
+// priceOf applies an explicit override when one was supplied, and the table
+// otherwise.
+//
+// The override wins where it exists but does NOT replace a row that disagrees
+// silently — it is consulted only because the caller stated a price, and a
+// caller who states one is asserting knowledge of their own contract that a
+// published rate card does not have.
+func (a *Agent) priceOf(prompt pricing.Prompt) (budget.Estimate, error) {
+	if a.opts.Price != nil {
+		return pricing.EstimateWithPrice(a.opts.Price, a.opts.Model, prompt,
+			a.opts.MaxOutputTokens)
+	}
+	return pricing.Estimate(Scheme, a.opts.Model, prompt, a.opts.MaxOutputTokens)
+}
+
 // estimate is Estimate without the context, so a settlement path that already
 // holds no context of its own does not have to invent one.
 func (a *Agent) estimate(c *core.Case) (budget.Estimate, error) {
-	est, err := pricing.Estimate(Scheme, a.opts.Model, a.prompt(c), a.opts.MaxOutputTokens)
+	est, err := a.priceOf(a.prompt(c))
 	if errors.Is(err, pricing.ErrUnpriced) {
 		// Run-fatal, because it is a property of the MODEL and the model does
 		// not change mid-run. Under a dollar cap core refuses every Case it
@@ -126,9 +141,12 @@ func (a *Agent) computeWorstCase() budget.Estimate {
 		n = maxWorstCasePromptBytes
 	}
 
-	est, err := pricing.Estimate(Scheme, a.opts.Model,
-		pricing.Prompt{System: a.opts.System, Input: strings.Repeat("x", int(n))},
-		a.opts.MaxOutputTokens)
+	// Through priceOf, so an explicit override reaches the figure
+	// checkCostIsKnowable reads. Without it, supplying a price for an unpriced
+	// model still left WorstCase at zero and the run was refused for having no
+	// computable cost — naming a flag the user had just passed.
+	est, err := a.priceOf(
+		pricing.Prompt{System: a.opts.System, Input: strings.Repeat("x", int(n))})
 	if err != nil {
 		return budget.Estimate{}
 	}

@@ -333,3 +333,54 @@ func estimate(t *testing.T, a *anthropic.Agent, c *knov1.Case) int64 {
 	}
 	return est.CostUSDMicros
 }
+
+// TestAPriceOverrideReachesTheEstimateAndTheWorstCase.
+//
+// The CLI accepted --price-input-per-mtok and --price-output-per-mtok, validated
+// them as a pair, and then DISCARDED them for this scheme — while the cookbook,
+// the CI recipe, and `kno doctor` all named them as the remedy for an unpriced
+// model. A silently ignored flag on the money path is worse than a missing one:
+// the user believes they supplied a price, and the run is refused for having
+// none.
+//
+// WorstCase matters as much as Estimate: it is the figure checkCostIsKnowable
+// reads, so an override that reached only Estimate would still leave the run
+// refused for having no computable cost.
+func TestAPriceOverrideReachesTheEstimateAndTheWorstCase(t *testing.T) {
+	t.Parallel()
+
+	in, out := int64(3_000_000), int64(15_000_000)
+	price := &knov1.Price{
+		InputPerMtokUsdMicros:  &in,
+		OutputPerMtokUsdMicros: &out,
+	}
+
+	// A model with no row in the table, which is the whole point of an
+	// override.
+	a := estimator(t, func(o *anthropic.Options) {
+		o.Model = "claude-not-in-the-table-9"
+		o.Price = price
+	})
+
+	est, err := a.Estimate(t.Context(), aCase("q"))
+	if err != nil {
+		t.Fatalf("an explicit price did not price an unpriced model: %v", err)
+	}
+	if est.CostUSDMicros <= 0 {
+		t.Errorf("estimate = %d; the override produced no cost", est.CostUSDMicros)
+	}
+
+	if got := a.WorstCase().CostUSDMicros; got <= 0 {
+		t.Errorf("WorstCase = %d for a model with an explicit price; the run "+
+			"would still be refused for having no computable cost", got)
+	}
+
+	// Without the override the same model is unpriced and run-fatal, so the
+	// test above is not passing because the table quietly covers it.
+	bare := estimator(t, func(o *anthropic.Options) {
+		o.Model = "claude-not-in-the-table-9"
+	})
+	if _, err := bare.Estimate(t.Context(), aCase("q")); err == nil {
+		t.Fatal("the model is priced by the table, so this test proves nothing")
+	}
+}

@@ -97,6 +97,14 @@ func (o BaselineOptions) agentCanPriceItself() bool {
 	return ok
 }
 
+// PlanningCostPerCall exposes the per-Case figure a confirmation would quote.
+//
+// Exported because the CLI prints that figure for a --yes run, which waives
+// the prompt the number would otherwise appear in. It must be the SAME
+// arithmetic: two places computing "what this will cost" is two numbers that
+// can disagree, and the one the user sees would be the one nothing enforces.
+func PlanningCostPerCall(o BaselineOptions) int64 { return o.planningCostPerCall() }
+
 // errUnknownCost marks a run whose per-Case cost cannot be computed at all.
 //
 // Distinct from errUnpriceable, which is per-Case and refuses under a cap. This

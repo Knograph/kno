@@ -41,7 +41,9 @@ kno baseline --evals cases.jsonl \
 
 `--key-env` takes `host=VARIABLE_NAME`. The **name** of a variable is not a secret; the key itself still only ever comes from the environment.
 
-This is not ceremony. Kno will not fall back to `OPENAI_API_KEY` for a host that is not OpenAI's, because that would mail your OpenAI key to whoever you pointed `--base-url` at. A host with no binding and no default gets no credential, and Kno refuses the run rather than sending an unauthenticated request.
+This is not ceremony. Kno will not fall back to `OPENAI_API_KEY` for a host that is not OpenAI's, because that would mail your OpenAI key to whoever you pointed `--base-url` at.
+
+A host with no binding simply gets no credential — which is correct for a local model server, and produces a 401 from anything else. For the provider's **own** default host (`api.openai.com`, `api.anthropic.com`) a missing key is refused before any request, since that host certainly needs one.
 
 ## Capping spend
 
@@ -87,7 +89,7 @@ Three flags need explaining, and each is a separate opt-in on purpose — somebo
 
 - **`--allow-insecure-base-url`** permits plain `http://`.
 - **`--allow-private-address`** permits loopback and private ranges. Link-local (`169.254.0.0/16`) is **not** covered and cannot be opted into: `169.254.169.254` is where cloud instance metadata lives, and a tool that fetches a URL and stores the response body has no business reaching it.
-- **`--cost-per-call-usd 0`** states that these calls are free. Without it Kno refuses to start, because it cannot compute a per-Case cost and will not spend an amount nobody can state. `--accept-unknown-cost` is the alternative if you would rather not claim a number.
+- **`--cost-per-call-usd 0`** states that these calls are free. Passing it *explicitly* is the claim; leaving it out is not, and without either that flag or `--accept-unknown-cost` Kno refuses to start rather than spending an amount nobody can state.
 
 Older servers may need `--use-legacy-max-tokens`, which sends `max_tokens` instead of `max_completion_tokens`.
 

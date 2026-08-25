@@ -144,6 +144,17 @@ type Options struct {
 	// they pointed --base-url at.
 	KeyEnv map[string]string
 
+	// Price overrides the table for this model, or nil to use the table.
+	//
+	// It exists because the table cannot cover every model: a variant that
+	// carries its own rate, a preview, a model shipped between two Kno
+	// releases. Without it the CLI's --price-input-per-mtok and
+	// --price-output-per-mtok were accepted, validated, and then discarded for
+	// this scheme, while three documents named them as the remedy for an
+	// unpriced model. A silently ignored flag on the money path is worse than
+	// a missing one.
+	Price *knov1.Price
+
 	// AllowInsecureBaseURL permits a plain-HTTP base URL.
 	AllowInsecureBaseURL bool
 

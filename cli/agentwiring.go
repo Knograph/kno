@@ -60,8 +60,13 @@ func composeRef(agentRef, baseURL string) (string, error) {
 			"pass the endpoint once — either as @<url> inside --agent, or as " +
 				"--base-url, not both",
 		).
+			// Redacted. A ref carrying userinfo is refused by agentref with a
+			// non-echoing message — but this refusal happens FIRST, so
+			// without this the credential reaches stderr and the CI log,
+			// which is the leak the userinfo refusal exists to prevent
+			// arriving one layer earlier.
 			Wrap(fmt.Errorf("--agent already names a base URL (%s) and --base-url "+
-				"names another", existing))
+				"names another", agentref.Redact(existing)))
 	}
 	if err := checkAbsoluteHTTP(baseURL); err != nil {
 		return "", err
@@ -72,19 +77,38 @@ func composeRef(agentRef, baseURL string) (string, error) {
 // splitAt reports a base URL already present in a ref, using the same
 // first-absolute-URL rule agentref does.
 //
-// Deliberately permissive: this only has to answer "did the user already name
-// an endpoint here", and agentref.Parse re-validates whatever survives.
+// It must agree with agentref.splitBaseURL EXACTLY, and the first version did
+// not: it matched the scheme case-sensitively and without trimming, while
+// agentref lowercases and trims first. So `--agent openai:m@HTTPS://evil/v1`
+// plus `--base-url https://good/v1` slipped past the double-endpoint refusal,
+// composed to a single ref, and agentref then took the SECOND URL as the base
+// — the CLI validated good and the adapter dialled evil. That divergence
+// defeats the entire reason --base-url is composed rather than passed
+// alongside, which is that there is one parser.
+//
+// The transport still applies its address policy to whatever host is really
+// dialled, so the consequence was a silently wrong endpoint rather than a
+// bypassed refusal — but the guarantee this function exists to provide was
+// gone.
 func splitAt(ref string) (rest, baseURL string) {
 	for i, c := range ref {
 		if c != '@' {
 			continue
 		}
-		candidate := ref[i+1:]
-		if strings.HasPrefix(candidate, "http://") || strings.HasPrefix(candidate, "https://") {
+		// Trimmed before testing AND before returning, matching
+		// agentref.splitBaseURL byte for byte.
+		candidate := strings.TrimSpace(ref[i+1:])
+		if isAbsoluteHTTP(candidate) {
 			return ref[:i], candidate
 		}
 	}
 	return ref, ""
+}
+
+// isAbsoluteHTTP normalizes the way agentref.splitBaseURL does before testing.
+func isAbsoluteHTTP(s string) bool {
+	v := strings.ToLower(s)
+	return strings.HasPrefix(v, "http://") || strings.HasPrefix(v, "https://")
 }
 
 // checkAbsoluteHTTP refuses a --base-url that is not an endpoint root, naming
@@ -93,7 +117,7 @@ func checkAbsoluteHTTP(raw string) error {
 	fix := "write --base-url as a full URL including the scheme, " +
 		"like https://api.example.com/v1"
 
-	u, err := url.Parse(raw)
+	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
 		// Not echoed: a malformed URL may still contain a credential, and the
 		// parse error quotes what it choked on.
@@ -172,10 +196,10 @@ func newOpenAICompat(f baselineFlags, ref *knov1.AgentRef) (core.Agent, error) {
 		AllowPrivateAddress:  f.allowPrivateAddress,
 
 		MaxOutputTokens:    f.maxOutputTokens,
-		MaxPromptBytes:     int(f.maxPromptBytes),
+		MaxPromptBytes:     intFromInt64(f.maxPromptBytes),
 		System:             f.system,
 		Temperature:        optionalFloat(f.temperature),
-		Seed:               optionalInt(f.seed),
+		Seed:               optionalInt(f.seed, f.seedSet),
 		GenerationParams:   genParams,
 		UseLegacyMaxTokens: f.useLegacyMaxTokens,
 		Price:              price,
@@ -189,13 +213,15 @@ func newAnthropic(f baselineFlags, ref *knov1.AgentRef) (core.Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := priceOverride(f); err != nil {
+	price, err := priceOverride(f)
+	if err != nil {
 		return nil, err
 	}
 
 	return anthropic.New(anthropic.Options{
 		Model:                ref.GetTarget(),
 		BaseURL:              ref.GetBaseUrl(),
+		Price:                price,
 		MaxOutputTokens:      f.maxOutputTokens,
 		MaxPromptBytes:       f.maxPromptBytes,
 		System:               f.system,
@@ -207,17 +233,21 @@ func newAnthropic(f baselineFlags, ref *knov1.AgentRef) (core.Agent, error) {
 	})
 }
 
-// keyBindings parses host=VAR pairs.
+// keyBindings turns repeated --key-env flags into the plain map the adapters
+// take.
 //
-// Parsed here rather than by the transport because the transport is INTERNAL
-// to adapters/agent — deliberately, since it is the security boundary and
-// nothing above it should be able to reach past it. The rule it enforces is
-// small and stated in one place; what must not be duplicated is the address
-// policy, and that stays where it is.
+// SHAPE ONLY. What a valid binding IS — the host normalization, the
+// looks-like-a-secret refusal, the bound-twice refusal — belongs to
+// transport.ParseKeyBindings, and each adapter runs its map through it. An
+// earlier version of this function reimplemented those rules here because the
+// transport is an internal package, and the copy was wrong in the way copies
+// are: its key-prefix denylist missed `gsk_`, which is Groq, which is the
+// worked example in this project's own cookbook. A user who pasted the key
+// instead of the variable name had it accepted onto the command line.
 //
 // The VALUE is a variable name, never a key. That is the whole point of the
-// flag: a key on a command line lands in shell history, in ps output, and in
-// CI logs, and nothing downstream can take it back.
+// flag: a key on a command line is written to shell history, shown in ps
+// output, and captured in CI logs, and nothing downstream can take it back.
 func keyBindings(pairs []string) (map[string]string, error) {
 	if len(pairs) == 0 {
 		return nil, nil
@@ -227,44 +257,17 @@ func keyBindings(pairs []string) (map[string]string, error) {
 		host, envVar, ok := strings.Cut(p, "=")
 		if !ok || host == "" || envVar == "" {
 			// The pair is NOT echoed. A user who put a key where a variable
-			// name belongs would otherwise see it in the error, which is
-			// persisted and logged — turning a near-miss into the leak the
-			// flag exists to prevent.
+			// name belongs would otherwise see it in the error, which reaches
+			// stderr and therefore CI logs — turning a near-miss into the leak
+			// the flag exists to prevent.
 			return nil, errs.ErrInvalidInput.WithFix(
 				"write each binding as --key-env host=VAR, naming the " +
-					"environment VARIABLE rather than the key itself",
-			).
+					"environment VARIABLE rather than the key itself").
 				Wrap(fmt.Errorf("a --key-env binding is not in host=VAR form"))
-		}
-		if looksLikeAKey(envVar) {
-			return nil, errs.ErrInvalidInput.WithFix(
-				"pass the NAME of an environment variable, not its value — " +
-					"a key on a command line is recorded in shell history, in " +
-					"ps output, and in CI logs",
-			).
-				Wrap(fmt.Errorf("the --key-env binding for %s looks like a "+
-					"credential rather than a variable name", host))
 		}
 		out[host] = envVar
 	}
 	return out, nil
-}
-
-// looksLikeAKey reports whether a value is shaped like a credential rather
-// than an environment-variable name.
-//
-// A conservative check on a shape, not a secret scanner: it exists to catch
-// the obvious mistake — pasting the key where the variable name goes — before
-// it reaches a process listing. Environment variable names are conventionally
-// uppercase letters, digits, and underscores; every published key prefix below
-// violates that.
-func looksLikeAKey(v string) bool {
-	for _, prefix := range []string{"sk-", "sk_", "pk-", "ghp_", "gho_", "AIza", "xoxb-"} {
-		if strings.HasPrefix(v, prefix) {
-			return true
-		}
-	}
-	return false
 }
 
 // generationParams turns the tri-state flag into the adapter's optional bool.
@@ -309,6 +312,20 @@ func priceOverride(f baselineFlags) (*knov1.Price, error) {
 	}, nil
 }
 
+// intFromInt64 narrows a byte ceiling without wrapping on a 32-bit build.
+//
+// A fat-fingered --max-prompt-bytes past MaxInt would otherwise become a small
+// or negative ceiling, which refuses every Case rather than none.
+func intFromInt64(v int64) int {
+	if v > int64(math.MaxInt32) {
+		return math.MaxInt32
+	}
+	if v < 0 {
+		return 0
+	}
+	return int(v)
+}
+
 // optionalFloat returns nil for an unset --temperature.
 //
 // NaN is the sentinel because zero is a LEGITIMATE temperature — the one that
@@ -322,8 +339,13 @@ func optionalFloat(v float64) *float64 {
 }
 
 // optionalInt returns nil for an unset --seed.
-func optionalInt(v int64) *int64 {
-	if v == 0 {
+//
+// Zero is a LEGITIMATE seed, so it is passed through when the flag was given
+// explicitly and only elided when it was not — the same hazard optionalFloat
+// documents for temperature, where the reproducible value is also the zero
+// value. The caller supplies `set` from cmd.Flags().Changed.
+func optionalInt(v int64, set bool) *int64 {
+	if !set {
 		return nil
 	}
 	return &v

@@ -48,6 +48,15 @@ type jsonReport struct {
 	ScoreUnavailable bool   `json:"score_unavailable,omitempty"`
 	SpentUSD         string `json:"spent_usd"`
 
+	// EstimatedUSD is what the run expected to spend before it started.
+	//
+	// Present so a --json run that waived the prompt still records the figure
+	// it waived — the human line cannot be printed there, because a prose line
+	// ahead of the document makes stdout unparseable. Beside spent_usd it also
+	// answers "was the estimate any good", which is the question a cost cap's
+	// honesty rests on.
+	EstimatedUSD string `json:"estimated_usd,omitempty"`
+
 	// Concurrency is what the run actually executed at, and why.
 	//
 	// Hand-written rather than embedding *knov1.ConcurrencyDecision: that
@@ -64,6 +73,7 @@ type jsonReport struct {
 func renderJSON(
 	out io.Writer,
 	f baselineFlags,
+	opts core.BaselineOptions,
 	res *core.BaselineResult,
 	counts jsonl.SplitCounts,
 	runID string,
@@ -91,6 +101,9 @@ func renderJSON(
 		Warnings:         warnings,
 	}
 	concurrencyFields(&rep, res.Run)
+	if perCall := core.PlanningCostPerCall(opts); perCall > 0 {
+		rep.EstimatedUSD = formatUSD(perCall * int64(counts.Dev))
+	}
 
 	enc := json.NewEncoder(out)
 	enc.SetIndent("", "  ")
@@ -129,6 +142,8 @@ func concurrencyFields(rep *jsonReport, run *knov1.Run) {
 	// is absent when the user named no width, so a default run would otherwise
 	// report having been reduced from zero.
 	if d.GetReason() != knov1.ConcurrencyReason_CONCURRENCY_REASON_UNSPECIFIED {
+		// Asked stays absent when the user named no width, rather than
+		// reporting a request of zero. omitempty carries that distinction.
 		rep.ConcurrencyAsked = d.GetRequested()
 		rep.ConcurrencyReason = concurrencyReasonName(d.GetReason())
 	}

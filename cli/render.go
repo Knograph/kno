@@ -53,21 +53,14 @@ func newRunID(now time.Time) string {
 // confirmFunc asks before spending, unless --yes or --json.
 func confirmFunc(out io.Writer, yes, jsonOut bool) budget.ConfirmFunc {
 	if yes {
-		// --yes proceeds, but it PRINTS what it is proceeding with.
+		// The printing lives in runBaseline, NOT here.
 		//
-		// It returned true and printed nothing, which made a blanket flag the
-		// entire consent surface for the only invocation that can currently
-		// reach a real provider — the interactive prompt declines by default
-		// until the TUI lands (docs/debt.md#59). A user who typed --yes still
-		// deserves to see the figure they agreed to, in the scrollback and in
-		// the CI log, and a number that turns out wrong is then evidence
-		// rather than a mystery.
-		return func(_ context.Context, est budget.Estimate, rem budget.Remaining) (bool, error) {
-			msg := fmt.Sprintf("\nProceeding with --yes: this run would spend about %s (%s remaining).\n",
-				formatUSD(est.CostUSDMicros), formatUSD(rem.CostUSDMicros))
-			if _, err := io.WriteString(out, msg); err != nil {
-				return false, fmt.Errorf("writing confirmation: %w", err)
-			}
+		// PreConfirm short-circuits below the $1.00 threshold and never calls
+		// this closure at all, so a --yes run under the threshold printed
+		// nothing while the flag's help, the cookbook, the CI recipe, and the
+		// plan all promised a figure unconditionally. A consent surface that
+		// is silent exactly when the amount is small is still silent.
+		return func(context.Context, budget.Estimate, budget.Remaining) (bool, error) {
 			return true, nil
 		}
 	}
@@ -94,6 +87,28 @@ func confirmFunc(out io.Writer, yes, jsonOut bool) budget.ConfirmFunc {
 		}
 		return false, nil
 	}
+}
+
+// printEstimate says what a --yes run is about to spend.
+//
+// Best effort by construction: the engine owns the real arithmetic, and this
+// asks it for the same per-Case figure confirmRun would quote. An agent that
+// cannot produce one is already refused before this point unless the user
+// passed --accept-unknown-cost, and in that case there is genuinely no number
+// to print — so it says that rather than printing a zero, which would read as
+// "free".
+func printEstimate(out io.Writer, opts core.BaselineOptions, devCases int) error {
+	perCall := core.PlanningCostPerCall(opts)
+	if perCall <= 0 {
+		_, err := io.WriteString(out,
+			"\nProceeding with --yes: this run's per-Case cost is unknown.\n")
+		return err
+	}
+	total := perCall * int64(devCases)
+	_, err := fmt.Fprintf(out,
+		"\nProceeding with --yes: this run would spend about %s across %d Cases.\n",
+		formatUSD(total), devCases)
+	return err
 }
 
 // scoredOf and erroredOf read the presence-carrying counts, falling back to
@@ -139,6 +154,7 @@ func formatUSD(micros int64) string {
 func render(
 	out io.Writer,
 	f baselineFlags,
+	opts core.BaselineOptions,
 	res *core.BaselineResult,
 	counts jsonl.SplitCounts,
 	runID string,
@@ -146,7 +162,7 @@ func render(
 	warnings := warningsFor(res, counts)
 
 	if f.jsonOut {
-		return renderJSON(out, f, res, counts, runID, warnings)
+		return renderJSON(out, f, opts, res, counts, runID, warnings)
 	}
 	return renderHuman(out, res, counts, runID, warnings)
 }
@@ -228,8 +244,23 @@ func renderHuman(
 	// of this line printed "width 8 (asked for 0; unspecified)" on every
 	// ordinary run.
 	if d := run.GetConcurrency(); d.GetReason() != knov1.ConcurrencyReason_CONCURRENCY_REASON_UNSPECIFIED {
-		fmt.Fprintf(&b, "  width      %d (asked for %d; %s)\n",
-			d.GetEffective(), d.GetRequested(), concurrencyReasonName(d.GetReason()))
+		// The "asked for" clause only when the user actually asked. Requested
+		// is presence-carrying and absent means "no particular width", so
+		// printing it unconditionally told someone who requested nothing that
+		// they had requested zero.
+		//
+		// Fixed HERE rather than by recording the defaulted width as a
+		// request: core deliberately does not, and says why — a report that
+		// says "you requested 8, we gave you 5" to someone who requested
+		// nothing is how a report earns distrust. There is a test pinning it,
+		// and making that test pass would have been weakening it.
+		if d.Requested != nil {
+			fmt.Fprintf(&b, "  width      %d (asked for %d; %s)\n",
+				d.GetEffective(), d.GetRequested(), concurrencyReasonName(d.GetReason()))
+		} else {
+			fmt.Fprintf(&b, "  width      %d (narrowed from the default; %s)\n",
+				d.GetEffective(), concurrencyReasonName(d.GetReason()))
+		}
 	}
 
 	for _, w := range warnings {

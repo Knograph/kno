@@ -60,6 +60,14 @@ type baselineFlags struct {
 	priceInPerMTok      float64
 	priceOutPerMTok     float64
 	acceptUnknownCost   bool
+
+	// costPerCallSet records whether --cost-per-call-usd was passed at all, as
+	// opposed to left at its zero default. An explicit zero is a claim that
+	// the calls are free; an absent flag is no claim.
+	costPerCallSet bool
+
+	// seedSet does the same for --seed, where 0 is a legitimate value.
+	seedSet bool
 }
 
 func newBaselineCmd() *cobra.Command {
@@ -89,6 +97,8 @@ continues without paying for anything twice.`,
 		// cobra must not also print its own.
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			f.costPerCallSet = cmd.Flags().Changed("cost-per-call-usd")
+			f.seedSet = cmd.Flags().Changed("seed")
 			return runBaseline(cmd.Context(), cmd.OutOrStdout(), f)
 		},
 	}
@@ -104,7 +114,8 @@ continues without paying for anything twice.`,
 	flags.StringVar(&f.splitSeed, "split-seed", "", "deliberately re-split the evals (changes which cases are held back)")
 	flags.Float64Var(&f.maxCostUSD, "max-cost-usd", 0, "stop before spending more than this (0 is unlimited)")
 	flags.Int64Var(&f.maxCalls, "max-calls", 0, "stop after this many agent calls (0 is unlimited)")
-	flags.Float64Var(&f.costPerCall, "cost-per-call-usd", 0, "expected cost of one agent call, required with --max-cost-usd")
+	flags.Float64Var(&f.costPerCall, "cost-per-call-usd", 0,
+		"expected cost of one agent call; 0 asserts the calls are free. Not needed for an agent that prices itself")
 	flags.BoolVar(&f.resume, "resume", false, "continue an interrupted run instead of starting one")
 	flags.BoolVar(&f.jsonOut, "json", false, "machine-readable output")
 	flags.BoolVar(&f.yes, "yes", false, "proceed without being asked; the estimate is still printed")
@@ -142,7 +153,7 @@ continues without paying for anything twice.`,
 	// A PAIR. EstimateWithPrice refuses unless both are set, because half a
 	// price is not a price.
 	flags.Float64Var(&f.priceInPerMTok, "price-input-per-mtok", 0,
-		"input price per million tokens, for a model with no table row (needs --price-output-per-mtok)")
+		"input price per million tokens, for a model with no table row (pairs with --price-output-per-mtok)")
 	flags.Float64Var(&f.priceOutPerMTok, "price-output-per-mtok", 0,
 		"output price per million tokens (needs --price-input-per-mtok)")
 	flags.BoolVar(&f.acceptUnknownCost, "accept-unknown-cost", false,
@@ -282,7 +293,34 @@ func runBaseline(ctx context.Context, out io.Writer, f baselineFlags) error {
 		HoldoutCases:            counts.Holdout,
 		HoldoutUnderpowered:     counts.Underpowered(),
 		EstCostPerCallUSDMicros: usdToMicros(f.costPerCall),
-		AcceptUnknownCost:       f.acceptUnknownCost,
+		// An EXPLICIT --cost-per-call-usd 0 is an assertion that the calls are
+		// free, which is the only thing a local model server can honestly say.
+		// Read from Changed rather than from the value, because 0 is also the
+		// default and the two must not mean the same thing: the documented
+		// local-server recipe passed --cost-per-call-usd 0 and was refused
+		// with a fix line naming the flag it had just passed.
+		AcceptUnknownCost: f.acceptUnknownCost || f.costPerCallSet,
+	}
+
+	// Printed BEFORE the run, unconditionally, when the user waived the
+	// prompt. --yes is currently the only usable invocation against a real
+	// provider — the interactive path declines by default until the TUI lands
+	// (docs/debt.md#59) — so a blanket flag is the whole consent surface, and
+	// it must at least say what it is agreeing to. In the scrollback and in
+	// the CI log, a figure that turns out wrong is evidence rather than a
+	// mystery.
+	//
+	// Not from the ConfirmFunc: PreConfirm short-circuits below the threshold
+	// and never calls it, so that version was silent for exactly the runs
+	// small enough not to prompt.
+	// Human output only. In --json mode stdout is a machine contract, and a
+	// prose line ahead of the document makes it unparseable — measured, as
+	// `invalid character 'P' looking for beginning of value`. The figure
+	// travels in the report instead, as estimated_usd.
+	if f.yes && !f.jsonOut {
+		if err := printEstimate(out, opts, counts.Dev); err != nil {
+			return err
+		}
 	}
 
 	res, runErr := core.Baseline(ctx, core.Seal(evals), opts)
@@ -290,7 +328,7 @@ func runBaseline(ctx context.Context, out io.Writer, f baselineFlags) error {
 		return runErr
 	}
 
-	renderErr := render(out, f, res, counts, runID)
+	renderErr := render(out, f, opts, res, counts, runID)
 	// The run's own error wins. Rendering happens first so a budget stop or an
 	// interruption still shows what it accomplished — but if stdout is a
 	// closed pipe, reporting THAT instead would exit 1 ("broken") for a run

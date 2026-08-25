@@ -65,6 +65,20 @@ covenants — breaking any of them requires a major version.
   `KeyEnv: map[string]string{…}`; `Policy: transport.Policy{AllowInsecureHTTP: a,
   AllowPrivateAddress: b}` becomes the two bools.
 
+  The map is **not** pre-normalized: the adapter runs it through
+  `transport.ParseKeyBindings` itself, so host casing and ports are handled and the
+  looks-like-a-secret and bound-twice refusals still apply. A caller that previously built a
+  `transport.KeyBindings` by hand was getting that for free and still is.
+
+- **`anthropic.Options` gains `Price`**, so `--price-input-per-mtok` / `--price-output-per-mtok`
+  reach this adapter. They were accepted, validated as a pair, and then discarded for this scheme,
+  while the cookbook, the CI recipe, and `kno doctor` all named them as the remedy for an unpriced
+  model — a silently ignored flag on the money path.
+
+- **An explicit `--cost-per-call-usd 0` asserts the calls are free.** Read from whether the flag
+  was passed, not from its value: 0 is also the default, so the documented local-model-server
+  recipe passed it and was refused with a fix line naming the flag it had just supplied.
+
 ### Fixed
 
 - **A missing credential is refused before any request.** `openaicompat` omitted the
@@ -72,6 +86,18 @@ covenants — breaking any of them requires a major version.
   but still a paid round trip and a message about a rejected credential that was never sent. Only
   for the provider's default host: a self-hosted endpoint legitimately needs no key. Repays
   [debt #57](docs/debt.md#57).
+
+- **`--yes` prints the estimate for every run, not just above the prompt threshold.** It printed
+  from inside the confirmation callback, which the guard short-circuits below $1.00 — so the flag
+  was silent for exactly the runs small enough not to prompt, while its help text, the cookbook,
+  and the CI recipe all promised a figure unconditionally. In `--json` mode the figure travels as
+  `estimated_usd` instead, because a prose line ahead of the document makes stdout unparseable.
+
+- **A narrowed run no longer claims a width the user never asked for.** With no `--concurrency`,
+  the report read `width 1 (asked for 0; cost-cap)`. Fixed in the renderer rather than by recording
+  the defaulted width as a request: `core` deliberately does not, and a test pins that a report
+  saying "you requested 8, we gave you 5" to someone who requested nothing is how a report earns
+  distrust.
 
 - **The test suite could bill you.** `cli`'s tests drive the real command, and a subtest asserting
   `--agent openai:gpt-4.1` was refused for having "no adapter" started making live API calls the

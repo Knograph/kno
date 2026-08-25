@@ -49,15 +49,15 @@ while diagnosing a run that failed.`,
 
 // adapterFact is one row of the matrix.
 //
-// Generated from each adapter's own Capabilities() rather than hand-written: a
-// handwritten matrix drifts from the adapters silently, and the entire point of
-// printing it is that it is true.
+// Hand-written, for the reason adapterFacts explains: building an Agent to ask
+// it requires a credential and a destination, which are the two things a user
+// running `kno doctor` is usually missing. The cost of that is drift, and the
+// mitigation is the test that checks each claim against the adapters.
 type adapterFact struct {
 	Scheme           string `json:"scheme"`
 	Available        bool   `json:"available"`
 	GenerationParams string `json:"generation_params"`
 	TokenCounts      bool   `json:"token_counts"`
-	Stream           bool   `json:"stream"`
 	Spends           bool   `json:"spends"`
 	Note             string `json:"note,omitempty"`
 }

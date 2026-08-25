@@ -43,7 +43,7 @@ Kno reads provider API keys from the **environment only**. There is no flag that
 - `--key-env host=VARIABLE_NAME` binds a host to the **name** of an environment variable. The name is not a secret; the value never appears in an argument.
 - A key bound to one host is **never** sent to another. Kno does not fall back to `OPENAI_API_KEY` for a host that is not OpenAI's, because that would forward your key to whatever endpoint `--base-url` names.
 - Kno **does not follow redirects**, cross-host or same-host. Go's HTTP client strips `Authorization` across a cross-domain redirect but not `x-api-key`, which is how Anthropic authenticates — so a base URL that redirected elsewhere would forward that key verbatim.
-- A host with no binding and no default credential is **refused before any request**, rather than sending an unauthenticated one.
+- A host with no binding gets **no credential** — Kno sends the request without one rather than substituting another host's. For a scheme's **own default host**, where a credential is certainly required, the run is **refused before any request** instead. A self-hosted endpoint that needs no key is the reason the two cases differ.
 
 ### Credentials in URLs
 
@@ -56,7 +56,7 @@ A base URL is persisted on the Run record, emitted on the event stream, and prin
 
 ### If a key is exposed
 
-Rotate it at the provider first. Then run `kno purge --run <id>` to remove stored conversation content for affected runs, and check whether the key reached a base URL recorded on any Run (`--json` output includes the agent ref).
+Rotate it at the provider first. Then run `kno purge --run-id <id>` to remove stored conversation content for affected runs, and check whether the key reached a base URL recorded on any Run (`--json` output includes the agent ref).
 
 ## Network destinations
 
