@@ -309,6 +309,33 @@ func formatUSDMicros(micros int64) string {
 
 func spendOf(r *knov1.Response) budget.Spend { return spendOfN(r, 1) }
 
+// settledSpend is what the guard actually settled for one Case, across every
+// attempt it took.
+//
+// The COST comes from the accumulated figure rather than from the final
+// Response, and that distinction is the whole point. A Case whose first
+// attempt was charged and failed and whose second succeeded settles both into
+// the guard; deriving the persisted cost from the Response alone keeps only
+// the second. Measured on the success-after-retry path: $0.25 settled, $0.05
+// persisted, a $0.20 gap per five Cases.
+//
+// SettledSpend is the only durable record of money spent and Guard.Restore
+// reads it, so any difference between this and what the guard holds is
+// headroom a resumed run spends a second time.
+//
+// Tokens still come from the Response: a failed attempt reports none, and the
+// token figure is descriptive rather than a cap the guard enforces.
+func settledSpend(o *caseOutcome) budget.Spend {
+	if o == nil {
+		return budget.Spend{Calls: 1}
+	}
+	return budget.Spend{
+		Calls:         attemptsOf(o),
+		CostUSDMicros: o.BilledUSDMicros,
+		Tokens:        o.Response.GetPromptTokens() + o.Response.GetCompletionTokens(),
+	}
+}
+
 // attemptsOf reports how many provider calls an outcome took, floored at one.
 //
 // A nil outcome means the work never produced one, which is still one call's

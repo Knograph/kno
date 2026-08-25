@@ -431,7 +431,7 @@ func Baseline(
 	var draining atomic.Bool
 
 	stats, runErr := executor.Run(ctx, cases,
-		opts.workFunc(), opts.sinkFunc(ctx, &draining, agg),
+		opts.workFunc(agg), opts.sinkFunc(ctx, &draining, agg),
 		executor.Options{
 			Concurrency: opts.Concurrency,
 			ID:          func(item any) string { c, _ := item.(*Case); return c.GetId() },
@@ -459,6 +459,12 @@ func Baseline(
 	// survives every resume — so a stream with a silent hole is worse than a
 	// run that stops and says why.
 	if err := stopProgress(); err != nil && runErr == nil {
+		runErr = err
+	}
+	// A hot-path event-write failure ends the run, but only here — recorded
+	// during the run rather than returned, so it could not destroy the paid
+	// work it was reporting on.
+	if err := agg.emitFailed(); err != nil && runErr == nil {
 		runErr = err
 	}
 	return opts.closeRun(ctx, run, agg, stats, runErr)

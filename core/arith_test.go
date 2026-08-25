@@ -1,9 +1,12 @@
 package core
 
 import (
+	"errors"
+	"fmt"
 	"math"
 	"testing"
 
+	"github.com/knograph/kno/core/errs"
 	knov1 "github.com/knograph/kno/gen/kno/v1"
 	"github.com/knograph/kno/stats/budget"
 )
@@ -172,3 +175,185 @@ func TestMeanRefusesAValueNothingCanUse(t *testing.T) {
 }
 
 func ptr(f float64) *float64 { return &f }
+
+// TestSaturatingAddMatchesTheGuardsClamp.
+//
+// The accumulated billed figure feeds the STORE, and Guard.Settle's clamp
+// feeds the guard. If the two disagree on the same input, the store and the
+// guard disagree about money — and the store is the one that outlives the
+// process, because Guard.Restore reads it on resume.
+func TestSaturatingAddMatchesTheGuardsClamp(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		total, add int64
+		want       int64
+	}{
+		{"an ordinary charge", 40_000, 10_000, 50_000},
+		{"zero adds nothing", 40_000, 0, 40_000},
+		{"a negative charge is refused, not subtracted", 40_000, -10_000, 40_000},
+		{"saturates rather than wrapping", math.MaxInt64 - 5, 100, math.MaxInt64},
+		{"the exact boundary is not saturated", math.MaxInt64 - 100, 100, math.MaxInt64},
+		{"from zero", 0, 25, 25},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := saturatingAdd(tt.total, tt.add)
+			if got != tt.want {
+				t.Errorf("saturatingAdd(%d, %d) = %d, want %d", tt.total, tt.add, got, tt.want)
+			}
+			if got < 0 {
+				t.Errorf("saturatingAdd(%d, %d) went negative; a negative total "+
+					"clears every cap comparison at once", tt.total, tt.add)
+			}
+		})
+	}
+}
+
+// TestBilledCostOfRefusesWhatItCannotTrust.
+//
+// An adapter reports what it was charged through an anonymous interface, so
+// core never imports it. A negative would CREDIT the run's cap, and "the
+// provider said nothing" is not "the provider said zero" — the absence of a
+// charge is not a charge.
+func TestBilledCostOfRefusesWhatItCannotTrust(t *testing.T) {
+	t.Parallel()
+
+	plain := errors.New("no charge reported")
+
+	tests := []struct {
+		name string
+		err  error
+		want int64
+	}{
+		{"an error reporting nothing", plain, 0},
+		{"nil", nil, 0},
+		{"a real charge", billedErr{plain, 40_000}, 40_000},
+		{"a negative charge is refused", billedErr{plain, -40_000}, 0},
+		{"a zero charge is not a charge", billedErr{plain, 0}, 0},
+		{"wrapped, so errors.As still finds it", fmt.Errorf("outer: %w", billedErr{plain, 7}), 7},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := billedCostOf(tt.err); got != tt.want {
+				t.Errorf("billedCostOf = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+type billedErr struct {
+	error
+	micros int64
+}
+
+func (b billedErr) BilledCostUSDMicros() int64 { return b.micros }
+func (b billedErr) Unwrap() error              { return b.error }
+
+// TestSettledSpendReportsWhatTheGuardSettled.
+//
+// One function, used by every sink branch. Three branches each re-deriving a
+// Case's cost is what let the success-after-retry path lose an earlier
+// attempt's charge — $0.25 settled against $0.05 persisted.
+func TestSettledSpendReportsWhatTheGuardSettled(t *testing.T) {
+	t.Parallel()
+
+	resp := &knov1.Response{PromptTokens: 100, CompletionTokens: 40, CostUsdMicros: 999}
+
+	tests := []struct {
+		name string
+		in   *caseOutcome
+		want budget.Spend
+	}{
+		{
+			// Nothing reached a provider: the executor recovered a panic and
+			// the reservation was released rather than settled.
+			name: "a nil outcome is one call's exposure and no money",
+			in:   nil,
+			want: budget.Spend{Calls: 1},
+		},
+		{
+			name: "cost comes from what was settled, NOT from the Response",
+			in:   &caseOutcome{Attempts: 2, BilledUSDMicros: 50_000, Response: resp},
+			want: budget.Spend{Calls: 2, CostUSDMicros: 50_000, Tokens: 140},
+		},
+		{
+			// The retry-exhausted path: every attempt failed, so there is no
+			// Response to take tokens from, but the charges were real.
+			name: "no Response still carries the charge",
+			in:   &caseOutcome{Attempts: 3, BilledUSDMicros: 120_000},
+			want: budget.Spend{Calls: 3, CostUSDMicros: 120_000},
+		},
+		{
+			name: "attempts floor at one",
+			in:   &caseOutcome{Attempts: 0, BilledUSDMicros: 10},
+			want: budget.Spend{Calls: 1, CostUSDMicros: 10},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := settledSpend(tt.in); got != tt.want {
+				t.Errorf("settledSpend = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestRetryReasonOfNamesWhatTheProtoDefines.
+//
+// The reason reaches the TUI and the API. Mapping an unclassifiable error onto
+// whichever neighbouring value looks closest would put a confident wrong label
+// on the stream, and the proto says an emitter that cannot classify must not
+// retry at all.
+func TestRetryReasonOfNamesWhatTheProtoDefines(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want knov1.RetryReason
+	}{
+		{
+			"a rate limit",
+			errs.ErrRateLimited.Wrap(errors.New("slow down")),
+			knov1.RetryReason_RETRY_REASON_RATE_LIMITED,
+		},
+		{
+			"a transient transport failure",
+			errs.ErrTransportTransient.Wrap(errors.New("connection reset")),
+			knov1.RetryReason_RETRY_REASON_TRANSPORT_TRANSIENT,
+		},
+		{
+			// Unreachable through invokeWithRetry, which only emits after
+			// retryable() has admitted one of the two above. Pinned so the arm
+			// stays honest if a third retryable sentinel is added and nobody
+			// grows the enum.
+			"anything retryable() would not admit",
+			errors.New("a plain failure"),
+			knov1.RetryReason_RETRY_REASON_UNSPECIFIED,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := retryReasonOf(tt.err); got != tt.want {
+				t.Errorf("retryReasonOf = %v, want %v", got, tt.want)
+			}
+			// Whatever it returns, retryable() and the reason must agree about
+			// whether this is a retry at all.
+			if retryable(tt.err) && retryReasonOf(tt.err) == knov1.RetryReason_RETRY_REASON_UNSPECIFIED {
+				t.Error("retryable() admits this error but no reason names it, so a " +
+					"RetryAttempted would carry UNSPECIFIED — which the proto says " +
+					"means the emitter must not retry")
+			}
+		})
+	}
+}

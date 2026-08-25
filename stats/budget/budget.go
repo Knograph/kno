@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 
 	"github.com/knograph/kno/core/errs"
@@ -274,14 +275,24 @@ func (g *Guard) tryReserve(est Estimate) (res *Reservation, needsConfirm bool, r
 
 // fitsLocked reports whether est fits within the caps, counting outstanding
 // reservations as already consumed. Callers must hold g.mu.
+// fitsLocked reports whether one more estimate stays inside the caps.
+//
+// Every sum saturates. A plain three-term add wraps to MinInt64 once spent
+// approaches the top of the range, the comparison then reads as "well under
+// the cap", and the guard authorizes without limit — measured against a $1.00
+// cap after one saturated settlement: Remaining reporting 0 and Authorize
+// returning nil. Clamping Settle alone moved the overflow here rather than
+// removing it, which is why docs/debt.md#48 needs both.
 func (g *Guard) fitsLocked(est Estimate) bool {
 	if g.limits.MaxCostUSDMicros > 0 {
-		if g.spent.CostUSDMicros+g.reserved.CostUSDMicros+est.CostUSDMicros > g.limits.MaxCostUSDMicros {
+		used := addSpend(addSpend(g.spent.CostUSDMicros, g.reserved.CostUSDMicros), est.CostUSDMicros)
+		if used > g.limits.MaxCostUSDMicros {
 			return false
 		}
 	}
 	if g.limits.MaxLLMCalls > 0 {
-		if g.spent.Calls+g.reserved.Calls+est.Calls > g.limits.MaxLLMCalls {
+		used := addSpend(addSpend(g.spent.Calls, g.reserved.Calls), est.Calls)
+		if used > g.limits.MaxLLMCalls {
 			return false
 		}
 	}
@@ -361,17 +372,58 @@ func (g *Guard) denied(est Estimate, rem Remaining) error {
 // actual may differ from the estimate in either direction; the reservation is
 // released and the real figure recorded. Calling Settle more than once, or
 // after Release, is a no-op.
-func (r *Reservation) Settle(actual Spend) {
+func (r *Reservation) Settle(actual Spend) (overshootDelta int64) {
 	r.once.Do(func() {
 		g := r.guard
 		g.mu.Lock()
 		defer g.mu.Unlock()
 
+		before := g.overshootLocked()
+
 		g.releaseLocked(r.id)
-		g.spent.Calls += actual.Calls
-		g.spent.CostUSDMicros += actual.CostUSDMicros
-		g.spent.Tokens += actual.Tokens
+		// Clamped, not trusted. Every caller is a provider adapter reporting
+		// what it was charged, and a saturated or negative figure from one of
+		// them lands straight in the number a report shows and Restore reads
+		// back on resume: two MaxInt64 settlements against a $1.00 cap left
+		// spent at -2, Remaining reporting MORE than the cap, and the guard
+		// authorizing again. docs/debt.md#48.
+		//
+		// Here rather than at each call site because this is the choke point.
+		// Both M2 adapters bound their own usage blocks, and every future one
+		// would have to remember to.
+		g.spent.Calls = addSpend(g.spent.Calls, actual.Calls)
+		g.spent.CostUSDMicros = addSpend(g.spent.CostUSDMicros, actual.CostUSDMicros)
+		g.spent.Tokens = addSpend(g.spent.Tokens, actual.Tokens)
+
+		overshootDelta = g.overshootLocked() - before
 	})
+	return overshootDelta
+}
+
+// addSpend adds a reported figure to a running total without wrapping or
+// going backwards.
+//
+// Negative is refused outright: a settlement that CREDITS the run is not a
+// settlement, and the only way to produce one is a provider or an adapter
+// reporting nonsense. Saturating rather than wrapping for the same reason a
+// cost estimate saturates — a wrapped total goes negative, which clears every
+// cap comparison at once.
+func addSpend(total, reported int64) int64 {
+	if reported <= 0 {
+		return total
+	}
+	if total > math.MaxInt64-reported {
+		return math.MaxInt64
+	}
+	return total + reported
+}
+
+// overshootLocked is Overshoot without taking the lock.
+func (g *Guard) overshootLocked() int64 {
+	if g.limits.MaxCostUSDMicros <= 0 {
+		return 0
+	}
+	return max(0, g.spent.CostUSDMicros-g.limits.MaxCostUSDMicros)
 }
 
 // Release returns the reservation's headroom without recording spend.
@@ -451,9 +503,9 @@ func (g *Guard) Restore(spent Spend) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	g.spent.Calls += spent.Calls
-	g.spent.CostUSDMicros += spent.CostUSDMicros
-	g.spent.Tokens += spent.Tokens
+	g.spent.Calls = addSpend(g.spent.Calls, spent.Calls)
+	g.spent.CostUSDMicros = addSpend(g.spent.CostUSDMicros, spent.CostUSDMicros)
+	g.spent.Tokens = addSpend(g.spent.Tokens, spent.Tokens)
 }
 
 // Limits reports the caps this Guard enforces.
@@ -625,11 +677,7 @@ func (g *Guard) Declined() bool {
 func (g *Guard) Overshoot() int64 {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-
-	if g.limits.MaxCostUSDMicros <= 0 {
-		return 0
-	}
-	return max(0, g.spent.CostUSDMicros-g.limits.MaxCostUSDMicros)
+	return g.overshootLocked()
 }
 
 // Spent reports what has actually been settled, excluding outstanding

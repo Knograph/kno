@@ -2,6 +2,7 @@ package budget
 
 import (
 	"context"
+	"math"
 	"testing"
 )
 
@@ -189,5 +190,67 @@ func TestFormatUSDRendersCentsAndSigns(t *testing.T) {
 		if got := formatUSD(tt.micros); got != tt.want {
 			t.Errorf("formatUSD(%d) = %q, want %q", tt.micros, got, tt.want)
 		}
+	}
+}
+
+// TestSettleClampsWhatAnAdapterReports.
+//
+// Every caller is a provider adapter reporting what it was charged, and
+// Settle's total is the number a report shows AND the number Restore reads
+// back on resume. docs/debt.md#48: two MaxInt64 settlements against a $1.00
+// cap left spent at -2, Remaining reporting more than the cap, and the guard
+// authorizing again.
+//
+// Clamped here rather than at each call site because this is the choke point.
+// Both M2 adapters bound their own usage blocks; every future one would have
+// to remember to.
+func TestSettleClampsWhatAnAdapterReports(t *testing.T) {
+	t.Parallel()
+
+	const costCap = 1_000_000 // $1.00
+
+	tests := []struct {
+		name      string
+		settles   []int64
+		wantSpent int64
+	}{
+		{"an ordinary settlement", []int64{250_000}, 250_000},
+		{
+			// The reproduction from #48.
+			name:      "two saturated settlements do not wrap negative",
+			settles:   []int64{math.MaxInt64, math.MaxInt64},
+			wantSpent: math.MaxInt64,
+		},
+		{
+			// A negative would CREDIT the run's cap — a settlement that gives
+			// money back is not a settlement.
+			name:      "a negative charge is refused, not subtracted",
+			settles:   []int64{500_000, -400_000},
+			wantSpent: 500_000,
+		},
+		{"a zero charge adds nothing", []int64{500_000, 0}, 500_000},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			g := New(Limits{MaxCostUSDMicros: costCap}, nil, 0)
+			for _, v := range tt.settles {
+				r, err := g.Authorize(context.Background(), Estimate{Calls: 1, CostUSDMicros: 1})
+				if err != nil {
+					// Once the cap binds, further authorization is refused —
+					// which is correct, and means the earlier settles stuck.
+					break
+				}
+				r.Settle(Spend{Calls: 1, CostUSDMicros: v})
+			}
+			if got := g.Spent().CostUSDMicros; got != tt.wantSpent {
+				t.Errorf("spent = %d, want %d", got, tt.wantSpent)
+			}
+			if g.Spent().CostUSDMicros < 0 {
+				t.Error("spent went negative; Remaining would then report more than " +
+					"the cap and the guard would authorize again")
+			}
+		})
 	}
 }

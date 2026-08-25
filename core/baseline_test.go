@@ -3407,3 +3407,318 @@ func TestTheHeartbeatCarriesTheNumbersItExistsFor(t *testing.T) {
 			last.GetAttempted(), res.Run.GetAttemptedCaseCount())
 	}
 }
+
+// billedFailure is an error carrying a provider's charge for a call that
+// failed, in the shape core reads it — the same anonymous-interface shape
+// retryAfterOf uses, so an adapter can report one without core importing it.
+type billedFailure struct {
+	error
+	micros int64
+}
+
+func (b billedFailure) BilledCostUSDMicros() int64 { return b.micros }
+func (b billedFailure) Unwrap() error              { return b.error }
+
+// billingAgent charges for every call and fails all of them.
+type billingAgent struct {
+	core.Agent
+	perCallUSDMicros int64
+	calls            atomic.Int64
+}
+
+func (a *billingAgent) Invoke(context.Context, *core.Case) (*knov1.Response, error) {
+	a.calls.Add(1)
+	return nil, billedFailure{
+		error:  errs.ErrTransportTransient.Wrap(errors.New("the provider charged and then failed")),
+		micros: a.perCallUSDMicros,
+	}
+}
+
+// TestABilledFailureIsPersistedSoAResumeDoesNotSpendItAgain.
+//
+// The guard settles a provider's charge for a failed call the moment it
+// happens. sinkFunc persists what the run owes, and SettledSpend is the only
+// durable record of money spent — Guard.Restore reads it back on resume.
+//
+// Persisting zero for a billed failure hands the resumed run that difference
+// as headroom, and it spends it a second time. With MaxAttempts 3 the guard
+// can settle three charges for one Case, so the divergence is per attempt.
+func TestABilledFailureIsPersistedSoAResumeDoesNotSpendItAgain(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const perCall = 40_000 // $0.04 a call, charged even though it fails
+
+	h := newHarness(t, 6, 3, fake.Options{})
+	h.opts.Agent = &billingAgent{perCallUSDMicros: perCall}
+	h.opts.Concurrency = 1
+	h.opts.EstCostPerCallUSDMicros = perCall
+	h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 10_000_000}, nil, 0)
+	// THREE attempts, not one. The guard settles each separately while only
+	// the last error survives the loop, so the accumulation across attempts is
+	// the thing under test — an earlier version of this test used one attempt
+	// and could not have caught a sink that persisted a single charge.
+	h.opts.MaxAttempts = 3
+	h.opts.RetryBackoff = time.Millisecond
+
+	// A run of all-errored Cases COMPLETES — an errored Case is counted, not
+	// fatal — so a non-nil error is not the signal here.
+	res, err := core.Baseline(ctx, h.evals, h.opts)
+	if err != nil {
+		t.Fatalf("Baseline: %v", err)
+	}
+	if res.Run.GetErroredCaseCount() == 0 {
+		t.Fatal("no Case errored; the fixture is not exercising a billed failure")
+	}
+
+	settledInGuard := h.opts.Guard.Spent().CostUSDMicros
+	if settledInGuard == 0 {
+		t.Fatal("the guard settled nothing; the fixture is not exercising a billed failure")
+	}
+
+	persisted, err := h.store.SettledSpend(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("SettledSpend: %v", err)
+	}
+
+	if persisted.CostUSDMicros != settledInGuard {
+		t.Errorf("the guard settled %d micro-USD and the store persisted %d. "+
+			"Guard.Restore reads the STORE on resume, so the resumed run gets "+
+			"the %d difference as headroom and spends it again",
+			settledInGuard, persisted.CostUSDMicros,
+			settledInGuard-persisted.CostUSDMicros)
+	}
+	// And the accumulation is real: three attempts per Case, each charged.
+	if want := int64(6 * 3 * perCall); settledInGuard != want {
+		t.Errorf("guard settled %d, want %d — 6 Cases x 3 attempts x %d. A figure "+
+			"matching one attempt per Case means the retries were not charged",
+			settledInGuard, want, perCall)
+	}
+}
+
+// TestASettlementPastTheCapIsReported.
+//
+// Guard.Overshoot made the excess computable in M2-2 and nothing surfaced it.
+// The event is gated on the DELTA from each settlement, so once the cap binds
+// and fitsLocked refuses further authorizations, only reservations already in
+// flight can overshoot — the count is bounded by concurrency, not by Cases.
+func TestASettlementPastTheCapIsReported(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// Each call costs ten times what it was estimated at, so the very first
+	// settlement blows a cap sized for the estimate.
+	h := newHarness(t, 8, 3, fake.Options{CostPerCallUSDMicros: 500_000})
+	h.opts.Concurrency = 1
+	h.opts.EstCostPerCallUSDMicros = 50_000
+	h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 200_000}, nil, 0)
+
+	if _, err := core.Baseline(ctx, h.evals, h.opts); err != nil &&
+		!errors.Is(err, errs.ErrBudgetExceeded) {
+		t.Fatalf("Baseline: %v", err)
+	}
+
+	var seen []*knov1.SettlementOvershoot
+	for _, ev := range eventLog(t, h.dbPath, "run-1") {
+		if p, ok := ev.GetPayload().(*knov1.Event_SettlementOvershoot); ok {
+			seen = append(seen, p.SettlementOvershoot)
+		}
+	}
+	if len(seen) == 0 {
+		t.Fatal("a settlement passed the cap and nothing said so; Guard.Overshoot " +
+			"has made this computable since M2-2 and no surface reported it")
+	}
+	first := seen[0]
+	if first.GetSettledUsdMicros() <= first.GetReservedUsdMicros() {
+		t.Errorf("settled=%d reserved=%d; an overshoot means the settlement "+
+			"exceeded what was authorized for it",
+			first.GetSettledUsdMicros(), first.GetReservedUsdMicros())
+	}
+	if first.GetCumulativeOvershootUsdMicros() <= 0 {
+		t.Error("cumulative overshoot is zero on an event that reports one")
+	}
+	if first.GetCaseId() == "" {
+		t.Error("no Case named; the overshoot is attributable and should say to what")
+	}
+	// Bounded by concurrency, not by Case count: at concurrency 1 the cap
+	// binds after the first settlement and nothing further is authorized.
+	if len(seen) > 2 {
+		t.Errorf("%d overshoot events at concurrency 1; once the cap binds, "+
+			"fitsLocked refuses further authorizations, so the count is bounded "+
+			"by in-flight reservations", len(seen))
+	}
+}
+
+// flakyBillingAgent charges for a failed first attempt, then succeeds.
+type flakyBillingAgent struct {
+	failedOnce sync.Map // case id -> struct{}
+	billed     int64
+	answer     *knov1.Response
+}
+
+func (a *flakyBillingAgent) Invoke(_ context.Context, c *core.Case) (*knov1.Response, error) {
+	if _, seen := a.failedOnce.LoadOrStore(c.GetId(), struct{}{}); !seen {
+		return nil, billedFailure{
+			error:  errs.ErrTransportTransient.Wrap(errors.New("charged, then failed")),
+			micros: a.billed,
+		}
+	}
+	r := proto.CloneOf(a.answer)
+	r.Output = c.GetExpected()
+	return r, nil
+}
+
+func (a *flakyBillingAgent) Capabilities() *knov1.Capabilities { return &knov1.Capabilities{} }
+
+// TestABilledFailureBeforeASuccessIsStillPersisted.
+//
+// The retry-EXHAUSTED branch was the obvious half and is covered. This is the
+// other one: a Case whose first attempt is charged and fails, and whose second
+// succeeds, is persisted by the sink's SCORED branch — which derives cost from
+// the final Response and knows nothing about what earlier attempts cost.
+//
+// The guard settles both. The store is what Guard.Restore reads on resume, so
+// the difference is headroom the resumed run spends again — the same defect as
+// the exhausted path, on the path that actually succeeds.
+func TestABilledFailureBeforeASuccessIsStillPersisted(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const billedOnFailure = 40_000 // $0.04, charged for the attempt that failed
+	const costOnSuccess = 10_000   // $0.01, the answer that worked
+
+	h := newHarness(t, 5, 3, fake.Options{})
+	h.opts.Agent = &flakyBillingAgent{
+		billed: billedOnFailure,
+		answer: &knov1.Response{CostUsdMicros: costOnSuccess},
+	}
+	h.opts.Concurrency = 1
+	h.opts.EstCostPerCallUSDMicros = billedOnFailure + costOnSuccess
+	h.opts.RetryBackoff = time.Millisecond
+	h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 10_000_000}, nil, 0)
+
+	res, err := core.Baseline(ctx, h.evals, h.opts)
+	if err != nil {
+		t.Fatalf("Baseline: %v", err)
+	}
+	if res.Run.GetScoredCaseCount() == 0 {
+		t.Fatal("no Case scored; the fixture must retry into a success")
+	}
+
+	settledInGuard := h.opts.Guard.Spent().CostUSDMicros
+	persisted, err := h.store.SettledSpend(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("SettledSpend: %v", err)
+	}
+
+	if persisted.CostUSDMicros != settledInGuard {
+		t.Errorf("the guard settled %d micro-USD and the store persisted %d, a gap "+
+			"of %d. Every Case here was charged once for a failed attempt and once "+
+			"for the success; the sink derives cost from the final Response alone, "+
+			"so the failed attempt's charge is lost. Guard.Restore reads the STORE",
+			settledInGuard, persisted.CostUSDMicros,
+			settledInGuard-persisted.CostUSDMicros)
+	}
+}
+
+// selectiveFailStore fails AppendEvent for one payload type and no other.
+type selectiveFailStore struct {
+	store.Store
+	failOn func(*knov1.Event) bool
+}
+
+func (s *selectiveFailStore) AppendEvent(ctx context.Context, ev *knov1.Event) error {
+	if s.failOn(ev) {
+		return errors.New("the event store is unavailable")
+	}
+	return s.Store.AppendEvent(ctx, ev)
+}
+
+// TestAnEventWriteFailureDoesNotDestroyThePaidWorkItReportsOn.
+//
+// The overshoot emit runs before the success check, so returning its error
+// discarded a paid, scoreable answer — and because the outcome row was still
+// written, CompletedCases included it and a resume skipped it forever. We
+// would have paid for an answer, thrown it away, blamed the agent, and never
+// re-attempted.
+//
+// docs/debt.md#32 rejected exactly this mechanism for Settle: "making Settle
+// fail would turn a successful, paid, scored call into an errored Case and
+// lose paid work." An emitter is the same hazard by another route.
+//
+// The failure still ends the run — a stream with a silent hole is worse than a
+// run that stops — but at close, after the work it was reporting on is safe.
+func TestAnEventWriteFailureDoesNotDestroyThePaidWorkItReportsOn(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// Each call costs ten times its estimate, so the first settlement
+	// overshoots and the overshoot emit fires.
+	h := newHarness(t, 4, 2, fake.Options{CostPerCallUSDMicros: 500_000})
+	h.opts.Concurrency = 1
+	h.opts.EstCostPerCallUSDMicros = 50_000
+	h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 200_000}, nil, 0)
+	h.opts.Store = &selectiveFailStore{
+		Store: h.store,
+		failOn: func(ev *knov1.Event) bool {
+			_, isOvershoot := ev.GetPayload().(*knov1.Event_SettlementOvershoot)
+			return isOvershoot
+		},
+	}
+
+	res, err := core.Baseline(ctx, h.evals, h.opts)
+	if err == nil {
+		t.Fatal("the run must end reporting the event-write failure; a silent gap " +
+			"in the stream is worse than a run that stops")
+	}
+
+	// The paid answer survived. Before the fix this was scored=0 errored=1.
+	if res == nil || res.Run.GetScoredCaseCount() == 0 {
+		t.Fatalf("the Case was paid for and answered, and the run recorded no score. "+
+			"An observability failure destroyed the work it was reporting on: %+v", res)
+	}
+	if res.Run.GetErroredCaseCount() > 0 {
+		t.Errorf("%d Cases errored; an event-store failure is not an agent failure, "+
+			"and codeOf would have recorded it as AGENT_ERROR",
+			res.Run.GetErroredCaseCount())
+	}
+}
+
+// TestAFailedRetryEventDoesNotTurnARetryableCaseTerminal.
+//
+// Same hazard, quieter symptom: returning the RetryAttempted emit error
+// converts a Case that would have succeeded on its next attempt into a
+// terminal failure. Enough of those trip ErrorRateExceeded and mark a healthy
+// baseline unusable, on an event-store hiccup.
+func TestAFailedRetryEventDoesNotTurnARetryableCaseTerminal(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	h := newHarness(t, 5, 2, fake.Options{})
+	h.opts.Agent = &flakyBillingAgent{
+		billed: 1_000,
+		answer: &knov1.Response{CostUsdMicros: 1_000},
+	}
+	h.opts.Concurrency = 1
+	h.opts.RetryBackoff = time.Millisecond
+	h.opts.Store = &selectiveFailStore{
+		Store: h.store,
+		failOn: func(ev *knov1.Event) bool {
+			_, isRetry := ev.GetPayload().(*knov1.Event_RetryAttempted)
+			return isRetry
+		},
+	}
+
+	res, err := core.Baseline(ctx, h.evals, h.opts)
+	if err == nil {
+		t.Fatal("the run must end reporting the event-write failure")
+	}
+	if res == nil || res.Run.GetScoredCaseCount() == 0 {
+		t.Fatalf("every Case retries into a success, and none scored — the retry "+
+			"event's failure made them terminal: %+v", res)
+	}
+	if res.Run.GetErrorRateExceeded() {
+		t.Error("the run is marked an unusable baseline because its event store " +
+			"hiccuped, not because its agent failed")
+	}
+}

@@ -80,6 +80,21 @@ type aggregator struct {
 	// first emitter that is not.
 	emitMu sync.Mutex
 
+	// emitFailure holds the first hot-path event-write failure.
+	//
+	// Out of band, because an observability failure must never change an
+	// attempt's RESULT. Returning it from the worker discarded a paid,
+	// scoreable answer and recorded the Case as an agent error — and since the
+	// outcome row was still written, a resume skipped it. We would have paid
+	// for an answer, thrown it away, and blamed the agent.
+	//
+	// docs/debt.md#32 already rejected this mechanism for Settle: "making
+	// Settle fail would turn a successful, paid, scored call into an errored
+	// Case and lose paid work." The emitter is the same hazard by another
+	// route. Surfaced at close instead, where it ends the run without
+	// destroying what the run bought.
+	emitFailure atomic.Pointer[error]
+
 	// closed is set when RunFinished is written.
 	//
 	// The payload promises it is "always the last event" and nothing enforced
@@ -175,6 +190,21 @@ func (a *aggregator) meanLocked() *float64 {
 		return nil
 	}
 	return &m
+}
+
+// recordEmitFailure keeps the first hot-path event-write failure.
+func (a *aggregator) recordEmitFailure(err error) {
+	if err != nil {
+		a.emitFailure.CompareAndSwap(nil, &err)
+	}
+}
+
+// emitFailed reports the first hot-path event-write failure, if any.
+func (a *aggregator) emitFailed() error {
+	if p := a.emitFailure.Load(); p != nil {
+		return *p
+	}
+	return nil
 }
 
 // isClosed reports whether RunFinished has been written.
@@ -463,6 +493,11 @@ func (o BaselineOptions) progressTicker(
 				tickCtx, cancel := context.WithTimeout(
 					context.WithoutCancel(ctx), progressWriteGrace)
 				err := o.emitStageProgress(tickCtx, agg, total, startedAt)
+				if err == nil {
+					// On the same tick, so the two heartbeats a watcher reads
+					// together describe the same instant.
+					err = o.emitSpendRecorded(tickCtx, agg)
+				}
 				cancel()
 				if err != nil {
 					// NOT swallowed. appendEvent allocates a sequence number
@@ -492,6 +527,100 @@ func (o BaselineOptions) progressTicker(
 		}
 		return nil
 	}
+}
+
+// emitSettlementOvershoot reports a settlement that pushed spend past the cap.
+//
+// Gated on the DELTA rather than on Overshoot() being positive, and emitted at
+// settle time. Once the cap binds, fitsLocked refuses every further
+// authorization, so only reservations already in flight can overshoot — which
+// bounds the event count by concurrency rather than by Case count. That is the
+// C + N x delta_max bound docs/debt.md#32 already writes down, and this event
+// enumerates its terms.
+//
+// The DELTA that gates this comes back from Settle rather than being read
+// afterwards: detecting an overshoot by reading Overshoot() after the fact is
+// a race in which two concurrent settlements both see the same positive value
+// and both report it. The gate is in invokeWithRetry, where the delta is.
+//
+// The cumulative figure below IS read after, which is correct for it — it is a
+// running total, and "as of now" is what it means.
+//
+// The per-event contribution is NOT derivable from this payload, and an
+// earlier version of this comment said to get it by subtracting reserved from
+// settled. That over-counts by the pre-cap headroom: reserved 50k, settled
+// 500k, cap 200k gives 450k where the contribution to the overshoot is 300k,
+// because the first 200k was still under the cap. Summing that across events
+// inflates the total. Carrying the delta Settle returns is the fix and needs a
+// proto field — docs/debt.md#50.
+func (o BaselineOptions) emitSettlementOvershoot(
+	ctx context.Context,
+	agg *aggregator,
+	caseID string,
+	reserved, settled int64,
+) error {
+	return o.appendEventFunc(ctx, agg, func() *knov1.Event {
+		return &knov1.Event{
+			Payload: &knov1.Event_SettlementOvershoot{
+				SettlementOvershoot: &knov1.SettlementOvershoot{
+					CaseId:                       caseID,
+					ReservedUsdMicros:            reserved,
+					SettledUsdMicros:             settled,
+					CumulativeOvershootUsdMicros: o.Guard.Overshoot(),
+				},
+			},
+		}
+	}, "settlement-overshoot")
+}
+
+// emitRetryAttempted reports that a Case is being retried, BEFORE the wait.
+//
+// Before, because the whole value of the signal is telling a watcher the run
+// is obeying a provider's backoff rather than hung. Emitted after the sleep it
+// announces, it says "we were idle" only once idleness ended.
+func (o BaselineOptions) emitRetryAttempted(
+	ctx context.Context,
+	agg *aggregator,
+	caseID string,
+	ordinal int,
+	reason knov1.RetryReason,
+	wait, budgetLeft time.Duration,
+) error {
+	return o.appendEvent(ctx, agg, &knov1.Event{
+		Payload: &knov1.Event_RetryAttempted{RetryAttempted: &knov1.RetryAttempted{
+			CaseId:                 caseID,
+			AttemptOrdinal:         int32(ordinal), //nolint:gosec // bounded by maxAttempts
+			Reason:                 reason,
+			BackoffMs:              wait.Milliseconds(),
+			RetryBudgetRemainingMs: budgetLeft.Milliseconds(),
+		}},
+	}, "retry-attempted")
+}
+
+// emitSpendRecorded reports the run's cumulative spend.
+//
+// On the progress ticker rather than per settlement. All three of its totals
+// are cumulative — the message was shaped for a heartbeat, not for a per-Case
+// event — and per-settlement emission would put another fsync behind every
+// agent call, on the same serialized writer as the outcome row that prevents
+// double-spend.
+func (o BaselineOptions) emitSpendRecorded(ctx context.Context, agg *aggregator) error {
+	return o.appendEventFunc(ctx, agg, func() *knov1.Event {
+		spent := o.Guard.Spent()
+		rem := o.Guard.Remaining()
+		rec := &knov1.SpendRecorded{
+			TotalCostUsdMicros: spent.CostUSDMicros,
+			TotalCalls:         spent.Calls,
+			TotalTokens:        spent.Tokens,
+		}
+		// Absent when uncapped: Remaining's fields are meaningless rather than
+		// zero without a cap, and its own godoc says so.
+		if !rem.Unlimited {
+			rec.RemainingCostUsdMicros = proto.Int64(rem.CostUSDMicros)
+			rec.RemainingCalls = proto.Int64(rem.LLMCalls)
+		}
+		return &knov1.Event{Payload: &knov1.Event_SpendRecorded{SpendRecorded: rec}}
+	}, "spend-recorded")
 }
 
 // emitStageProgress reports where the run has got to.
@@ -640,7 +769,7 @@ func (o BaselineOptions) sinkFunc(runCtx context.Context, draining *atomic.Bool,
 		case r.Done():
 			out.Response = r.Value.Response
 			out.Score = r.Value.Score
-			out.Spend = spendOfN(r.Value.Response, int64(r.Value.Attempts))
+			out.Spend = settledSpend(r.Value)
 		default:
 			out.Err = codeOf(r.Err)
 			// A Case can fail AFTER a paid call — a Goal erroring on malformed
@@ -650,13 +779,20 @@ func (o BaselineOptions) sinkFunc(runCtx context.Context, draining *atomic.Bool,
 			// spent than really was, reopening the amnesia M1-0 closed.
 			if r.Value != nil && r.Value.Response != nil {
 				out.Response = r.Value.Response
-				out.Spend = spendOfN(r.Value.Response, int64(r.Value.Attempts))
+				out.Spend = settledSpend(r.Value)
 			} else {
 				// No Response, which is the retry-EXHAUSTED path — every
 				// attempt failed. Hardcoding one call here is what made the
 				// headline fix miss the branch it was written for: measured 5
 				// persisted against 15 settled with MaxAttempts 3.
-				out.Spend = budget.Spend{Calls: attemptsOf(r.Value)}
+				//
+				// The cost is what the provider charged across every attempt,
+				// not zero. The guard settles each attempt as it happens, and
+				// SettledSpend is the only durable record of money spent —
+				// Guard.Restore reads it on resume. Persisting zero here while
+				// the guard holds a real figure gives the resumed run that
+				// difference as headroom and it spends it again.
+				out.Spend = settledSpend(r.Value)
 			}
 		}
 
@@ -672,6 +808,15 @@ type caseOutcome struct {
 	// Attempts is how many provider calls this Case took. Persisted so the
 	// store's spend matches what the guard actually settled.
 	Attempts int
+
+	// BilledUSDMicros is what the provider charged across every attempt.
+	//
+	// Accumulated in invokeWithRetry rather than derived from Response,
+	// because a failed attempt can be billed and produces no Response. The
+	// guard settles each attempt as it happens; this is what the SINK
+	// persists, and SettledSpend is the only durable record of money spent —
+	// so a difference between the two is headroom a resumed run spends twice.
+	BilledUSDMicros int64
 
 	Response *Response
 	Score    *Score
