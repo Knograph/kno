@@ -41,7 +41,16 @@ Next: `kno value` to measure which of your assets earn their place.
 
 **`6 held back`** is the holdout. Nothing reads it — not this run, not valuation, not selection — until `validate`. That constraint is the reason any number Kno reports later means anything. [Why](docs/mental-model.md#why-devholdout-exists).
 
-Full walkthrough: **[Score your agent for the first time](docs/cookbook/first-baseline.md)**.
+That run used `fake:`, the local agent that costs nothing. Pointing it at a real provider is one flag:
+
+```bash
+export OPENAI_API_KEY=sk-...
+kno baseline --evals cases.jsonl --agent openai:gpt-4.1 --max-cost-usd 2.00
+```
+
+Keys come from the environment, never from a flag. Kno prices each Case from its own table, so the cap binds *before* the call rather than at settlement. `kno doctor` prints which providers, models, and goals this build supports — it contacts nothing.
+
+Full walkthrough: **[Score your agent for the first time](docs/cookbook/first-baseline.md)**, then **[Point Kno at your own provider](docs/cookbook/your-own-provider.md)**.
 
 ## Three properties worth knowing up front
 
@@ -77,7 +86,7 @@ A CI gate branches on these, so they're a contract rather than an afterthought.
 | **Validate** | Measure the Portfolio as a set against the untouched holdout | Planned |
 | **Export** | Training set, report, and the gaps nothing in your pool could fix | Planned |
 
-Provider adapters (OpenAI-compatible, Anthropic) arrive with **Value**. Until then `--agent fake:` is the only agent, and it costs nothing.
+Provider adapters are **shipped**: `openai:` (and any OpenAI-compatible endpoint via `--base-url`), `anthropic:`, and `fake:`. `exec:` and `tuned:` arrive with the stages that need them.
 
 ## Documentation
 

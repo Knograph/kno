@@ -101,7 +101,8 @@ func (c SplitCounts) Validate() error {
 		}
 		return fmt.Errorf(
 			"all %d Cases landed in dev, leaving no holdout; at a holdout fraction of %.2f, "+
-				"roughly %d or more Cases are needed", c.Total(), frac, minCasesFor(frac))
+				"roughly %d or more Cases are needed", c.Total(), frac, minCasesFor(frac),
+		)
 	}
 	if c.Dev == 0 {
 		return fmt.Errorf("all %d Cases landed in the holdout, leaving nothing to measure against", c.Total())

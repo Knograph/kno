@@ -118,11 +118,13 @@ func EstimateWithPrice(p *knov1.Price, model string, prompt Prompt, maxOutputTok
 	// from missing data.
 	if p.InputPerMtokUsdMicros == nil || p.OutputPerMtokUsdMicros == nil {
 		return budget.Estimate{}, fmt.Errorf(
-			"%w: the row for %s has no input or output rate", ErrUnpriced, model)
+			"%w: the row for %s has no input or output rate", ErrUnpriced, model,
+		)
 	}
 	if maxOutputTokens <= 0 {
 		return budget.Estimate{}, fmt.Errorf(
-			"pricing: %s has no output ceiling, so the output term is unbounded", model)
+			"pricing: %s has no output ceiling, so the output term is unbounded", model,
+		)
 	}
 	// No current model's context window is within three orders of magnitude of
 	// this. The bound exists so a fat-fingered ceiling cannot overflow the
@@ -131,7 +133,8 @@ func EstimateWithPrice(p *knov1.Price, model string, prompt Prompt, maxOutputTok
 	if maxOutputTokens > maxOutputCeiling {
 		return budget.Estimate{}, fmt.Errorf(
 			"pricing: an output ceiling of %d is beyond any real model's context "+
-				"window, and the cost arithmetic cannot bound it", maxOutputTokens)
+				"window, and the cost arithmetic cannot bound it", maxOutputTokens,
+		)
 	}
 
 	inTokens := countTokens(prompt.size(), model)

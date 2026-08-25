@@ -339,6 +339,14 @@ func redactRef(s string) string {
 	return userinfoPattern.ReplaceAllString(s, "${1}[redacted]@")
 }
 
+// Redact removes userinfo from a reference or URL before it is shown.
+//
+// Exported because agentref is not the only place a user-supplied reference is
+// echoed back: the CLI composes --base-url into a ref and can refuse before
+// this package ever sees it, and an unredacted refusal reaches stderr and
+// therefore CI logs. One redactor, wherever the echo happens.
+func Redact(s string) string { return redactRef(s) }
+
 func knownSchemeNames() []string {
 	out := make([]string, 0, len(knownSchemes))
 	for s := range knownSchemes {

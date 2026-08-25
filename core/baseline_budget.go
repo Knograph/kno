@@ -87,6 +87,106 @@ func (o BaselineOptions) estimate(ctx context.Context, c *Case) (budget.Estimate
 	return est, nil
 }
 
+// agentCanPriceItself reports whether the Agent computes its own per-Case cost.
+//
+// An Estimator makes --cost-per-call-usd both unnecessary and inert: estimate()
+// consults the Estimator and never falls back to the scalar, so requiring one
+// alongside a cost cap demanded a number nothing would read.
+func (o BaselineOptions) agentCanPriceItself() bool {
+	_, ok := o.Agent.(Estimator)
+	return ok
+}
+
+// PlanningCostPerCall exposes the per-Case figure a confirmation would quote.
+//
+// Exported because the CLI prints that figure for a --yes run, which waives
+// the prompt the number would otherwise appear in. It must be the SAME
+// arithmetic: two places computing "what this will cost" is two numbers that
+// can disagree, and the one the user sees would be the one nothing enforces.
+func PlanningCostPerCall(o BaselineOptions) int64 { return o.planningCostPerCall() }
+
+// errUnknownCost marks a run whose per-Case cost cannot be computed at all.
+//
+// Distinct from errUnpriceable, which is per-Case and refuses under a cap. This
+// is the run-level question asked BEFORE any Case: can this configuration
+// produce a number to show a human? An Agent that is not an Estimator and was
+// given no scalar cannot, and neither can one whose model has no price row.
+var errUnknownCost = errors.New("core: the per-Case cost of this run is unknown")
+
+// checkCostIsKnowable refuses a run nobody can be asked to consent to.
+//
+// Prime directive 4 is "never spend the user's money silently", and the path
+// that violated it was the one where we know LEAST. With an unpriced model and
+// no cap, estimate() returns the scalar (zero), planningCostPerCall() returns
+// zero, and confirmRun returns before ever calling PreConfirm — so a
+// 10,000-Case run against a real provider made 10,000 calls with no prompt, no
+// printed figure, and no --yes. A run against a PRICED model with no cap does
+// prompt, because WorstCase x remaining crosses the threshold. The asymmetry
+// ran the wrong way.
+//
+// Refusing rather than prompting, and this is the design decision worth
+// stating. A prompt reading "10,000 Cases, per-Case cost unknown" gives a human
+// no basis to decide; it is a dialog people click through. A flag someone had
+// to type is consent, and it is greppable — in a CI config, in shell history,
+// in a code review — which a prompt is not. It also needs no change to
+// stats/budget, whose ConfirmFunc cannot express "unknown" and whose
+// PreConfirm latches confirmed=true below the threshold, so a zero-valued
+// estimate would disarm the per-operation prompt as well.
+func (o BaselineOptions) checkCostIsKnowable() error {
+	if o.AcceptUnknownCost {
+		return nil
+	}
+	// Being an Estimator is NOT the same as being able to price THIS model,
+	// and treating it as such reopened the hole this function exists to close.
+	// An openai-compatible endpoint with no row in the price table is an
+	// Estimator whose WorstCase is zero: under a cost cap estimate() refuses
+	// every Case and the refusal is run-fatal, but with NO cap it falls back
+	// to the scalar — which is also zero — and the run proceeds silently
+	// against a real provider. Measured against a self-hosted endpoint before
+	// this branch checked the figure rather than the interface.
+	//
+	// WorstCase is the right question because it is what confirmRun would
+	// quote. If the adapter cannot produce a number there, no number can be
+	// shown to a human, which is precisely the condition being refused.
+	if o.agentCanPriceItself() {
+		if e, ok := o.Agent.(Estimator); ok && e.WorstCase().CostUSDMicros > 0 {
+			return nil
+		}
+	}
+	if o.EstCostPerCallUSDMicros > 0 {
+		return nil
+	}
+	// An Agent that cannot price itself and was given no scalar. Free agents
+	// exist — the local fake is one — so this is not "refuse anything
+	// unpriced", it is "refuse to spend an amount nobody can state".
+	if !spendsMoney(o.Agent) {
+		return nil
+	}
+	return errs.ErrConfirmationRequired.WithFix(
+		"pass --cost-per-call-usd with your expected per-call cost, or " +
+			"--accept-unknown-cost to run anyway",
+	).
+		Wrap(fmt.Errorf("%w: this agent cannot compute a per-Case cost and none "+
+			"was supplied, so no figure can be shown before spending",
+			errUnknownCost))
+}
+
+// spendsMoney reports whether invoking this Agent can cost the user anything.
+//
+// An anonymous interface, the fourth on this seam beside retryAfterOf,
+// billedCostOf, and runFatalOf, so an adapter can answer without core importing
+// it — prime directive 3.
+//
+// ABSENT MEANS SPENDS. An adapter that says nothing is assumed to cost money,
+// because the failure modes are not symmetric: treating a paid agent as free
+// skips the consent prime directive 4 exists to require, while treating a free
+// agent as paid asks one unnecessary question. Only an adapter that KNOWS it is
+// free — the local fake, and later a replay or a cached adapter — says so.
+func spendsMoney(a Agent) bool {
+	f, ok := a.(interface{ Spends() bool })
+	return !ok || f.Spends()
+}
+
 // errUnpriceable marks a Case the guard was never asked to authorize.
 //
 // A sentinel rather than an inspection of the message, so the sink can tell
@@ -102,7 +202,8 @@ var errUnpriceable = errors.New("core: case cannot be priced")
 func (o BaselineOptions) unpriceable(c *Case, cause error) error {
 	return errs.ErrInvalidInput.WithFix(
 		"drop --max-cost-usd to run without a dollar cap, or use an agent that " +
-			"can price this model").
+			"can price this model",
+	).
 		Wrap(fmt.Errorf("cannot price case %s, and a cost cap cannot be enforced "+
 			"against an unknown cost: %w: %w", c.GetId(), errUnpriceable, cause))
 }
@@ -148,7 +249,8 @@ func (o BaselineOptions) confirmRun(ctx context.Context, alreadyDone int) error 
 	}
 	if !ok {
 		return errs.ErrBudgetExceeded.WithFix(
-			"re-run with --yes to proceed, or lower --max-cost-usd").
+			"re-run with --yes to proceed, or lower --max-cost-usd",
+		).
 			Wrap(fmt.Errorf("the run was not confirmed; nothing was spent"))
 	}
 	return nil
@@ -242,7 +344,8 @@ func (o *BaselineOptions) checkFeasible(alreadyDone int) error {
 	remaining := o.Guard.Remaining().CostUSDMicros
 	if remaining <= 0 {
 		return errs.ErrBudgetExceeded.WithFix(
-			"raise --max-cost-usd, or start a fresh run without --resume").
+			"raise --max-cost-usd, or start a fresh run without --resume",
+		).
 			Wrap(fmt.Errorf("the cost cap is already spent, so no Case can be authorized"))
 	}
 
@@ -253,7 +356,8 @@ func (o *BaselineOptions) checkFeasible(alreadyDone int) error {
 	// are affordable, and the per-Case guard already stops the dear ones.
 	if _, perCase := o.Agent.(Estimator); !perCase && perCall > remaining {
 		return errs.ErrBudgetExceeded.WithFix(fmt.Sprintf(
-			"raise --max-cost-usd above %s", formatUSDMicros(perCall))).
+			"raise --max-cost-usd above %s", formatUSDMicros(perCall),
+		)).
 			Wrap(fmt.Errorf("one Case is estimated at %s and only %s remains, so "+
 				"not a single Case can be authorized",
 				formatUSDMicros(perCall), formatUSDMicros(remaining)))

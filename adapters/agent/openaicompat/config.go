@@ -3,6 +3,7 @@ package openaicompat
 import (
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -73,14 +74,29 @@ type Options struct {
 	// to reach the Run record.
 	Ref *core.AgentRef
 
-	// KeyBindings maps a host to the NAME of the environment variable holding
-	// its credential. The default host resolves through DefaultKeyEnv without
-	// a binding; every other host needs one.
-	KeyBindings transport.KeyBindings
+	// KeyEnv maps a host to the NAME of the environment variable holding its
+	// credential. The default host resolves through DefaultKeyEnv without a
+	// binding; every other host needs one.
+	//
+	// It is map[string]string rather than transport.KeyBindings so that a
+	// caller OUTSIDE adapters/agent can construct these Options at all. The
+	// transport is an internal package by design — it is the security
+	// boundary, and nothing above should be able to reach past it — which
+	// meant the exported field typed by it made this whole struct
+	// unconstructible from cli. anthropic.Options.KeyEnv has always had the
+	// plain type for the same reason; this brings the two adapters into line.
+	KeyEnv map[string]string
 
-	// Policy is what the caller has opted into: plain HTTP, private addresses.
-	// The zero value is the strictest one.
-	Policy transport.Policy
+	// AllowInsecureBaseURL permits a plain-HTTP base URL.
+	AllowInsecureBaseURL bool
+
+	// AllowPrivateAddress permits loopback and RFC1918 destinations, which is
+	// what a local vLLM or Ollama endpoint is.
+	//
+	// Link-local is NOT covered and cannot be opted into: 169.254.169.254 is
+	// the cloud instance-metadata endpoint, and a tool that fetches a URL and
+	// persists the response body has no legitimate reason to reach it.
+	AllowPrivateAddress bool
 
 	// MaxOutputTokens is the output ceiling. Zero uses DefaultMaxOutputTokens.
 	MaxOutputTokens int64
@@ -158,7 +174,8 @@ func New(opts Options) (*Agent, error) {
 	if opts.Ref.GetScheme() != agentref.SchemeOpenAI {
 		return nil, errs.ErrInvalidInput.WithFix(
 			"write the reference as openai:<model>, adding @<base-url> for a " +
-				"compatible provider").
+				"compatible provider",
+		).
 			Wrap(fmt.Errorf("openaicompat serves the %q scheme, not %q",
 				agentref.SchemeOpenAI, opts.Ref.GetScheme()))
 	}
@@ -206,6 +223,34 @@ func New(opts Options) (*Agent, error) {
 	return a, nil
 }
 
+// parseBindings normalizes and validates host=VAR pairs.
+//
+// The map arrives plain (map[string]string) so a caller outside adapters/agent
+// can build Options at all; the transport still owns what a valid binding IS,
+// so the rules live in exactly one place rather than being approximated by
+// whoever assembled the map.
+func parseBindings(keyEnv map[string]string) (transport.KeyBindings, error) {
+	if len(keyEnv) == 0 {
+		return nil, nil
+	}
+	// Sorted, so a refusal naming two bindings that normalize to one host reads
+	// the same on every run rather than depending on map iteration order.
+	pairs := make([]string, 0, len(keyEnv))
+	for h, v := range keyEnv {
+		pairs = append(pairs, h+"="+v)
+	}
+	sort.Strings(pairs)
+
+	bindings, err := transport.ParseKeyBindings(pairs)
+	if err != nil {
+		return nil, errs.ErrInvalidInput.
+			WithFix("write each binding as --key-env host=VAR, naming the " +
+				"environment VARIABLE rather than the key itself").
+			Wrap(err)
+	}
+	return bindings, nil
+}
+
 // connect builds the transport, and is where the destination and the credential
 // are decided.
 //
@@ -226,14 +271,57 @@ func connect(opts Options) (client *transport.Client, host, keyEnv string, err e
 	// Resolved per host, never per scheme. `openai:llama-3.3-70b@groq` needs
 	// GROQ_API_KEY; falling back to OPENAI_API_KEY would send the user's OpenAI
 	// key to a third party, which is the threat the binding exists for.
-	key, keyEnv := opts.KeyBindings.Resolve(host, defaultHost, DefaultKeyEnv)
+	// Re-parsed rather than cast, exactly as anthropic.resolveKey does.
+	//
+	// A bare cast keeps the user's literal host strings, and Resolve looks up a
+	// NORMALIZED key — lowercased, trailing dot trimmed, port stripped. So
+	// a binding whose host was written WITH a port was stored that way and
+	// looked up without it, so it silently resolved nothing and the request
+	// went out unauthenticated. That is verbatim the defect keybinding.go:56-61 records
+	// as already fixed, reintroduced by skipping the parser.
+	//
+	// It also restores the two refusals the cast dropped: a value that looks
+	// like a key rather than a variable NAME, and the same host bound twice —
+	// whose whole point is that argv order must not decide which key goes
+	// where.
+	bindings, err := parseBindings(opts.KeyEnv)
+	if err != nil {
+		return nil, "", "", err
+	}
+	key, keyEnv := bindings.Resolve(host, defaultHost, DefaultKeyEnv)
+
+	// An absent credential for the DEFAULT host is refused here, before any
+	// request. It used to proceed: connect simply omitted the Authorization
+	// header, so every Case made a real request and collected a 401 — which is
+	// now run-fatal and therefore bounded, but still one paid round trip and a
+	// message about the provider rejecting a credential that was never sent.
+	//
+	// Only for the default host. A self-hosted OpenAI-compatible server —
+	// vLLM, Ollama, llama.cpp — legitimately needs no credential, and refusing
+	// there would make the local-model path unreachable. anthropic draws the
+	// same line for the same reason (anthropic.go:333). Closes docs/debt.md#57.
+	if key == "" && host == defaultHost {
+		fix := fmt.Sprintf("export %s", DefaultKeyEnv)
+		if keyEnv != "" && keyEnv != DefaultKeyEnv {
+			// A binding exists and the variable is empty. Distinguished from
+			// no binding at all because the fixes differ: one is "export it",
+			// the other is "bind it".
+			fix = fmt.Sprintf("export %s; it is bound to %s but is empty", keyEnv, host)
+		}
+		return nil, "", "", errs.ErrInvalidInput.WithFix(fix).
+			Wrap(fmt.Errorf("no credential for %s", host))
+	}
+
 	if key != "" {
 		// Bearer is part of the header VALUE for this shape. The transport
 		// attaches whatever it is given to the bound host and nothing else.
 		key = "Bearer " + key
 	}
 
-	dest, err := transport.NewDestination(baseURL, key, "Authorization", opts.Policy)
+	dest, err := transport.NewDestination(baseURL, key, "Authorization", transport.Policy{
+		AllowInsecureHTTP:   opts.AllowInsecureBaseURL,
+		AllowPrivateAddress: opts.AllowPrivateAddress,
+	})
 	if err != nil {
 		return nil, "", "", err
 	}
@@ -280,7 +368,8 @@ func (a *Agent) applyPrice(opts Options) error {
 	if p.InputPerMtokUsdMicros == nil || p.OutputPerMtokUsdMicros == nil {
 		return errs.ErrInvalidInput.WithFix(
 			"give the price both an input and an output rate, or drop the override " +
-				"and let the dated table answer").
+				"and let the dated table answer",
+		).
 			Wrap(fmt.Errorf("the price supplied for %s is missing one of its two "+
 				"rates, so a reply that reported usage would settle at the other "+
 				"term alone rather than at its real cost", a.model))
@@ -311,7 +400,8 @@ func (a *Agent) applyGenerationParams(opts Options) error {
 	if opts.Temperature != nil || opts.Seed != nil {
 		return errs.ErrCapabilityUnsupported.WithFix(fmt.Sprintf(
 			"drop --temperature and --seed for %s, or pass "+
-				"--generation-params if this endpoint accepts them", a.model)).
+				"--generation-params if this endpoint accepts them", a.model,
+		)).
 			Wrap(fmt.Errorf("%s rejects sampling parameters, so sending one would "+
 				"fail every Case with a 400 rather than pin determinism", a.model))
 	}

@@ -115,14 +115,16 @@ func (a *Agent) Invoke(ctx context.Context, c *core.Case) (*core.Response, error
 		if _, seen := a.attempted.LoadOrStore(c.GetId(), true); !seen {
 			a.rateLimited.Add(1)
 			return nil, errs.ErrRateLimited.Wrap(
-				fmt.Errorf("fake: throttled the first attempt at %s", c.GetId()))
+				fmt.Errorf("fake: throttled the first attempt at %s", c.GetId()),
+			)
 		}
 	}
 
 	if a.opts.RateLimitEvery > 0 && n%int64(a.opts.RateLimitEvery) == 0 {
 		a.rateLimited.Add(1)
 		return nil, errs.ErrRateLimited.Wrap(
-			fmt.Errorf("fake: rate limited on call %d", n))
+			fmt.Errorf("fake: rate limited on call %d", n),
+		)
 	}
 
 	if a.opts.Latency > 0 {
@@ -186,6 +188,21 @@ func (a *Agent) Capabilities() *core.Capabilities {
 		TokenCounts:    true,
 	}
 }
+
+// Spends reports whether this agent can cost the user money.
+//
+// Always false. The fake makes no network call, so nothing it does can appear
+// on anyone's invoice — CostPerCallUSDMicros is a SIMULATED figure that exists
+// so budget-guard behavior can be tested against a real Guard, not a claim
+// about real money.
+//
+// core defaults to "spends" for any adapter that stays silent, because
+// treating a paid agent as free would skip the consent prime directive 4
+// requires. This method is the one place that default is overridden, and it is
+// what keeps the quickstart — and every test that measures spend arithmetic
+// against a costed fake — from being asked to approve a bill that cannot
+// arrive.
+func (a *Agent) Spends() bool { return false }
 
 // Calls returns how many times Invoke has been called.
 func (a *Agent) Calls() int64 { return a.calls.Load() }

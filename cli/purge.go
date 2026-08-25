@@ -113,7 +113,8 @@ func runPurge(ctx context.Context, out io.Writer, f purgeFlags) error {
 		// succeed, log success, and delete nothing — the same silent no-op the
 		// unknown-run check above exists to prevent.
 		return errs.ErrConfirmationRequired.WithFix(
-			"re-run with --yes to purge").
+			"re-run with --yes to purge",
+		).
 			Wrap(fmt.Errorf("purge of run %s was not confirmed; nothing was removed", f.runID))
 	}
 

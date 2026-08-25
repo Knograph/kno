@@ -124,6 +124,16 @@ an existing dependency can't, its license, and its maintenance signal.
   `VerifyTestMain`, not a per-test helper. goleak takes a process-global census, so a parallel
   sibling's goroutines are indistinguishable from a leak — once per package is the only form that
   is not flaky, and a flaky gate gets deleted rather than fixed. See `docs/debt.md#18`.
+- **A test must never be able to spend somebody's money.** Any package whose tests can construct a
+  provider adapter unsets every provider credential in a `TestMain` unless `KNO_LIVE_TESTS=1`. That
+  now means `cli` as well as the adapter packages.
+
+  This is not hygiene, it is prime directive 4. The CLI tests drive the real command with real
+  flags, and one of them passed `--agent openai:gpt-4.1` while asserting it was refused for having
+  no adapter — true until the adapters were wired. On any machine exporting `OPENAI_API_KEY`, that
+  subtest then resolved the key and made live calls: measured at 8.7 seconds, on a case its author
+  believed never touched the network. Live tests are opt-in and never run in PR CI; a package that
+  acquires the *ability* to make one by accident needs the guard whether or not it has one.
 - **Flaky tests are quarantined within 24 hours** with an issue, then fixed or deleted within a
   week. Retries are never the fix.
 

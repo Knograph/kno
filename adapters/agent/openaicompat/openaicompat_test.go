@@ -77,7 +77,8 @@ func baseOptions(t *testing.T, srv *httptest.Server, tweak ...func(*openaicompat
 		HTTPClient: srv.Client(),
 		// A test server is loopback over plain HTTP, which is exactly the local
 		// vLLM/Ollama case the policy exists to make opt-in.
-		Policy: transport.Policy{AllowInsecureHTTP: true, AllowPrivateAddress: true},
+		AllowInsecureBaseURL: true,
+		AllowPrivateAddress:  true,
 	}
 	for _, f := range tweak {
 		if f != nil {
@@ -496,9 +497,10 @@ func TestAnUnpricedModelIsAnAbsenceNotAZero(t *testing.T) {
 		t.Fatalf("parsing the agent ref: %v", err)
 	}
 	a, err := openaicompat.New(openaicompat.Options{
-		Ref:        ref,
-		HTTPClient: srv.Client(),
-		Policy:     transport.Policy{AllowInsecureHTTP: true, AllowPrivateAddress: true},
+		Ref:                  ref,
+		HTTPClient:           srv.Client(),
+		AllowInsecureBaseURL: true,
+		AllowPrivateAddress:  true,
 	})
 	if err != nil {
 		t.Fatalf("New refused an unpriced model. With no cost cap that is a "+
@@ -546,10 +548,11 @@ func TestSamplingParametersAreRefusedForAModelThatRejectsThem(t *testing.T) {
 	}
 	zero := 0.0
 	_, err = openaicompat.New(openaicompat.Options{
-		Ref:         ref,
-		HTTPClient:  srv.Client(),
-		Policy:      transport.Policy{AllowInsecureHTTP: true, AllowPrivateAddress: true},
-		Temperature: &zero,
+		Ref:                  ref,
+		HTTPClient:           srv.Client(),
+		AllowInsecureBaseURL: true,
+		AllowPrivateAddress:  true,
+		Temperature:          &zero,
 	})
 	if !errors.Is(err, errs.ErrCapabilityUnsupported) {
 		t.Fatalf("New error = %v, want ErrCapabilityUnsupported", err)
@@ -562,11 +565,12 @@ func TestSamplingParametersAreRefusedForAModelThatRejectsThem(t *testing.T) {
 	// endpoint may legitimately disagree with it.
 	yes := true
 	if _, err := openaicompat.New(openaicompat.Options{
-		Ref:              ref,
-		HTTPClient:       srv.Client(),
-		Policy:           transport.Policy{AllowInsecureHTTP: true, AllowPrivateAddress: true},
-		Temperature:      &zero,
-		GenerationParams: &yes,
+		Ref:                  ref,
+		HTTPClient:           srv.Client(),
+		AllowInsecureBaseURL: true,
+		AllowPrivateAddress:  true,
+		Temperature:          &zero,
+		GenerationParams:     &yes,
 	}); err != nil {
 		t.Errorf("the override was refused: %v", err)
 	}
@@ -773,9 +777,9 @@ func TestTheDefaultKeyVariableDoesNotTravelToAnotherHost(t *testing.T) {
 		strings.TrimPrefix(srv.URL, "http://") + "=KNO_TEST_LOCAL_KEY",
 	})
 	if err != nil {
-		t.Fatalf("ParseKeyBindings: %v", err)
+		t.Fatalf("ParseKeyEnv: %v", err)
 	}
-	b := newAgent(t, srv, func(o *openaicompat.Options) { o.KeyBindings = bindings })
+	b := newAgent(t, srv, func(o *openaicompat.Options) { o.KeyEnv = bindings })
 	if _, err := b.Invoke(t.Context(), newCase("c", "hi")); err != nil {
 		t.Fatalf("Invoke: %v", err)
 	}

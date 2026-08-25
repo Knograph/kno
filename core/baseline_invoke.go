@@ -162,9 +162,11 @@ func (o BaselineOptions) invokeWithRetry(
 			// the worker context and a budget stop is exactly when an
 			// overshoot happens.
 			emitCtx, cancel := context.WithTimeout(
-				context.WithoutCancel(ctx), progressWriteGrace)
+				context.WithoutCancel(ctx), progressWriteGrace,
+			)
 			agg.recordEmitFailure(o.emitSettlementOvershoot(
-				emitCtx, agg, c.GetId(), est.CostUSDMicros, settled.CostUSDMicros, overshoot))
+				emitCtx, agg, c.GetId(), est.CostUSDMicros, settled.CostUSDMicros, overshoot,
+			))
 			cancel()
 		}
 		if invokeErr == nil {
@@ -201,7 +203,8 @@ func (o BaselineOptions) invokeWithRetry(
 		// hiccup must not convert a retryable Case into a terminal error and
 		// inflate the run's error rate past ErrorRateExceeded.
 		retryCtx, cancelRetry := context.WithTimeout(
-			context.WithoutCancel(ctx), progressWriteGrace)
+			context.WithoutCancel(ctx), progressWriteGrace,
+		)
 		agg.recordEmitFailure(o.emitRetryAttempted(retryCtx, agg, c.GetId(), attempt,
 			retryReasonOf(invokeErr), wait, time.Until(deadline)))
 		cancelRetry()

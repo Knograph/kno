@@ -8,7 +8,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/knograph/kno/adapters/agent/agentref"
-	"github.com/knograph/kno/adapters/agent/internal/transport"
 	"github.com/knograph/kno/adapters/agent/openaicompat"
 	"github.com/knograph/kno/core"
 	"github.com/knograph/kno/core/errs"
@@ -44,10 +43,11 @@ func TestAPriceThatCannotPriceIsRefusedAtConstruction(t *testing.T) {
 			t.Parallel()
 
 			if _, err := openaicompat.New(openaicompat.Options{
-				Ref:        ref,
-				HTTPClient: srv.Client(),
-				Policy:     transport.Policy{AllowInsecureHTTP: true, AllowPrivateAddress: true},
-				Price:      tc.price,
+				Ref:                  ref,
+				HTTPClient:           srv.Client(),
+				AllowInsecureBaseURL: true,
+				AllowPrivateAddress:  true,
+				Price:                tc.price,
 			}); !errors.Is(err, errs.ErrInvalidInput) {
 				t.Errorf("New error = %v, want ErrInvalidInput", err)
 			}

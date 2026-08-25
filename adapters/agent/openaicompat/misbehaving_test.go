@@ -368,9 +368,9 @@ func TestA401NamesTheVariableActuallyBoundToTheHost(t *testing.T) {
 		strings.TrimPrefix(srv.URL, "http://") + "=KNO_TEST_401_KEY",
 	})
 	if err != nil {
-		t.Fatalf("ParseKeyBindings: %v", err)
+		t.Fatalf("ParseKeyEnv: %v", err)
 	}
-	bound := newAgent(t, srv, func(o *openaicompat.Options) { o.KeyBindings = bindings })
+	bound := newAgent(t, srv, func(o *openaicompat.Options) { o.KeyEnv = bindings })
 	_, err = bound.Invoke(t.Context(), newCase("c", "hi"))
 	if err == nil {
 		t.Fatal("a 401 produced no error")

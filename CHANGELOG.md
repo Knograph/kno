@@ -16,6 +16,95 @@ covenants — breaking any of them requires a major version.
 
 ## [Unreleased]
 
+### Added
+
+- **`kno baseline` can reach a real provider.** `--agent openai:<model>` (and any OpenAI-compatible
+  endpoint via `--base-url`) and `--agent anthropic:<model>` now resolve to the adapters built in
+  M2-3 through M2-8, which until now were unreachable from the command line. This is the first
+  release in which the command can spend money.
+
+  New flags: `--base-url`, `--key-env`, `--allow-insecure-base-url`, `--allow-private-address`,
+  `--max-output-tokens`, `--max-prompt-bytes`, `--temperature`, `--seed`, `--system`,
+  `--generation-params`, `--use-legacy-max-tokens`, `--timeout`, `--price-input-per-mtok`,
+  `--price-output-per-mtok`, `--accept-unknown-cost`.
+
+  **No `KNO_*` environment mirrors.** `DESIGN.md` specifies three layers — flag, env var,
+  `kno.yaml` — and none of that machinery exists. Shipping a mirror column would be specifying a
+  config system in a flag table. Tracked as [debt #62](docs/debt.md#62).
+
+- **`kno doctor`** prints the adapters, which of them cost money, the goals, and the price table's
+  date. `errs.ErrCapabilityUnsupported`'s fix line has always told users to run it and no such
+  command existed. It contacts nothing and reads no credential.
+
+- **`--accept-unknown-cost`.** A run whose per-Case cost cannot be computed is now **refused**
+  rather than run silently. With an agent that cannot price itself and no `--cost-per-call-usd`,
+  the quote arithmetic collapsed to zero and `confirmRun` returned before ever asking — so the
+  configuration we know *least* about was the only one that skipped consent, while a priced model
+  with no cap did prompt. Refusing rather than prompting is deliberate: a confirmation that cannot
+  state a dollar figure gives a human no basis to decide, and a flag someone had to type is
+  greppable in a CI config.
+
+- The reduced-concurrency **report**: a `width` line when the engine narrowed the run, and
+  `concurrency` / `concurrency_requested` / `concurrency_reduced_reason` in `--json`. Partly repays
+  [debt #44](docs/debt.md#44); the consent-prompt half stays open.
+
+### Changed
+
+- **`--cost-per-call-usd` is no longer required alongside `--max-cost-usd`** for an agent that
+  prices its own calls. `--agent anthropic:claude-opus-5 --max-cost-usd 5` was refused even though
+  the adapter prices every Case exactly — and the scalar the user was then forced to supply is
+  *ignored*, because the estimator path never falls back to it. The flag was mandatory, inert, and
+  the only way to run the flagship invocation.
+
+- **BREAKING (pre-1.0): `openaicompat.Options.KeyBindings` and `.Policy` are replaced** by
+  `KeyEnv map[string]string`, `AllowInsecureBaseURL bool`, and `AllowPrivateAddress bool`. Both old
+  fields were typed by the `internal/transport` package, which made the whole struct
+  **unconstructible from outside `adapters/agent/`** — including from `cli`. `anthropic.Options`
+  never had this problem; this brings the two adapters into line rather than weakening the
+  transport's internal boundary. **Migration:** `KeyBindings: transport.KeyBindings{…}` becomes
+  `KeyEnv: map[string]string{…}`; `Policy: transport.Policy{AllowInsecureHTTP: a,
+  AllowPrivateAddress: b}` becomes the two bools.
+
+  The map is **not** pre-normalized: the adapter runs it through
+  `transport.ParseKeyBindings` itself, so host casing and ports are handled and the
+  looks-like-a-secret and bound-twice refusals still apply. A caller that previously built a
+  `transport.KeyBindings` by hand was getting that for free and still is.
+
+- **`anthropic.Options` gains `Price`**, so `--price-input-per-mtok` / `--price-output-per-mtok`
+  reach this adapter. They were accepted, validated as a pair, and then discarded for this scheme,
+  while the cookbook, the CI recipe, and `kno doctor` all named them as the remedy for an unpriced
+  model — a silently ignored flag on the money path.
+
+- **An explicit `--cost-per-call-usd 0` asserts the calls are free.** Read from whether the flag
+  was passed, not from its value: 0 is also the default, so the documented local-model-server
+  recipe passed it and was refused with a fix line naming the flag it had just supplied.
+
+### Fixed
+
+- **A missing credential is refused before any request.** `openaicompat` omitted the
+  `Authorization` header and let every Case collect a 401 — now bounded by run-fatal escalation,
+  but still a paid round trip and a message about a rejected credential that was never sent. Only
+  for the provider's default host: a self-hosted endpoint legitimately needs no key. Repays
+  [debt #57](docs/debt.md#57).
+
+- **`--yes` prints the estimate for every run, not just above the prompt threshold.** It printed
+  from inside the confirmation callback, which the guard short-circuits below $1.00 — so the flag
+  was silent for exactly the runs small enough not to prompt, while its help text, the cookbook,
+  and the CI recipe all promised a figure unconditionally. In `--json` mode the figure travels as
+  `estimated_usd` instead, because a prose line ahead of the document makes stdout unparseable.
+
+- **A narrowed run no longer claims a width the user never asked for.** With no `--concurrency`,
+  the report read `width 1 (asked for 0; cost-cap)`. Fixed in the renderer rather than by recording
+  the defaulted width as a request: `core` deliberately does not, and a test pins that a report
+  saying "you requested 8, we gave you 5" to someone who requested nothing is how a report earns
+  distrust.
+
+- **The test suite could bill you.** `cli`'s tests drive the real command, and a subtest asserting
+  `--agent openai:gpt-4.1` was refused for having "no adapter" started making live API calls the
+  moment the adapters were wired, on any machine exporting `OPENAI_API_KEY`. `cli` now has a
+  `TestMain` that unsets eleven provider credential variables unless `KNO_LIVE_TESTS=1`. Tracked as
+  [debt #63](docs/debt.md#63), because the list is a denylist.
+
 ### Changed
 
 - **BREAKING (pre-1.0): `BaselineOptions.ResolvedModel` is removed.** It was caller-supplied and

@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/knograph/kno/adapters/agent/agentref"
-	"github.com/knograph/kno/adapters/agent/internal/transport"
 	"github.com/knograph/kno/adapters/agent/openaicompat"
 	"github.com/knograph/kno/adapters/agent/pricing"
 	"github.com/knograph/kno/core"
@@ -198,10 +197,11 @@ func TestAnUnpricedModelIsRunFatalHere(t *testing.T) {
 		t.Fatalf("parsing the agent ref: %v", err)
 	}
 	a, err := openaicompat.New(openaicompat.Options{
-		Ref:             ref,
-		HTTPClient:      srv.Client(),
-		MaxOutputTokens: 256,
-		Policy:          transport.Policy{AllowInsecureHTTP: true, AllowPrivateAddress: true},
+		Ref:                  ref,
+		HTTPClient:           srv.Client(),
+		MaxOutputTokens:      256,
+		AllowInsecureBaseURL: true,
+		AllowPrivateAddress:  true,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

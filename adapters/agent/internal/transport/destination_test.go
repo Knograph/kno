@@ -85,8 +85,10 @@ func TestDestinationAcceptsWhatItShould(t *testing.T) {
 		policy transport.Policy
 	}{
 		{"an ordinary provider", "https://api.openai.com/v1", transport.Policy{}},
-		{"a local model server, opted in", "http://localhost:8000/v1",
-			transport.Policy{AllowInsecureHTTP: true, AllowPrivateAddress: true}},
+		{
+			"a local model server, opted in", "http://localhost:8000/v1",
+			transport.Policy{AllowInsecureHTTP: true, AllowPrivateAddress: true},
+		},
 		{"a hostname that is not a literal IP", "https://internal.corp/v1", transport.Policy{}},
 	}
 

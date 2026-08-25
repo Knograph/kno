@@ -111,7 +111,8 @@ func (a *Agent) estimate(prompt pricing.Prompt) (budgetEstimate, error) {
 		// cases errored" — naming nothing about pricing. See docs/debt.md#46.
 		return budgetEstimate{}, agenterr.AsRunFatal(
 			fmt.Errorf("%w: %s:%s has no row in the %s price table",
-				pricing.ErrUnpriced, a.scheme, a.model, pricing.Version))
+				pricing.ErrUnpriced, a.scheme, a.model, pricing.Version),
+		)
 	}
 	est, err := pricing.EstimateWithPrice(a.price, a.model, prompt, a.maxOutput)
 	if errors.Is(err, pricing.ErrUnpriced) {
@@ -146,14 +147,16 @@ func (a *Agent) estimate(prompt pricing.Prompt) (budgetEstimate, error) {
 func (a *Agent) checkCeilings() error {
 	if a.maxOutput > maxOutputCeiling {
 		return errs.ErrInvalidInput.WithFix(fmt.Sprintf(
-			"lower --max-output-tokens below %d", maxOutputCeiling)).
+			"lower --max-output-tokens below %d", maxOutputCeiling,
+		)).
 			Wrap(fmt.Errorf("an output ceiling of %d is beyond any real model's "+
 				"context window, and the cost arithmetic cannot bound it — every "+
 				"Case would be refused as unpriceable", a.maxOutput))
 	}
 	if a.maxPrompt > maxPromptCeiling {
 		return errs.ErrInvalidInput.WithFix(fmt.Sprintf(
-			"lower --max-prompt-bytes below %d", maxPromptCeiling)).
+			"lower --max-prompt-bytes below %d", maxPromptCeiling,
+		)).
 			Wrap(fmt.Errorf("a prompt ceiling of %d bytes is past anything a "+
 				"provider will accept, so it would bound nothing while still "+
 				"inflating the planned cost of every Case", a.maxPrompt))
@@ -189,7 +192,8 @@ func (a *Agent) checkPromptSize(prompt pricing.Prompt) error {
 	return errs.ErrInvalidInput.WithFix(fmt.Sprintf(
 		"shorten the Case, or raise --max-prompt-bytes above %d — note that "+
 			"raising it also raises the planned cost of every Case, so fewer run "+
-			"concurrently under a cost cap", size)).
+			"concurrently under a cost cap", size,
+	)).
 		Wrap(fmt.Errorf("the assembled prompt is %d bytes and this adapter sends "+
 			"at most %d; the ceiling is what makes the run's planned cost a bound "+
 			"rather than a guess", size, a.maxPrompt))

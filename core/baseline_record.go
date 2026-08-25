@@ -562,7 +562,8 @@ func (o BaselineOptions) progressTicker(
 				// heartbeat costs nothing and a hung write must not make
 				// shutdown unbounded. The executor's sink takes the same form.
 				tickCtx, cancel := context.WithTimeout(
-					context.WithoutCancel(ctx), progressWriteGrace)
+					context.WithoutCancel(ctx), progressWriteGrace,
+				)
 				err := o.emitStageProgress(tickCtx, agg, total, startedAt)
 				if err == nil {
 					// On the same tick, so the two heartbeats a watcher reads
