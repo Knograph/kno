@@ -867,3 +867,61 @@ func TestSettledSpendOnAFreshRunIsZero(t *testing.T) {
 		t.Errorf("SettledSpend on an unknown run = %+v, want zero", spend)
 	}
 }
+
+// TestPurgeLeavesOrphanSpendIntact.
+//
+// docs/debt.md#25 records that `kno purge` and the resume done-marker share a
+// row, and that a purge which DELETED rows would reopen the double-spend hole
+// the store exists to close. Orphan spend adds a second place money lives, so
+// purge has to be checked against it too.
+//
+// It survives by design rather than by accident: the spend is columns on
+// `runs`, never trace content, and Purge only nulls blob columns on
+// `outcomes`. Asserted so a future purge that widened its reach would fail
+// here rather than silently erase a run's spend record.
+func TestPurgeLeavesOrphanSpendIntact(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	st := newStore(t)
+	if err := st.CreateRun(ctx, newRun("run-1")); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	if err := st.RecordOutcome(ctx, "run-1", scoredOutcome("c1", 1, 10_000)); err != nil {
+		t.Fatalf("RecordOutcome: %v", err)
+	}
+	if err := st.RecordOrphanSpend(ctx, "run-1",
+		budget.Spend{Calls: 2, CostUSDMicros: 80_000, Tokens: 7}); err != nil {
+		t.Fatalf("RecordOrphanSpend: %v", err)
+	}
+
+	before, err := st.SettledSpend(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("SettledSpend: %v", err)
+	}
+
+	if _, err := st.Purge(ctx, "run-1"); err != nil {
+		t.Fatalf("Purge: %v", err)
+	}
+
+	after, err := st.SettledSpend(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("SettledSpend after purge: %v", err)
+	}
+	if after != before {
+		t.Errorf("purge changed the run's settled spend from %+v to %+v. Spend is "+
+			"not trace content, and a resumed run restores this figure — losing it "+
+			"lets the run spend its cap a second time", before, after)
+	}
+
+	// And the completed Case is still marked complete, which is #25's own
+	// invariant: a purge that reopened the double-spend hole would be a
+	// privacy feature that costs money.
+	done, err := st.CompletedCases(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("CompletedCases: %v", err)
+	}
+	if _, ok := done["c1"]; !ok {
+		t.Error("purge removed the done-marker for a completed Case")
+	}
+}

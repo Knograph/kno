@@ -3823,3 +3823,63 @@ func (o *orphanCountingStore) RecordOrphanSpend(ctx context.Context, runID strin
 	o.total += sp.CostUSDMicros
 	return o.Store.RecordOrphanSpend(ctx, runID, sp)
 }
+
+// TestACancelDuringBackoffKeepsTheChargeItAlreadyIncurred.
+//
+// The second skip path, and the one the first draft of this fix missed.
+// invokeWithRetry returns ctx.Err() from its backoff wait AFTER charges have
+// accumulated, so a Ctrl-C landing there follows a billed attempt with real
+// money settled and no outcome to attach it to.
+//
+// docs/debt.md#50 and #20 both name this path. It is distinct from the budget
+// refusal: the run is stopping because a human asked, not because the cap was
+// reached, and it reaches a different predicate in the sink.
+func TestACancelDuringBackoffKeepsTheChargeItAlreadyIncurred(t *testing.T) {
+	t.Parallel()
+
+	const perCall = 40_000
+
+	h := newHarness(t, 6, 3, fake.Options{})
+	orphans := &orphanCountingStore{Store: h.store}
+	h.opts.Store = orphans
+	h.opts.Agent = &billingAgent{perCallUSDMicros: perCall}
+	h.opts.Concurrency = 1
+	h.opts.MaxAttempts = 3
+	// Long enough that the cancellation below lands inside the wait rather
+	// than between Cases.
+	h.opts.RetryBackoff = 300 * time.Millisecond
+	h.opts.EstCostPerCallUSDMicros = perCall
+	h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 10_000_000}, nil, 0)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		// After the first attempt is billed and the backoff has begun.
+		time.Sleep(80 * time.Millisecond)
+		cancel()
+	}()
+
+	_, err := core.Baseline(ctx, h.evals, h.opts)
+	if err == nil {
+		t.Fatal("the run was cancelled and reported success")
+	}
+
+	settled := h.opts.Guard.Spent().CostUSDMicros
+	if settled == 0 {
+		t.Fatal("nothing was billed before the cancellation; the fixture did not " +
+			"reach the backoff wait")
+	}
+	if orphans.n == 0 {
+		t.Fatal("a charge was settled and no orphan spend recorded — this test is " +
+			"not exercising the cancel-during-backoff path")
+	}
+
+	persisted, err := h.store.SettledSpend(context.Background(), "run-1")
+	if err != nil {
+		t.Fatalf("SettledSpend: %v", err)
+	}
+	if persisted.CostUSDMicros != settled {
+		t.Errorf("the guard settled %d micro-USD and the store holds %d. A resume "+
+			"reads the store, so the %d difference is money spent twice",
+			settled, persisted.CostUSDMicros, settled-persisted.CostUSDMicros)
+	}
+}
