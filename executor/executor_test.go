@@ -786,9 +786,9 @@ func TestAHungSinkIsBoundedPerCallNotPerRun(t *testing.T) {
 	// call has room. A budget larger than the sum would pass either way, which
 	// is what the first version of this test did.
 	const (
-		perCall = 50 * time.Millisecond
-		perSink = 30 * time.Millisecond
-		items   = 6 // 180ms of sink work against a 50ms budget
+		perCall = 500 * time.Millisecond
+		perSink = 100 * time.Millisecond
+		items   = 6 // 600ms of sink work against a 500ms budget
 	)
 	sink := func(ctx context.Context, _ executor.Result[*core.Case, output]) error {
 		select {
@@ -842,15 +842,19 @@ func TestAfterRecordEndsTheRunAndKeepsTheResult(t *testing.T) {
 	stats, err := executor.Run(context.Background(), staticCases(50), echoWork, sink, executor.Options{
 		Concurrency: 1,
 		ID:          caseID,
-		AfterRecord: func(item any, value any, workErr error) error {
+		AfterRecord: func(result any) error {
 			seen.Add(1)
-			if workErr != nil {
-				t.Errorf("a successful item reported an error: %v", workErr)
+			r, ok := result.(executor.Result[*core.Case, output])
+			if !ok {
+				t.Fatalf("AfterRecord got %T, not a Result", result)
 			}
-			if value == nil {
+			if !r.Done() {
+				t.Errorf("a successful item reported an error: %v", r.Err)
+			}
+			if r.Value == nil {
 				t.Error("no value; AfterRecord runs on the recorded result")
 			}
-			if caseID(item) == "case-002" {
+			if r.Item.GetId() == "case-002" {
 				return errGate
 			}
 			return nil
@@ -884,9 +888,9 @@ func TestAfterRecordEndsTheRunAndKeepsTheResult(t *testing.T) {
 }
 
 // TestAfterRecordSeesAFailedItemWithoutBeingAskedToJudgeIt keeps the seam
-// honest about its arguments: a failed item still reaches AfterRecord, with the
-// error set and a non-nil `any` holding a nil pointer for the value. Callers
-// must check err first, and the godoc says so.
+// honest about its argument: a failed item still reaches AfterRecord, and
+// Result's invariant survives the boxing — Done() answers, and a failed item
+// carries no value.
 func TestAfterRecordSeesAFailedItemWithoutBeingAskedToJudgeIt(t *testing.T) {
 	t.Parallel()
 
@@ -901,9 +905,20 @@ func TestAfterRecordSeesAFailedItemWithoutBeingAskedToJudgeIt(t *testing.T) {
 	_, err := executor.Run(context.Background(), staticCases(3), failing, discardSink, executor.Options{
 		Concurrency: 1,
 		ID:          caseID,
-		AfterRecord: func(_ any, _ any, workErr error) error {
-			if workErr != nil {
+		AfterRecord: func(result any) error {
+			r, ok := result.(executor.Result[*core.Case, output])
+			if !ok {
+				t.Fatalf("AfterRecord got %T, not a Result", result)
+			}
+			if !r.Done() {
 				sawErr.Store(true)
+				// The invariant, which the boxed-Result shape makes checkable
+				// rather than merely documented: a failed item carries no
+				// value, and the caller reads that off Done() instead of
+				// second-guessing a pointer.
+				if r.Value != nil {
+					t.Errorf("a failed item carried a value: %+v", r.Value)
+				}
 			}
 			return nil
 		},
@@ -913,5 +928,144 @@ func TestAfterRecordSeesAFailedItemWithoutBeingAskedToJudgeIt(t *testing.T) {
 	}
 	if !sawErr.Load() {
 		t.Error("AfterRecord never saw the failed item")
+	}
+}
+
+// TestAPanicInAfterRecordEndsTheRunRatherThanHangingIt.
+//
+// AfterRecord is caller-supplied code running inline in the loop that drains
+// `results`. Unguarded, a panic unwinds out of that loop — and nothing else
+// drains the channel, while every worker's send into it is unconditional by
+// design (that unconditional send is itself a deliberate fix: selecting on
+// cancellation there threw away paid-for results on Ctrl-C).
+//
+// So the workers block forever, workers.Wait() never returns, and Run hangs
+// permanently with no path to recovery. Only SIGKILL ends it, which loses every
+// in-flight result and re-pays for them on resume. Reproduced on this branch
+// before the guard existed: 200 items at concurrency 8, still hung at 3s.
+//
+// The sink and the work function are both guarded for a weaker version of this
+// reason. This one is the strongest version.
+func TestAPanicInAfterRecordEndsTheRunRatherThanHangingIt(t *testing.T) {
+	t.Parallel()
+
+	done := make(chan struct{})
+	var err error
+	go func() {
+		defer close(done)
+		_, err = executor.Run(context.Background(), staticCases(200), echoWork, discardSink,
+			executor.Options{
+				Concurrency: 8,
+				ID:          caseID,
+				AfterRecord: func(result any) error {
+					r, _ := result.(executor.Result[*core.Case, output])
+					if r.Item.GetId() == "case-002" {
+						// A panic value that CARRIES content, which is the
+						// whole reason the recover formats with %T. A real one
+						// is a failed assertion holding a prompt or a response.
+						panic(errors.New("caller bug: sk-live-SECRET-do-not-log"))
+					}
+					return nil
+				},
+			})
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("DEADLOCK: Run never returned. A panic in AfterRecord unwound " +
+			"out of the sink loop, so nothing drains results and every worker " +
+			"is blocked on an unconditional send")
+	}
+
+	if err == nil {
+		t.Fatal("the panic was swallowed; the run must end")
+	}
+	if !strings.Contains(err.Error(), "panic in AfterRecord") {
+		t.Errorf("error = %q, want it to name the panicking hook", err)
+	}
+	// %T, not %v — the same rule the sink and work recovers state, because a
+	// panic value is arbitrary and may embed prompt or response content.
+	if strings.Contains(err.Error(), "SECRET") {
+		t.Errorf("the panic value's CONTENT reached the error, which is "+
+			"persisted and shown to the user: %q", err)
+	}
+}
+
+// TestAfterRecordDoesNotDiscardResultsAlreadyInFlight.
+//
+// Ending the run must not break out of the drain loop. Every worker that is
+// mid-item still has a result to deliver, and a result that never reaches the
+// sink is one a resumed run pays for again — the same money-losing shape as
+// docs/debt.md#54.
+//
+// At Concurrency 1 this is unfalsifiable: at most one result is ever in flight,
+// so a drain that stops early is indistinguishable from one that does not. This
+// runs wide on purpose.
+//
+// Two mutations are in scope and they fail differently. Breaking out of the
+// loop hangs the run — nothing drains `results` and the workers block — so the
+// timeout catches it. Skipping the RECORD for post-gate results while still
+// draining keeps the run alive and silently loses paid-for work, and only the
+// count assertion below catches that one.
+func TestAfterRecordDoesNotDiscardResultsAlreadyInFlight(t *testing.T) {
+	t.Parallel()
+
+	const concurrency = 8
+
+	var mu sync.Mutex
+	recorded := map[string]bool{}
+	sink := func(_ context.Context, r executor.Result[*core.Case, output]) error {
+		mu.Lock()
+		defer mu.Unlock()
+		recorded[r.Item.GetId()] = true
+		return nil
+	}
+
+	work := func(_ context.Context, c *core.Case) (*output, error) {
+		return &output{id: c.GetId()}, nil
+	}
+
+	stats, err := executor.Run(context.Background(), staticCases(500), work, sink,
+		executor.Options{
+			Concurrency: concurrency,
+			ID:          caseID,
+			AfterRecord: func(result any) error {
+				r, _ := result.(executor.Result[*core.Case, output])
+				if r.Item.GetId() == "case-010" {
+					return errors.New("gate")
+				}
+				return nil
+			},
+		})
+	if err == nil {
+		t.Fatal("the gate did not end the run")
+	}
+
+	// Every item a worker EXECUTED reached the sink.
+	//
+	// Dispatched is the independent baseline, and it has to be: comparing the
+	// sink's count against Stats.Recorded() proves nothing, because a drain
+	// that skips results decrements both together and they stay equal. Work
+	// performed is the thing that cost money, so work performed is what must
+	// equal work recorded.
+	//
+	// Run returns only after workers.Wait(), so every dispatched item has
+	// completed and sent by the time this reads.
+	mu.Lock()
+	defer mu.Unlock()
+	if len(recorded) != stats.Dispatched {
+		t.Errorf("%d items were executed and %d reached the sink. The drain "+
+			"stopped early, so paid-for work went unrecorded and a resumed run "+
+			"pays for it again", stats.Dispatched, len(recorded))
+	}
+	if stats.Recorded() != stats.Dispatched {
+		t.Errorf("Dispatched = %d, Recorded = %d", stats.Dispatched, stats.Recorded())
+	}
+	if !recorded["case-010"] {
+		t.Error("the triggering result was discarded")
+	}
+	if stats.Recorded() < 11 {
+		t.Errorf("Recorded() = %d, want at least 11 (case-000..010)", stats.Recorded())
 	}
 }

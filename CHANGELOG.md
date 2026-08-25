@@ -61,14 +61,23 @@ covenants — breaking any of them requires a major version.
   because the hazard is one write that never returns, not a budget the run draws down. Repays
   [debt #54](docs/debt.md#54).
 
-### Added
-
-- **`executor.Options.AfterRecord`**, the only path from a *successful* item to shutdown. `IsFatal`
+- **`executor.Options.AfterRecord`** (additive), the only path from a *successful* item to shutdown. `IsFatal`
   is consulted only on a work error, so a condition discovered in an answer the caller has already
   paid for had nowhere to go: failing the item would discard a paid, scoreable result and record it
   as an error, and returning an error from `SinkFunc` would latch `sinkBroken` and discard every
   result after it. `AfterRecord` runs once the result is durable and counted, and ending the run
-  there keeps it. Additive and nil by default.
+  there keeps it — and a panic inside it is recovered, because unguarded it unwound out of the loop
+  that drains results and deadlocked the run permanently.
+
+  It receives the `Result` boxed as `any` rather than splintered into `(item, value, err)`:
+  `Result` documents that exactly one of `Value` and `Err` is meaningful, and three loose
+  parameters discard that invariant and hand the caller a non-nil `any` wrapping a nil pointer on
+  the failure path.
+
+- A sink failure that happens **after the grace has expired** now joins the caller's cancellation
+  cause. Without it, a store surfacing its own error text instead of a wrapped `context.Canceled`
+  turned a Ctrl-C into `RUN_STATUS_FAILED` with a generic exit code — so a CI gate keying on the
+  interrupted code would flip the day a driver reworded.
 
 ### Changed
 

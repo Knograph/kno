@@ -8,7 +8,6 @@ import (
 	"iter"
 	"runtime"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -103,11 +102,29 @@ type Options struct {
 	// Ending the run here keeps the triggering result durable and counted,
 	// which is the whole point of the seam.
 	//
-	// item and value are `any` for the same reason ID's argument is: this
-	// package is generic over its item type and Options is not. value carries
-	// the work's *T and is a NON-NIL any holding a nil pointer when the item
-	// failed — check err first, not value.
-	AfterRecord func(item any, value any, err error) error
+	// result is a Result[I, T] boxed as `any`, for the same reason ID's
+	// argument is untyped: this package is generic over its item type and
+	// Options is not. Type-assert it.
+	//
+	// Boxed WHOLE rather than splintered into (item, value, err): Result
+	// documents that exactly one of Value and Err is meaningful, and three
+	// loose parameters both discard that invariant and hand the caller a
+	// non-nil `any` wrapping a nil *T on the failure path — a trap that needs
+	// a godoc paragraph to survive rather than a shape that cannot spring it.
+	// Done() comes along for free.
+	//
+	// The returned error is surfaced to the caller verbatim, so it must be a
+	// code or an identifier, never prompt or response content.
+	//
+	// It runs on the sink goroutine with no context and no timeout of its own:
+	// a blocking implementation stalls the run, exactly as a blocking SinkFunc
+	// would but without PerRecordTimeout to bound it. A panic inside it is
+	// recovered and ends the run rather than deadlocking it.
+	//
+	// It is not called again after returning an error, but IS called for
+	// results already in flight during the drain that follows — the first
+	// error is the one reported.
+	AfterRecord func(result any) error
 }
 
 // id returns an item's identity, falling back to a placeholder rather than
@@ -168,6 +185,11 @@ type WorkFunc[I proto.Message, T any] func(ctx context.Context, item I) (*T, err
 // own and results are recorded in completion order. Returning an error stops
 // the run: if results cannot be persisted, continuing would spend money whose
 // outcome nothing can record, and resume would pay for it again.
+//
+// ctx carries a PerRecordTimeout deadline for THIS call. It does not inherit
+// the caller's cancellation — recording outlives that on purpose — but it is
+// cancelled once RecordGrace expires after the caller cancels, which is how a
+// Ctrl-C eventually reaches an implementation that is still writing.
 type SinkFunc[I proto.Message, T any] func(ctx context.Context, r Result[I, T]) error
 
 // Stats reports what a run did.
@@ -307,21 +329,40 @@ func Run[I proto.Message, T any](
 	// window that needs a bound is the drain after Ctrl-C, where N workers each
 	// finish their current item and send.
 	//
-	// The timer handle is kept so it can be stopped: this package runs
-	// goleak.VerifyTestMain, and a pending timer that fires into a finished run
-	// is a real if harmless wakeup.
-	var graceTimer atomic.Pointer[time.Timer]
+	// The timer is stopped on the way out, because an unstopped 30s timer
+	// holds recordCancel — and through it the whole context tree — live long
+	// after the run is over.
+	//
+	// A flag under a mutex, not an atomic handle: stopArming() returning false
+	// means the arming func has already STARTED, not that it has finished, so
+	// a plain Load() can read nil in the window before it stores and leave a
+	// live timer behind. That window opens on any caller whose context is
+	// already cancelled when Run begins.
+	var (
+		graceMu      sync.Mutex
+		graceTimer   *time.Timer
+		graceStopped bool
+	)
 	stopArming := context.AfterFunc(ctx, func() {
-		graceTimer.Store(time.AfterFunc(opts.recordGrace(), recordCancel))
+		graceMu.Lock()
+		defer graceMu.Unlock()
+		if graceStopped {
+			return
+		}
+		graceTimer = time.AfterFunc(opts.recordGrace(), recordCancel)
 	})
 	defer func() {
 		stopArming()
-		if t := graceTimer.Load(); t != nil {
-			t.Stop()
+		graceMu.Lock()
+		defer graceMu.Unlock()
+		graceStopped = true
+		if graceTimer != nil {
+			graceTimer.Stop()
 		}
 	}()
 
 	sinkBroken := false
+	gateFired := false
 	sinkDone := make(chan struct{})
 	go func() {
 		// #5: the sink is caller-supplied code doing serialization and I/O,
@@ -348,8 +389,7 @@ func Run[I proto.Message, T any](
 			// died, so passing it here would ask a store to persist results
 			// while handing it an already-dead context — losing exactly the
 			// record resume depends on. Values are preserved; only the
-			// cancellation is dropped, under its own bounded deadline so a
-			// hung sink cannot make shutdown unbounded.
+			// cancellation is dropped.
 			// Per CALL, not per run. A sink that hangs on one write must not
 			// hang the run, and a run that takes longer than one write's
 			// budget is not a failure.
@@ -358,7 +398,18 @@ func Run[I proto.Message, T any](
 			callCancel()
 			if err != nil {
 				sinkBroken = true
-				fail(fmt.Errorf("recording result for %s: %w", opts.id(r.Item), err))
+				recErr := fmt.Errorf("recording result for %s: %w", opts.id(r.Item), err)
+				// When the grace has expired, this failure IS the
+				// cancellation, and the run's classification must not depend
+				// on whether the sink happened to return a wrapped ctx.Err().
+				// Without the join, a store surfacing its own error text turns
+				// a Ctrl-C into RUN_STATUS_FAILED and a generic exit code — so
+				// a CI gate keying on the interrupted code flips the day a
+				// driver rewords.
+				if cause := ctx.Err(); cause != nil {
+					recErr = errors.Join(recErr, cause)
+				}
+				fail(recErr)
 				continue
 			}
 
@@ -381,8 +432,16 @@ func Run[I proto.Message, T any](
 			// Draining continues; the loop is not broken out of. Workers still
 			// in flight have results to deliver, and a result that never
 			// reaches the sink is one a resumed run pays for again.
-			if opts.AfterRecord != nil {
-				if err := opts.AfterRecord(r.Item, r.Value, r.Err); err != nil {
+			// Guarded, like the sink and the work function beside it. A panic
+			// here unwinds out of `for r := range results`, and nothing else
+			// drains that channel — every worker's send is unconditional by
+			// design, so they block forever and workers.Wait() never returns.
+			// The run hangs permanently and only SIGKILL ends it, losing every
+			// in-flight result and re-paying for them on resume. Reproduced
+			// before this guard existed.
+			if opts.AfterRecord != nil && !gateFired {
+				if err := afterRecordOne(opts.AfterRecord, r, opts.id(r.Item)); err != nil {
+					gateFired = true
 					fail(err)
 				}
 			}
@@ -508,6 +567,26 @@ func recordOne[I proto.Message, T any](ctx context.Context, sink SinkFunc[I, T],
 		}
 	}()
 	return sink(ctx, r)
+}
+
+// afterRecordOne runs the caller's hook, converting a panic into an error.
+//
+// Unguarded, a panic here is strictly worse than a panic in the sink: it
+// unwinds out of the loop that drains `results`, and every worker's send into
+// that channel is unconditional, so the whole run deadlocks with no path to
+// recovery. The sink goroutine's own recover cannot help — it fires after the
+// loop is already gone.
+func afterRecordOne[I proto.Message, T any](
+	hook func(result any) error, r Result[I, T], id string,
+) (err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			// %T, not %v: a panic value is arbitrary and may embed prompt or
+			// response content, and this error reaches the user.
+			err = fmt.Errorf("panic in AfterRecord for %s: %T", id, p)
+		}
+	}()
+	return hook(r)
 }
 
 // runOne executes a single item, converting a panic into an error.
