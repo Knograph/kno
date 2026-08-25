@@ -372,7 +372,7 @@ func (o BaselineOptions) emit(ctx context.Context, r executor.Result[*Case, case
 // The store records the amount against the RUN and cannot say which Case it
 // belonged to, so this event is the only place that attribution exists.
 // Without it the money is a bare integer nothing describes — the side channel
-// CLAUDE.md's Observability section forbids. docs/debt.md#52.
+// CLAUDE.md's Observability section forbids.
 //
 // Emitted from the sink rather than the worker because the sink is where the
 // decision not to record an outcome is made, and the two must not disagree.
@@ -422,7 +422,20 @@ func (o BaselineOptions) recordOrphanSpend(
 	// After the durable write, so the stream never describes money the store
 	// does not hold. The reverse order would put a charge on the wire that a
 	// resume cannot see.
-	return o.emitOrphanSpend(ctx, agg, caseID, spend, reason)
+	//
+	// RECORDED, not returned. This is the sink's return value, and the
+	// executor latches sinkBroken on it — so a failed append here would drop
+	// every result still queued behind it, including scored Cases already paid
+	// for, on the drain path where a budget stop delivers them in a burst.
+	// Worse, the worker sends its result before calling fail(ErrBudgetExceeded),
+	// so the sink's error can lose that race and be swallowed: a clean
+	// BUDGET_STOPPED, and a resume into a double-spend with nothing saying
+	// results were dropped.
+	//
+	// The same conclusion the other hot-path emitters reached, and the
+	// mechanism is already here.
+	agg.recordEmitFailure(o.emitOrphanSpend(ctx, agg, caseID, spend, reason))
+	return nil
 }
 
 // emitRunStarted opens the event stream.
@@ -828,8 +841,18 @@ func (o BaselineOptions) sinkFunc(runCtx context.Context, draining *atomic.Bool,
 			// invokeWithRetry returns ctx.Err() from its backoff wait AFTER
 			// charges have accumulated, so a Ctrl-C during backoff following a
 			// billed 429 lands here with real money settled.
-			return o.recordOrphanSpend(ctx, agg, r.Item.GetId(), r.Value,
-				knov1.OrphanReason_ORPHAN_REASON_CANCELLED)
+			//
+			// The reason is NOT always CANCELLED. A budget stop cancels the
+			// executor's context too, so every in-flight worker's backoff wait
+			// returns ctx.Err() and lands here — at the default concurrency
+			// that is seven Cases reported as "a human interrupted this" for a
+			// run that ran out of money. draining is the discriminator, and it
+			// is already in the expression above.
+			reason := knov1.OrphanReason_ORPHAN_REASON_CANCELLED
+			if draining.Load() {
+				reason = knov1.OrphanReason_ORPHAN_REASON_BUDGET_EXCEEDED
+			}
+			return o.recordOrphanSpend(ctx, agg, r.Item.GetId(), r.Value, reason)
 		}
 
 		out := &store.Outcome{CaseID: r.Item.GetId()}

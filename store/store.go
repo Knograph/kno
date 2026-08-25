@@ -113,8 +113,10 @@ type Store interface {
 	// is idempotent on (run_id, case_id) by ignoring a second insert, so a
 	// spend-only row would permanently block the real outcome for its Case.
 	//
-	// The amount is recorded against the RUN, so which Case it belonged to is
-	// not preserved. docs/debt.md#52.
+	// The amount is recorded against the RUN, so this method cannot say which
+	// Case it belonged to. The engine emits an OrphanSpend event carrying that
+	// attribution; an implementation of this interface is not responsible for
+	// it.
 	//
 	// Refuses a run that does not exist rather than silently dropping the
 	// spend, which is the failure it exists to prevent.

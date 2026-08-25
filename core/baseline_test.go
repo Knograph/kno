@@ -3821,12 +3821,25 @@ func TestAKilledRunResumesWithTheMoneyItAlreadySpent(t *testing.T) {
 		}
 		fromEvents += e.GetCostUsdMicros()
 	}
-	// The stream and the store must agree: outcomes carry their own spend, so
-	// the events account for exactly the difference.
-	if inOutcomesOnly := settledByFirst - fromEvents; inOutcomesOnly < 0 {
-		t.Errorf("the orphan events total %d micro-USD against %d settled overall; "+
-			"the stream is describing money the run never spent",
-			fromEvents, settledByFirst)
+	// The stream and the store must describe the SAME money. Comparing against
+	// the run's total settled spend proves nothing — orphan spend is a subset
+	// of it by construction, so that inequality can never fail. The accumulator
+	// on the wrapping store is the real counterpart.
+	if fromEvents != orphans.total {
+		t.Errorf("the store recorded %d micro-USD of orphan spend and the stream "+
+			"describes %d; a charge the store holds and no event names is the "+
+			"side channel this event exists to close", orphans.total, fromEvents)
+	}
+	if len(orphanEvents) != orphans.n {
+		t.Errorf("%d durable orphan writes produced %d events", orphans.n, len(orphanEvents))
+	}
+	// The call count travels too — it is settled against --max-calls.
+	var callsFromEvents int64
+	for _, e := range orphanEvents {
+		callsFromEvents += e.GetCalls()
+	}
+	if callsFromEvents == 0 {
+		t.Error("the orphan events report no calls, though the guard settled them")
 	}
 
 	// And the Cases that were refused are still re-attemptable — the money is
@@ -4009,5 +4022,117 @@ func TestAPanicDoesNotTakeTheMoneyWithIt(t *testing.T) {
 		t.Errorf("the guard settled %d calls and the store holds %d; --max-calls "+
 			"is enforced against the guard and restored from the store",
 			settled.Calls, persisted.Calls)
+	}
+}
+
+// TestABudgetStopDoesNotReportItsCasesAsCancelled.
+//
+// A budget stop cancels the executor's context, so every in-flight worker's
+// backoff wait returns ctx.Err() and lands on the shutdown predicate carrying
+// real settled money. At the default concurrency that is seven Cases labelled
+// "a human interrupted this" for a run that ran out of budget — the exact
+// misreport OrphanReason was added to prevent.
+//
+// Both other orphan tests pin Concurrency = 1, where no Case is ever in flight
+// beside the refused one, so neither can see this.
+func TestABudgetStopDoesNotReportItsCasesAsCancelled(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const perCall = 40_000
+
+	h := newHarness(t, 40, 10, fake.Options{Latency: 5 * time.Millisecond})
+	h.opts.Agent = &billingAgent{perCallUSDMicros: perCall}
+	h.opts.Concurrency = 8 // the default, and the point of this test
+	h.opts.MaxAttempts = 3
+	h.opts.RetryBackoff = 30 * time.Millisecond
+	h.opts.EstCostPerCallUSDMicros = perCall
+	h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 11 * perCall}, nil, 0)
+
+	if _, err := core.Baseline(ctx, h.evals, h.opts); err != nil &&
+		!errors.Is(err, errs.ErrBudgetExceeded) {
+		t.Fatalf("Baseline: %v", err)
+	}
+
+	byReason := map[knov1.OrphanReason]int{}
+	for _, ev := range eventLog(t, h.dbPath, "run-1") {
+		if p, ok := ev.GetPayload().(*knov1.Event_OrphanSpend); ok {
+			byReason[p.OrphanSpend.GetReason()]++
+		}
+	}
+	if len(byReason) == 0 {
+		t.Fatal("no orphan spend at all; the fixture did not stop mid-Case")
+	}
+	if n := byReason[knov1.OrphanReason_ORPHAN_REASON_CANCELLED]; n > 0 {
+		t.Errorf("%d Cases reported as CANCELLED on a run that stopped because it "+
+			"ran out of budget. Nobody interrupted it, and a consumer reading "+
+			"these cannot tell a Ctrl-C from a breached cap", n)
+	}
+	if byReason[knov1.OrphanReason_ORPHAN_REASON_BUDGET_EXCEEDED] == 0 {
+		t.Error("no Case reported BUDGET_EXCEEDED on a budget stop")
+	}
+}
+
+// TestAFailedOrphanEventLeavesTheMoneyConsistent.
+//
+// What this proves: an event-store failure on the orphan path does not make
+// the guard and the store disagree. The money stays reconcilable even when the
+// observability write fails, and the run still reports the failure.
+//
+// What it does NOT prove, stated because the assertion would otherwise imply
+// it: that a failed orphan emit cannot break the sink and discard the results
+// queued behind it. The sink's return value latches the executor's sinkBroken,
+// after which every remaining result is dropped — no outcome row, absent from
+// CompletedCases, re-paid on resume. That is why the emit is recorded out of
+// band rather than returned.
+//
+// Reverting to `return o.emitOrphanSpend(...)` leaves this test GREEN, because
+// orphan emits happen during the drain, when little is still queued behind
+// them. Constructing a case with results behind one means controlling the
+// executor's delivery order, which the harness cannot do. The protection is
+// structural, and it is the same one every other hot-path emitter already
+// uses — docs/debt.md#32 rejected this exact mechanism for Settle, and
+// baseline_record.go's own comment on emitFailure explains why.
+func TestAFailedOrphanEventLeavesTheMoneyConsistent(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const perCall = 40_000
+
+	h := newHarness(t, 40, 10, fake.Options{Latency: 5 * time.Millisecond})
+	h.opts.Agent = &billingAgent{perCallUSDMicros: perCall}
+	h.opts.Concurrency = 8
+	h.opts.MaxAttempts = 3
+	h.opts.RetryBackoff = 30 * time.Millisecond
+	h.opts.EstCostPerCallUSDMicros = perCall
+	h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 11 * perCall}, nil, 0)
+	h.opts.Store = &selectiveFailStore{
+		Store: h.store,
+		failOn: func(ev *knov1.Event) bool {
+			_, isOrphan := ev.GetPayload().(*knov1.Event_OrphanSpend)
+			return isOrphan
+		},
+	}
+
+	if _, err := core.Baseline(ctx, h.evals, h.opts); err == nil {
+		t.Fatal("the run must report the failed event write rather than passing")
+	}
+
+	// Every Case the guard settled must still be durable. If the emit had
+	// broken the sink, the outcomes behind it would be missing and their money
+	// would be spent again on resume.
+	settled := h.opts.Guard.Spent()
+	persisted, err := h.store.SettledSpend(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("SettledSpend: %v", err)
+	}
+
+	if persisted.CostUSDMicros != settled.CostUSDMicros {
+		t.Errorf("the guard settled %d micro-USD and the store holds %d. An event "+
+			"write failed and took paid results with it — a resume re-pays for "+
+			"every one of them", settled.CostUSDMicros, persisted.CostUSDMicros)
+	}
+	if persisted.Calls != settled.Calls {
+		t.Errorf("guard settled %d calls, store holds %d", settled.Calls, persisted.Calls)
 	}
 }
