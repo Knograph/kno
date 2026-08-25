@@ -1,4 +1,4 @@
-# CaseExecution: a writer, a reader, and a resume gate that goes live
+# CaseExecution: a writer, a reader, and the recorded half of a resume gate
 
 Repays [`docs/debt.md#26`](../debt.md#26). Second of three PRs replacing the blocked
 [M2-10e plan](2026-08-25-m2-10e-observations-and-orphan-spend.md). Lands after
@@ -31,14 +31,26 @@ Cases" — about a run that executed Cases and spent money. That is the inverted
 **So `closeRun` writes `CaseExecution` unconditionally for Baseline**, with zeros where the run
 genuinely did nothing. A stage that invokes no agent leaves it absent by not writing it.
 
-## The resume gate this turns on
+## The resume gate this fills half of
+
+> **Retracted 2026-08-25.** This section originally claimed this PR arms the gate. It does not,
+> and the claim survived into the PR body before being caught. `checkResumable` compares
+> `CaseExecution.resolved_models` against `BaselineOptions.ResolvedModel` — and **nothing sets
+> that option outside tests**, verified by grepping every assignment in the tree. Writing
+> `resolved_models` fills the *recorded* operand; the *current* operand stays empty, and
+> `resolvedModelChanged` short-circuits on an empty side exactly as before. No user-facing
+> `ErrCheckpointStale` becomes reachable in this PR.
+>
+> The option cannot be filled either: it is read at `openRun`, before any request, so the only
+> value it could hold is one a previous run recorded — the check comparing a value to itself. The
+> gate has to move to **first-response time**, which is a `core` change with an event and an exit
+> code. Re-triggered to M2-11 in [debt #42](../debt.md#42); the end-to-end test lands there.
 
 `checkResumable` refuses a resume when `resolvedModelChanged`, which reads
-`firstResolvedModel(run)` → `CaseExecution.resolved_models[0]`. Nothing writes that field, so the
-gate has never run. **This PR is what arms it**, and a user-facing `ErrCheckpointStale` appearing
-for the first time is a behaviour change that needs saying out loud.
+`firstResolvedModel(run)` → `CaseExecution.resolved_models[0]`. Nothing writes that field.
 
-Two defects to fix before arming it:
+Two defects to fix in the recorded half regardless, because a gate that goes live over bad data is
+worse than one that is inert:
 
 - **`resolved_model` is `TEXT NOT NULL DEFAULT ''`.** Every errored Case has `''`. A naive
   `SELECT DISTINCT` returns `''` as a set member, so `resolved_models` would carry an empty
@@ -129,7 +141,7 @@ Deferred to a third PR, when a stage that executes no Cases actually exists. A s
 | Baseline run, any shape | `CaseExecution` present, zeros if nothing ran |
 | A stage that invokes no agent | Absent, because that stage does not write it |
 | Every Case refused after billing | Present with zeros — it executed Cases, and the orphan spend says so |
-| All Cases errored | `resolved_models` empty after the `!= ''` filter, so the resume gate stays inert rather than comparing against an empty string |
+| All Cases errored | `resolved_models` empty after the `!= ''` filter, so the resume gate stays inert rather than comparing against an empty string (it is inert for a second reason too — see the retraction above) |
 | Two models observed | Both in the set, ordered; `checkResumable` compares membership |
 | Purged run | Unaffected — every aggregated field is a column |
 
