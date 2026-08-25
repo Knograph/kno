@@ -3722,3 +3722,104 @@ func TestAFailedRetryEventDoesNotTurnARetryableCaseTerminal(t *testing.T) {
 			"hiccuped, not because its agent failed")
 	}
 }
+
+// TestAKilledRunResumesWithTheMoneyItAlreadySpent.
+//
+// CLAUDE.md's resume-from-checkpoint rule: kill mid-run, resume, assert no
+// double-spend. This is the test whose absence let docs/debt.md#50 through —
+// M2-10d compared the guard against the store INSIDE one process, which cannot
+// see a resume defect by construction.
+//
+// The first process is stopped by its cost cap after several Cases have been
+// charged for attempts that never produced an outcome. Guard.Restore reads
+// SettledSpend, so anything the store failed to record is headroom the second
+// process spends again.
+func TestAKilledRunResumesWithTheMoneyItAlreadySpent(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const perCall = 40_000 // $0.04, charged even when the call fails
+
+	h := newHarness(t, 30, 10, fake.Options{})
+	orphans := &orphanCountingStore{Store: h.store}
+	h.opts.Store = orphans
+	h.opts.Agent = &billingAgent{perCallUSDMicros: perCall}
+	h.opts.Concurrency = 1
+	h.opts.MaxAttempts = 2
+	h.opts.RetryBackoff = time.Millisecond
+	h.opts.EstCostPerCallUSDMicros = perCall
+	// NINE calls, deliberately odd. Every Case here uses exactly two attempts,
+	// so an even cap always runs out on some Case's FIRST attempt — which
+	// settles nothing and produces no orphan spend. The refusal has to land
+	// BETWEEN two attempts of one Case for this test to exercise what it is
+	// about, and an earlier version of it used ten and proved nothing.
+	h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 9 * perCall}, nil, 0)
+
+	if _, err := core.Baseline(ctx, h.evals, h.opts); err != nil &&
+		!errors.Is(err, errs.ErrBudgetExceeded) {
+		t.Fatalf("first run: %v", err)
+	}
+
+	settledByFirst := h.opts.Guard.Spent().CostUSDMicros
+	// The orphan path must actually have run, or this test proves nothing
+	// about it. An earlier fixture used an even call cap, so the refusal
+	// always landed on some Case's FIRST attempt — which settles nothing —
+	// and the test passed against code that dropped the spend entirely.
+	if orphans.n == 0 {
+		t.Fatal("no orphan spend was recorded, so the refusal never landed between " +
+			"two attempts of one Case and this test is not exercising docs/debt.md#50")
+	}
+	if settledByFirst == 0 {
+		t.Fatal("the first process settled nothing; the fixture proves nothing")
+	}
+
+	// Exactly what a resume reconstructs.
+	restored, err := h.store.SettledSpend(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("SettledSpend: %v", err)
+	}
+	if restored.CostUSDMicros != settledByFirst {
+		t.Errorf("the first process settled %d micro-USD and the store holds %d, a "+
+			"gap of %d. Guard.Restore reads the store, so the resumed run gets "+
+			"that gap as headroom and spends it a second time",
+			settledByFirst, restored.CostUSDMicros,
+			settledByFirst-restored.CostUSDMicros)
+	}
+
+	// And the Cases that were refused are still re-attemptable — the money is
+	// durable without the Case being marked done.
+	done, err := h.store.CompletedCases(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("CompletedCases: %v", err)
+	}
+	if len(done) >= 30 {
+		t.Errorf("%d of 30 Cases are marked complete after a budget stop; recording "+
+			"the spend must not mark a Case done that never got an answer", len(done))
+	}
+
+	// The resume itself cannot exceed the cap, which is the point.
+	opts := h.opts
+	opts.Resume = true
+	opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 9 * perCall}, nil, 0)
+	if _, err := core.Baseline(ctx, h.evals, opts); err != nil &&
+		!errors.Is(err, errs.ErrBudgetExceeded) {
+		t.Fatalf("resumed run: %v", err)
+	}
+	if total, ceiling := opts.Guard.Spent().CostUSDMicros, int64(9*perCall); total > ceiling {
+		t.Errorf("the run spent %d micro-USD against a %d cap across two processes; "+
+			"the resumed process did not inherit what the first one spent",
+			total, ceiling)
+	}
+}
+
+type orphanCountingStore struct {
+	store.Store
+	n     int
+	total int64
+}
+
+func (o *orphanCountingStore) RecordOrphanSpend(ctx context.Context, runID string, sp budget.Spend) error {
+	o.n++
+	o.total += sp.CostUSDMicros
+	return o.Store.RecordOrphanSpend(ctx, runID, sp)
+}

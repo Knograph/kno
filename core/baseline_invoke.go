@@ -37,17 +37,19 @@ func (o BaselineOptions) workFunc(agg *aggregator) executor.WorkFunc[*Case, case
 			return nil, err
 		}
 
-		resp, attempts, billed, invokeErr := o.invokeWithRetry(ctx, c, agg, est)
+		resp, attempts, billed, settledCalls, invokeErr := o.invokeWithRetry(ctx, c, agg, est)
 		if invokeErr != nil {
 			return &caseOutcome{
-				Response: nil, Err: invokeErr, Attempts: attempts, BilledUSDMicros: billed,
+				Response: nil, Err: invokeErr, Attempts: attempts,
+				BilledUSDMicros: billed, SettledCalls: settledCalls,
 			}, invokeErr
 		}
 
 		score, scoreErr := o.Goal.Score(ctx, c, resp)
 		if scoreErr != nil {
 			return &caseOutcome{
-				Response: resp, Err: scoreErr, Attempts: attempts, BilledUSDMicros: billed,
+				Response: resp, Err: scoreErr, Attempts: attempts,
+				BilledUSDMicros: billed, SettledCalls: settledCalls,
 			}, scoreErr
 		}
 
@@ -58,7 +60,8 @@ func (o BaselineOptions) workFunc(agg *aggregator) executor.WorkFunc[*Case, case
 		// inflated count was the last thing durably recorded. Counting happens
 		// after persistence, in emit, where errored Cases are already counted.
 		return &caseOutcome{
-			Response: resp, Score: score, Attempts: attempts, BilledUSDMicros: billed,
+			Response: resp, Score: score, Attempts: attempts,
+			BilledUSDMicros: billed, SettledCalls: settledCalls,
 		}, nil
 	}
 }
@@ -77,7 +80,7 @@ func (o BaselineOptions) invokeWithRetry(
 	c *Case,
 	agg *aggregator,
 	est budget.Estimate,
-) (resp *Response, attempts int, billedUSDMicros int64, err error) {
+) (resp *Response, attempts int, billedUSDMicros, settledCallCount int64, err error) {
 	backoff := o.retryBackoff()
 	// time.Now, not o.now. The budget bounds real elapsed time, and o.now is
 	// injectable — a frozen clock (which BaselineOptions.Now's own godoc
@@ -95,6 +98,13 @@ func (o BaselineOptions) invokeWithRetry(
 	// spent, so the difference is headroom a resumed run spends twice.
 	var billed int64
 
+	// Calls the guard actually SETTLED, which is not the attempt count.
+	// attempts++ runs at the top of the loop, before invokeOnce, and a refused
+	// Authorize returns before settling anything — so a Case that made one
+	// real call and was refused on attempt 2 would otherwise persist Calls: 2
+	// against a guard that settled 1.
+	var settledCalls int64
+
 	for attempt := 1; attempt <= o.maxAttempts(); attempt++ {
 		attempts++
 		resp, settled, overshoot, invokeErr := o.invokeOnce(ctx, c, est)
@@ -103,6 +113,7 @@ func (o BaselineOptions) invokeWithRetry(
 		// inputs the clamp exists for — and the store is the one that outlives
 		// the process.
 		billed = saturatingAdd(billed, settled.CostUSDMicros)
+		settledCalls = saturatingAdd(settledCalls, settled.Calls)
 		if overshoot > 0 {
 			// Emitted at settle time and gated on the DELTA, so the count is
 			// bounded by concurrency rather than by Case count: once the cap
@@ -123,12 +134,12 @@ func (o BaselineOptions) invokeWithRetry(
 			cancel()
 		}
 		if invokeErr == nil {
-			return resp, attempts, billed, nil
+			return resp, attempts, billed, settledCalls, nil
 		}
 		lastErr = invokeErr
 
 		if !retryable(invokeErr) {
-			return nil, attempts, billed, invokeErr
+			return nil, attempts, billed, settledCalls, invokeErr
 		}
 		if attempt == o.maxAttempts() {
 			break
@@ -167,10 +178,10 @@ func (o BaselineOptions) invokeWithRetry(
 		case <-time.After(wait):
 			backoff *= 2
 		case <-ctx.Done():
-			return nil, attempts, billed, ctx.Err()
+			return nil, attempts, billed, settledCalls, ctx.Err()
 		}
 	}
-	return nil, attempts, billed, lastErr
+	return nil, attempts, billed, settledCalls, lastErr
 }
 
 // saturatingAdd adds without wrapping. Non-positive is discarded: a charge

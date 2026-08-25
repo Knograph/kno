@@ -272,27 +272,42 @@ func TestSettledSpendReportsWhatTheGuardSettled(t *testing.T) {
 	}{
 		{
 			// Nothing reached a provider: the executor recovered a panic and
-			// the reservation was released rather than settled.
-			name: "a nil outcome is one call's exposure and no money",
+			// the reservation was RELEASED rather than settled. Reporting one
+			// call would over-record against the call cap for work the guard
+			// gave back — and this value now decides whether an orphan-spend
+			// row is written at all, so a phantom call would write one.
+			name: "a nil outcome settled nothing",
 			in:   nil,
-			want: budget.Spend{Calls: 1},
+			want: budget.Spend{},
 		},
 		{
 			name: "cost comes from what was settled, NOT from the Response",
-			in:   &caseOutcome{Attempts: 2, BilledUSDMicros: 50_000, Response: resp},
+			in: &caseOutcome{
+				Attempts: 2, SettledCalls: 2, BilledUSDMicros: 50_000, Response: resp,
+			},
 			want: budget.Spend{Calls: 2, CostUSDMicros: 50_000, Tokens: 140},
 		},
 		{
 			// The retry-exhausted path: every attempt failed, so there is no
 			// Response to take tokens from, but the charges were real.
 			name: "no Response still carries the charge",
-			in:   &caseOutcome{Attempts: 3, BilledUSDMicros: 120_000},
+			in:   &caseOutcome{Attempts: 3, SettledCalls: 3, BilledUSDMicros: 120_000},
 			want: budget.Spend{Calls: 3, CostUSDMicros: 120_000},
 		},
 		{
-			name: "attempts floor at one",
-			in:   &caseOutcome{Attempts: 0, BilledUSDMicros: 10},
-			want: budget.Spend{Calls: 1, CostUSDMicros: 10},
+			// The distinction this field exists for: two attempts, one of
+			// which the guard refused before settling anything. Persisting the
+			// attempt count would over-report against the call cap.
+			name: "a refused attempt is not a settled call",
+			in:   &caseOutcome{Attempts: 2, SettledCalls: 1, BilledUSDMicros: 40_000},
+			want: budget.Spend{Calls: 1, CostUSDMicros: 40_000},
+		},
+		{
+			// Refused before the first call: nothing settled, nothing to
+			// persist. sinkFunc's write predicate skips this outcome entirely.
+			name: "nothing settled reports nothing",
+			in:   &caseOutcome{Attempts: 1, SettledCalls: 0},
+			want: budget.Spend{},
 		},
 	}
 

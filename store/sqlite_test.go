@@ -732,3 +732,138 @@ func TestClosedStoreRefusesEveryOperation(t *testing.T) {
 		t.Error("FinishRun on a closed store returned no error")
 	}
 }
+
+// TestRecordOrphanSpendIsDurableWithoutMarkingACaseDone.
+//
+// The whole point of the method: money the guard settled for a Case that
+// produced no outcome has to survive into SettledSpend, which Guard.Restore
+// reads on resume — while the Case stays absent from CompletedCases so a
+// resumed run re-attempts it.
+//
+// Recording it as an outcome row would do the opposite on both counts.
+// RecordOutcome is INSERT OR IGNORE, so a spend-only row would permanently
+// block the real outcome for that Case.
+func TestRecordOrphanSpendIsDurableWithoutMarkingACaseDone(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	st := newStore(t)
+	if err := st.CreateRun(ctx, newRun("run-1")); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	// One Case completes normally.
+	if err := st.RecordOutcome(ctx, "run-1", &store.Outcome{
+		CaseID: "done-1",
+		Score:  &knov1.Score{Value: 1},
+		Spend:  budget.Spend{Calls: 1, CostUSDMicros: 10_000, Tokens: 5},
+	}); err != nil {
+		t.Fatalf("RecordOutcome: %v", err)
+	}
+
+	// Another was charged and then refused, so it has no outcome.
+	if err := st.RecordOrphanSpend(ctx, "run-1",
+		budget.Spend{Calls: 2, CostUSDMicros: 80_000, Tokens: 3}); err != nil {
+		t.Fatalf("RecordOrphanSpend: %v", err)
+	}
+
+	spend, err := st.SettledSpend(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("SettledSpend: %v", err)
+	}
+	want := budget.Spend{Calls: 3, CostUSDMicros: 90_000, Tokens: 8}
+	if spend != want {
+		t.Errorf("SettledSpend = %+v, want %+v — a resume restores this figure, so "+
+			"anything missing from it is headroom spent twice", spend, want)
+	}
+
+	done, err := st.CompletedCases(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("CompletedCases: %v", err)
+	}
+	if len(done) != 1 {
+		t.Errorf("%d Cases marked complete, want 1; orphan spend must not mark a "+
+			"Case done that never produced an answer", len(done))
+	}
+	if _, ok := done["done-1"]; !ok {
+		t.Error("the completed Case is missing from CompletedCases")
+	}
+}
+
+// TestOrphanSpendAccumulates.
+//
+// Additive, because a run can refuse several Cases after charging for them,
+// and each is a separate settlement the guard already made.
+func TestOrphanSpendAccumulates(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	st := newStore(t)
+	if err := st.CreateRun(ctx, newRun("run-1")); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	for range 3 {
+		if err := st.RecordOrphanSpend(ctx, "run-1",
+			budget.Spend{Calls: 1, CostUSDMicros: 20_000}); err != nil {
+			t.Fatalf("RecordOrphanSpend: %v", err)
+		}
+	}
+
+	spend, err := st.SettledSpend(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("SettledSpend: %v", err)
+	}
+	if spend.CostUSDMicros != 60_000 || spend.Calls != 3 {
+		t.Errorf("SettledSpend = %+v, want 3 calls and 60000 micro-USD; the writes "+
+			"must add rather than replace", spend)
+	}
+}
+
+// TestRecordOrphanSpendRefusesAnUnknownRun.
+//
+// Silently dropping the spend is the failure this method exists to prevent, so
+// a caller bug must be loud rather than a no-op that reads as success.
+func TestRecordOrphanSpendRefusesAnUnknownRun(t *testing.T) {
+	t.Parallel()
+
+	st := newStore(t)
+	err := st.RecordOrphanSpend(context.Background(), "no-such-run",
+		budget.Spend{Calls: 1, CostUSDMicros: 1_000})
+	if err == nil {
+		t.Fatal("recording spend against a run that does not exist succeeded; the " +
+			"money would vanish with nothing reporting it")
+	}
+}
+
+// TestSettledSpendOnAFreshRunIsZero.
+//
+// SettledSpend now joins runs against outcomes, so a run with no outcomes must
+// still read as zero rather than as a scan error — Guard.Restore calls this on
+// every resume, including the first one after a run was created.
+func TestSettledSpendOnAFreshRunIsZero(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	st := newStore(t)
+	if err := st.CreateRun(ctx, newRun("run-1")); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	spend, err := st.SettledSpend(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("SettledSpend on a run with no outcomes: %v", err)
+	}
+	if (spend != budget.Spend{}) {
+		t.Errorf("SettledSpend = %+v, want zero", spend)
+	}
+
+	// And a run that does not exist at all is zero, not an error: the guard
+	// restores nothing and the run proceeds.
+	if spend, err = st.SettledSpend(ctx, "never-created"); err != nil {
+		t.Errorf("SettledSpend on an unknown run: %v", err)
+	}
+	if (spend != budget.Spend{}) {
+		t.Errorf("SettledSpend on an unknown run = %+v, want zero", spend)
+	}
+}

@@ -74,6 +74,18 @@ covenants — breaking any of them requires a major version.
 
 ### Fixed
 
+- **Money spent on a Case that never produced an answer is now durable.** A budget refusal on a
+  retry — or a Ctrl-C during backoff — discarded every charge the earlier attempts incurred:
+  measured at guard $0.36, store $0.32. `SettledSpend` is the only durable record of money spent
+  and `Guard.Restore` reads it, so a resumed run got the difference back as headroom and spent it
+  again. Repays [debt #50](docs/debt.md#50).
+
+  The spend is recorded against the run, not as an outcome row, so the Case stays absent from the
+  completed set and a resume still re-attempts it.
+
+  **This migration cannot be downgraded past.** `kno` refuses to open a database whose schema is
+  newer than the binary understands, so an older build will not start against a migrated file.
+
 - **A provider's charge for a failed call is no longer recorded as free.** The guard settled it and
   the store persisted zero, and `SettledSpend` is the only durable record of money spent — so a
   resumed run got the difference as headroom and spent it again. With `--max-attempts 3` the guard

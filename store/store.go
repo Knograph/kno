@@ -99,6 +99,24 @@ type Store interface {
 	// second time.
 	SettledSpend(ctx context.Context, runID string) (budget.Spend, error)
 
+	// RecordOrphanSpend adds spend the guard settled for a Case that produced
+	// no outcome — refused by the budget after earlier attempts were charged,
+	// or cancelled mid-backoff.
+	//
+	// Additive, and separate from RecordOutcome, because the two answer
+	// different questions. RecordOutcome says a Case is DONE; this says money
+	// was spent on one that is not. A Case carrying orphan spend stays absent
+	// from CompletedCases and is re-attempted on resume, while its earlier
+	// charge is already inside SettledSpend and is not spent twice.
+	//
+	// An implementation must NOT record this as an outcome row. RecordOutcome
+	// is idempotent on (run_id, case_id) by ignoring a second insert, so a
+	// spend-only row would permanently block the real outcome for its Case.
+	//
+	// Refuses a run that does not exist rather than silently dropping the
+	// spend, which is the failure it exists to prevent.
+	RecordOrphanSpend(ctx context.Context, runID string, spend budget.Spend) error
+
 	// AppendEvent records one event. The caller owns ordering and must set
 	// Sequence.
 	AppendEvent(ctx context.Context, ev *knov1.Event) error

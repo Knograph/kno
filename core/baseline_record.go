@@ -367,6 +367,25 @@ func (o BaselineOptions) emit(ctx context.Context, r executor.Result[*Case, case
 	return o.appendEvent(ctx, agg, ev, "case "+r.Item.GetId())
 }
 
+// recordOrphanSpend makes durable the money settled for a Case that produced
+// no outcome.
+//
+// The write predicate is "the guard settled something", not "the Case
+// errored". A Case refused before its first call settled nothing, and writing a
+// call for it would fabricate one that never happened.
+func (o BaselineOptions) recordOrphanSpend(ctx context.Context, out *caseOutcome) error {
+	spend := settledSpend(out)
+	if spend.Calls <= 0 && spend.CostUSDMicros <= 0 {
+		return nil
+	}
+	// WithoutCancel: this path is reached BY a cancellation, and the whole
+	// point is that the money outlives it.
+	if err := o.Store.RecordOrphanSpend(context.WithoutCancel(ctx), o.RunID, spend); err != nil {
+		return fmt.Errorf("recording orphan spend: %w", err)
+	}
+	return nil
+}
+
 // emitRunStarted opens the event stream.
 func (o BaselineOptions) emitRunStarted(ctx context.Context, agg *aggregator, total int) error {
 	return o.appendEvent(ctx, agg, &knov1.Event{
@@ -722,7 +741,13 @@ func (o BaselineOptions) sinkFunc(runCtx context.Context, draining *atomic.Bool,
 		// that never happened AND mark the Case done, so fixing the pricing
 		// table and re-running with --resume would never re-attempt it.
 		if errors.Is(r.Err, errs.ErrBudgetExceeded) || errors.Is(r.Err, errUnpriceable) {
-			return nil
+			// The Case is not recorded — it has no result and must stay
+			// re-attemptable — but money the guard already settled for it has
+			// to become durable, or a resume gets it back as headroom.
+			//
+			// errUnpriceable settles nothing: estimate refuses before
+			// Authorize, so orphanSpend is zero and this is a no-op for it.
+			return o.recordOrphanSpend(ctx, r.Value)
 		}
 
 		// A Case the shutdown cancelled before it produced anything is the same
@@ -760,7 +785,11 @@ func (o BaselineOptions) sinkFunc(runCtx context.Context, draining *atomic.Bool,
 		noResult := r.Value == nil || r.Value.Response == nil
 
 		if shuttingDown && cancelled && noResult {
-			return nil
+			// Same shape, and the one the first draft of this fix missed:
+			// invokeWithRetry returns ctx.Err() from its backoff wait AFTER
+			// charges have accumulated, so a Ctrl-C during backoff following a
+			// billed 429 lands here with real money settled.
+			return o.recordOrphanSpend(ctx, r.Value)
 		}
 
 		out := &store.Outcome{CaseID: r.Item.GetId()}
@@ -817,6 +846,14 @@ type caseOutcome struct {
 	// persists, and SettledSpend is the only durable record of money spent —
 	// so a difference between the two is headroom a resumed run spends twice.
 	BilledUSDMicros int64
+
+	// SettledCalls is how many calls the guard actually settled.
+	//
+	// Not Attempts. attempts++ runs before invokeOnce, and a refused Authorize
+	// returns before settling — so a Case that made one call and was refused
+	// on attempt 2 has Attempts 2 and SettledCalls 1. Persisting the attempt
+	// count would over-report against the call cap by one per refusal.
+	SettledCalls int64
 
 	Response *Response
 	Score    *Score
