@@ -446,6 +446,18 @@ enum OrphanReason {
   // The run was cancelled — a Ctrl-C, a deadline — while the Case was waiting
   // out a retry backoff.
   ORPHAN_REASON_CANCELLED = 2;
+
+  // A condition that cannot change within this run ended it: a rejected
+  // credential, the provider's own spend cap, a refused destination, an unpaid
+  // account, a model that does not exist.
+  //
+  // Distinct from BUDGET_EXCEEDED even though both stop a run early, because
+  // the two need opposite responses. A budget stop is resumable as-is — raise
+  // the cap or accept the partial result. A run-fatal stop is not: resuming
+  // without fixing the condition makes the same request and gets the same
+  // answer, having paid for the attempt. Reporting one as the other tells the
+  // user to raise a cap that was never the problem.
+  ORPHAN_REASON_RUN_FATAL = 3;
 }
 
 // ConcurrencyReduced reports that the engine narrowed the run's concurrency.

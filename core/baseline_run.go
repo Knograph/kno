@@ -3,8 +3,6 @@ package core
 import (
 	"context"
 	"fmt"
-	"slices"
-	"strings"
 	"time"
 
 	"github.com/knograph/kno/core/errs"
@@ -62,6 +60,14 @@ func (o BaselineOptions) openRun(ctx context.Context) (*knov1.Run, error) {
 // checkResumable refuses a resume whose measurement configuration differs from
 // the one recorded.
 //
+// The RESOLVED MODEL is deliberately not checked here. It was, against
+// BaselineOptions.ResolvedModel — a caller-supplied field read before any
+// request is made, so the only value it could ever hold was one a previous run
+// recorded, and the check compared a value to itself. It never fired. The gate
+// now runs at first-response time (modelGate, baseline_gate.go), which is also
+// the only placement catching an alias that re-points DURING a long run rather
+// than only between two. See docs/debt.md#42.
+//
 // InputFingerprint is supplied by the caller and covers the caller's inputs;
 // core cannot assume it covers the Goal or the Agent, and the one caller that
 // exists today does not fold them in. So the recorded fields are compared
@@ -72,10 +78,7 @@ func (o BaselineOptions) openRun(ctx context.Context) (*knov1.Run, error) {
 // AggregateScore and presents it as a single homogeneous number — the
 // corrupted-reference failure prime directive 5 exists to prevent.
 func (o BaselineOptions) checkResumable(run *knov1.Run) error {
-	var (
-		changed      string
-		modelChanged bool
-	)
+	var changed string
 	switch {
 	case run.GetInputFingerprint() != o.InputFingerprint:
 		changed = "different inputs"
@@ -87,81 +90,29 @@ func (o BaselineOptions) checkResumable(run *knov1.Run) error {
 	case run.GetAgent().GetRef() != o.AgentRef.GetRef():
 		changed = fmt.Sprintf("a different agent (recorded %q, now %q)",
 			run.GetAgent().GetRef(), o.AgentRef.GetRef())
-	case resolvedModelChanged(run, o.ResolvedModel):
-		modelChanged = true
-		// A ref like openai:gpt-4.1 is a moving pointer. A run interrupted on
-		// Monday and resumed on Friday after the alias re-points passes every
-		// check above and blends two models into one AggregateScore.
-		//
-		// Only the RESOLVED model. The provider's build identifier is recorded
-		// and reported but never refused on: it changes whenever the backend
-		// config changes, routinely and with no model change, and refusing on
-		// it would cost the user a full re-run for a false positive — worse
-		// than the blending it prevents.
-		changed = fmt.Sprintf("a resolved model it never saw (recorded %s, now %q)",
-			recordedModels(run), o.ResolvedModel)
 	default:
 		return nil
 	}
-	return errs.ErrCheckpointStale.WithFix(o.staleFix(run, modelChanged)).
+	return errs.ErrCheckpointStale.WithFix(o.staleFix(run)).
 		Wrap(fmt.Errorf("run %s was recorded against %s", o.RunID, changed))
-}
-
-// resolvedModelChanged reports whether the provider is now answering with a
-// different model than the one this run recorded.
-//
-// Empty on either side means unknown — the first process may not have reached a
-// response, or this one has not yet. Unknown is not a mismatch: refusing on
-// absence would make every run that stopped before its first answer
-// unresumable.
-// resolvedModelChanged reports whether the model now answering is absent from
-// the set the recorded Run observed.
-//
-// Set MEMBERSHIP, not models[0]. The field is repeated because with
-// concurrency there is no "first response", and during a provider rollout two
-// workers in one Run legitimately see different builds — so a run that saw
-// {A, B} and is now served by B has not changed, and comparing against
-// whichever element happened to sort first would refuse it.
-//
-// Empty on either side means nothing to compare: a run whose Cases all errored
-// records no model, and a process that has not called the provider yet knows
-// none.
-func resolvedModelChanged(run *knov1.Run, now string) bool {
-	recorded := run.GetCaseExecution().GetResolvedModels()
-	if len(recorded) == 0 || now == "" {
-		return false
-	}
-	return !slices.Contains(recorded, now)
-}
-
-// recordedModels renders the set for a refusal message, so the user can see
-// what the run was measured against rather than only that it disagreed.
-func recordedModels(run *knov1.Run) string {
-	return strings.Join(run.GetCaseExecution().GetResolvedModels(), ", ")
 }
 
 // staleFix names what to DO about the change the caller already identified.
 //
-// It must not name causes checkResumable does not test. It previously offered
-// "the goal, agent, or split configuration changed" for every non-eval
-// mismatch, which named the split — never compared, since InputFingerprint
-// covers the eval SOURCE only — and omitted the resolved model, which is. A
-// user re-pointed by an alias got told to restore a setting they never
+// It must not name causes checkResumable does not test. It once offered "the
+// goal, agent, or split configuration changed" for every non-eval mismatch,
+// which named the split — never compared, since InputFingerprint covers the
+// eval SOURCE only — so a user was told to restore a setting they had never
 // touched.
-func (o BaselineOptions) staleFix(run *knov1.Run, modelChanged bool) string {
-	switch {
-	case modelChanged:
-		// Not a setting the user can restore: the ref is a moving pointer and
-		// the provider moved it. Pinning is the only thing that makes the run
-		// resumable, and re-running is the only thing that makes it comparable.
-		return "the agent ref resolved to a different model than this run was " +
-			"measured against; re-run without --resume, or pin the model in the " +
-			"agent ref so a provider rollout cannot re-point it mid-run"
-	case run.GetEvalContentHash() != o.EvalContentHash:
+//
+// The resolved-model branch left with the check itself. modelGate carries its
+// own fix line, because that refusal happens mid-run and has a different remedy
+// than anything reachable here.
+func (o BaselineOptions) staleFix(run *knov1.Run) string {
+	if run.GetEvalContentHash() != o.EvalContentHash {
 		return "the eval source changed since this run started; re-run without --resume, " +
 			"or restore the original file"
-	default:
-		return "the goal or agent changed since this run started; re-run without " +
-			"--resume, or restore the setting it was recorded against"
 	}
+	return "the goal or agent changed since this run started; re-run without " +
+		"--resume, or restore the setting it was recorded against"
 }

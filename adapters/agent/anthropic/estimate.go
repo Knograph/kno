@@ -2,9 +2,11 @@ package anthropic
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/knograph/kno/adapters/agent/internal/agenterr"
 	"github.com/knograph/kno/adapters/agent/pricing"
 	"github.com/knograph/kno/core"
 	knov1 "github.com/knograph/kno/gen/kno/v1"
@@ -35,7 +37,21 @@ func (a *Agent) Estimate(ctx context.Context, c *core.Case) (budget.Estimate, er
 // estimate is Estimate without the context, so a settlement path that already
 // holds no context of its own does not have to invent one.
 func (a *Agent) estimate(c *core.Case) (budget.Estimate, error) {
-	return pricing.Estimate(Scheme, a.opts.Model, a.prompt(c), a.opts.MaxOutputTokens)
+	est, err := pricing.Estimate(Scheme, a.opts.Model, a.prompt(c), a.opts.MaxOutputTokens)
+	if errors.Is(err, pricing.ErrUnpriced) {
+		// Run-fatal, because it is a property of the MODEL and the model does
+		// not change mid-run. Under a dollar cap core refuses every Case it
+		// cannot price, so without this the run made a refusal per Case and
+		// ended as "too many cases errored" — a verdict naming nothing about
+		// pricing, after taking the user's consent for a figure that was never
+		// going to apply. See docs/debt.md#46.
+		//
+		// Marked HERE rather than in core, which cannot tell this apart from
+		// an Estimator that refuses one Case and prices the rest — a
+		// distinction core has a test for and must keep.
+		return budget.Estimate{}, agenterr.AsRunFatal(err)
+	}
+	return est, err
 }
 
 // prompt reports every byte the provider will bill as input for this Case.

@@ -171,13 +171,12 @@ type BaselineOptions struct {
 	// moved to first-response time, because a resolved model is a property of
 	// a response and the check runs before any call is made.
 	//
-	// ResolvedModel is what the provider reported actually answering, once one
-	// has. Empty until the adapter supplies it.
-	//
-	// Compared on resume: a ref like openai:gpt-4.1 is a moving pointer, and a
-	// run resumed after the alias re-points would otherwise blend two models
-	// into one AggregateScore.
-	ResolvedModel string
+	// (BaselineOptions.ResolvedModel was here. It was caller-supplied and read
+	// at openRun, BEFORE any request, so the only value it could ever hold was
+	// one a previous run had recorded — checkResumable compared it to itself
+	// and never fired. The gate moved to first-response time; see modelGate in
+	// baseline_gate.go and docs/debt.md#42. Removing an exported field is a
+	// public-Go-API break, permitted pre-1.0 with a CHANGELOG migration note.)
 
 	// HoldoutUnderpowered marks a holdout too small for a meaningful interval.
 	HoldoutUnderpowered bool
@@ -425,27 +424,72 @@ func Baseline(
 	// stop below, so this catches only a panic in executor.Run; the explicit
 	// call is what orders RunFinished last and surfaces a write failure.
 	defer func() { _ = stopProgress() }()
-	// draining is set the moment a fatal error starts the shutdown, and read by
-	// the sink to tell "this Case was cancelled BY the stop" from "this Case
-	// timed out on its own".
+	// stopReason is set the moment a fatal error starts the shutdown, and read
+	// by the sink to tell "this Case was cancelled BY the stop" from "this Case
+	// timed out on its own" — and, now, WHICH stop.
 	//
 	// The run's own context is not that signal: a budget stop cancels the
 	// executor's internal context, never the caller's, so runCtx.Err() stays
 	// nil throughout — which is exactly the wrong answer for the case this
 	// exists to catch.
-	var draining atomic.Bool
+	//
+	// It carries the reason rather than a bool because there are three stops
+	// and they need different words. A run stopped by a human is not a run that
+	// ran out of money (docs/debt.md#52), and a run stopped by a rejected
+	// credential is neither: telling that user the cost cap could not admit
+	// another attempt sends them to raise a cap that was never the problem.
+	// UNSPECIFIED means "not draining", which is why the zero value is right.
+	var stopReason atomic.Int32
+
+	// Armed from the RESUMED run's record; inert on a fresh run.
+	gate := newModelGate(run)
 
 	stats, runErr := executor.Run(ctx, cases,
-		opts.workFunc(agg), opts.sinkFunc(ctx, &draining, agg),
+		opts.workFunc(agg), opts.sinkFunc(ctx, &stopReason, agg),
 		executor.Options{
+			// The only path from a SUCCESSFUL Case to shutdown. IsFatal is
+			// consulted on work errors only, and a re-pointed model alias is
+			// visible in an answer we already paid for and want to keep.
+			AfterRecord: gate.afterRecord,
 			Concurrency: opts.Concurrency,
 			ID:          func(item any) string { c, _ := item.(*Case); return c.GetId() },
 			Skip:        func(id string) bool { _, ok := done[id]; return ok },
 			// Budget exhaustion ends the run rather than failing every
 			// remaining Case one at a time.
+			//
+			// So does a condition that cannot change WITHIN the run: a
+			// rejected credential, the provider's own spend cap, an unpaid
+			// account, a model that does not exist, a refused destination, a
+			// model with no price row under a dollar cap. Each was
+			// classified per-Case, so a wrong ANTHROPIC_API_KEY on a
+			// 10,000-Case run made 10,000 requests and settled 10,000 calls
+			// against --max-calls before telling the user anything — which is
+			// precisely what anthropic.ErrAuthentication's own godoc claims it
+			// prevents. See docs/debt.md#47.
+			//
+			// The adapter classifies and core escalates. The adapter cannot do
+			// the escalation (it does not own the run) and core cannot do the
+			// classification (it never saw the status code), which is why this
+			// reads a structural assertion rather than a sentinel.
+			//
+			// Deliberately NOT keyed on errUnpriceable, which would have been
+			// the easy way to repay docs/debt.md#46 and is wrong. That sentinel
+			// covers three causes and only some are run-invariant: a model with
+			// no price row cannot change mid-run, while an Estimator that
+			// refuses one Case and prices the rest is a per-Case problem, and
+			// TestEstimatorFailureRefusesWhenACostCapIsSet exists to keep the
+			// second from being aborted — "no money can be spent on a Case that
+			// was never authorized, and the rest are priced correctly". So the
+			// ADAPTER marks its model-level pricing failure and this reads the
+			// mark, rather than core guessing from a sentinel that cannot tell
+			// the two apart.
 			IsFatal: func(err error) bool {
 				if errors.Is(err, errs.ErrBudgetExceeded) {
-					draining.Store(true)
+					stopReason.Store(int32(knov1.OrphanReason_ORPHAN_REASON_BUDGET_EXCEEDED))
+					return true
+				}
+				if runFatalOf(err) {
+					stopReason.Store(int32(knov1.OrphanReason_ORPHAN_REASON_RUN_FATAL))
 					return true
 				}
 				return false

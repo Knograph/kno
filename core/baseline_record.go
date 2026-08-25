@@ -775,7 +775,7 @@ func (o BaselineOptions) emitRunResumed(
 // still write during shutdown, which means it cannot ask its own ctx whether
 // the run is ending. draining covers the other way a run stops — a fatal error
 // such as a budget stop, which never touches the caller's context.
-func (o BaselineOptions) sinkFunc(runCtx context.Context, draining *atomic.Bool, agg *aggregator) executor.SinkFunc[*Case, caseOutcome] {
+func (o BaselineOptions) sinkFunc(runCtx context.Context, stopReason *atomic.Int32, agg *aggregator) executor.SinkFunc[*Case, caseOutcome] {
 	return func(ctx context.Context, r executor.Result[*Case, caseOutcome]) error {
 		// A Case refused by the budget guard was never attempted: no provider
 		// call was made and nothing was spent. Recording it as a terminal
@@ -832,7 +832,9 @@ func (o BaselineOptions) sinkFunc(runCtx context.Context, draining *atomic.Bool,
 		// And there must be no Response. A Case that failed AFTER a paid call
 		// produced one is a real terminal outcome, recorded below with the
 		// spend that call incurred.
-		shuttingDown := runCtx.Err() != nil || draining.Load()
+		stopping := knov1.OrphanReason(stopReason.Load())
+		shuttingDown := runCtx.Err() != nil ||
+			stopping != knov1.OrphanReason_ORPHAN_REASON_UNSPECIFIED
 		cancelled := errors.Is(r.Err, context.Canceled) || errors.Is(r.Err, context.DeadlineExceeded)
 		noResult := r.Value == nil || r.Value.Response == nil
 
@@ -842,15 +844,19 @@ func (o BaselineOptions) sinkFunc(runCtx context.Context, draining *atomic.Bool,
 			// charges have accumulated, so a Ctrl-C during backoff following a
 			// billed 429 lands here with real money settled.
 			//
-			// The reason is NOT always CANCELLED. A budget stop cancels the
+			// The reason is NOT always CANCELLED. A fatal stop cancels the
 			// executor's context too, so every in-flight worker's backoff wait
 			// returns ctx.Err() and lands here — at the default concurrency
 			// that is seven Cases reported as "a human interrupted this" for a
-			// run that ran out of money. draining is the discriminator, and it
-			// is already in the expression above.
+			// run that ran out of money. stopReason is the discriminator, and
+			// it is already in the expression above.
+			//
+			// Three values, not two. A credential the provider rejected is not
+			// a cap that could not admit another attempt, and reporting it as
+			// one sends the user to raise a limit that was never binding.
 			reason := knov1.OrphanReason_ORPHAN_REASON_CANCELLED
-			if draining.Load() {
-				reason = knov1.OrphanReason_ORPHAN_REASON_BUDGET_EXCEEDED
+			if stopping != knov1.OrphanReason_ORPHAN_REASON_UNSPECIFIED {
+				reason = stopping
 			}
 			return o.recordOrphanSpend(ctx, agg, r.Item.GetId(), r.Value, reason)
 		}

@@ -244,6 +244,12 @@ func saturatingAdd(total, add int64) int64 {
 // TRANSPORT_TRANSIENT. See the case below for why the charge is the
 // discriminator.
 func retryReasonOf(err error) knov1.RetryReason {
+	// The adapter's own classification wins where it has one. It is the only
+	// layer that saw the status code, and a sentinel cannot recover what a
+	// status code knew.
+	if r, ok := retryReasonFrom(err); ok {
+		return r
+	}
 	switch {
 	case errors.Is(err, errs.ErrRateLimited):
 		return knov1.RetryReason_RETRY_REASON_RATE_LIMITED
@@ -263,6 +269,42 @@ func retryReasonOf(err error) knov1.RetryReason {
 	default:
 		return knov1.RetryReason_RETRY_REASON_UNSPECIFIED
 	}
+}
+
+// runFatalOf reports whether an error ends the whole run rather than one Case.
+//
+// An anonymous interface, the same shape retryAfterOf and billedCostOf use, so
+// an adapter can escalate without core importing it — prime directive 3. The
+// alternative was a sentinel in core/errs that adapters wrap, and it is broken
+// in both possible orientations: Actionable has ONE wrapped slot and Wrap
+// replaces it, so wrapping outward makes errors.As return the sentinel's
+// Actionable and codeOf persist a generic code (docs/debt.md#39 verbatim),
+// while wrapping inward doubles the fix line and leaves nowhere for the
+// provider's cause.
+//
+// This does NOT survive serialization. errs.FromProto rebuilds an Actionable
+// with no chain, so a run-fatal error arriving from a Ring-2 plugin or over
+// the api reaches here as an ordinary one. Ledgered as docs/debt.md#56 rather
+// than fixed with a wire field whose only consumer would be a plugin Agent
+// that does not exist.
+func runFatalOf(err error) bool {
+	var rf interface{ RunFatal() bool }
+	return errors.As(err, &rf) && rf.RunFatal()
+}
+
+// retryReasonFrom reads a reason an adapter attached, if it did.
+//
+// core classifies from sentinels where it can. It cannot separate a timeout
+// from a 5xx that way — an adapter wraps both as ErrTransportTransient — so a
+// timed-out request was reported as PROVIDER_UNAVAILABLE, whose schema
+// definition is "the provider returned a 5xx". See docs/debt.md#53.
+func retryReasonFrom(err error) (knov1.RetryReason, bool) {
+	var rr interface{ RetryReason() knov1.RetryReason }
+	if !errors.As(err, &rr) {
+		return knov1.RetryReason_RETRY_REASON_UNSPECIFIED, false
+	}
+	r := rr.RetryReason()
+	return r, r != knov1.RetryReason_RETRY_REASON_UNSPECIFIED
 }
 
 // retryable reports whether an error may succeed on another attempt.

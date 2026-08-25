@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/knograph/kno/adapters/agent/internal/agenterr"
 	"github.com/knograph/kno/adapters/agent/internal/transport"
 	"github.com/knograph/kno/core/errs"
 )
@@ -150,9 +151,11 @@ func fromTransport(err error) error {
 		// A cross-host redirect or a credential aimed somewhere it is not bound.
 		// Terminal by construction: the policy will not have changed by the next
 		// attempt, and retrying a redirect refusal means re-offering the key.
-		return errs.ErrInvalidInput.
+		// Run-fatal: config is read once, so the policy that refused this
+		// request refuses every one after it.
+		return agenterr.AsRunFatal(errs.ErrInvalidInput.
 			WithFix("point --base-url at the endpoint directly; Kno does not follow redirects off the host a key is bound to").
-			Wrap(err)
+			Wrap(err))
 
 	case errors.Is(err, transport.ErrResponseTooLarge):
 		return ErrProvider.
@@ -175,9 +178,12 @@ func fromStatus(status int, retryAfter time.Duration, env *errorEnvelope) error 
 
 	if status == http.StatusTooManyRequests {
 		if env != nil && env.ErrorCode == spendLimitCode {
-			return ErrProvider.
+			// Run-fatal: the provider's own cap does not reset mid-run, so
+			// every remaining Case makes a request that gets the same answer.
+			// Keyed on the STRUCTURED error_code, not on prose.
+			return agenterr.AsRunFatal(ErrProvider.
 				WithFix("your organization has crossed its monthly API spend cap; raise the tier or wait for it to reset — retrying will not clear it").
-				Wrap(cause)
+				Wrap(cause))
 		}
 		return rateLimited(retryAfter, cause)
 	}
@@ -204,17 +210,24 @@ func terminalStatus(status int, env *errorEnvelope, cause error) error {
 
 	switch {
 	case status == http.StatusUnauthorized, status == http.StatusForbidden:
-		return ErrAuthentication.Wrap(cause)
+		// Run-fatal. The credential is read once at construction and is not
+		// rotated mid-run, so a rejected key rejects every Case — and
+		// ErrAuthentication's own godoc claims to prevent exactly the sweep
+		// that classifying this per-Case produced. See docs/debt.md#47.
+		return agenterr.AsRunFatal(ErrAuthentication.Wrap(cause))
 
 	case status == http.StatusPaymentRequired:
-		return ErrProvider.
+		// Run-fatal: an unpaid account does not become paid mid-run.
+		return agenterr.AsRunFatal(ErrProvider.
 			WithFix("check the payment details on the Anthropic account this key belongs to").
-			Wrap(cause)
+			Wrap(cause))
 
 	case status == http.StatusNotFound:
-		return ErrProvider.
+		// Run-fatal: a model name that does not resolve will not resolve on the
+		// next Case either. A typo otherwise errors every Case in the set.
+		return agenterr.AsRunFatal(ErrProvider.
 			WithFix("check the model name against Anthropic's published model IDs, and check --base-url points at the API root rather than at /v1/messages").
-			Wrap(cause)
+			Wrap(cause))
 
 	case status == http.StatusRequestEntityTooLarge,
 		strings.Contains(msg, contextTooLong):
@@ -225,9 +238,17 @@ func terminalStatus(status int, env *errorEnvelope, cause error) error {
 			Wrap(cause)
 
 	case strings.HasPrefix(msg, selfSetSpendLimit):
-		return ErrProvider.
+		// Run-fatal, and the ONLY escalation here that rests on English prose.
+		// The contextTooLong comment above states the principle this bends:
+		// a message match should pick the FIX line, never whether the error is
+		// terminal, so a reword degrades advice rather than classification.
+		// Accepted because it fails OPEN — a reword drops back to per-Case
+		// handling, which is the behavior that shipped before this — rather
+		// than closed, which would kill a healthy run. Ledgered as
+		// docs/debt.md#61 with a canary as the repayment trigger.
+		return agenterr.AsRunFatal(ErrProvider.
 			WithFix("raise or remove the spend limit set on this Anthropic organization or workspace; retrying will not clear it").
-			Wrap(cause)
+			Wrap(cause))
 
 	default:
 		return ErrProvider.Wrap(cause)
