@@ -113,6 +113,9 @@ type Store interface {
 	// is idempotent on (run_id, case_id) by ignoring a second insert, so a
 	// spend-only row would permanently block the real outcome for its Case.
 	//
+	// The amount is recorded against the RUN, so which Case it belonged to is
+	// not preserved. docs/debt.md#52.
+	//
 	// Refuses a run that does not exist rather than silently dropping the
 	// spend, which is the failure it exists to prevent.
 	RecordOrphanSpend(ctx context.Context, runID string, spend budget.Spend) error

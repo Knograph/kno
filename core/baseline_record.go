@@ -378,9 +378,13 @@ func (o BaselineOptions) recordOrphanSpend(ctx context.Context, out *caseOutcome
 	if spend.Calls <= 0 && spend.CostUSDMicros <= 0 {
 		return nil
 	}
-	// WithoutCancel: this path is reached BY a cancellation, and the whole
-	// point is that the money outlives it.
-	if err := o.Store.RecordOrphanSpend(context.WithoutCancel(ctx), o.RunID, spend); err != nil {
+	// ctx as given, NOT WithoutCancel. The sink already receives a context the
+	// executor built as WithoutCancel plus RecordGrace, so it is already
+	// immune to the caller's cancellation — wrapping it again only strips the
+	// deadline, leaving this write unbounded on the very path (Ctrl-C during
+	// backoff) it was added for. RecordOutcome two branches down uses it bare
+	// for the same reason.
+	if err := o.Store.RecordOrphanSpend(ctx, o.RunID, spend); err != nil {
 		return fmt.Errorf("recording orphan spend: %w", err)
 	}
 	return nil

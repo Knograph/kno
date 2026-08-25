@@ -820,6 +820,47 @@ func TestOrphanSpendAccumulates(t *testing.T) {
 	}
 }
 
+// TestRecordOrphanSpendRefusesANegativeCharge.
+//
+// This UPDATE is the first subtraction primitive on the money path. A negative
+// folds into the sum inside SQLite before Guard.Restore sees it, so addSpend's
+// refusal of negatives protects nothing: a run with real spend plus a negative
+// orphan write restores less than it spent and gets the difference as free
+// headroom.
+//
+// Clamped in the statement rather than trusted from the caller — the same
+// conclusion docs/debt.md#48 reached for Reservation.Settle.
+func TestRecordOrphanSpendRefusesANegativeCharge(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	st := newStore(t)
+	if err := st.CreateRun(ctx, newRun("run-1")); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	if err := st.RecordOutcome(ctx, "run-1", scoredOutcome("c1", 1, 5_000)); err != nil {
+		t.Fatalf("RecordOutcome: %v", err)
+	}
+
+	if err := st.RecordOrphanSpend(ctx, "run-1",
+		budget.Spend{Calls: -5, CostUSDMicros: -1_000, Tokens: -3}); err != nil {
+		t.Fatalf("RecordOrphanSpend: %v", err)
+	}
+
+	spend, err := st.SettledSpend(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("SettledSpend: %v", err)
+	}
+	if spend.CostUSDMicros != 5_000 {
+		t.Errorf("settled spend = %d, want 5000 — a negative charge must not "+
+			"subtract from what the run has already spent, or a resume restores "+
+			"less than it owes and spends the difference again", spend.CostUSDMicros)
+	}
+	if spend.Calls < 0 || spend.Tokens < 0 {
+		t.Errorf("settled spend went negative: %+v", spend)
+	}
+}
+
 // TestRecordOrphanSpendRefusesAnUnknownRun.
 //
 // Silently dropping the spend is the failure this method exists to prevent, so

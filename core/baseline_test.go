@@ -3883,3 +3883,71 @@ func TestACancelDuringBackoffKeepsTheChargeItAlreadyIncurred(t *testing.T) {
 			settled, persisted.CostUSDMicros, settled-persisted.CostUSDMicros)
 	}
 }
+
+// panickingAgent bills for its first attempt, then panics.
+type panickingAgent struct {
+	billed int64
+	seen   sync.Map
+}
+
+func (a *panickingAgent) Invoke(_ context.Context, c *core.Case) (*knov1.Response, error) {
+	if _, again := a.seen.LoadOrStore(c.GetId(), struct{}{}); !again {
+		return nil, billedFailure{
+			error:  errs.ErrTransportTransient.Wrap(errors.New("charged, then failed")),
+			micros: a.billed,
+		}
+	}
+	panic("the adapter came apart")
+}
+
+func (a *panickingAgent) Capabilities() *knov1.Capabilities { return &knov1.Capabilities{} }
+
+// TestAPanicDoesNotTakeTheMoneyWithIt.
+//
+// The executor recovers a panic and discards the value — deliberately, so a
+// half-built outcome cannot be persisted. But the guard settled every attempt
+// BEFORE the panic, and a discarded value means the sink persists nothing for
+// a Case that really cost money.
+//
+// The dollars were already lost this way before orphan spend existed. What
+// this pins is that they are not, and that the CALL count agrees too: a Case
+// that made two charged attempts and then panicked must not report zero to a
+// cap that counts calls.
+func TestAPanicDoesNotTakeTheMoneyWithIt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const perCall = 40_000
+
+	h := newHarness(t, 4, 2, fake.Options{})
+	h.opts.Agent = &panickingAgent{billed: perCall}
+	h.opts.Concurrency = 1
+	h.opts.MaxAttempts = 3
+	h.opts.RetryBackoff = time.Millisecond
+	h.opts.EstCostPerCallUSDMicros = perCall
+	h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 10_000_000}, nil, 0)
+
+	if _, err := core.Baseline(ctx, h.evals, h.opts); err != nil {
+		t.Fatalf("a panicking agent errors its Cases, it does not fail the run: %v", err)
+	}
+
+	settled := h.opts.Guard.Spent()
+	if settled.CostUSDMicros == 0 {
+		t.Fatal("nothing was billed before the panic; the fixture proves nothing")
+	}
+
+	persisted, err := h.store.SettledSpend(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("SettledSpend: %v", err)
+	}
+	if persisted.CostUSDMicros != settled.CostUSDMicros {
+		t.Errorf("the guard settled %d micro-USD and the store holds %d. The panic "+
+			"discarded the outcome that carried it, and a resume reads the store",
+			settled.CostUSDMicros, persisted.CostUSDMicros)
+	}
+	if persisted.Calls != settled.Calls {
+		t.Errorf("the guard settled %d calls and the store holds %d; --max-calls "+
+			"is enforced against the guard and restored from the store",
+			settled.Calls, persisted.Calls)
+	}
+}

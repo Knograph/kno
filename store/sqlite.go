@@ -302,8 +302,9 @@ var migrations = []migration{{
 	// row would count as an errored Case and could stamp a healthy run
 	// ErrorRateExceeded.
 	//
-	// The cost is per-Case attribution, which the event stream already carries
-	// — SettlementOvershoot and CaseErrored both name their Case.
+	// The cost is per-Case attribution, which is LOST rather than relocated.
+	// sinkFunc returns before reaching emit on these paths, and emit skips a
+	// budget refusal anyway, so no event carries the amount. docs/debt.md#52.
 	stmts: []string{
 		`ALTER TABLE runs ADD COLUMN orphan_cost_usd_micros INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE runs ADD COLUMN orphan_calls INTEGER NOT NULL DEFAULT 0`,
@@ -738,11 +739,21 @@ func (s *SQLite) RecordOrphanSpend(ctx context.Context, runID string, spend budg
 		return err
 	}
 	return retryOnBusy(ctx, func() error {
+		// MAX(0, ?) on every dimension. Without it this is the first
+		// SUBTRACTION primitive on the money path: a negative folds into the
+		// sum inside SQLite before Guard.Restore ever sees it, so addSpend's
+		// refusal of negatives protects nothing. Measured unclamped — a run
+		// with $0.005 of real spend and a -$0.001 orphan write restored $0.004
+		// and got the difference as free headroom.
+		//
+		// Clamped here rather than trusted from the caller, which is the same
+		// conclusion docs/debt.md#48 reached for Reservation.Settle: this is
+		// the choke point, and every future caller would have to remember.
 		res, err := db.ExecContext(ctx,
 			`UPDATE runs
-			 SET orphan_calls           = orphan_calls + ?,
-			     orphan_cost_usd_micros = orphan_cost_usd_micros + ?,
-			     orphan_tokens          = orphan_tokens + ?
+			 SET orphan_calls           = orphan_calls + MAX(0, ?),
+			     orphan_cost_usd_micros = orphan_cost_usd_micros + MAX(0, ?),
+			     orphan_tokens          = orphan_tokens + MAX(0, ?)
 			 WHERE id = ?`,
 			spend.Calls, spend.CostUSDMicros, spend.Tokens, runID)
 		if err != nil {
