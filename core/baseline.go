@@ -214,6 +214,16 @@ type BaselineOptions struct {
 	// settlement.
 	EstCostPerCallUSDMicros int64
 
+	// AcceptUnknownCost lets a run proceed when no per-Case cost can be
+	// computed.
+	//
+	// Explicit rather than a prompt. A confirmation that cannot state a dollar
+	// figure — "10,000 Cases, per-Case cost unknown" — gives a human no basis
+	// to decide and is a dialog people click through; a flag someone had to
+	// type is consent, and it is greppable in a CI config, in shell history,
+	// and in a code review.
+	AcceptUnknownCost bool
+
 	// Now returns the current time. Nil uses time.Now. Injected so golden
 	// tests over a Run are stable.
 	Now func() time.Time
@@ -343,6 +353,14 @@ func Baseline(
 	// above-threshold `kno baseline` minted a fresh orphan. A CI gate reading
 	// exit 2 as "not a failure" then reported green for a run that never
 	// started.
+	// Before checkFeasible and before confirmRun, because it answers a
+	// question both of them assume: can this run state what it will cost?
+	// confirmRun's arithmetic collapses to zero when it cannot, and a zero
+	// quote is indistinguishable from a cheap one — so the run proceeded
+	// silently on exactly the configuration we know least about.
+	if err := opts.checkCostIsKnowable(); err != nil {
+		return nil, err
+	}
 	if err := (&opts).checkFeasible(len(done)); err != nil {
 		return nil, err
 	}
@@ -543,14 +561,24 @@ func (o BaselineOptions) validate(evals *SealedEvals) error {
 		return errors.New("core: baseline needs a budget guard")
 	case o.Store == nil:
 		return errors.New("core: baseline needs a store")
-	case o.Guard.Limits().MaxCostUSDMicros > 0 && o.EstCostPerCallUSDMicros <= 0:
+	case o.Guard.Limits().MaxCostUSDMicros > 0 && o.EstCostPerCallUSDMicros <= 0 &&
+		!o.agentCanPriceItself():
 		// The guard cannot refuse what it was not told about. A dollar cap
 		// with a zero estimate is only discovered at settlement, after the
 		// money is spent — which already caused a real overshoot once.
 		// User-reachable, unlike the nil-field cases above, so it carries the
 		// grammar: what failed, why, and the flag to pass.
+		//
+		// Not required of an Agent that prices ITSELF. This rule refused
+		// `--agent anthropic:claude-opus-5 --max-cost-usd 5` even though the
+		// adapter prices every Case exactly — and the scalar the user was
+		// forced to supply is then IGNORED, because estimate() consults the
+		// Estimator and never falls back to it. So the flag was mandatory,
+		// inert, and the only way to run the flagship invocation.
 		return errs.ErrInvalidInput.WithFix(
-			"pass --cost-per-call-usd alongside --max-cost-usd").
+			"pass --cost-per-call-usd alongside --max-cost-usd, or use an agent " +
+				"that can price its own calls",
+		).
 			Wrap(errors.New("a run with a cost cap needs a per-call cost estimate, " +
 				"or the cap is only enforced after the money is spent"))
 	case o.Goal.Direction() == knov1.Direction_DIRECTION_UNSPECIFIED:
@@ -561,7 +589,8 @@ func (o BaselineOptions) validate(evals *SealedEvals) error {
 		// only at the CLI edge: the rule is a property of the stage, not of one
 		// front end, and api/tui/plugins call this same function.
 		return errs.ErrInvalidInput.WithFix(
-			"add Cases, or lower the holdout fraction").
+			"add Cases, or lower the holdout fraction",
+		).
 			Wrap(errors.New("no Cases landed in dev, leaving nothing to measure"))
 	case o.Concurrency < 0:
 		return errs.ErrInvalidInput.WithFix("pass --concurrency 0 for the default, or a positive number").
@@ -587,7 +616,8 @@ func (o BaselineOptions) validate(evals *SealedEvals) error {
 		// can never produce a holdout number is not a run: every later stage
 		// would compute against a reference with no honest confirmation.
 		return errs.ErrInvalidInput.WithFix(
-			"add Cases, or raise the holdout fraction").
+			"add Cases, or raise the holdout fraction",
+		).
 			Wrap(errors.New("no Cases landed in the holdout, so this run can never be validated"))
 	}
 	return nil

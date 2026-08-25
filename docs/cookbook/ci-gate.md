@@ -70,9 +70,19 @@ kno baseline --evals cases.jsonl \
   --yes
 ```
 
-`--cost-per-call-usd` is required alongside a cost cap, and Kno refuses the run without it. The guard can't refuse what it wasn't told about: a cap checked only at settlement is a cap discovered after the money is gone.
+`--cost-per-call-usd` tells the guard what a call is expected to cost. It can't refuse what it wasn't told about: a cap checked only at settlement is a cap discovered after the money is gone.
 
-`--yes` skips the confirmation. In `--json` mode Kno **refuses to spend past the threshold without it**, because a machine-readable run has nobody to answer a prompt and proceeding would spend money with no one watching.
+You don't need it for a provider that prices its own calls — `openai:` and `anthropic:` compute every Case from Kno's price table, so `--max-cost-usd 5.00` alone is enough. It **is** required for an agent that can't price itself, and for a model with no table row you supply `--price-input-per-mtok` and `--price-output-per-mtok` instead.
+
+`--yes` proceeds without asking, and prints the figure it's proceeding with — so the number your job agreed to is in the log. In `--json` mode Kno **refuses to spend past the threshold without it**, because a machine-readable run has nobody to answer a prompt and proceeding would spend money with no one watching.
+
+## Real spend changes what a red build means
+
+Everything above holds for `fake:`, which costs nothing. Once the agent is a real provider, three things are worth knowing before you schedule it:
+
+- **A failing gate has already cost you money.** The run spent up to its cap before producing the number you gated on. Set `--max-cost-usd` to what you're willing to pay per build, not to what a full run costs.
+- **Some failures stop the whole run at the first Case** — a rejected credential, an unpaid account, a model that no longer exists, your provider's own spend cap. These exit `1`, and the Cases that never ran stay unmeasured, so a `--resume` after you fix the cause picks them up rather than skipping them. A wrong key in CI costs you one call, not one per Case.
+- **A moving model alias will stop a resume.** `openai:gpt-4.1` is a pointer; if the provider re-points it between the interrupted run and the resume, Kno refuses rather than averaging two models into one score. Pin the version in the ref for a job that resumes.
 
 ## Resume in a scheduled job
 

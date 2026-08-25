@@ -173,13 +173,16 @@ func (a *Agent) errorFor(resp *transport.Response) error {
 		return agenterr.WithRetryReason(
 			a.billed(errs.ErrTransportTransient.Wrap(fmt.Errorf(
 				"%s did not answer for %s in time: %s",
-				host, model, describe(resp.StatusCode, we))),
+				host, model, describe(resp.StatusCode, we),
+			)),
 				decodeUsage(resp.Body)),
-			knov1.RetryReason_RETRY_REASON_TIMEOUT)
+			knov1.RetryReason_RETRY_REASON_TIMEOUT,
+		)
 
 	case resp.StatusCode >= 500:
 		return a.billed(errs.ErrTransportTransient.Wrap(fmt.Errorf(
-			"%s did not answer for %s: %s", host, model, describe(resp.StatusCode, we))),
+			"%s did not answer for %s: %s", host, model, describe(resp.StatusCode, we),
+		)),
 			decodeUsage(resp.Body))
 
 	case resp.StatusCode == http.StatusUnauthorized,
@@ -194,7 +197,8 @@ func (a *Agent) errorFor(resp *transport.Response) error {
 		return agenterr.AsRunFatal(
 			errs.ErrInvalidInput.WithFix(credentialFix(host, a.keyEnv)).
 				Wrap(fmt.Errorf("%s rejected the credential: %s",
-					host, describe(resp.StatusCode, we))))
+					host, describe(resp.StatusCode, we))),
+		)
 
 	case isContextLength(we):
 		// A distinct message because the fix is distinct and neither of the

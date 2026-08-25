@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -35,6 +36,30 @@ type baselineFlags struct {
 	resume      bool
 	jsonOut     bool
 	yes         bool
+
+	// Provider wiring. Every one of these reaches a real endpoint, which is
+	// what makes this command able to spend money for the first time.
+	//
+	// There is no KNO_* env mirror for any of them. DESIGN.md specifies three
+	// layers — flag, env var, kno.yaml — and NONE of the machinery exists:
+	// os.Getenv appears outside tests in exactly two places, both for API keys.
+	// Shipping a mirror column here would be specifying a config system in a
+	// flag table. Tracked as docs/debt.md#62.
+	baseURL             string
+	keyEnv              []string
+	allowInsecureURL    bool
+	allowPrivateAddress bool
+	maxOutputTokens     int64
+	maxPromptBytes      int64
+	temperature         float64
+	seed                int64
+	system              string
+	generationParams    string
+	useLegacyMaxTokens  bool
+	timeout             time.Duration
+	priceInPerMTok      float64
+	priceOutPerMTok     float64
+	acceptUnknownCost   bool
 }
 
 func newBaselineCmd() *cobra.Command {
@@ -82,7 +107,46 @@ continues without paying for anything twice.`,
 	flags.Float64Var(&f.costPerCall, "cost-per-call-usd", 0, "expected cost of one agent call, required with --max-cost-usd")
 	flags.BoolVar(&f.resume, "resume", false, "continue an interrupted run instead of starting one")
 	flags.BoolVar(&f.jsonOut, "json", false, "machine-readable output")
-	flags.BoolVar(&f.yes, "yes", false, "skip the spend confirmation")
+	flags.BoolVar(&f.yes, "yes", false, "proceed without being asked; the estimate is still printed")
+
+	// Provider wiring.
+	//
+	// --base-url is COMPOSED INTO the agent ref rather than passed to the
+	// adapter beside it. agentref.Parse is where the credential-in-a-URL and
+	// control-character refusals live, and a second entry point that skipped
+	// them would be a second place for a key to reach the Run record — which
+	// openaicompat.Options.Ref's own godoc says in as many words.
+	flags.StringVar(&f.baseURL, "base-url", "",
+		"endpoint root for a compatible provider (or write it as @<url> in --agent)")
+	// The NAME of an environment variable, never a key. A key on a command
+	// line lands in shell history, in ps output, and in CI logs.
+	flags.StringArrayVar(&f.keyEnv, "key-env", nil,
+		"bind a host to the NAME of an environment variable holding its key, as host=VAR (repeatable)")
+	flags.BoolVar(&f.allowInsecureURL, "allow-insecure-base-url", false,
+		"permit a plain-http base URL")
+	flags.BoolVar(&f.allowPrivateAddress, "allow-private-address", false,
+		"permit loopback and private addresses, for a local model server")
+	flags.Int64Var(&f.maxOutputTokens, "max-output-tokens", 0,
+		"generation ceiling, which also bounds every cost estimate")
+	flags.Int64Var(&f.maxPromptBytes, "max-prompt-bytes", 0,
+		"refuse a Case whose prompt exceeds this")
+	flags.Float64Var(&f.temperature, "temperature", math.NaN(),
+		"sampling temperature (unset leaves the provider default)")
+	flags.Int64Var(&f.seed, "seed", 0, "sampling seed, where the provider supports one")
+	flags.StringVar(&f.system, "system", "", "system prompt prepended to every Case")
+	flags.StringVar(&f.generationParams, "generation-params", "",
+		"override whether this model accepts generation parameters: auto, on, or off")
+	flags.BoolVar(&f.useLegacyMaxTokens, "use-legacy-max-tokens", false,
+		"send max_tokens instead of max_completion_tokens, for older self-hosted servers")
+	flags.DurationVar(&f.timeout, "timeout", 0, "per-call deadline")
+	// A PAIR. EstimateWithPrice refuses unless both are set, because half a
+	// price is not a price.
+	flags.Float64Var(&f.priceInPerMTok, "price-input-per-mtok", 0,
+		"input price per million tokens, for a model with no table row (needs --price-output-per-mtok)")
+	flags.Float64Var(&f.priceOutPerMTok, "price-output-per-mtok", 0,
+		"output price per million tokens (needs --price-input-per-mtok)")
+	flags.BoolVar(&f.acceptUnknownCost, "accept-unknown-cost", false,
+		"run a model whose per-Case cost cannot be computed")
 
 	if err := cmd.MarkFlagRequired("evals"); err != nil {
 		panic(fmt.Sprintf("cli: marking --evals required: %v", err))
@@ -108,6 +172,22 @@ func (f baselineFlags) validateCaps() error {
 	case f.maxCalls < 0:
 		return errs.ErrInvalidInput.WithFix("pass a positive --max-calls, or omit it for no cap").
 			Wrap(fmt.Errorf("--max-calls is %d; a negative cap would disable the limit, not tighten it", f.maxCalls))
+	case (f.priceInPerMTok > 0) != (f.priceOutPerMTok > 0):
+		// A PAIR. EstimateWithPrice needs both terms, and half a price
+		// produces an estimate wrong in the direction that UNDER-reserves —
+		// a cap that does not bind. Checked at the flag rather than inside the
+		// adapter constructors, so a typo is refused whichever scheme it is
+		// paired with rather than only where an override is consumed.
+		return errs.ErrInvalidInput.WithFix(
+			"pass both --price-input-per-mtok and --price-output-per-mtok",
+		).
+			Wrap(fmt.Errorf("a price override needs an input and an output rate; got %.4f and %.4f",
+				f.priceInPerMTok, f.priceOutPerMTok))
+	case f.priceInPerMTok < 0 || f.priceOutPerMTok < 0:
+		return errs.ErrInvalidInput.WithFix(
+			"pass positive per-million-token prices",
+		).
+			Wrap(fmt.Errorf("a negative price would credit the budget on every call"))
 	case f.costPerCall < 0:
 		return errs.ErrInvalidInput.WithFix("pass a positive --cost-per-call-usd").
 			Wrap(fmt.Errorf("--cost-per-call-usd is %.2f; a negative estimate would credit the budget on every call", f.costPerCall))
@@ -123,7 +203,8 @@ func runBaseline(ctx context.Context, out io.Writer, f baselineFlags) error {
 	})
 	if err != nil {
 		return errs.ErrInvalidInput.WithFix(
-			"check --evals and --holdout-frac").Wrap(err)
+			"check --evals and --holdout-frac",
+		).Wrap(err)
 	}
 
 	// Count the split before anything is spent. A run that can never produce a
@@ -132,11 +213,13 @@ func runBaseline(ctx context.Context, out io.Writer, f baselineFlags) error {
 	counts, err := evals.CountSplits(ctx)
 	if err != nil {
 		return errs.ErrInvalidInput.WithFix(
-			"fix the reported line, then re-run").Wrap(err)
+			"fix the reported line, then re-run",
+		).Wrap(err)
 	}
 	if err := counts.Validate(); err != nil {
 		return errs.ErrInvalidInput.WithFix(
-			"add more cases, or lower --holdout-frac").Wrap(err)
+			"add more cases, or lower --holdout-frac",
+		).Wrap(err)
 	}
 
 	// A negative cap must not read as an absent one. The guard treats a limit
@@ -147,7 +230,7 @@ func runBaseline(ctx context.Context, out io.Writer, f baselineFlags) error {
 		return err
 	}
 
-	agent, agentRef, err := resolveAgent(f.agentRef)
+	agent, agentRef, err := resolveAgent(f)
 	if err != nil {
 		return err
 	}
@@ -199,6 +282,7 @@ func runBaseline(ctx context.Context, out io.Writer, f baselineFlags) error {
 		HoldoutCases:            counts.Holdout,
 		HoldoutUnderpowered:     counts.Underpowered(),
 		EstCostPerCallUSDMicros: usdToMicros(f.costPerCall),
+		AcceptUnknownCost:       f.acceptUnknownCost,
 	}
 
 	res, runErr := core.Baseline(ctx, core.Seal(evals), opts)

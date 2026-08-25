@@ -135,7 +135,8 @@ func (e *Evals) Cases(ctx context.Context) (iter.Seq2[*core.Case, error], error)
 				// no less load-bearing: the split is keyed on it.
 				yield(nil, fmt.Errorf(
 					"%s line %d: case has no id, and the dev/holdout split is keyed on it; "+
-						"give every case a stable id", e.opts.Path, line))
+						"give every case a stable id", e.opts.Path, line,
+				))
 				return
 			}
 			if rec.Input == "" {

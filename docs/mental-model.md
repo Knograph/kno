@@ -95,6 +95,18 @@ Every Asset carries a cost vector: context tokens (recurring, per call), fine-tu
 
 Money is tracked in integer micro-dollars end to end. Floating-point dollars accumulate error across thousands of calls, and Kno decides whether to spend on these numbers.
 
+### Where a cost figure comes from
+
+A reported cost is **reported usage priced against a dated table** — the token counts the provider returned, multiplied by the rates in Kno's price table on the date it was built. It is not an invoice, and the two can differ: discounts, committed-use pricing, and cached-input rates are all things your provider knows and this table does not. `kno doctor` prints the table's date.
+
+Where the provider reports no usage, Kno records its own estimate and says so, rather than presenting a guess as a measurement.
+
+### What a cost cap actually bounds
+
+`--max-cost-usd` bounds **what Kno authorizes before each call**, using a per-Case estimate. It is honest in one direction: the estimate is an upper bound — prompt tokens plus the full output ceiling — so a run stops at or before the cap, never after. The cost of that honesty is that a run with a generous `--max-output-tokens` reserves against output it will probably not generate, so it may stop earlier than the money spent suggests.
+
+A cap Kno cannot compute an estimate for is refused rather than accepted and checked later. A cap discovered at settlement is a cap discovered after the money is gone, which is not a cap.
+
 ## Errors are not scores
 
 A Case where the agent returned a 500 is counted separately and excluded from the score. The agent didn't answer *badly* — it didn't answer. Scoring infrastructure failure as task failure biases the baseline downward, which makes every asset you later measure look better than it is.

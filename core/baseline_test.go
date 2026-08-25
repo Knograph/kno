@@ -1128,6 +1128,12 @@ func (deadlineAgent) Invoke(context.Context, *core.Case) (*core.Response, error)
 	return nil, fmt.Errorf("calling provider: %w", context.DeadlineExceeded)
 }
 
+// Spends reports that this double costs nothing, which is true: it never makes
+// a network call. core defaults to "spends" for any Agent that stays silent,
+// because treating a paid agent as free would skip the consent prime directive
+// 4 requires.
+func (deadlineAgent) Spends() bool { return false }
+
 // TestDeadlineIsClassifiedAsAnInterruption, not as a generic agent error — the
 // same distinction statusFor draws for the run as a whole. A run stopped by a
 // deadline is resumable; one that broke is not.
@@ -1292,6 +1298,15 @@ type pricingAgent struct {
 	failOn string
 }
 
+// Spends reports that this double costs nothing, which is true: it wraps the
+// local fake and makes no network call.
+//
+// core defaults to "spends" for any Agent that stays silent, because treating
+// a paid agent as free would skip the consent prime directive 4 requires — and
+// a double embedding the core.Agent INTERFACE does not promote a method the
+// interface does not declare, so silence is what it would otherwise give.
+func (*pricingAgent) Spends() bool { return false }
+
 func (p *pricingAgent) Estimate(_ context.Context, c *core.Case) (budget.Estimate, error) {
 	if p.failOn != "" && c.GetId() == p.failOn {
 		return budget.Estimate{}, errors.New("no price for this model")
@@ -1440,6 +1455,15 @@ type everythingUnpriceable struct {
 	invoked atomic.Int64
 }
 
+// Spends reports that this double costs nothing, which is true: it wraps the
+// local fake and makes no network call.
+//
+// core defaults to "spends" for any Agent that stays silent, because treating
+// a paid agent as free would skip the consent prime directive 4 requires — and
+// a double embedding the core.Agent INTERFACE does not promote a method the
+// interface does not declare, so silence is what it would otherwise give.
+func (*everythingUnpriceable) Spends() bool { return false }
+
 func (e *everythingUnpriceable) Invoke(ctx context.Context, c *core.Case) (*core.Response, error) {
 	e.invoked.Add(1)
 	return e.Agent.Invoke(ctx, c)
@@ -1577,6 +1601,15 @@ type fixedEstimate struct {
 	est     budget.Estimate
 	invoked atomic.Int64
 }
+
+// Spends reports that this double costs nothing, which is true: it wraps the
+// local fake and makes no network call.
+//
+// core defaults to "spends" for any Agent that stays silent, because treating
+// a paid agent as free would skip the consent prime directive 4 requires — and
+// a double embedding the core.Agent INTERFACE does not promote a method the
+// interface does not declare, so silence is what it would otherwise give.
+func (*fixedEstimate) Spends() bool { return false }
 
 func (f *fixedEstimate) Invoke(ctx context.Context, c *core.Case) (*core.Response, error) {
 	f.invoked.Add(1)
@@ -1962,6 +1995,15 @@ type transientOnce struct {
 	seen  sync.Map
 }
 
+// Spends reports that this double costs nothing, which is true: it wraps the
+// local fake and makes no network call.
+//
+// core defaults to "spends" for any Agent that stays silent, because treating
+// a paid agent as free would skip the consent prime directive 4 requires — and
+// a double embedding the core.Agent INTERFACE does not promote a method the
+// interface does not declare, so silence is what it would otherwise give.
+func (*transientOnce) Spends() bool { return false }
+
 func (a *transientOnce) Invoke(ctx context.Context, c *core.Case) (*core.Response, error) {
 	a.calls.Add(1)
 	if _, been := a.seen.LoadOrStore(c.GetId(), true); !been {
@@ -2050,6 +2092,15 @@ type retryAfterAgent struct {
 	wait time.Duration
 	seen sync.Map
 }
+
+// Spends reports that this double costs nothing, which is true: it wraps the
+// local fake and makes no network call.
+//
+// core defaults to "spends" for any Agent that stays silent, because treating
+// a paid agent as free would skip the consent prime directive 4 requires — and
+// a double embedding the core.Agent INTERFACE does not promote a method the
+// interface does not declare, so silence is what it would otherwise give.
+func (*retryAfterAgent) Spends() bool { return false }
 
 func (a *retryAfterAgent) Invoke(ctx context.Context, c *core.Case) (*core.Response, error) {
 	if _, been := a.seen.LoadOrStore(c.GetId(), true); !been {
@@ -2362,7 +2413,8 @@ func clearScoreValues(t *testing.T, dbPath, runID string) {
 
 	if _, err := db.Exec(
 		`UPDATE outcomes SET score_value = NULL, score_proto = NULL WHERE run_id = ?`,
-		runID); err != nil {
+		runID,
+	); err != nil {
 		t.Fatalf("clearing score values: %v", err)
 	}
 }
@@ -2532,7 +2584,8 @@ func TestAResumedRunIsNotQuotedAgainstTheCapItAlreadySpent(t *testing.T) {
 	// happens at the real $1.00 threshold is a separate test — see
 	// TestAResumeUnderTheConfirmThresholdProceedsWithoutAsking.
 	opts.Guard = budget.New(
-		budget.Limits{MaxCostUSDMicros: costCap, MaxLLMCalls: 1_000}, confirm, 1)
+		budget.Limits{MaxCostUSDMicros: costCap, MaxLLMCalls: 1_000}, confirm, 1,
+	)
 	if _, err := core.Baseline(ctx, h.evals, opts); err != nil &&
 		!errors.Is(err, errs.ErrBudgetExceeded) {
 		t.Fatalf("resumed run: %v", err)
@@ -2671,7 +2724,8 @@ func TestAResumeUnderTheConfirmThresholdProceedsWithoutAsking(t *testing.T) {
 	opts := h.opts
 	opts.Resume = true
 	opts.Guard = budget.New(
-		budget.Limits{MaxCostUSDMicros: costCap, MaxLLMCalls: 1_000}, confirm, threshold)
+		budget.Limits{MaxCostUSDMicros: costCap, MaxLLMCalls: 1_000}, confirm, threshold,
+	)
 
 	before, err := h.store.CompletedCases(ctx, "run-1")
 	if err != nil {
@@ -2724,7 +2778,8 @@ func eventLog(t *testing.T, dbPath, runID string) []*knov1.Event {
 	defer func() { _ = db.Close() }()
 
 	rows, err := db.Query(
-		`SELECT proto FROM events WHERE run_id = ? ORDER BY sequence`, runID)
+		`SELECT proto FROM events WHERE run_id = ? ORDER BY sequence`, runID,
+	)
 	if err != nil {
 		t.Fatalf("reading events: %v", err)
 	}
@@ -3378,6 +3433,15 @@ type billingAgent struct {
 	calls            atomic.Int64
 }
 
+// Spends reports that this double costs nothing, which is true: it wraps the
+// local fake and makes no network call.
+//
+// core defaults to "spends" for any Agent that stays silent, because treating
+// a paid agent as free would skip the consent prime directive 4 requires — and
+// a double embedding the core.Agent INTERFACE does not promote a method the
+// interface does not declare, so silence is what it would otherwise give.
+func (*billingAgent) Spends() bool { return false }
+
 func (a *billingAgent) Invoke(context.Context, *core.Case) (*knov1.Response, error) {
 	a.calls.Add(1)
 	return nil, billedFailure{
@@ -3519,6 +3583,12 @@ type flakyBillingAgent struct {
 	billed     int64
 	answer     *knov1.Response
 }
+
+// Spends reports that this double costs nothing, which is true: it never makes
+// a network call. core defaults to "spends" for any Agent that stays silent,
+// because treating a paid agent as free would skip the consent prime directive
+// 4 requires.
+func (*flakyBillingAgent) Spends() bool { return false }
 
 func (a *flakyBillingAgent) Invoke(_ context.Context, c *core.Case) (*knov1.Response, error) {
 	if _, seen := a.failedOnce.LoadOrStore(c.GetId(), struct{}{}); !seen {
@@ -3914,6 +3984,12 @@ type panickingAgent struct {
 	billed int64
 	seen   sync.Map
 }
+
+// Spends reports that this double costs nothing, which is true: it never makes
+// a network call. core defaults to "spends" for any Agent that stays silent,
+// because treating a paid agent as free would skip the consent prime directive
+// 4 requires.
+func (*panickingAgent) Spends() bool { return false }
 
 func (a *panickingAgent) Invoke(_ context.Context, c *core.Case) (*knov1.Response, error) {
 	if _, again := a.seen.LoadOrStore(c.GetId(), struct{}{}); !again {
@@ -4479,6 +4555,15 @@ type runFatalAgent struct {
 	err error
 }
 
+// Spends reports that this double costs nothing, which is true: it wraps the
+// local fake and makes no network call.
+//
+// core defaults to "spends" for any Agent that stays silent, because treating
+// a paid agent as free would skip the consent prime directive 4 requires — and
+// a double embedding the core.Agent INTERFACE does not promote a method the
+// interface does not declare, so silence is what it would otherwise give.
+func (*runFatalAgent) Spends() bool { return false }
+
 func (a *runFatalAgent) Invoke(context.Context, *core.Case) (*core.Response, error) {
 	return nil, a.err
 }
@@ -4753,6 +4838,15 @@ type reasonAgent struct {
 	reason knov1.RetryReason
 }
 
+// Spends reports that this double costs nothing, which is true: it wraps the
+// local fake and makes no network call.
+//
+// core defaults to "spends" for any Agent that stays silent, because treating
+// a paid agent as free would skip the consent prime directive 4 requires — and
+// a double embedding the core.Agent INTERFACE does not promote a method the
+// interface does not declare, so silence is what it would otherwise give.
+func (*reasonAgent) Spends() bool { return false }
+
 type reasonErr struct {
 	error
 	reason knov1.RetryReason
@@ -4805,5 +4899,150 @@ func TestCoreEmitsTheReasonTheAdapterAttached(t *testing.T) {
 	if seen == 0 {
 		t.Fatal("no RetryAttempted events, so this asserts nothing about the " +
 			"reason it exists to check")
+	}
+}
+
+// spendingAgent is a double that reports it costs money, the way every real
+// provider adapter does by staying silent about it.
+type spendingAgent struct{ core.Agent }
+
+func (spendingAgent) Spends() bool { return true }
+
+// TestARunThatCannotStateItsCostIsRefusedRatherThanRunSilently.
+//
+// Prime directive 4 is "never spend the user's money silently", and the path
+// that violated it was the one where we know LEAST. With an agent that cannot
+// price itself and no --cost-per-call-usd, estimate() returned the scalar
+// (zero), planningCostPerCall() returned zero, and confirmRun returned BEFORE
+// ever calling PreConfirm — so a 10,000-Case run against a real provider made
+// 10,000 calls with no prompt, no printed figure, and no --yes. A run against
+// a PRICED model with no cap does prompt, because WorstCase x remaining
+// crosses the threshold. The asymmetry ran the wrong way.
+//
+// Refused rather than prompted, deliberately. A confirmation that cannot state
+// a dollar figure gives a human no basis to decide; a flag someone had to type
+// is consent, and it is greppable in a CI config.
+func TestARunThatCannotStateItsCostIsRefusedRatherThanRunSilently(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	h := newHarness(t, 20, 5, fake.Options{})
+	h.opts.Agent = spendingAgent{h.agent}
+
+	_, err := core.Baseline(ctx, h.evals, h.opts)
+	if err == nil {
+		t.Fatal("a run that cannot state its cost proceeded silently")
+	}
+	if !errors.Is(err, errs.ErrConfirmationRequired) {
+		t.Errorf("error = %v, want ErrConfirmationRequired", err)
+	}
+	if !contains(err.Error(), "--accept-unknown-cost") {
+		t.Errorf("the fix does not name the way through: %v", err)
+	}
+
+	// Nothing was spent and nothing was recorded: the refusal happens before
+	// the Run record exists, let alone before a provider call.
+	if _, getErr := h.store.GetRun(ctx, "run-1"); getErr == nil {
+		t.Error("a Run row was created by a run that was refused before it started")
+	}
+}
+
+// TestTheEscapesFromAnUnknownCostBothWork, so the fix line is not a dead end —
+// which is the failure unpriceable's own godoc records having shipped once.
+func TestTheEscapesFromAnUnknownCostBothWork(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("--accept-unknown-cost", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t, 10, 3, fake.Options{})
+		h.opts.Agent = spendingAgent{h.agent}
+		h.opts.AcceptUnknownCost = true
+
+		if _, err := core.Baseline(ctx, h.evals, h.opts); err != nil {
+			t.Fatalf("--accept-unknown-cost did not let the run proceed: %v", err)
+		}
+	})
+
+	t.Run("--cost-per-call-usd", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t, 10, 3, fake.Options{})
+		h.opts.Agent = spendingAgent{h.agent}
+		h.opts.EstCostPerCallUSDMicros = 100
+
+		if _, err := core.Baseline(ctx, h.evals, h.opts); err != nil {
+			t.Fatalf("--cost-per-call-usd did not let the run proceed: %v", err)
+		}
+	})
+}
+
+// TestAnAgentThatPricesItselfNeedsNoScalar.
+//
+// validate refused `--agent anthropic:claude-opus-5 --max-cost-usd 5` even
+// though the adapter prices every Case exactly — and the scalar the user was
+// then forced to supply is IGNORED, because estimate() consults the Estimator
+// and never falls back to it. The flag was mandatory, inert, and the only way
+// to run the flagship invocation.
+func TestAnAgentThatPricesItselfNeedsNoScalar(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	h := newHarness(t, 10, 3, fake.Options{})
+	h.opts.Agent = &pricingAgent{Agent: h.agent, unit: 1}
+	h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 1_000_000}, nil, 0)
+	// Deliberately absent.
+	h.opts.EstCostPerCallUSDMicros = 0
+
+	if _, err := core.Baseline(ctx, h.evals, h.opts); err != nil {
+		t.Fatalf("an agent that prices itself was refused a cost cap: %v", err)
+	}
+}
+
+// unpricedEstimator is an Estimator that cannot price the model it was given —
+// an OpenAI-compatible endpoint with no row in the price table, which is what
+// every self-hosted model server is.
+type unpricedEstimator struct{ core.Agent }
+
+func (*unpricedEstimator) Spends() bool { return true }
+
+func (*unpricedEstimator) Estimate(context.Context, *core.Case) (budget.Estimate, error) {
+	return budget.Estimate{}, errors.New("no row in the price table")
+}
+
+func (*unpricedEstimator) WorstCase() budget.Estimate { return budget.Estimate{} }
+
+// TestAnEstimatorThatCannotPriceThisModelIsStillRefused.
+//
+// Being an Estimator is NOT the same as being able to price the model in hand,
+// and the first version of the consent guard conflated them — it short-circuited
+// on the interface rather than on the figure.
+//
+// Under a cost cap an unpriced model is refused per Case and the refusal is
+// run-fatal, so that path was covered. With NO cap, estimate() falls back to
+// the run-scoped scalar, which is also zero, and the run proceeded silently
+// against a real provider — the exact hole this guard exists to close, reached
+// through the one adapter shape that is both real and unpriced.
+func TestAnEstimatorThatCannotPriceThisModelIsStillRefused(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	h := newHarness(t, 20, 5, fake.Options{})
+	h.opts.Agent = &unpricedEstimator{h.agent}
+
+	_, err := core.Baseline(ctx, h.evals, h.opts)
+	if err == nil {
+		t.Fatal("a provider that cannot price this model ran with no cap and no " +
+			"figure shown")
+	}
+	if !errors.Is(err, errs.ErrConfirmationRequired) {
+		t.Errorf("error = %v, want ErrConfirmationRequired", err)
+	}
+
+	// And the escape works, so the fix line is not a dead end.
+	h2 := newHarness(t, 20, 5, fake.Options{})
+	h2.opts.Agent = &unpricedEstimator{h2.agent}
+	h2.opts.AcceptUnknownCost = true
+	if _, err := core.Baseline(ctx, h2.evals, h2.opts); err != nil {
+		t.Errorf("--accept-unknown-cost did not let it proceed: %v", err)
 	}
 }

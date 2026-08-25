@@ -36,6 +36,37 @@ Out of scope: vulnerabilities in third-party LLM providers, MCP servers, or comm
 please report those to their maintainers. We do want to hear about cases where **kno's handling** of
 an untrusted third party is unsafe.
 
+## Handling credentials
+
+Kno reads provider API keys from the **environment only**. There is no flag that takes a key, and there will not be one: a key on a command line is written to shell history, exposed in `ps` output to every user on the machine, and captured in CI logs.
+
+- `--key-env host=VARIABLE_NAME` binds a host to the **name** of an environment variable. The name is not a secret; the value never appears in an argument.
+- A key bound to one host is **never** sent to another. Kno does not fall back to `OPENAI_API_KEY` for a host that is not OpenAI's, because that would forward your key to whatever endpoint `--base-url` names.
+- Kno **does not follow redirects**, cross-host or same-host. Go's HTTP client strips `Authorization` across a cross-domain redirect but not `x-api-key`, which is how Anthropic authenticates — so a base URL that redirected elsewhere would forward that key verbatim.
+- A host with no binding and no default credential is **refused before any request**, rather than sending an unauthenticated one.
+
+### Credentials in URLs
+
+A base URL is persisted on the Run record, emitted on the event stream, and printed in `--json`, so a credential placed in one lands in several durable places at once. Kno refuses:
+
+- **userinfo** — `https://user:pass@host` — and does not echo the value in the refusal.
+- **query strings and fragments** — anything after the endpoint root would be appended to every request.
+
+**Not currently detected: a credential in the URL path**, such as `https://gw.example/v1/sk-abc123`. A path segment is indistinguishable from a legitimate route prefix (`/v1`, `/openai/v1`, `/api/v3/deployments/gpt-4o`), and a blocklist of known key prefixes fails open on every provider not in it while false-positiving real routes. Use `--key-env`. Tracked publicly as [debt #60](docs/debt.md#60).
+
+### If a key is exposed
+
+Rotate it at the provider first. Then run `kno purge --run <id>` to remove stored conversation content for affected runs, and check whether the key reached a base URL recorded on any Run (`--json` output includes the agent ref).
+
+## Network destinations
+
+By default Kno sends only to a scheme's own endpoint over HTTPS. Two separate opt-ins widen that, deliberately kept apart so that someone who needs a local model server does not also waive TLS to the public internet:
+
+- `--allow-insecure-base-url` permits plain HTTP.
+- `--allow-private-address` permits loopback and RFC1918 addresses.
+
+**Link-local (`169.254.0.0/16`) is refused with no opt-in at all.** `169.254.169.254` is the cloud instance-metadata endpoint, and a tool that fetches a URL and persists the response body has no legitimate reason to reach it.
+
 ## What we consider security-relevant
 
 These are architectural commitments, so violations are vulnerabilities rather than bugs:

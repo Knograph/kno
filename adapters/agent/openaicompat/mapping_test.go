@@ -187,24 +187,25 @@ func TestNewRefusesADestinationItWillNotSendTo(t *testing.T) {
 
 	for _, tc := range []struct {
 		name, ref string
-		policy    transport.Policy
+		insecure  bool
+		private   bool
 	}{
 		{
 			"plain HTTP without the opt-in",
 			"openai:m@http://example.com/v1",
-			transport.Policy{},
+			false, false,
 		},
 		{
 			"a private address without the opt-in",
 			"openai:m@https://10.0.0.1/v1",
-			transport.Policy{},
+			false, false,
 		},
 		{
 			// Refused with no override at all: 169.254.169.254 is where cloud
 			// instance metadata lives, and this tool persists response bodies.
 			"link-local, which has no opt-in",
 			"openai:m@https://169.254.169.254/v1",
-			transport.Policy{AllowPrivateAddress: true, AllowInsecureHTTP: true},
+			true, true,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -215,8 +216,9 @@ func TestNewRefusesADestinationItWillNotSendTo(t *testing.T) {
 				t.Fatalf("parsing %q: %v", tc.ref, err)
 			}
 			if _, err := openaicompat.New(openaicompat.Options{
-				Ref:    ref,
-				Policy: tc.policy,
+				Ref:                  ref,
+				AllowInsecureBaseURL: tc.insecure,
+				AllowPrivateAddress:  tc.private,
 			}); err == nil {
 				t.Fatalf("New accepted %s", tc.ref)
 			} else if !errors.Is(err, transport.ErrRefusedDestination) {

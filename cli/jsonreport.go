@@ -21,6 +21,7 @@ import (
 
 	"github.com/knograph/kno/adapters/evals/jsonl"
 	"github.com/knograph/kno/core"
+	knov1 "github.com/knograph/kno/gen/kno/v1"
 )
 
 // jsonReport is the --json shape.
@@ -44,10 +45,20 @@ type jsonReport struct {
 	// cannot tell a run that scored nothing from one whose numbers cannot be
 	// read back, and those call for different responses: the first is a broken
 	// run, the second is intact data with a lost measurement.
-	ScoreUnavailable bool     `json:"score_unavailable,omitempty"`
-	SpentUSD         string   `json:"spent_usd"`
-	Incomplete       string   `json:"incomplete_reason,omitempty"`
-	Warnings         []string `json:"warnings,omitempty"`
+	ScoreUnavailable bool   `json:"score_unavailable,omitempty"`
+	SpentUSD         string `json:"spent_usd"`
+
+	// Concurrency is what the run actually executed at, and why.
+	//
+	// Hand-written rather than embedding *knov1.ConcurrencyDecision: that
+	// would re-couple this contract to the proto and emit its int64 fields as
+	// bare numbers, which is the divergence from the generated OpenAPI spec
+	// ADR-0001 bans.
+	Concurrency       int32    `json:"concurrency"`
+	ConcurrencyAsked  int32    `json:"concurrency_requested,omitempty"`
+	ConcurrencyReason string   `json:"concurrency_reduced_reason,omitempty"`
+	Incomplete        string   `json:"incomplete_reason,omitempty"`
+	Warnings          []string `json:"warnings,omitempty"`
 }
 
 func renderJSON(
@@ -79,6 +90,7 @@ func renderJSON(
 		Incomplete:       res.Run.GetIncompleteReason(),
 		Warnings:         warnings,
 	}
+	concurrencyFields(&rep, res.Run)
 
 	enc := json.NewEncoder(out)
 	enc.SetIndent("", "  ")
@@ -86,6 +98,40 @@ func renderJSON(
 		return fmt.Errorf("writing json report: %w", err)
 	}
 	return nil
+}
+
+// writeJSON encodes any hand-written report shape.
+//
+// Shared by the baseline report and by `kno doctor`, both of which are
+// hand-written structs for the same reason: a CLI contract aimed at somebody's
+// jq pipeline must not shift when a proto message gains a field (ADR-0001).
+func writeJSON(out io.Writer, v any) error {
+	enc := json.NewEncoder(out)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
+		return fmt.Errorf("writing json report: %w", err)
+	}
+	return nil
+}
+
+// concurrencyFields fills the three concurrency keys from the Run's record.
+//
+// Absent on a Run that recorded no decision — a resume with no Cases left
+// returns before checkFeasible — so the extra keys are omitempty rather than
+// zero, because 0 is not a width anything ran at.
+func concurrencyFields(rep *jsonReport, run *knov1.Run) {
+	d := run.GetConcurrency()
+	if d == nil {
+		return
+	}
+	rep.Concurrency = d.GetEffective()
+	// The REASON is the discriminator, not requested != effective: `requested`
+	// is absent when the user named no width, so a default run would otherwise
+	// report having been reduced from zero.
+	if d.GetReason() != knov1.ConcurrencyReason_CONCURRENCY_REASON_UNSPECIFIED {
+		rep.ConcurrencyAsked = d.GetRequested()
+		rep.ConcurrencyReason = concurrencyReasonName(d.GetReason())
+	}
 }
 
 // decodeReport parses a rendered report. Used by tests, which would otherwise

@@ -101,7 +101,8 @@ func (o BaselineOptions) closeRun(
 				"before scores were stored separately, or holding a Score that "+
 				"could not be read back — so this run has no reportable "+
 				"aggregate; the Cases themselves are intact and resume normally",
-			lostCount, scored))
+			lostCount, scored,
+		))
 	}
 
 	// A run whose error rate is too high is completed but not clean. Later
@@ -114,7 +115,8 @@ func (o BaselineOptions) closeRun(
 			reasons = append(reasons, fmt.Sprintf(
 				"%d of %d Cases errored (%.1f%%), above the %.1f%% threshold; "+
 					"this run is not a usable baseline",
-				errored, attempted, rate*100, o.maxErrorRate()*100))
+				errored, attempted, rate*100, o.maxErrorRate()*100,
+			))
 		}
 	}
 	run.IncompleteReason = strings.Join(reasons, "; also: ")

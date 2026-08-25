@@ -9,8 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/knograph/kno/adapters/agent/agentref"
-	"github.com/knograph/kno/adapters/agent/fake"
 	"github.com/knograph/kno/adapters/evals/jsonl"
 	"github.com/knograph/kno/core"
 	"github.com/knograph/kno/core/errs"
@@ -26,41 +24,14 @@ import (
 // a missing one is somebody's money.
 const confirmThresholdUSD = 1.00
 
-// resolveAgent turns an agent ref into an Agent.
-//
-// Only the fake is available today. A ref naming a real provider is refused
-// with a message saying so, rather than falling back to something that would
-// silently produce numbers the user would read as real.
-func resolveAgent(ref string) (core.Agent, *knov1.AgentRef, error) {
-	// Parse and resolve are separate steps because they answer different
-	// questions. Parsing asks whether the reference is well formed; resolving
-	// asks whether an adapter exists for it. Merging them means a typo and an
-	// unsupported provider produce the same message, and the user cannot tell
-	// which one they have.
-	parsed, err := agentref.Parse(ref)
-	if err != nil {
-		return nil, nil, errs.ErrInvalidInput.WithFix(
-			"write the reference as scheme:target — openai:gpt-4.1, " +
-				"exec:my-agent-command, or fake: for the local agent that costs " +
-				"nothing").Wrap(err)
-	}
-
-	if parsed.GetScheme() == agentref.SchemeFake {
-		return fake.New(fake.Options{}), parsed, nil
-	}
-
-	return nil, nil, errs.ErrCapabilityUnsupported.WithFix(
-		"only `fake:` is available in this build; provider adapters land in the next milestone").
-		Wrap(fmt.Errorf("no adapter for agent ref %q", parsed.GetRef()))
-}
-
 // resolveGoal turns a goal name into a Goal.
 func resolveGoal(name string) (core.Goal, error) {
 	if name == "exact-match" {
 		return &exactmatch.Goal{}, nil
 	}
 	return nil, errs.ErrInvalidInput.WithFix(
-		"only `exact-match` is available in this build; judged goals land with the judge").
+		"only `exact-match` is available in this build; judged goals land with the judge",
+	).
 		Wrap(fmt.Errorf("no goal named %q", name))
 }
 
@@ -82,7 +53,21 @@ func newRunID(now time.Time) string {
 // confirmFunc asks before spending, unless --yes or --json.
 func confirmFunc(out io.Writer, yes, jsonOut bool) budget.ConfirmFunc {
 	if yes {
-		return func(context.Context, budget.Estimate, budget.Remaining) (bool, error) {
+		// --yes proceeds, but it PRINTS what it is proceeding with.
+		//
+		// It returned true and printed nothing, which made a blanket flag the
+		// entire consent surface for the only invocation that can currently
+		// reach a real provider — the interactive prompt declines by default
+		// until the TUI lands (docs/debt.md#59). A user who typed --yes still
+		// deserves to see the figure they agreed to, in the scrollback and in
+		// the CI log, and a number that turns out wrong is then evidence
+		// rather than a mystery.
+		return func(_ context.Context, est budget.Estimate, rem budget.Remaining) (bool, error) {
+			msg := fmt.Sprintf("\nProceeding with --yes: this run would spend about %s (%s remaining).\n",
+				formatUSD(est.CostUSDMicros), formatUSD(rem.CostUSDMicros))
+			if _, err := io.WriteString(out, msg); err != nil {
+				return false, fmt.Errorf("writing confirmation: %w", err)
+			}
 			return true, nil
 		}
 	}
@@ -92,7 +77,8 @@ func confirmFunc(out io.Writer, yes, jsonOut bool) budget.ConfirmFunc {
 		return func(_ context.Context, est budget.Estimate, _ budget.Remaining) (bool, error) {
 			return false, fmt.Errorf(
 				"this run would spend about %s and --json cannot prompt; pass --yes to proceed",
-				formatUSD(est.CostUSDMicros))
+				formatUSD(est.CostUSDMicros),
+			)
 		}
 	}
 	return func(_ context.Context, est budget.Estimate, rem budget.Remaining) (bool, error) {
@@ -174,7 +160,8 @@ func warningsFor(res *core.BaselineResult, counts jsonl.SplitCounts) []string {
 	if counts.Underpowered() {
 		w = append(w, fmt.Sprintf(
 			"the holdout has only %d cases, too few for a meaningful confidence "+
-				"interval at validate", counts.Holdout))
+				"interval at validate", counts.Holdout,
+		))
 	}
 	if res.Run.GetErrorRateExceeded() {
 		w = append(w, "too many cases errored for this to be a usable baseline")
@@ -219,6 +206,32 @@ func renderHuman(
 		formatUSD(res.Spent.CostUSDMicros), res.Spent.Calls)
 	fmt.Fprintf(&b, "  status     %s\n", statusName(run.GetStatus()))
 
+	// The width the run actually executed at, but ONLY when the engine chose a
+	// smaller one than was asked for.
+	//
+	// checkFeasible narrows concurrency when the cost cap cannot admit the
+	// requested width, and it did so with no event, no log line, and no field
+	// on the Run — a 6x slowdown the user did not ask for and could not see.
+	// A run that got the width it asked for has no news, so this stays quiet
+	// there rather than adding a line to every report.
+	//
+	// docs/debt.md#44 also names the CONSENT PROMPT as the natural place for
+	// this, and that half stays open: budget.ConfirmFunc is
+	// func(ctx, Estimate, Remaining) and has no channel for a
+	// ConcurrencyDecision, so putting it there means changing a signature in
+	// stats/budget — the prime-directive-4 package — and breaking all three
+	// CLI closures and any API caller.
+	// Gated on the REASON, not on requested != effective. `requested` is
+	// presence-carrying and absent means "the user asked for no particular
+	// width", so a default run reports requested=0 against an effective 8 —
+	// which is the default being applied, not a reduction. The first version
+	// of this line printed "width 8 (asked for 0; unspecified)" on every
+	// ordinary run.
+	if d := run.GetConcurrency(); d.GetReason() != knov1.ConcurrencyReason_CONCURRENCY_REASON_UNSPECIFIED {
+		fmt.Fprintf(&b, "  width      %d (asked for %d; %s)\n",
+			d.GetEffective(), d.GetRequested(), concurrencyReasonName(d.GetReason()))
+	}
+
 	for _, w := range warnings {
 		fmt.Fprintf(&b, "\n  warning: %s\n", w)
 	}
@@ -248,6 +261,18 @@ func nextStep(status knov1.RunStatus) string {
 	default:
 		return "Next: `kno value` to measure which of your assets earn their place."
 	}
+}
+
+// concurrencyReasonName renders why the engine narrowed the width.
+//
+// Named rather than numeric, for the same reason statusName is: a jq pipeline
+// branching on 1 breaks the day an enum value is inserted, and a person
+// reading the JSON should not need the proto to interpret it.
+func concurrencyReasonName(r knov1.ConcurrencyReason) string {
+	if r == knov1.ConcurrencyReason_CONCURRENCY_REASON_COST_CAP {
+		return "cost-cap"
+	}
+	return "unspecified"
 }
 
 func statusName(s knov1.RunStatus) string {

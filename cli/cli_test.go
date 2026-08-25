@@ -178,12 +178,17 @@ func TestExitCodesMatchTheGrammar(t *testing.T) {
 }
 
 // TestErrorsFollowTheGrammar: what failed, why, and the exact fix.
+//
+// The subject used to be an unsupported scheme, back when `fake:` was the only
+// adapter. Now that a scheme resolves to a real provider, the interesting
+// refusal is a real misconfiguration — and it is a better test, because this
+// message reaches a user who is one flag away from spending money.
 func TestErrorsFollowTheGrammar(t *testing.T) {
 	t.Parallel()
 
 	cases := writeCases(t, 50)
 	_, stderr, code := run(t, "baseline", "--evals", cases,
-		"--agent", "anthropic:claude", "--db", filepath.Join(t.TempDir(), "kno.db"))
+		"--agent", "tuned:job-123", "--db", filepath.Join(t.TempDir(), "kno.db"))
 
 	if code == errs.ExitOK {
 		t.Fatal("an unsupported agent succeeded")
@@ -194,7 +199,7 @@ func TestErrorsFollowTheGrammar(t *testing.T) {
 	if !strings.Contains(stderr, "fix:") {
 		t.Errorf("stderr does not name a fix:\n%s", stderr)
 	}
-	if !strings.Contains(stderr, "fake:") {
+	if !strings.Contains(stderr, "openai:") || !strings.Contains(stderr, "anthropic:") {
 		t.Errorf("the fix does not name what IS available:\n%s", stderr)
 	}
 }
@@ -600,7 +605,8 @@ func outcomesAndCaseEvents(t *testing.T, dbPath, runID string) (outcomeCount, ca
 
 	var outcomes, perCase int64
 	if err := db.QueryRow(
-		`SELECT COUNT(*) FROM outcomes WHERE run_id = ?`, runID).Scan(&outcomes); err != nil {
+		`SELECT COUNT(*) FROM outcomes WHERE run_id = ?`, runID,
+	).Scan(&outcomes); err != nil {
 		t.Fatalf("counting outcomes: %v", err)
 	}
 	// Count only the PER-CASE events, by decoding each payload, rather than
@@ -778,7 +784,7 @@ func TestAMalformedRefAndAnUnsupportedOneReadDifferently(t *testing.T) {
 		{"a typo in the scheme", "opeani:gpt-4.1", "unknown scheme"},
 		{"a scheme that does not exist", "openai-compat:model", "unknown scheme"},
 		{"no scheme at all", "gpt-4.1", "no scheme"},
-		{"a well-formed reference with no adapter", "openai:gpt-4.1", "no adapter for agent ref"},
+		{"a well-formed reference with no adapter", "tuned:job-123", "no adapter for agent ref"},
 		{"a command scheme with no command", "exec:", "no command"},
 	}
 
