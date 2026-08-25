@@ -10,6 +10,7 @@ import (
 	"github.com/knograph/kno/core/errs"
 	"github.com/knograph/kno/executor"
 	knov1 "github.com/knograph/kno/gen/kno/v1"
+	"github.com/knograph/kno/observe"
 	"github.com/knograph/kno/stats/budget"
 )
 
@@ -30,6 +31,17 @@ import (
 // emit, so the Run's counts can never outrun the outcomes table.
 func (o BaselineOptions) workFunc(agg *aggregator) executor.WorkFunc[*Case, caseOutcome] {
 	return func(ctx context.Context, c *Case) (out *caseOutcome, err error) {
+		// One span per Case, hanging off the run span. The ID, never the
+		// input: a Case ID is a label the user chose, while the input is the
+		// conversation content docs/retention.md promises stays local.
+		ctx, span := observe.StartCase(ctx, c.GetId())
+		defer func() {
+			if err != nil {
+				observe.Fail(span, codeOf(err))
+			}
+			span.End()
+		}()
+
 		// The same guard one frame up, for a panic AFTER the provider call —
 		// Goal.Score is a Ring-1 plug-in point on this goroutine, and a panic
 		// there would otherwise discard everything the call was charged for.
@@ -141,7 +153,7 @@ func (o BaselineOptions) invokeWithRetry(
 
 	for attempt := 1; attempt <= o.maxAttempts(); attempt++ {
 		attempts++
-		resp, settled, overshoot, invokeErr := o.invokeOnce(ctx, c, est)
+		resp, settled, overshoot, invokeErr := o.invokeOnce(ctx, c, est, attempt)
 		// Saturating, matching Guard.Settle. A plain add wraps where the guard
 		// pins, so the store and the guard would disagree on exactly the
 		// inputs the clamp exists for — and the store is the one that outlives
@@ -345,9 +357,19 @@ func (o BaselineOptions) invokeOnce(
 	ctx context.Context,
 	c *Case,
 	est budget.Estimate,
+	attempt int,
 ) (resp *Response, settled budget.Spend, overshoot int64, err error) {
+	// SpanKindClient, because this is the call OUT of the process — which is
+	// what makes a provider show up as a dependency edge in a trace rather
+	// than as internal work, and what makes provider latency separable from
+	// ours. Opened before Authorize so a budget refusal is visible as a call
+	// that never happened rather than as a gap.
+	ctx, span := observe.StartAgentCall(ctx, o.AgentRef.GetScheme(), attempt)
+	defer span.End()
+
 	res, err := o.Guard.Authorize(ctx, est)
 	if err != nil {
+		observe.Fail(span, codeOf(err))
 		return nil, budget.Spend{}, 0, err
 	}
 	// Reached on every path: the agent erroring, the context cancelling
@@ -357,6 +379,7 @@ func (o BaselineOptions) invokeOnce(
 
 	resp, invokeErr := o.Agent.Invoke(ctx, c)
 	if invokeErr != nil {
+		observe.Fail(span, codeOf(invokeErr))
 		// The attempt consumed a call, and the provider may have CHARGED for
 		// it: a 200 carrying both an error object and a usage block is a shape
 		// several OpenAI-compatible gateways produce. M2-7 made that

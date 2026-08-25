@@ -675,3 +675,46 @@ func TestTheLocalModelServerRecipeRuns(t *testing.T) {
 			"naming a flag the user just passed:\n%s", stderr)
 	}
 }
+
+// TestTraceSpansGoToStderrNotStdout.
+//
+// stdout is the report, and --json makes it a machine contract. A span
+// document interleaved there makes it unparseable — the same failure a
+// one-line consent notice already caused once in this milestone.
+func TestTraceSpansGoToStderrNotStdout(t *testing.T) {
+	t.Parallel()
+
+	cases := writeCases(t, 30)
+	stdout, stderr, code := run(t, "baseline", "--evals", cases, "--agent", "fake:",
+		"--trace-spans", "--json", "--db", filepath.Join(t.TempDir(), "kno.db"))
+	if code != errs.ExitOK {
+		t.Fatalf("exit = %d:\n%s", code, stderr)
+	}
+
+	if _, err := cli.DecodeRaw([]byte(stdout)); err != nil {
+		t.Errorf("--trace-spans corrupted the --json contract: %v\n%s", err, stdout)
+	}
+	if !strings.Contains(stderr, "kno.baseline") {
+		t.Errorf("no run span reached stderr:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "kno.case") {
+		t.Errorf("no Case spans reached stderr:\n%s", stderr)
+	}
+}
+
+// TestTracingIsOffByDefault, so a run that did not ask for spans emits none —
+// and so the flag is a real opt-in rather than a filter over output that was
+// being produced anyway.
+func TestTracingIsOffByDefault(t *testing.T) {
+	t.Parallel()
+
+	cases := writeCases(t, 30)
+	_, stderr, code := run(t, "baseline", "--evals", cases, "--agent", "fake:",
+		"--db", filepath.Join(t.TempDir(), "kno.db"))
+	if code != errs.ExitOK {
+		t.Fatalf("exit = %d", code)
+	}
+	if strings.Contains(stderr, "kno.baseline") || strings.Contains(stderr, "kno.case") {
+		t.Errorf("spans were exported without --trace-spans:\n%s", stderr)
+	}
+}

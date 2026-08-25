@@ -10,8 +10,10 @@ import (
 	"github.com/knograph/kno/core/errs"
 	"github.com/knograph/kno/executor"
 	knov1 "github.com/knograph/kno/gen/kno/v1"
+	"github.com/knograph/kno/observe"
 	"github.com/knograph/kno/stats/budget"
 	"github.com/knograph/kno/store"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // Package-level entry point for the Baseline stage: its options, its result,
@@ -320,6 +322,12 @@ func Baseline(
 		return nil, err
 	}
 
+	// The span every other span in this run hangs from. A no-op unless the
+	// caller installed a TracerProvider, so this costs nothing on the default
+	// path — which is why it is unconditional rather than behind a flag.
+	ctx, runSpan := observe.StartRun(ctx, opts.RunID)
+	defer runSpan.End()
+
 	// Resume state first: both guards below need it. checkFeasible must see the
 	// headroom a resume actually has, and confirmRun must quote only the Cases
 	// that are left.
@@ -540,7 +548,22 @@ func Baseline(
 	if err := agg.emitFailed(); err != nil && runErr == nil {
 		runErr = err
 	}
-	return opts.closeRun(ctx, run, agg, stats, runErr)
+	res, err := opts.closeRun(ctx, run, agg, stats, runErr)
+
+	// Recorded on the run span before it ends, so a trace answers "what did
+	// this run cost and how much of it worked" without joining to the store.
+	// Counts and money only; the numbers, never the answers.
+	if res != nil {
+		runSpan.SetAttributes(
+			observe.CostUSDMicros(res.Spent.CostUSDMicros),
+			attribute.Int("kno.cases.scored", int(res.Run.GetScoredCaseCount())),
+			attribute.Int("kno.cases.errored", int(res.Run.GetErroredCaseCount())),
+		)
+	}
+	if err != nil {
+		observe.Fail(runSpan, codeOf(err))
+	}
+	return res, err
 }
 
 func (o BaselineOptions) validate(evals *SealedEvals) error {

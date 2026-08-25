@@ -18,6 +18,33 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
+- **OpenTelemetry spans**, correlated by run ID: one per run, one per Case, one per provider call.
+  Instrumentation is **unconditional** — the OTel API's global provider is a no-op until something
+  registers a real one, so a run that is not tracing allocates nothing. `--trace-spans` writes
+  them to stderr for local debugging.
+
+  **Spans carry IDs, counts, and money only** — never a prompt, an answer, or a system prompt.
+  `docs/retention.md` tells users their conversation content lives in the local store and that
+  `kno purge` removes it; a span is shipped to a collector, which is the one place purge cannot
+  reach. Enforced by the `observe` package's attribute constructors (nothing there accepts
+  content) and by a test that drives a real run — with an agent whose *errors quote the Case* —
+  and scans every attribute, event, and status description on every span. `span.RecordError` is
+  deliberately unused: it writes the error's text into an event, and a wrapped provider error can
+  carry the prompt that produced it.
+
+  **OTLP export is not here.** `DESIGN.md:399` places OTel *export* at v0.3 and `CLAUDE.md` says
+  tracing is *built in* — read precisely those agree, and separating instrumentation from export
+  honors both without editing either. Measured cost: both OTLP exporters pull 21 modules including
+  `google.golang.org/grpc`; the API + SDK + stdout exporter pulls 11 and no grpc. Partly repays
+  [debt #37](docs/debt.md#37), which stays open for the export half.
+
+  New dependencies: `go.opentelemetry.io/otel`, `/trace`, `/sdk`, and
+  `/exporters/stdout/stdouttrace` (Apache-2.0, CNCF-governed, the standard tracing API for Go).
+  Nothing in stdlib expresses distributed tracing, and a homegrown span format would be a format
+  no collector reads.
+
+### Added
+
 - **`kno baseline` can reach a real provider.** `--agent openai:<model>` (and any OpenAI-compatible
   endpoint via `--base-url`) and `--agent anthropic:<model>` now resolve to the adapters built in
   M2-3 through M2-8, which until now were unreachable from the command line. This is the first
