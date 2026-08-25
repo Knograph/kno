@@ -18,6 +18,28 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
+- A concurrency the engine chooses is now reported rather than silent. `checkFeasible` narrows the
+  width when the cost cap cannot admit what was asked for; it did so with no event, no log line,
+  and no field on the `Run`. A `ConcurrencyReduced` event now says so while it is happening, and
+  `Run.concurrency` records the decision afterwards — for every Case-executing run, reduced or
+  not, so two runs can be compared. **Partly** repays [debt #44](docs/debt.md#44): the engine now
+  records and emits it, and no surface reads it back yet. The CLI report that entry requires is
+  M2-11.
+- `StageProgress` heartbeats, **off by default**. Every event is one fsync under
+  `synchronous=FULL` on the same serialized writer as the outcome row that prevents double-spend,
+  so a heartbeat nobody watches is write contention in front of the write whose loss costs money.
+  A failed heartbeat write ends the run rather than being swallowed: the append allocates a
+  sequence number immediately before writing, so a silent failure leaves a permanent hole that
+  `MaxEventSequence` cannot heal, and a consumer reading the stream correctly concludes it lost
+  events. `--concurrency` and the interval are both bounds-checked; an unbounded `--concurrency`
+  recorded a negative width on the wire.
+
+  Nothing turns it on yet — the flag is M2-11. `core.DefaultProgressInterval` is 1 Hz. The rate is
+  averaged over **this process's** work and clock: not over the last interval, because a window
+  shorter than one LLM call swings on nothing, and not over the whole run, because a resume's
+  counts span both processes while its clock does not. The counts themselves stay whole-run, since
+  they pair with `total_cases`.
+
 - `ConcurrencyDecision`, carried by `Run.concurrency` and by a new `ConcurrencyReduced` event, for
   a concurrency the engine chooses rather than the user. **Nothing emits or writes them yet** —
   the emitter lands with M2-10c, and until then an absent `Run.concurrency` means "not recorded",

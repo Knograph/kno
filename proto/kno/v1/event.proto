@@ -189,8 +189,6 @@ message StageProgress {
   // Which stage is running.
   Stage stage = 1;
 
-  // Cases attempted so far, and of those, how many scored and how many
-  // errored. attempted = scored + errored.
   // Cases with a TERMINAL outcome so far. attempted = scored + errored; a Case
   // still being retried is not yet counted. See CaseErrored.will_retry.
   int32 attempted = 2;
@@ -205,6 +203,16 @@ message StageProgress {
   int32 total_cases = 5;
 
   // Throughput, for the ETA a dashboard shows.
+  //
+  // Averaged over THIS PROCESS's work and THIS PROCESS's clock.
+  //
+  // Not over the last interval: a rate measured across one heartbeat swings
+  // wildly when a single Case takes longer than it, which for an LLM call is
+  // most of them. And not over the whole run: attempted below spans a resume
+  // while the clock starts when this process does, so a resume carrying 900
+  // completed Cases into a one-second-old process would report 900 a second.
+  //
+  // The counts above DO span the whole run — they pair with total_cases.
   double cases_per_second = 6;
 }
 

@@ -734,8 +734,6 @@ type StageProgress struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Which stage is running.
 	Stage Stage `protobuf:"varint,1,opt,name=stage,proto3,enum=kno.v1.Stage" json:"stage,omitempty"`
-	// Cases attempted so far, and of those, how many scored and how many
-	// errored. attempted = scored + errored.
 	// Cases with a TERMINAL outcome so far. attempted = scored + errored; a Case
 	// still being retried is not yet counted. See CaseErrored.will_retry.
 	Attempted int32 `protobuf:"varint,2,opt,name=attempted,proto3" json:"attempted,omitempty"`
@@ -746,6 +744,16 @@ type StageProgress struct {
 	// Total Cases intended, matching RunStarted.total_cases. Zero when unknown.
 	TotalCases int32 `protobuf:"varint,5,opt,name=total_cases,json=totalCases,proto3" json:"total_cases,omitempty"`
 	// Throughput, for the ETA a dashboard shows.
+	//
+	// Averaged over THIS PROCESS's work and THIS PROCESS's clock.
+	//
+	// Not over the last interval: a rate measured across one heartbeat swings
+	// wildly when a single Case takes longer than it, which for an LLM call is
+	// most of them. And not over the whole run: attempted below spans a resume
+	// while the clock starts when this process does, so a resume carrying 900
+	// completed Cases into a one-second-old process would report 900 a second.
+	//
+	// The counts above DO span the whole run — they pair with total_cases.
 	CasesPerSecond float64 `protobuf:"fixed64,6,opt,name=cases_per_second,json=casesPerSecond,proto3" json:"cases_per_second,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache

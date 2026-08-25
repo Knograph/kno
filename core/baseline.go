@@ -53,6 +53,47 @@ const DefaultRetryBudget = 90 * time.Second
 // each attempt.
 const DefaultRetryBackoff = 500 * time.Millisecond
 
+// DefaultProgressInterval is how often to emit StageProgress when progress
+// reporting is on.
+//
+// One second, against two stated bounds rather than picked: a live view is
+// useful at about 1Hz, and the heartbeat must not dominate durable writes.
+// Every event is one fsync under synchronous=FULL on the same serialized
+// writer as the outcome row that prevents double-spend.
+//
+// The overhead is 1 / (throughput x writes-per-Case), NOT a function of run
+// length. At two durable writes per Case, staying under ~10% needs about five
+// Cases a second — which concurrency 8 against one-second calls clears and
+// concurrency 1 against a reasoning model does not. Default-off is what
+// actually bounds this; M2-11 owns arguing the rate for a run that turns it on.
+const DefaultProgressInterval = time.Second
+
+// minProgressInterval is the floor on ProgressInterval.
+//
+// Every heartbeat is one fsync on the same single writer lane RecordOutcome
+// needs, so a fast enough ticker starves the write whose loss costs money. Ten
+// milliseconds is two orders of magnitude below the default and still leaves
+// the store's own writes the overwhelming majority for any run whose Cases
+// take longer than that — which is every run against a real provider.
+const minProgressInterval = 10 * time.Millisecond
+
+// progressWriteGrace bounds one heartbeat's write.
+//
+// Matched to the store's own busy_timeout: a contended SQLite write waits up
+// to that long and then succeeds, so a shorter bound turns a slow write into a
+// run-ending error of our own making. Measured on a CI runner at a 20ms bound.
+//
+// It exists at all so a hung write cannot make shutdown unbounded — stop()
+// joins the goroutine, and without a deadline a wedged tick would block it
+// forever.
+const progressWriteGrace = 5 * time.Second
+
+// maxConcurrency bounds Concurrency.
+//
+// Recorded as an int32 on the wire, and one goroutine per unit. Without it
+// --concurrency 3000000000 records a width of -1294967296.
+const maxConcurrency = 1024
+
 // BaselineOptions configures a Baseline run.
 type BaselineOptions struct {
 	// RunID identifies this run. Required.
@@ -79,6 +120,24 @@ type BaselineOptions struct {
 
 	// Concurrency bounds in-flight work.
 	Concurrency int
+
+	// ProgressInterval is how often a StageProgress heartbeat is emitted.
+	//
+	// Zero disables it, which is the default: every event is one fsync under
+	// synchronous=FULL on the same serialized writer as the outcome row that
+	// prevents double-spend, so a heartbeat nobody watches is pure write
+	// contention. The CLI turns it on when there is something rendering.
+	//
+	// DefaultProgressInterval is the figure to pass.
+	ProgressInterval time.Duration
+
+	// concurrency records what checkFeasible decided, for the event stream and
+	// the Run record.
+	//
+	// Unexported: it is an OUTPUT of the feasibility check, not an input a
+	// caller supplies. A caller setting it would be describing a decision that
+	// had not been made yet.
+	concurrency *knov1.ConcurrencyDecision
 
 	// Resume continues an existing run rather than starting one.
 	Resume bool
@@ -348,6 +407,19 @@ func Baseline(
 	if err := opts.emitOpening(ctx, agg, maxSeq, len(done), restored); err != nil {
 		return nil, err
 	}
+	// After the opening event: a consumer should have the run's identity
+	// before its caveats.
+	if err := opts.emitConcurrencyReduced(ctx, agg); err != nil {
+		return nil, err
+	}
+	// Stopped and JOINED before closeRun, so RunFinished is last by
+	// construction rather than by appendEvent refusing a late append. A
+	// refusal is an error nobody reads.
+	stopProgress := opts.progressTicker(ctx, agg, opts.DevCases, opts.now())
+	// A panic guard. There is no early return between here and the explicit
+	// stop below, so this catches only a panic in executor.Run; the explicit
+	// call is what orders RunFinished last and surfaces a write failure.
+	defer func() { _ = stopProgress() }()
 	// draining is set the moment a fatal error starts the shutdown, and read by
 	// the sink to tell "this Case was cancelled BY the stop" from "this Case
 	// timed out on its own".
@@ -375,6 +447,20 @@ func Baseline(
 			},
 		})
 
+	// Before closeRun, not deferred after it: a deferred stop runs once
+	// closeRun has already returned, leaving the ticker free to take a
+	// sequence number during it. RunFinished is documented as the last event.
+	// Before closeRun, not deferred after it: a deferred stop runs once
+	// closeRun has already returned, leaving the ticker free to take a
+	// sequence number during it. RunFinished is documented as the last event.
+	//
+	// Its error is a run-ending one. A failed heartbeat append burns a
+	// sequence number that is never written, and a gap below the maximum
+	// survives every resume — so a stream with a silent hole is worse than a
+	// run that stops and says why.
+	if err := stopProgress(); err != nil && runErr == nil {
+		runErr = err
+	}
 	return opts.closeRun(ctx, run, agg, stats, runErr)
 }
 
@@ -416,6 +502,25 @@ func (o BaselineOptions) validate(evals *SealedEvals) error {
 		return errs.ErrInvalidInput.WithFix(
 			"add Cases, or lower the holdout fraction").
 			Wrap(errors.New("no Cases landed in dev, leaving nothing to measure"))
+	case o.Concurrency < 0:
+		return errs.ErrInvalidInput.WithFix("pass --concurrency 0 for the default, or a positive number").
+			Wrap(fmt.Errorf("concurrency %d is negative", o.Concurrency))
+	case o.Concurrency > maxConcurrency:
+		// Bounded because it is recorded as an int32 and because the executor
+		// spawns a goroutine per unit. --concurrency 3000000000 recorded
+		// Requested: -1294967296, a negative width on the wire.
+		return errs.ErrInvalidInput.WithFix(fmt.Sprintf("pass --concurrency at or below %d", maxConcurrency)).
+			Wrap(fmt.Errorf("concurrency %d is beyond what one process can run", o.Concurrency))
+	case o.ProgressInterval < 0:
+		return errs.ErrInvalidInput.WithFix("pass a positive interval, or zero to disable progress").
+			Wrap(fmt.Errorf("progress interval %s is negative", o.ProgressInterval))
+	case o.ProgressInterval > 0 && o.ProgressInterval < minProgressInterval:
+		// A floor, because every heartbeat is one fsync on the single writer
+		// lane RecordOutcome needs. At 1ms a 12-Case run emitted 48
+		// heartbeats — four durable writes per Case, which is the ratio the
+		// heartbeat is off by default to avoid.
+		return errs.ErrInvalidInput.WithFix(fmt.Sprintf("pass a progress interval of at least %s", minProgressInterval)).
+			Wrap(fmt.Errorf("progress interval %s would put more durable writes on the store than the run itself", o.ProgressInterval))
 	case o.HoldoutCases <= 0:
 		// The refusal DESIGN.md advertises as an engine property. A run that
 		// can never produce a holdout number is not a run: every later stage

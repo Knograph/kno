@@ -11,6 +11,7 @@ import (
 	"github.com/knograph/kno/executor"
 	knov1 "github.com/knograph/kno/gen/kno/v1"
 	"github.com/knograph/kno/stats/budget"
+	"google.golang.org/protobuf/proto"
 )
 
 // Budget planning and spend arithmetic: what a Case is estimated to cost,
@@ -220,6 +221,18 @@ func (o *BaselineOptions) checkFeasible(alreadyDone int) error {
 		return nil
 	}
 
+	// Recorded before any early return: an uncapped run still executes at some
+	// width, and a Run that ran at 32 and one that ran at 8 are otherwise
+	// identical on the record. reason stays UNSPECIFIED and the two arithmetic
+	// fields stay zero, which the schema documents reason as discriminating.
+	o.concurrency = &knov1.ConcurrencyDecision{
+		Effective: int32(o.effectiveConcurrency()), //nolint:gosec // validate bounds Concurrency at maxConcurrency
+		Reason:    knov1.ConcurrencyReason_CONCURRENCY_REASON_UNSPECIFIED,
+	}
+	if o.Concurrency > 0 {
+		o.concurrency.Requested = proto.Int32(int32(o.Concurrency)) //nolint:gosec // validate bounds Concurrency at maxConcurrency
+	}
+
 	limits := o.Guard.Limits()
 	perCall := o.planningCostPerCall()
 	if limits.MaxCostUSDMicros <= 0 || perCall <= 0 {
@@ -260,12 +273,33 @@ func (o *BaselineOptions) checkFeasible(alreadyDone int) error {
 	if requested <= 0 {
 		requested = executor.DefaultConcurrency()
 	}
-	if requested <= affordable {
-		return nil
-	}
 
-	o.Concurrency = affordable
+	if requested > affordable {
+		// Set together with the reason, because the proto documents reason as
+		// the discriminator for both: UNSPECIFIED means no cap constrained the
+		// width and these are zero because there was nothing to measure.
+		// Setting them for an unreduced run under a cap would falsify that in
+		// the common case — a consumer following the discriminator the schema
+		// told it to trust would read two live numbers it was promised absent.
+		o.concurrency.Reason = knov1.ConcurrencyReason_CONCURRENCY_REASON_COST_CAP
+		o.concurrency.Effective = int32(affordable)
+		o.concurrency.HeadroomUsdMicros = remaining
+		o.concurrency.PerCaseEstimateUsdMicros = perCall
+		o.Concurrency = affordable
+	}
 	return nil
+}
+
+// effectiveConcurrency is the width this run will use if nothing reduces it.
+//
+// Zero on the options is not "no concurrency": it is the CLI's default, and
+// the executor turns it into min(NumCPU, 8). Recording the zero would say the
+// run had no width.
+func (o BaselineOptions) effectiveConcurrency() int {
+	if o.Concurrency > 0 {
+		return o.Concurrency
+	}
+	return executor.DefaultConcurrency()
 }
 
 // formatUSDMicros renders micro-USD for a human.

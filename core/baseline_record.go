@@ -127,6 +127,18 @@ func (a *aggregator) addError() {
 	a.errored++
 }
 
+// sessionCounts reports what THIS process did, excluding a resumed run's
+// prior work.
+//
+// Distinct from counts, which spans the whole run. A throughput figure needs
+// this one: a resume carrying 900 completed Cases into a process that has run
+// for one second is not doing 900 Cases a second.
+func (a *aggregator) sessionCounts() (scored, errored int) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.scored, a.errored
+}
+
 func (a *aggregator) counts() (scored, errored int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -244,13 +256,32 @@ func (o BaselineOptions) appendEvent(
 	ev *knov1.Event,
 	what string,
 ) error {
-	ev.RunId = o.RunID
-	ev.EmittedAt = o.now().Format(time.RFC3339)
+	return o.appendEventFunc(ctx, agg, func() *knov1.Event { return ev }, what)
+}
 
-	// Held across BOTH steps, so a concurrent emitter cannot interleave a
-	// lower sequence behind a higher one.
+// appendEventFunc is appendEvent for a payload whose CONTENTS must be read
+// under the same lock that orders the write.
+//
+// The progress heartbeat needs it. Reading the counts before taking emitMu
+// lets the sink write several CaseScored events at lower sequences while the
+// heartbeat waits, so a consumer replaying in order sees ten Cases scored and
+// then a heartbeat claiming five — progress going backwards against events
+// already delivered.
+func (o BaselineOptions) appendEventFunc(
+	ctx context.Context,
+	agg *aggregator,
+	build func() *knov1.Event,
+	what string,
+) error {
+	// Held across ALL of it, so a concurrent emitter cannot interleave a lower
+	// sequence behind a higher one, and cannot change the counts between the
+	// read and the write.
 	agg.emitMu.Lock()
 	defer agg.emitMu.Unlock()
+
+	ev := build()
+	ev.RunId = o.RunID
+	ev.EmittedAt = o.now().Format(time.RFC3339)
 
 	if agg.isClosed() {
 		return fmt.Errorf("appending %s event: the run already emitted RunFinished, "+
@@ -356,6 +387,147 @@ func (o BaselineOptions) emitOpening(
 		return o.emitRunResumed(ctx, agg, alreadyDone, o.DevCases, restored)
 	}
 	return o.emitRunStarted(ctx, agg, o.DevCases)
+}
+
+// emitConcurrencyReduced reports a width the engine chose rather than the user.
+//
+// Only on an actual reduction: a run that got what it asked for has no news,
+// and Run.concurrency records the decision either way. Emitted after the
+// opening event, so a consumer has the run's identity before its caveats.
+//
+// Nothing to report when nothing was decided — a stage that executes no Cases
+// has no concurrency.
+func (o BaselineOptions) emitConcurrencyReduced(ctx context.Context, agg *aggregator) error {
+	d := o.concurrency
+	if d == nil || d.GetReason() == knov1.ConcurrencyReason_CONCURRENCY_REASON_UNSPECIFIED {
+		return nil
+	}
+	return o.appendEvent(ctx, agg, &knov1.Event{
+		Payload: &knov1.Event_ConcurrencyReduced{
+			ConcurrencyReduced: &knov1.ConcurrencyReduced{Decision: d},
+		},
+	}, "concurrency-reduced")
+}
+
+// progressTicker emits StageProgress until stop is called.
+//
+// A ticker rather than a per-Case emission, because AppendEvent is one fsync
+// each under synchronous=FULL, on the same serialized writer as the outcome
+// row that prevents double-spend. Per-Case would put four to six durable
+// writes behind every agent call and queue them in front of the write whose
+// loss costs money.
+//
+// One second, chosen against a stated target rather than picked: a live view
+// is useful at about 1Hz, and a 1M-Case run must not add more than ~10% to
+// durable writes. At 1Hz a run of any length adds one write per second.
+//
+// The returned stop function blocks until the goroutine has finished, which is
+// what keeps RunFinished last. appendEvent refuses a late append anyway, but a
+// refusal is an error nobody reads; joining means there is nothing to refuse.
+func (o BaselineOptions) progressTicker(
+	ctx context.Context,
+	agg *aggregator,
+	total int,
+	startedAt time.Time,
+) (stop func() error) {
+	if o.ProgressInterval <= 0 {
+		return func() error { return nil }
+	}
+
+	done := make(chan struct{})
+	finished := make(chan struct{})
+	var failure atomic.Pointer[error]
+
+	go func() {
+		defer close(finished)
+		t := time.NewTicker(o.ProgressInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+				// Bounded, but by what a legitimate write can cost rather
+				// than by the tick period. Bounding it by the period ended
+				// runs on a slow runner: a 20ms interval against a SQLite
+				// write that took longer produced "context deadline exceeded"
+				// and killed the run, which is a self-inflicted failure
+				// dressed as a store failure. The store's own busy_timeout is
+				// 5s, so a contended write can legitimately take that long.
+				//
+				// Uncancellable, like closeRun, because a budget stop and a
+				// Ctrl-C are when a watcher most wants the last position — but
+				// unlike closeRun this carries a deadline, because losing a
+				// heartbeat costs nothing and a hung write must not make
+				// shutdown unbounded. The executor's sink takes the same form.
+				tickCtx, cancel := context.WithTimeout(
+					context.WithoutCancel(ctx), progressWriteGrace)
+				err := o.emitStageProgress(tickCtx, agg, total, startedAt)
+				cancel()
+				if err != nil {
+					// NOT swallowed. appendEvent allocates a sequence number
+					// immediately before the write, so a failed append burns
+					// one — and with a concurrent emitter running, that hole
+					// is below the maximum and MaxEventSequence can never heal
+					// it. A consumer reading the stream then correctly
+					// concludes it lost events. Measured: 48 permanent holes
+					// on a 12-Case run, exit 0.
+					failure.CompareAndSwap(nil, &err)
+					return
+				}
+			}
+		}
+	}()
+
+	// Idempotent: the caller defers it as a panic guard AND calls it
+	// explicitly before closeRun. Closing a channel twice panics.
+	var once sync.Once
+	return func() error {
+		once.Do(func() {
+			close(done)
+			<-finished
+		})
+		if err := failure.Load(); err != nil {
+			return *err
+		}
+		return nil
+	}
+}
+
+// emitStageProgress reports where the run has got to.
+func (o BaselineOptions) emitStageProgress(
+	ctx context.Context,
+	agg *aggregator,
+	total int,
+	startedAt time.Time,
+) error {
+	scored, errored := agg.counts()
+	attempted := scored + errored
+
+	// Averaged over THIS PROCESS's work and THIS PROCESS's clock.
+	//
+	// Both halves matter. Over the whole run rather than the last tick,
+	// because a rate measured across one heartbeat swings wildly when a single
+	// Case takes longer than the window — which for an LLM call is most of
+	// them. And over the session rather than the run, because attempted spans
+	// a resume while startedAt does not: a resume carrying 900 completed Cases
+	// into a process one second old would report 900 Cases a second.
+	sessionScored, sessionErrored := agg.sessionCounts()
+	var rate float64
+	if elapsed := o.now().Sub(startedAt).Seconds(); elapsed > 0 {
+		rate = float64(sessionScored+sessionErrored) / elapsed
+	}
+
+	return o.appendEvent(ctx, agg, &knov1.Event{
+		Payload: &knov1.Event_StageProgress{StageProgress: &knov1.StageProgress{
+			Stage:          knov1.Stage_STAGE_BASELINE,
+			Attempted:      int32(attempted), //nolint:gosec // bounded by the eval set
+			Scored:         int32(scored),    //nolint:gosec // bounded by the eval set
+			Errored:        int32(errored),   //nolint:gosec // bounded by the eval set
+			TotalCases:     int32(total),     //nolint:gosec // bounded by the eval set
+			CasesPerSecond: rate,
+		}},
+	}, "stage-progress")
 }
 
 // emitRunResumed reports that this process picked up an interrupted Run.

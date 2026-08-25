@@ -51,6 +51,25 @@ func (o BaselineOptions) closeRun(
 	// resume that goes on to score 200 cleanly still reports "not a usable
 	// baseline" forever, because the branch that sets the flag has no branch
 	// that unsets it.
+	// The width this Run executed at, recorded whether or not it was reduced.
+	// A Run that ran at 32 and one that ran at 8 are otherwise identical on
+	// the record, which cannot then answer whether two Runs are comparable.
+	//
+	// Never overwritten with nothing. openRun reloads the stored Run on a
+	// resume and FinishRun re-marshals the whole message, so an unconditional
+	// assignment ERASES the first process's decision — and checkFeasible
+	// returns before recording when a resume has no Cases left, which is
+	// exactly the idempotent `--resume` in CI that its own comment advertises.
+	// Measured: a completed run recording effective=10 resumed to nil.
+	//
+	// The field is per-process where the two disagree: a resume that ran at a
+	// different width records its own, because that is the width its Cases
+	// actually ran at and the alternative is asserting a number no process
+	// used.
+	if o.concurrency != nil {
+		run.Concurrency = o.concurrency
+	}
+
 	run.ErrorRateExceeded = false
 	run.IncompleteReason = ""
 
