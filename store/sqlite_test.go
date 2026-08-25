@@ -966,3 +966,97 @@ func TestPurgeLeavesOrphanSpendIntact(t *testing.T) {
 		t.Error("purge removed the done-marker for a completed Case")
 	}
 }
+
+// TestCaseObservationsExcludesTheEmptyModelAndOrders.
+//
+// resolved_model is NOT NULL DEFAULT ”, so every errored Case contributes an
+// empty string. A set carrying "" would make a resume comparison test against
+// nothing, and SQLite gives DISTINCT no ordering guarantee — so without ORDER
+// BY, a run that saw two models would refuse or accept a resume differently
+// across two invocations of the same command. A flaky money gate is worse than
+// no gate.
+func TestCaseObservationsExcludesTheEmptyModelAndOrders(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	st := newStore(t)
+	if err := st.CreateRun(ctx, newRun("run-1")); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	// Two Cases that answered, on different models, recorded out of order.
+	for _, m := range []string{"zeta-model", "alpha-model"} {
+		o := scoredOutcome("case-"+m, 1, 1_000)
+		o.Response.ResolvedModel = m
+		if err := st.RecordOutcome(ctx, "run-1", o); err != nil {
+			t.Fatalf("RecordOutcome: %v", err)
+		}
+	}
+	// And two that errored, which carry no model at all.
+	for _, id := range []string{"err-1", "err-2"} {
+		if err := st.RecordOutcome(ctx, "run-1", &store.Outcome{
+			CaseID: id, Err: "AGENT_ERROR", Spend: budget.Spend{Calls: 1},
+		}); err != nil {
+			t.Fatalf("RecordOutcome: %v", err)
+		}
+	}
+
+	obs, err := st.CaseObservations(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("CaseObservations: %v", err)
+	}
+
+	want := []string{"alpha-model", "zeta-model"}
+	if len(obs.ResolvedModels) != len(want) {
+		t.Fatalf("resolved models = %q, want %q — an empty string from an errored "+
+			"Case would make a resume compare against nothing",
+			obs.ResolvedModels, want)
+	}
+	for i, m := range want {
+		if obs.ResolvedModels[i] != m {
+			t.Errorf("resolved models = %q, want %q in that order — DISTINCT has no "+
+				"ordering guarantee, and this set decides whether a resume is refused",
+				obs.ResolvedModels, want)
+		}
+	}
+
+	// Repeated reads must agree, which is the property that matters for a gate.
+	again, err := st.CaseObservations(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("CaseObservations: %v", err)
+	}
+	for i := range obs.ResolvedModels {
+		if again.ResolvedModels[i] != obs.ResolvedModels[i] {
+			t.Errorf("two reads disagreed: %q then %q", obs.ResolvedModels, again.ResolvedModels)
+		}
+	}
+
+	// And the counts partition correctly.
+	if obs.Attempted != 4 || obs.Scored != 2 || obs.Errored != 2 {
+		t.Errorf("attempted=%d scored=%d errored=%d, want 4/2/2",
+			obs.Attempted, obs.Scored, obs.Errored)
+	}
+}
+
+// TestCaseObservationsOnARunWithNoOutcomes.
+//
+// Zeros and empty sets, with no presence signal: presence on the wire means
+// "this stage executes Cases", which is a property of the stage rather than of
+// the query, so it belongs to the caller.
+func TestCaseObservationsOnARunWithNoOutcomes(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	st := newStore(t)
+	if err := st.CreateRun(ctx, newRun("run-1")); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	obs, err := st.CaseObservations(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("CaseObservations on a run with no outcomes: %v", err)
+	}
+	if obs.Attempted != 0 || len(obs.ResolvedModels) != 0 {
+		t.Errorf("observations = %+v, want zeros and empty sets", obs)
+	}
+}

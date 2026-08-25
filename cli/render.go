@@ -110,6 +110,36 @@ func confirmFunc(out io.Writer, yes, jsonOut bool) budget.ConfirmFunc {
 	}
 }
 
+// scoredOf and erroredOf read the presence-carrying counts, falling back to
+// the flat ones.
+//
+// The fallback is not decoration. CaseExecution is written from a store READ
+// at close, and a read that fails leaves it absent — at which point the
+// chained getters return 0 and the report would print "0 scored, 0 errored"
+// for a run that scored every Case, with the correct number sitting in the
+// flat counter beside it. The flat counters are still written on every path
+// and are still correct.
+func scoredOf(run *knov1.Run) int32 {
+	if ce := run.GetCaseExecution(); ce != nil {
+		return ce.GetScoredCaseCount()
+	}
+	return run.GetScoredCaseCount()
+}
+
+func attemptedOf(run *knov1.Run) int32 {
+	if ce := run.GetCaseExecution(); ce != nil {
+		return ce.GetAttemptedCaseCount()
+	}
+	return run.GetAttemptedCaseCount()
+}
+
+func erroredOf(run *knov1.Run) int32 {
+	if ce := run.GetCaseExecution(); ce != nil {
+		return ce.GetErroredCaseCount()
+	}
+	return run.GetErroredCaseCount()
+}
+
 // formatUSD renders micro-USD as dollars, for display only.
 func formatUSD(micros int64) string {
 	sign := ""
@@ -178,7 +208,7 @@ func renderHuman(
 
 	fmt.Fprintf(&b, "\nBaseline %s\n", runID)
 	fmt.Fprintf(&b, "  cases      %d scored, %d errored (of %d dev; %d held back)\n",
-		run.GetScoredCaseCount(), run.GetErroredCaseCount(), counts.Dev, counts.Holdout)
+		scoredOf(run), erroredOf(run), counts.Dev, counts.Holdout)
 
 	if res.AggregateScore != nil {
 		fmt.Fprintf(&b, "  score      %.3f\n", *res.AggregateScore)

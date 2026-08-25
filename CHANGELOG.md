@@ -18,6 +18,53 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
+- `Run.case_execution` is now written for every run that executes Cases, with the counts
+  aggregated from what is durably recorded rather than from in-memory counters — so they survive a
+  crash and stay correct across a resume. Presence is set by the stage: absent means "this stage
+  does not execute Cases", never "this run scored nothing". Repays
+  [debt #26](docs/debt.md#26).
+
+  `--json` and the human report both read it, **falling back to the flat counters when it is
+  absent**. It is composed from a store read at close; a read that fails leaves it absent, and the
+  chained getters then return zero — printing `0 scored, 0 errored` for a run that scored every
+  Case, with the correct number in the flat counter beside it. A CI gate reads that as a total
+  failure. The flat counters are still written on every path and are still correct.
+
+  The counts stay non-pointer: the absent case is unreachable while Baseline is the only front
+  end, so making them nullable would break a `jq` pipeline and buy nothing.
+
+  Composing it is **not** allowed to fail the run. It is a read, and it was sequenced ahead of
+  `FinishRun`: one transient store error left the `Run` in `RUN_STATUS_RUNNING` with no
+  `finished_at` — indistinguishable from a crash — suppressed `RunFinished`, which the schema
+  promises is always the last event and which an SSE consumer waits on forever, and replaced the
+  run's real error, so a budget stop reported "reading case observations" and exited with the
+  generic failure code. The failure is now surfaced only after the run is durably closed, and only
+  when nothing worse happened.
+
+  The dev/holdout split is carried forward from the `Run` rather than re-read from this process's
+  options. `checkResumable` does not compare the split — `InputFingerprint` covers the eval
+  *source* only — so a resume declaring a different `--holdout-frac` passes every check, and
+  re-reading would have put two contradictory splits on one message, with the presence-carrying
+  copy describing a split the run was never measured under.
+
+### Changed
+
+- The fix line on a stale-checkpoint refusal no longer names a cause that is never tested. It
+  offered "the goal, agent, or split configuration changed" for every non-eval mismatch: the split
+  is not compared at all, and the resolved model — which is — was not named. A user whose provider
+  re-pointed a moving alias was told to restore a setting they had never touched; they are now
+  told to pin the model in the agent ref, which is the only thing that prevents it.
+
+- The resume check for a changed provider model now compares **set membership** rather than the
+  first recorded element. With concurrency there is no "first response", and during a provider
+  rollout two workers in one run legitimately see different builds — so a run that saw `{A, B}`
+  and is now served by `B` has not changed, and comparing against whichever element sorted first
+  would have refused it.
+
+  **The check still does not run.** Writing `case_execution` fills the *recorded* half of the
+  comparison; nothing populates the model this process is about to use, because that is a property
+  of a response and the check runs before any call. See [debt #42](docs/debt.md#42).
+
 - **`OrphanSpend`**, naming the Case a charge belonged to when no outcome could carry it. The
   amount is recorded against the run, so without this event the money is an integer nothing
   describes — a side channel. Carries a reason, because a run stopped by a human is not a run that

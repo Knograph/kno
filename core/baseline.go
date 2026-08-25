@@ -166,6 +166,11 @@ type BaselineOptions struct {
 	DevCases     int
 	HoldoutCases int
 
+	// NOT SET BY ANYTHING. No caller populates this, so checkResumable's model
+	// comparison is inert — see docs/debt.md#42. Filling it needs the check
+	// moved to first-response time, because a resolved model is a property of
+	// a response and the check runs before any call is made.
+	//
 	// ResolvedModel is what the provider reported actually answering, once one
 	// has. Empty until the adapter supplies it.
 	//

@@ -99,6 +99,26 @@ type Store interface {
 	// second time.
 	SettledSpend(ctx context.Context, runID string) (budget.Spend, error)
 
+	// CaseObservations aggregates per-outcome facts for one Run.
+	//
+	// AGGREGABLE facts only. dev_case_count and holdout_case_count are
+	// deliberately absent: they describe what was LOADED, not what executed,
+	// and ADR-0004 records that aggregating them from outcomes reports a zero
+	// holdout count — the number that sets every interval's width. The caller
+	// composes CaseExecution from this plus what it loaded.
+	//
+	// Returns zeros for a Run with no outcomes, and no presence signal.
+	// Presence on the wire means "this stage executes Cases", which is a
+	// property of the stage rather than of the query, so it belongs to the
+	// caller.
+	//
+	// ResolvedModels and ProviderBuilds are SETS, ordered, and exclude the
+	// empty string: a Case that errored has no resolved model, and a set
+	// carrying "" would make a resume comparison test against nothing.
+	//
+	// Purge-transparent: every field is a column, never a blob.
+	CaseObservations(ctx context.Context, runID string) (Observations, error)
+
 	// RecordOrphanSpend adds spend the guard settled for a Case that produced
 	// no outcome — refused by the budget after earlier attempts were charged,
 	// or cancelled mid-backoff.
@@ -138,6 +158,41 @@ type Store interface {
 	// while other calls are in flight — those return an error rather than
 	// racing, which is what the executor's drain-then-close shutdown needs.
 	Close() error
+}
+
+// Observations are the per-outcome facts a Run can report about itself.
+//
+// Aggregated from the outcomes table rather than from in-memory counters, so
+// they survive a crash and stay correct across a resume — the same reason
+// ScoreSum exists.
+type Observations struct {
+	// Attempted is Cases with a terminal outcome; Scored and Errored partition
+	// it. A Case still being retried is not counted.
+	Attempted int32
+	Scored    int32
+	Errored   int32
+
+	// Refused is Cases the provider declined on policy grounds. Scored, and
+	// counted separately so a run that was refused rather than measured cannot
+	// pass for a clean baseline.
+	Refused int32
+
+	// Truncated is Cases whose answer hit the output ceiling. Scored against an
+	// incomplete answer, so a number here means our own max_output_tokens is
+	// depressing the score.
+	Truncated int32
+
+	// UsageEstimated is Cases whose cost is the engine's prediction rather than
+	// reported usage.
+	UsageEstimated int32
+
+	// ResolvedModels is the distinct models that actually answered, ordered and
+	// excluding the empty string.
+	ResolvedModels []string
+
+	// ProviderBuilds is the distinct provider-side builds observed, same
+	// treatment.
+	ProviderBuilds []string
 }
 
 // Outcome is one Case's terminal result.
