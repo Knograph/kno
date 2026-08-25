@@ -38,8 +38,10 @@ func (o BaselineOptions) closeRun(
 
 	run.Status = statusFor(runErr)
 	run.FinishedAt = proto.String(o.now().Format(time.RFC3339))
-	// DEBT(docs/debt.md#26): these do not track presence, so a stage that does
-	// not execute Cases writes a zero indistinguishable from a real one.
+	// Still written, and still without presence — CaseExecution below is the
+	// one that has it, and these stay on the wire until a deprecation with a
+	// reader ready. The lint bundle rejects a DEBT marker pointing at a repaid
+	// row, and #26 is repaid.
 	run.AttemptedCaseCount = int32(attempted) //nolint:gosec // bounded by the eval set
 	run.ScoredCaseCount = int32(scored)       //nolint:gosec // bounded by the eval set
 	run.ErroredCaseCount = int32(errored)     //nolint:gosec // bounded by the eval set
@@ -70,6 +72,15 @@ func (o BaselineOptions) closeRun(
 		run.Concurrency = o.concurrency
 	}
 
+	// Written for EVERY Baseline run, with zeros where nothing ran.
+	//
+	// Presence means "this stage executes Cases" (ADR-0004), which is a
+	// property of the STAGE, not of the query. Deriving it from whether the
+	// aggregate found rows would report "this stage executes no Cases" for a
+	// run whose Cases were all refused after being charged — a run that
+	// executed Cases and spent money — which is the inverted ambiguity
+	// run.proto forbids. A stage that invokes no agent leaves it absent by not
+	// writing it.
 	run.ErrorRateExceeded = false
 	run.IncompleteReason = ""
 
@@ -120,6 +131,20 @@ func (o BaselineOptions) closeRun(
 	// on Ctrl-C the caller's context is precisely the one that died, and a Run
 	// left in RUNNING would look like a crash rather than an interruption.
 	closeCtx := context.WithoutCancel(ctx)
+
+	// Written for EVERY Baseline run, with zeros where nothing ran, and on the
+	// uncancellable context: an interrupted run still executed Cases, and the
+	// caller's context is precisely the one that died.
+	//
+	// Presence means "this stage executes Cases" (ADR-0004) — a property of
+	// the STAGE, not of the query. Deriving it from whether the aggregate found
+	// rows would report "this stage executes no Cases" for a run whose Cases
+	// were all refused after being charged, which is the inverted ambiguity
+	// run.proto forbids. A stage that invokes no agent leaves it absent by not
+	// writing it.
+	if err := o.writeCaseExecution(closeCtx, run); err != nil {
+		return result, err
+	}
 	if err := o.Store.FinishRun(closeCtx, run); err != nil {
 		return result, fmt.Errorf("finishing run %s: %w", o.RunID, err)
 	}
@@ -142,6 +167,35 @@ func classifyRunErr(err error) error {
 	default:
 		return err
 	}
+}
+
+// writeCaseExecution composes the Run's per-Case record.
+//
+// The counts come from the STORE, not from the aggregator: aggregating what is
+// durable is what makes them survive a crash and stay correct across a resume.
+//
+// dev and holdout come from the OPTIONS, never from SQL. They describe what was
+// loaded rather than what executed, and ADR-0004 records that aggregating them
+// from outcomes reports a zero holdout count — the number that sets every
+// interval's width.
+func (o BaselineOptions) writeCaseExecution(ctx context.Context, run *knov1.Run) error {
+	obs, err := o.Store.CaseObservations(ctx, o.RunID)
+	if err != nil {
+		return fmt.Errorf("reading case observations: %w", err)
+	}
+	run.CaseExecution = &knov1.CaseExecution{
+		DevCaseCount:            int32(o.DevCases),     //nolint:gosec // bounded by the eval set
+		HoldoutCaseCount:        int32(o.HoldoutCases), //nolint:gosec // bounded by the eval set
+		AttemptedCaseCount:      obs.Attempted,
+		ScoredCaseCount:         obs.Scored,
+		ErroredCaseCount:        obs.Errored,
+		RefusedCaseCount:        obs.Refused,
+		TruncatedCaseCount:      obs.Truncated,
+		UsageEstimatedCaseCount: obs.UsageEstimated,
+		ResolvedModels:          obs.ResolvedModels,
+		ObservedProviderBuilds:  obs.ProviderBuilds,
+	}
+	return nil
 }
 
 // statusFor maps a run error to how the run ended.

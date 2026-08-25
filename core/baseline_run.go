@@ -3,6 +3,8 @@ package core
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/knograph/kno/core/errs"
@@ -92,8 +94,8 @@ func (o BaselineOptions) checkResumable(run *knov1.Run) error {
 		// config changes, routinely and with no model change, and refusing on
 		// it would cost the user a full re-run for a false positive — worse
 		// than the blending it prevents.
-		changed = fmt.Sprintf("a different resolved model (recorded %q, now %q)",
-			firstResolvedModel(run), o.ResolvedModel)
+		changed = fmt.Sprintf("a resolved model it never saw (recorded %s, now %q)",
+			recordedModels(run), o.ResolvedModel)
 	default:
 		return nil
 	}
@@ -108,17 +110,30 @@ func (o BaselineOptions) checkResumable(run *knov1.Run) error {
 // response, or this one has not yet. Unknown is not a mismatch: refusing on
 // absence would make every run that stopped before its first answer
 // unresumable.
+// resolvedModelChanged reports whether the model now answering is absent from
+// the set the recorded Run observed.
+//
+// Set MEMBERSHIP, not models[0]. The field is repeated because with
+// concurrency there is no "first response", and during a provider rollout two
+// workers in one Run legitimately see different builds — so a run that saw
+// {A, B} and is now served by B has not changed, and comparing against
+// whichever element happened to sort first would refuse it.
+//
+// Empty on either side means nothing to compare: a run whose Cases all errored
+// records no model, and a process that has not called the provider yet knows
+// none.
 func resolvedModelChanged(run *knov1.Run, now string) bool {
-	recorded := firstResolvedModel(run)
-	return recorded != "" && now != "" && recorded != now
+	recorded := run.GetCaseExecution().GetResolvedModels()
+	if len(recorded) == 0 || now == "" {
+		return false
+	}
+	return !slices.Contains(recorded, now)
 }
 
-func firstResolvedModel(run *knov1.Run) string {
-	models := run.GetCaseExecution().GetResolvedModels()
-	if len(models) == 0 {
-		return ""
-	}
-	return models[0]
+// recordedModels renders the set for a refusal message, so the user can see
+// what the run was measured against rather than only that it disagreed.
+func recordedModels(run *knov1.Run) string {
+	return strings.Join(run.GetCaseExecution().GetResolvedModels(), ", ")
 }
 
 // staleFix names which input changed, rather than only that something did.

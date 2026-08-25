@@ -59,15 +59,20 @@ func renderJSON(
 	warnings []string,
 ) error {
 	rep := jsonReport{
-		RunID:            runID,
-		Status:           statusName(res.Run.GetStatus()),
-		Agent:            f.agentRef,
-		Goal:             f.goalName,
-		DevCases:         counts.Dev,
-		Holdout:          counts.Holdout,
-		Attempted:        res.Run.GetAttemptedCaseCount(),
-		Scored:           res.Run.GetScoredCaseCount(),
-		Errored:          res.Run.GetErroredCaseCount(),
+		RunID:    runID,
+		Status:   statusName(res.Run.GetStatus()),
+		Agent:    f.agentRef,
+		Goal:     f.goalName,
+		DevCases: counts.Dev,
+		Holdout:  counts.Holdout,
+		// From CaseExecution, which is aggregated from what is durable rather
+		// than from in-memory counters — so it survives a crash and stays
+		// correct across a resume. The flat counters on Run still carry the
+		// same numbers and are still written; this reads the one that has
+		// presence, per docs/debt.md#26.
+		Attempted:        res.Run.GetCaseExecution().GetAttemptedCaseCount(),
+		Scored:           res.Run.GetCaseExecution().GetScoredCaseCount(),
+		Errored:          res.Run.GetCaseExecution().GetErroredCaseCount(),
 		Score:            res.AggregateScore,
 		ScoreUnavailable: res.AggregateUnavailable,
 		SpentUSD:         formatUSD(res.Spent.CostUSDMicros),

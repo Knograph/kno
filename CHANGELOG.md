@@ -18,6 +18,27 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
+- `Run.case_execution` is now written for every run that executes Cases, with the counts
+  aggregated from what is durably recorded rather than from in-memory counters — so they survive a
+  crash and stay correct across a resume. Presence is set by the stage: absent means "this stage
+  does not execute Cases", never "this run scored nothing". Repays
+  [debt #26](docs/debt.md#26).
+
+  `--json` and the human report both read it. The counts stay non-pointer: the absent case is
+  unreachable while Baseline is the only front end, so making them nullable would break a `jq`
+  pipeline and buy nothing.
+
+### Changed
+
+- **A resume is now refused when the provider is serving a model the run never saw.** This check
+  has existed since M2-6 and has never run, because nothing wrote the field it compares. A run
+  whose halves were measured against different models produces one aggregate score describing two
+  things, which is why it refuses rather than warns.
+
+  It compares set membership, not a first element: with concurrency there is no "first response",
+  and during a provider rollout two workers in one run legitimately see different builds — so a
+  run that saw `{A, B}` and is now served by `B` continues.
+
 - **`OrphanSpend`**, naming the Case a charge belonged to when no outcome could carry it. The
   amount is recorded against the run, so without this event the money is an integer nothing
   describes — a side channel. Carries a reason, because a run stopped by a human is not a run that

@@ -4136,3 +4136,148 @@ func TestAFailedOrphanEventLeavesTheMoneyConsistent(t *testing.T) {
 		t.Errorf("guard settled %d calls, store holds %d", settled.Calls, persisted.Calls)
 	}
 }
+
+// TestCaseExecutionIsWrittenForEveryBaselineRun.
+//
+// Presence means "this stage executes Cases" — a property of the STAGE, not of
+// the query. Deriving it from whether the aggregate found rows would report
+// "this stage executes no Cases" for a run whose Cases were all refused after
+// being charged: a run that executed Cases and spent money.
+func TestCaseExecutionIsWrittenForEveryBaselineRun(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("an ordinary run", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t, 12, 4, fake.Options{FailEvery: 4})
+		res, err := core.Baseline(ctx, h.evals, h.opts)
+		if err != nil {
+			t.Fatalf("Baseline: %v", err)
+		}
+		ce := res.Run.GetCaseExecution()
+		if ce == nil {
+			t.Fatal("no CaseExecution on a run that executed Cases")
+		}
+		// Aggregated from what is durable, so it must match the flat counters
+		// the aggregator produced. A divergence means the store and the
+		// in-memory counts disagree about the same run.
+		if ce.GetScoredCaseCount() != res.Run.GetScoredCaseCount() ||
+			ce.GetErroredCaseCount() != res.Run.GetErroredCaseCount() {
+			t.Errorf("CaseExecution says %d scored / %d errored, the counters say %d / %d",
+				ce.GetScoredCaseCount(), ce.GetErroredCaseCount(),
+				res.Run.GetScoredCaseCount(), res.Run.GetErroredCaseCount())
+		}
+		// Ingested, not aggregated: these describe what was LOADED. Deriving
+		// them from outcomes reports a zero holdout count, which is the number
+		// that sets every interval's width.
+		if ce.GetDevCaseCount() != 12 || ce.GetHoldoutCaseCount() != 4 {
+			t.Errorf("dev=%d holdout=%d, want 12/4 — these come from the split, "+
+				"not from the outcomes table",
+				ce.GetDevCaseCount(), ce.GetHoldoutCaseCount())
+		}
+	})
+
+	t.Run("a run whose every Case was refused after being charged", func(t *testing.T) {
+		t.Parallel()
+		h := newHarness(t, 20, 5, fake.Options{})
+		h.opts.Agent = &billingAgent{perCallUSDMicros: 40_000}
+		h.opts.Concurrency = 1
+		h.opts.MaxAttempts = 1
+		h.opts.EstCostPerCallUSDMicros = 40_000
+		h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 40_000}, nil, 0)
+
+		res, err := core.Baseline(ctx, h.evals, h.opts)
+		if err != nil && !errors.Is(err, errs.ErrBudgetExceeded) {
+			t.Fatalf("Baseline: %v", err)
+		}
+		if res.Run.GetCaseExecution() == nil {
+			t.Fatal("no CaseExecution on a run that executed Cases and spent money. " +
+				"An absent message means 'this stage executes no Cases', which is " +
+				"the opposite of what happened")
+		}
+	})
+}
+
+// TestAResumeIsRefusedOnlyForAModelTheRunNeverSaw.
+//
+// The gate this PR arms. It has never run: nothing wrote resolved_models, so
+// firstResolvedModel always returned "" and the comparison short-circuited.
+//
+// Set membership, not models[0]. With concurrency there is no "first
+// response", and during a provider rollout two workers in one Run legitimately
+// see different builds — so a run that saw {A, B} and is now served by B has
+// not changed, and comparing against whichever element sorted first would
+// refuse it.
+func TestAResumeIsRefusedOnlyForAModelTheRunNeverSaw(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		now         string
+		wantRefused bool
+	}{
+		{"the model that sorts first", "claude-opus-5-20260101", false},
+		{
+			// The case models[0] gets wrong: present in the set, not first.
+			name:        "a model in the set but not first",
+			now:         "claude-opus-5-20260514",
+			wantRefused: false,
+		},
+		{"a model the run never saw", "claude-opus-5-20261231", true},
+		{"nothing resolved yet", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			h := newHarness(t, 5, 2, fake.Options{})
+			opts := h.opts
+			opts.Resume = true
+			opts.ResolvedModel = tt.now
+
+			// Matching on every OTHER axis, so the model is the only thing
+			// under test. Without this the fixture refuses on "different
+			// inputs" and the subtests pass for the wrong reason — which the
+			// first version of this test did.
+			recorded := recordedRun(opts, "claude-opus-5-20260101", "claude-opus-5-20260514")
+
+			if err := core.CheckResumableForTest(opts, recorded); (err != nil) != tt.wantRefused {
+				t.Errorf("refused = %v, want %v (err = %v)", err != nil, tt.wantRefused, err)
+			}
+		})
+	}
+}
+
+// TestAResumeWithNoRecordedModelIsNotRefused.
+//
+// A run whose Cases all errored records no model — the store filters the empty
+// string out, because the column is NOT NULL DEFAULT ” and every errored Case
+// contributes one. Without that filter the set would carry "" and a resume
+// would be compared against nothing.
+func TestAResumeWithNoRecordedModelIsNotRefused(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t, 5, 2, fake.Options{})
+	opts := h.opts
+	opts.Resume = true
+	opts.ResolvedModel = "claude-opus-5"
+
+	empty := recordedRun(opts)
+	if err := core.CheckResumableForTest(opts, empty); err != nil {
+		t.Errorf("a run that recorded no model refused a resume: %v", err)
+	}
+}
+
+// recordedRun builds a Run that checkResumable accepts on every axis except
+// the resolved model, so a test can isolate that one.
+func recordedRun(o core.BaselineOptions, models ...string) *knov1.Run {
+	return &knov1.Run{
+		Id:               o.RunID,
+		InputFingerprint: o.InputFingerprint,
+		EvalContentHash:  o.EvalContentHash,
+		GoalName:         o.GoalName,
+		GoalDirection:    o.Goal.Direction(),
+		Agent:            o.AgentRef,
+		CaseExecution:    &knov1.CaseExecution{ResolvedModels: models},
+	}
+}

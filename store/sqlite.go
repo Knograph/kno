@@ -723,6 +723,86 @@ func (s *SQLite) SettledSpend(ctx context.Context, runID string) (budget.Spend, 
 	return spend, nil
 }
 
+// CaseObservations aggregates per-outcome facts for one Run.
+//
+// TWO queries, not one, and the godoc says so rather than claiming an
+// atomicity it does not have: the scalar aggregates are one statement and the
+// two distinct sets are another, because group_concat cannot take a separator
+// that is safe against arbitrary model names. closeRun runs after the executor
+// has drained, so nothing races them within a process.
+func (s *SQLite) CaseObservations(ctx context.Context, runID string) (Observations, error) {
+	db, err := s.conn()
+	if err != nil {
+		return Observations{}, err
+	}
+
+	var obs Observations
+	// COALESCE because SUM over zero rows is NULL, and a Run with no outcomes
+	// legitimately has none — that reads as zero, not as a scan error.
+	err = db.QueryRowContext(ctx,
+		`SELECT COUNT(*),
+		        COALESCE(SUM(scored), 0),
+		        COALESCE(SUM(1 - scored), 0),
+		        COALESCE(SUM(refused), 0),
+		        COALESCE(SUM(truncated), 0),
+		        COALESCE(SUM(usage_estimated), 0)
+		 FROM outcomes WHERE run_id = ?`, runID).
+		Scan(&obs.Attempted, &obs.Scored, &obs.Errored,
+			&obs.Refused, &obs.Truncated, &obs.UsageEstimated)
+	if err != nil {
+		return Observations{}, fmt.Errorf("aggregating outcomes for %s: %w", runID, err)
+	}
+
+	if obs.ResolvedModels, err = s.distinctNonEmpty(ctx, runID, "resolved_model"); err != nil {
+		return Observations{}, err
+	}
+	if obs.ProviderBuilds, err = s.distinctNonEmpty(ctx, runID, "provider_build_id"); err != nil {
+		return Observations{}, err
+	}
+	return obs, nil
+}
+
+// distinctNonEmpty returns the distinct non-empty values of one column, in a
+// deterministic order.
+//
+// Both halves are load-bearing. The column is NOT NULL DEFAULT ”, so every
+// errored Case contributes an empty string and a set carrying "" would make a
+// resume check compare against nothing. And SQLite gives DISTINCT no ordering
+// guarantee, so without ORDER BY a run that saw two models would refuse or
+// accept a resume differently across two invocations of the same command — a
+// flaky money gate being worse than no gate.
+//
+// The column name is interpolated because SQLite cannot parameterise an
+// identifier. It is never caller-supplied: both call sites pass a literal.
+func (s *SQLite) distinctNonEmpty(ctx context.Context, runID, column string) ([]string, error) {
+	db, err := s.conn()
+	if err != nil {
+		return nil, err
+	}
+	//nolint:gosec // the column is a compile-time literal, never caller input
+	q := fmt.Sprintf(
+		`SELECT DISTINCT %s FROM outcomes WHERE run_id = ? AND %s != '' ORDER BY %s`,
+		column, column, column)
+	rows, err := db.QueryContext(ctx, q, runID)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s for %s: %w", column, runID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []string
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			return nil, fmt.Errorf("scanning %s: %w", column, err)
+		}
+		out = append(out, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating %s: %w", column, err)
+	}
+	return out, nil
+}
+
 // RecordOrphanSpend adds spend the guard settled for a Case that produced no
 // outcome.
 //

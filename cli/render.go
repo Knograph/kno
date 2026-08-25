@@ -178,7 +178,8 @@ func renderHuman(
 
 	fmt.Fprintf(&b, "\nBaseline %s\n", runID)
 	fmt.Fprintf(&b, "  cases      %d scored, %d errored (of %d dev; %d held back)\n",
-		run.GetScoredCaseCount(), run.GetErroredCaseCount(), counts.Dev, counts.Holdout)
+		run.GetCaseExecution().GetScoredCaseCount(),
+		run.GetCaseExecution().GetErroredCaseCount(), counts.Dev, counts.Holdout)
 
 	if res.AggregateScore != nil {
 		fmt.Fprintf(&b, "  score      %.3f\n", *res.AggregateScore)

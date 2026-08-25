@@ -305,12 +305,18 @@ type Run struct {
 	ErrorRateExceeded bool `protobuf:"varint,20,opt,name=error_rate_exceeded,json=errorRateExceeded,proto3" json:"error_rate_exceeded,omitempty"`
 	// Facts about a Run that executed Cases. Absent for a stage that does not.
 	//
-	// NOT POPULATED YET. Nothing writes this before M2-10; read the five flat
-	// counters above until then. Said here because this comment is the source
-	// for the published API reference, and a consumer seeing an absent
-	// case_execution on every baseline Run would otherwise conclude the Run
-	// executed no Cases — the inverted form of the exact ambiguity this message
-	// exists to remove.
+	// Written for every Run whose stage executes Cases, with zeros where nothing
+	// ran. Absent means the stage does not execute Cases at all — Value works
+	// over Assets, Select attempts none — NOT that a Case-executing run happened
+	// to score nothing.
+	//
+	// Presence is set by the STAGE, not derived from whether any outcome was
+	// recorded. A run whose Cases were every one refused after being charged has
+	// no outcomes, and deriving presence from the query would report "this stage
+	// executes no Cases" about a run that executed Cases and spent money — the
+	// inverted form of the exact ambiguity this message exists to remove.
+	//
+	// The five flat counters above carry the same numbers and are still written.
 	//
 	// See ADR-0004. This is the presence-carrying replacement for the five flat
 	// counters above, which stay until their writer and reader migrate.
