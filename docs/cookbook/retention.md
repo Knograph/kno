@@ -114,3 +114,13 @@ Purge is per-run today. Bulk retention across every run older than *N* days is n
 - **Exported artifacts.** Anything you wrote to disk from a report.
 - **Provider-side logs.** Your LLM provider's retention is between you and them; check their policy.
 - **Backups of `kno.db`.** Purge touches the database you point it at, nothing else.
+
+### Traces are content-free on purpose
+
+Kno emits OpenTelemetry spans for every run, Case, and provider call. **They carry IDs, counts, and money — never a prompt, an answer, or a system prompt.**
+
+One caveat worth stating plainly: the **Case ID is one of those IDs**, and Kno takes it verbatim from your eval file. If your IDs are derived from your content — a common shortcut when they come from source rows — then that content is in your traces. Give Cases labels (`refund-01`) rather than IDs cut from the question text.
+
+That is not a courtesy, it is what keeps this page true. A span is designed to leave the machine; once it reaches a collector it is somewhere `kno purge` cannot follow. So the rule is enforced in code rather than by convention: the tracing package's attribute helpers accept no content, error *codes* are recorded instead of error messages (a wrapped provider error can quote the prompt that produced it), and a test drives a real run — with an agent whose errors deliberately quote the Case — and scans every attribute, event, and status on every span for that content.
+
+`--trace-spans` writes them to stderr for local debugging. Export to a collector is not in this release.

@@ -60,6 +60,7 @@ type baselineFlags struct {
 	priceInPerMTok      float64
 	priceOutPerMTok     float64
 	acceptUnknownCost   bool
+	traceSpans          bool
 
 	// costPerCallSet records whether --cost-per-call-usd was passed at all, as
 	// opposed to left at its zero default. An explicit zero is a claim that
@@ -99,7 +100,7 @@ continues without paying for anything twice.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			f.costPerCallSet = cmd.Flags().Changed("cost-per-call-usd")
 			f.seedSet = cmd.Flags().Changed("seed")
-			return runBaseline(cmd.Context(), cmd.OutOrStdout(), f)
+			return runBaseline(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), f)
 		},
 	}
 
@@ -158,6 +159,10 @@ continues without paying for anything twice.`,
 		"output price per million tokens (needs --price-input-per-mtok)")
 	flags.BoolVar(&f.acceptUnknownCost, "accept-unknown-cost", false,
 		"run a model whose per-Case cost cannot be computed")
+	// Local only. Exporting to a collector over OTLP is the v0.3 half of this
+	// (DESIGN.md:399) and costs ten more dependency modules including gRPC.
+	flags.BoolVar(&f.traceSpans, "trace-spans", false,
+		"write OpenTelemetry spans for this run to stderr")
 
 	if err := cmd.MarkFlagRequired("evals"); err != nil {
 		panic(fmt.Sprintf("cli: marking --evals required: %v", err))
@@ -206,7 +211,21 @@ func (f baselineFlags) validateCaps() error {
 	return nil
 }
 
-func runBaseline(ctx context.Context, out io.Writer, f baselineFlags) error {
+func runBaseline(ctx context.Context, out, errOut io.Writer, f baselineFlags) error {
+	// Before anything that could emit a span. Spans written to stderr, never
+	// stdout: stdout is the report, and --json makes it a machine contract
+	// that a span document would corrupt — measured once already with a
+	// one-line consent notice.
+	// errOut, not os.Stderr: CLAUDE.md forbids reaching for the process
+	// streams outside tui/ (the lint bundle enforces it), and taking the
+	// writer cobra already holds is also what makes this testable without
+	// capturing a global.
+	stopTracing, err := startTracing(ctx, errOut, f.traceSpans)
+	if err != nil {
+		return err
+	}
+	defer stopTracing()
+
 	evals, err := jsonl.New(jsonl.Options{
 		Path:        f.evalsPath,
 		HoldoutFrac: f.holdoutFrac,

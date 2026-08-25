@@ -129,6 +129,14 @@ Some failures cannot get better by trying again: a rejected credential, an unpai
 
 The Cases it did not measure stay unmeasured — fix the problem and `--resume`, and they are picked up rather than skipped.
 
+## Seeing where the time went
+
+```bash
+kno baseline --evals cases.jsonl --agent openai:gpt-4.1 --max-cost-usd 2.00 --trace-spans
+```
+
+Writes an OpenTelemetry span for the run, each Case, and each provider call to stderr — which separates provider latency from Kno's own, and shows retries as what they are. Spans carry IDs, counts, and cost only, never your prompts or the answers; see [retention](retention.md#traces-are-content-free-on-purpose).
+
 ## Checking what is supported
 
 ```bash
