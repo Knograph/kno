@@ -33,6 +33,17 @@ const (
 	// The run was cancelled — a Ctrl-C, a deadline — while the Case was waiting
 	// out a retry backoff.
 	OrphanReason_ORPHAN_REASON_CANCELLED OrphanReason = 2
+	// A condition that cannot change within this run ended it: a rejected
+	// credential, the provider's own spend cap, a refused destination, an unpaid
+	// account, a model that does not exist.
+	//
+	// Distinct from BUDGET_EXCEEDED even though both stop a run early, because
+	// the two need opposite responses. A budget stop is resumable as-is — raise
+	// the cap or accept the partial result. A run-fatal stop is not: resuming
+	// without fixing the condition makes the same request and gets the same
+	// answer, having paid for the attempt. Reporting one as the other tells the
+	// user to raise a cap that was never the problem.
+	OrphanReason_ORPHAN_REASON_RUN_FATAL OrphanReason = 3
 )
 
 // Enum value maps for OrphanReason.
@@ -41,11 +52,13 @@ var (
 		0: "ORPHAN_REASON_UNSPECIFIED",
 		1: "ORPHAN_REASON_BUDGET_EXCEEDED",
 		2: "ORPHAN_REASON_CANCELLED",
+		3: "ORPHAN_REASON_RUN_FATAL",
 	}
 	OrphanReason_value = map[string]int32{
 		"ORPHAN_REASON_UNSPECIFIED":     0,
 		"ORPHAN_REASON_BUDGET_EXCEEDED": 1,
 		"ORPHAN_REASON_CANCELLED":       2,
+		"ORPHAN_REASON_RUN_FATAL":       3,
 	}
 )
 
@@ -1741,11 +1754,12 @@ const file_kno_v1_event_proto_rawDesc = "" +
 	"\x05calls\x18\x03 \x01(\x03R\x05calls\x12,\n" +
 	"\x06reason\x18\x04 \x01(\x0e2\x14.kno.v1.OrphanReasonR\x06reason\"M\n" +
 	"\x12ConcurrencyReduced\x127\n" +
-	"\bdecision\x18\x01 \x01(\v2\x1b.kno.v1.ConcurrencyDecisionR\bdecision*m\n" +
+	"\bdecision\x18\x01 \x01(\v2\x1b.kno.v1.ConcurrencyDecisionR\bdecision*\x8a\x01\n" +
 	"\fOrphanReason\x12\x1d\n" +
 	"\x19ORPHAN_REASON_UNSPECIFIED\x10\x00\x12!\n" +
 	"\x1dORPHAN_REASON_BUDGET_EXCEEDED\x10\x01\x12\x1b\n" +
-	"\x17ORPHAN_REASON_CANCELLED\x10\x02*\xb1\x01\n" +
+	"\x17ORPHAN_REASON_CANCELLED\x10\x02\x12\x1b\n" +
+	"\x17ORPHAN_REASON_RUN_FATAL\x10\x03*\xb1\x01\n" +
 	"\vRetryReason\x12\x1c\n" +
 	"\x18RETRY_REASON_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19RETRY_REASON_RATE_LIMITED\x10\x01\x12$\n" +

@@ -16,6 +16,53 @@ covenants — breaking any of them requires a major version.
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING (pre-1.0): `BaselineOptions.ResolvedModel` is removed.** It was caller-supplied and
+  read at run open, before any request, so the only value it could ever hold was one a previous run
+  had recorded — `checkResumable` compared it to itself and the gate never fired once. **Migration:
+  delete the field; nothing replaces it.** The check now runs at first-response time and needs no
+  caller input. Repays [debt #42](docs/debt.md#42).
+
+- **A provider failure that cannot change within a run now ends the run at the first Case.** Six
+  conditions escalate: a rejected credential (401/403), the provider's own spend cap, a user's
+  self-set spend limit, an unpaid account (402), a model that does not exist (404), and a refused
+  destination or key-binding mismatch. A wrong `ANTHROPIC_API_KEY` on a 10,000-Case run previously
+  made 10,000 requests and settled 10,000 calls against `--max-calls` before saying anything.
+  Repays [debt #47](docs/debt.md#47).
+
+  A plain 429, a 5xx, a truncation, and an oversized response are deliberately **not** escalated —
+  each may succeed on the next call, and escalating them would convert a recoverable run into a
+  dead one. That direction has its own test.
+
+- **A capped run against a model with no price row is refused once**, naming pricing, instead of
+  erroring every Case and reporting "too many cases errored" — a verdict naming nothing about
+  pricing, after taking consent for a figure that was never going to apply. **Partly** repays
+  [debt #46](docs/debt.md#46): this is the refusal shape only. The price rows and the per-token
+  override land with the CLI wiring.
+
+- **A timed-out request reports `RETRY_REASON_TIMEOUT`.** A 408 and a 5xx share the
+  `ErrTransportTransient` sentinel, so `core` — which could classify only from sentinels — reported
+  a timeout as `RETRY_REASON_PROVIDER_UNAVAILABLE`, whose schema definition is "the provider
+  returned a 5xx". The enum value existed and nothing ever emitted it. Repays
+  [debt #53](docs/debt.md#53).
+
+- **Orphaned spend from a run-fatal stop is no longer attributed to the budget.** The
+  discriminator was a bool, so every in-flight charged Case on any fatal stop reported "the cost or
+  call cap could not admit another attempt" — sending a user whose credential was rejected to raise
+  a cap that was never binding.
+
+- **`OrphanReason.ORPHAN_REASON_RUN_FATAL`** (proto, additive). A budget stop is resumable as-is; a
+  run-fatal stop is not, and resuming without fixing the condition pays for the same answer again.
+
+- **A run-fatal refusal leaves its Case re-attemptable**, like a budget refusal and an unpriceable
+  one: refused by a condition the user then fixes. Recording it as a terminal outcome put the Case
+  in `CompletedCases`, so a resume skipped it forever — and `closeRun` recomputes
+  `ErrorRateExceeded` over the whole store, branding the **corrected** run "not a usable baseline".
+  Measured: 20 Cases, a bad key, then a resume with a healthy agent — completed, 8 errored, error
+  rate exceeded, recoverable only by paying for all 20 again. The remedy every escalated error
+  advertises is "fix this and re-run", and it now works.
+
 ### Added
 
 - `Run.case_execution` is now written for every run that executes Cases, with the counts

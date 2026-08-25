@@ -2,12 +2,14 @@ package openaicompat
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"math/bits"
 	"net/url"
 	"strings"
 
+	"github.com/knograph/kno/adapters/agent/internal/agenterr"
 	"github.com/knograph/kno/adapters/agent/pricing"
 	"github.com/knograph/kno/core"
 	"github.com/knograph/kno/core/errs"
@@ -103,10 +105,18 @@ func (a *Agent) estimate(prompt pricing.Prompt) (budgetEstimate, error) {
 		return budgetEstimate{}, err
 	}
 	if a.price == nil {
-		return budgetEstimate{}, fmt.Errorf("%w: %s:%s has no row in the %s price table",
-			pricing.ErrUnpriced, a.scheme, a.model, pricing.Version)
+		// Run-fatal: a property of the MODEL, which does not change mid-run.
+		// Under a dollar cap core refuses every Case it cannot price, so
+		// without this a run made one refusal per Case and ended as "too many
+		// cases errored" — naming nothing about pricing. See docs/debt.md#46.
+		return budgetEstimate{}, agenterr.AsRunFatal(
+			fmt.Errorf("%w: %s:%s has no row in the %s price table",
+				pricing.ErrUnpriced, a.scheme, a.model, pricing.Version))
 	}
 	est, err := pricing.EstimateWithPrice(a.price, a.model, prompt, a.maxOutput)
+	if errors.Is(err, pricing.ErrUnpriced) {
+		return budgetEstimate{}, agenterr.AsRunFatal(err)
+	}
 	if err != nil {
 		return budgetEstimate{}, err
 	}

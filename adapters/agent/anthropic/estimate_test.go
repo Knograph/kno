@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/knograph/kno/adapters/agent/anthropic"
+	"github.com/knograph/kno/adapters/agent/pricing"
 	knov1 "github.com/knograph/kno/gen/kno/v1"
 )
 
@@ -226,6 +227,24 @@ func TestEstimateRefusesAnUnpricedModelRatherThanGuessing(t *testing.T) {
 	if got := a.WorstCase().CostUSDMicros; got != 0 {
 		t.Errorf("WorstCase = %d for an unpriced model; core falls back to the "+
 			"run-scoped scalar on zero, which is the sanctioned degradation", got)
+	}
+
+	// And it is RUN-FATAL, because the model does not change mid-run. Under a
+	// dollar cap core refuses every Case it cannot price, so without the
+	// escalation a run made one refusal per Case and ended as "too many cases
+	// errored" — a verdict naming nothing about pricing, after taking the
+	// user's consent for a figure that was never going to apply. Marked here
+	// rather than in core, which cannot tell this apart from an Estimator that
+	// refuses one Case and prices the rest. See docs/debt.md#46.
+	_, err := a.Estimate(t.Context(), aCase("q"))
+	var rf interface{ RunFatal() bool }
+	if !errors.As(err, &rf) || !rf.RunFatal() {
+		t.Error("an unpriced model is not run-fatal, so a capped run refuses " +
+			"every Case one at a time and reports an error rate rather than a " +
+			"pricing problem")
+	}
+	if !errors.Is(err, pricing.ErrUnpriced) {
+		t.Errorf("the escalation destroyed the classification it wraps: %v", err)
 	}
 }
 

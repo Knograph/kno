@@ -73,6 +73,24 @@ type Options struct {
 	// CostPerCallUSDMicros is the reported cost. Zero by default: the fake
 	// spends nothing, and a run against it must not consume a real budget.
 	CostPerCallUSDMicros int64
+
+	// ResolvedModel is what the fake claims actually answered, echoed onto
+	// every Response.
+	//
+	// It exists so the resolved-model gate can be driven through a real run
+	// rather than a synthesized Run record. A real provider reports this and
+	// can change it mid-run when a moving alias re-points, which is the whole
+	// hazard; nothing else in the tree can produce that.
+	ResolvedModel string
+
+	// ResolvedModelAfter re-points ResolvedModel from the Nth call onward,
+	// simulating an alias moving DURING a run. Zero disables it.
+	//
+	// Counts calls rather than Cases because that is what a provider does.
+	ResolvedModelAfter int
+
+	// ResolvedModelThen is what the alias re-points TO.
+	ResolvedModelThen string
 }
 
 // New returns a fake Agent.
@@ -138,7 +156,21 @@ func (a *Agent) Invoke(ctx context.Context, c *core.Case) (*core.Response, error
 		CompletionTokens: int64(len(answer)),
 		CostUsdMicros:    a.opts.CostPerCallUSDMicros,
 		LatencyMs:        a.opts.Latency.Milliseconds(),
+		ResolvedModel:    a.resolvedModel(),
 	}, nil
+}
+
+// resolvedModel reports which model answered, honoring a mid-run re-point.
+//
+// The counter is the same one FailEvery and RateLimitEvery use, so the
+// re-point lands deterministically at a call number rather than at whichever
+// Case a scheduler happened to run first.
+func (a *Agent) resolvedModel() string {
+	if a.opts.ResolvedModelAfter > 0 && a.opts.ResolvedModelThen != "" &&
+		int(a.calls.Load()) >= a.opts.ResolvedModelAfter {
+		return a.opts.ResolvedModelThen
+	}
+	return a.opts.ResolvedModel
 }
 
 // Capabilities reports what this adapter supports.

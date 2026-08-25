@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/knograph/kno/adapters/agent/internal/agenterr"
 	"github.com/knograph/kno/adapters/agent/internal/transport"
 	"github.com/knograph/kno/core/errs"
 	knov1 "github.com/knograph/kno/gen/kno/v1"
@@ -101,6 +102,25 @@ func classify(err error) error {
 	// all decisions that will be made identically on every attempt. Retrying
 	// them spends nothing but the run's retry budget, and the user needs the
 	// message, not three copies of it.
+	//
+	// Destination and key-binding refusals are run-fatal on top of that: config
+	// is read once, so the policy that refused this request refuses every one
+	// after it. A response past the size ceiling is NOT — that is a property of
+	// one answer, and a single fat response must not kill the run.
+	if errors.Is(err, transport.ErrRefusedDestination) ||
+		errors.Is(err, transport.ErrKeyBinding) {
+		// Wrapped in an Actionable before it is marked, matching what
+		// anthropic does for the identical condition. The bare transport error
+		// was harmless while it was one Case's failure; as the RUN-ending
+		// error it reaches codeOf, which records "AGENT_ERROR", and
+		// ExitCodeOf, which returns the unclassified default — so the user
+		// gets no fix line for a misconfiguration that has an obvious one.
+		return agenterr.AsRunFatal(errs.ErrInvalidInput.
+			WithFix("point --base-url at the endpoint directly, and bind a key " +
+				"for that host with --key-env host=VAR; Kno does not follow " +
+				"redirects off the host a key is bound to").
+			Wrap(err))
+	}
 	return err
 }
 
@@ -140,7 +160,24 @@ func (a *Agent) errorFor(resp *transport.Response) error {
 					host, model, describe(resp.StatusCode, we))),
 		}
 
-	case resp.StatusCode >= 500, resp.StatusCode == http.StatusRequestTimeout:
+	case resp.StatusCode == http.StatusRequestTimeout:
+		// Same sentinel as a 5xx — both are "the provider failed to answer",
+		// both retryable — but NOT the same reason. core could only classify
+		// from the sentinel, so a timeout was reported as
+		// RETRY_REASON_PROVIDER_UNAVAILABLE, whose schema definition is "the
+		// provider returned a 5xx". RETRY_REASON_TIMEOUT existed and nothing
+		// ever emitted it. See docs/debt.md#53.
+		//
+		// The reason rides on the error because the status code is knowledge
+		// only this layer has, and a sentinel cannot carry it up.
+		return agenterr.WithRetryReason(
+			a.billed(errs.ErrTransportTransient.Wrap(fmt.Errorf(
+				"%s did not answer for %s in time: %s",
+				host, model, describe(resp.StatusCode, we))),
+				decodeUsage(resp.Body)),
+			knov1.RetryReason_RETRY_REASON_TIMEOUT)
+
+	case resp.StatusCode >= 500:
 		return a.billed(errs.ErrTransportTransient.Wrap(fmt.Errorf(
 			"%s did not answer for %s: %s", host, model, describe(resp.StatusCode, we))),
 			decodeUsage(resp.Body))
@@ -152,9 +189,12 @@ func (a *Agent) errorFor(resp *transport.Response) error {
 		// per-host binding is what went wrong — the user set OPENAI_API_KEY and
 		// pointed the run at a different provider, and the message must say
 		// which host had no key rather than implying the key is wrong.
-		return errs.ErrInvalidInput.WithFix(credentialFix(host, a.keyEnv)).
-			Wrap(fmt.Errorf("%s rejected the credential: %s",
-				host, describe(resp.StatusCode, we)))
+		// Run-fatal: the credential is resolved once at construction, so a
+		// rejected key rejects every remaining Case. See docs/debt.md#47.
+		return agenterr.AsRunFatal(
+			errs.ErrInvalidInput.WithFix(credentialFix(host, a.keyEnv)).
+				Wrap(fmt.Errorf("%s rejected the credential: %s",
+					host, describe(resp.StatusCode, we))))
 
 	case isContextLength(we):
 		// A distinct message because the fix is distinct and neither of the
@@ -170,11 +210,13 @@ func (a *Agent) errorFor(resp *transport.Response) error {
 				"%s's context window: %s", host, model, describe(resp.StatusCode, we)))
 
 	case resp.StatusCode == http.StatusNotFound:
-		return errs.ErrInvalidInput.
+		// Run-fatal: neither the model name nor the base URL changes mid-run,
+		// so a 404 on the first Case is a 404 on all of them.
+		return agenterr.AsRunFatal(errs.ErrInvalidInput.
 			WithFix(fmt.Sprintf("check the model name and the base URL; %s has no "+
 				"chat-completions endpoint at this path", host)).
 			Wrap(fmt.Errorf("%s returned 404 for %s: %s",
-				host, model, describe(resp.StatusCode, we)))
+				host, model, describe(resp.StatusCode, we))))
 
 	default:
 		return a.billed(errs.ErrInvalidInput.
