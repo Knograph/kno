@@ -47,6 +47,38 @@ covenants — breaking any of them requires a major version.
   re-reading would have put two contradictory splits on one message, with the presence-carrying
   copy describing a split the run was never measured under.
 
+### Fixed
+
+- **`executor.RecordGrace` bounded the whole run instead of the drain after cancellation.** It was
+  a `context.WithTimeout` built before the first item was dispatched, so on any run longer than the
+  grace (30s by default, and nothing ever set it) the first sink write failed, `sinkBroken` latched
+  so every later result was discarded without being asked, and a resumed run paid for all of them
+  again. Invisible until now only because every test in the tree uses a sub-second in-process fake
+  agent — which stops being true the moment a provider adapter is reachable from the CLI.
+
+  The grace is now armed **by** the caller's cancellation, which is what its godoc always described.
+  A hung sink is bounded separately by `PerRecordTimeout` (new, exported, 30s default) **per call**,
+  because the hazard is one write that never returns, not a budget the run draws down. Repays
+  [debt #54](docs/debt.md#54).
+
+- **`executor.Options.AfterRecord`** (additive), the only path from a *successful* item to shutdown. `IsFatal`
+  is consulted only on a work error, so a condition discovered in an answer the caller has already
+  paid for had nowhere to go: failing the item would discard a paid, scoreable result and record it
+  as an error, and returning an error from `SinkFunc` would latch `sinkBroken` and discard every
+  result after it. `AfterRecord` runs once the result is durable and counted, and ending the run
+  there keeps it — and a panic inside it is recovered, because unguarded it unwound out of the loop
+  that drains results and deadlocked the run permanently.
+
+  It receives the `Result` boxed as `any` rather than splintered into `(item, value, err)`:
+  `Result` documents that exactly one of `Value` and `Err` is meaningful, and three loose
+  parameters discard that invariant and hand the caller a non-nil `any` wrapping a nil pointer on
+  the failure path.
+
+- A sink failure that happens **after the grace has expired** now joins the caller's cancellation
+  cause. Without it, a store surfacing its own error text instead of a wrapped `context.Canceled`
+  turned a Ctrl-C into `RUN_STATUS_FAILED` with a generic exit code — so a CI gate keying on the
+  interrupted code would flip the day a driver reworded.
+
 ### Changed
 
 - The fix line on a stale-checkpoint refusal no longer names a cause that is never tested. It
