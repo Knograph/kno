@@ -569,18 +569,16 @@ func (o BaselineOptions) progressTicker(
 // The cumulative figure below IS read after, which is correct for it — it is a
 // running total, and "as of now" is what it means.
 //
-// The per-event contribution is NOT derivable from this payload, and an
-// earlier version of this comment said to get it by subtracting reserved from
-// settled. That over-counts by the pre-cap headroom: reserved 50k, settled
-// 500k, cap 200k gives 450k where the contribution to the overshoot is 300k,
-// because the first 200k was still under the cap. Summing that across events
-// inflates the total. Carrying the delta Settle returns is the fix and needs a
-// proto field — docs/debt.md#50.
+// The per-event contribution rides along as delta, because it is NOT derivable
+// from the other fields: subtracting reserved from settled over-counts by
+// whatever headroom was left under the cap. Reserved 50k, settled 500k, cap
+// 200k gives 450k where the contribution is 300k, since the first 200k was
+// still inside. A consumer summing the derived figure inflates the total.
 func (o BaselineOptions) emitSettlementOvershoot(
 	ctx context.Context,
 	agg *aggregator,
 	caseID string,
-	reserved, settled int64,
+	reserved, settled, delta int64,
 ) error {
 	return o.appendEventFunc(ctx, agg, func() *knov1.Event {
 		return &knov1.Event{
@@ -590,6 +588,7 @@ func (o BaselineOptions) emitSettlementOvershoot(
 					ReservedUsdMicros:            reserved,
 					SettledUsdMicros:             settled,
 					CumulativeOvershootUsdMicros: o.Guard.Overshoot(),
+					DeltaUsdMicros:               delta,
 				},
 			},
 		}

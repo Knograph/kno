@@ -91,6 +91,16 @@ covenants — breaking any of them requires a major version.
   **This migration cannot be downgraded past.** `kno` refuses to open a database whose schema is
   newer than the binary understands, so an older build will not start against a migrated file.
 
+- `SettlementOvershoot` reports how much **this** settlement contributed. The figure was not
+  derivable from the payload: subtracting `reserved` from `settled` over-counts by whatever
+  headroom was still under the cap — 450k where the true contribution is 300k — so a consumer
+  summing across events inflated the overshoot.
+- A **billed** retry is reported as `PROVIDER_UNAVAILABLE` rather than `TRANSPORT_TRANSIENT`,
+  which the schema defines as having *no evidence the provider processed the request*. A charge is
+  evidence it did, and it is the only signal that separates the two — an adapter wraps a reset
+  connection and a billed 5xx as the same sentinel. The one retry reason that costs money was
+  being reported as the one that means nothing happened.
+
 - **A provider's charge for a failed call is no longer recorded as free.** The guard settled it and
   the store persisted zero, and `SettledSpend` is the only durable record of money spent — so a
   resumed run got the difference as headroom and spent it again. With `--max-attempts 3` the guard

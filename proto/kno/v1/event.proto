@@ -390,6 +390,16 @@ message SettlementOvershoot {
 
   // Cumulative spend beyond the cap, or zero while still within it.
   int64 cumulative_overshoot_usd_micros = 4;
+
+  // How much of the cumulative overshoot THIS settlement contributed.
+  //
+  // Not derivable from the fields above. Subtracting reserved from settled
+  // over-counts by whatever headroom was left under the cap: reserved 50k,
+  // settled 500k, cap 200k gives 450k where the contribution is 300k, because
+  // the first 200k was still inside the cap. Summing that across events
+  // inflates the total, which is why the engine carries the figure it already
+  // computes rather than leaving a consumer to derive a wrong one.
+  int64 delta_usd_micros = 5;
 }
 
 // ConcurrencyReduced reports that the engine narrowed the run's concurrency.

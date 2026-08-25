@@ -1329,8 +1329,17 @@ type SettlementOvershoot struct {
 	SettledUsdMicros int64 `protobuf:"varint,3,opt,name=settled_usd_micros,json=settledUsdMicros,proto3" json:"settled_usd_micros,omitempty"`
 	// Cumulative spend beyond the cap, or zero while still within it.
 	CumulativeOvershootUsdMicros int64 `protobuf:"varint,4,opt,name=cumulative_overshoot_usd_micros,json=cumulativeOvershootUsdMicros,proto3" json:"cumulative_overshoot_usd_micros,omitempty"`
-	unknownFields                protoimpl.UnknownFields
-	sizeCache                    protoimpl.SizeCache
+	// How much of the cumulative overshoot THIS settlement contributed.
+	//
+	// Not derivable from the fields above. Subtracting reserved from settled
+	// over-counts by whatever headroom was left under the cap: reserved 50k,
+	// settled 500k, cap 200k gives 450k where the contribution is 300k, because
+	// the first 200k was still inside the cap. Summing that across events
+	// inflates the total, which is why the engine carries the figure it already
+	// computes rather than leaving a consumer to derive a wrong one.
+	DeltaUsdMicros int64 `protobuf:"varint,5,opt,name=delta_usd_micros,json=deltaUsdMicros,proto3" json:"delta_usd_micros,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *SettlementOvershoot) Reset() {
@@ -1387,6 +1396,13 @@ func (x *SettlementOvershoot) GetSettledUsdMicros() int64 {
 func (x *SettlementOvershoot) GetCumulativeOvershootUsdMicros() int64 {
 	if x != nil {
 		return x.CumulativeOvershootUsdMicros
+	}
+	return 0
+}
+
+func (x *SettlementOvershoot) GetDeltaUsdMicros() int64 {
+	if x != nil {
+		return x.DeltaUsdMicros
 	}
 	return 0
 }
@@ -1552,12 +1568,13 @@ const file_kno_v1_event_proto_rawDesc = "" +
 	"\x10RateLimitWaiting\x12\x17\n" +
 	"\await_ms\x18\x01 \x01(\x03R\x06waitMs\x12-\n" +
 	"\x12provider_requested\x18\x02 \x01(\bR\x11providerRequested\x12\x12\n" +
-	"\x04host\x18\x03 \x01(\tR\x04host\"\xd3\x01\n" +
+	"\x04host\x18\x03 \x01(\tR\x04host\"\xfd\x01\n" +
 	"\x13SettlementOvershoot\x12\x17\n" +
 	"\acase_id\x18\x01 \x01(\tR\x06caseId\x12.\n" +
 	"\x13reserved_usd_micros\x18\x02 \x01(\x03R\x11reservedUsdMicros\x12,\n" +
 	"\x12settled_usd_micros\x18\x03 \x01(\x03R\x10settledUsdMicros\x12E\n" +
-	"\x1fcumulative_overshoot_usd_micros\x18\x04 \x01(\x03R\x1ccumulativeOvershootUsdMicros\"M\n" +
+	"\x1fcumulative_overshoot_usd_micros\x18\x04 \x01(\x03R\x1ccumulativeOvershootUsdMicros\x12(\n" +
+	"\x10delta_usd_micros\x18\x05 \x01(\x03R\x0edeltaUsdMicros\"M\n" +
 	"\x12ConcurrencyReduced\x127\n" +
 	"\bdecision\x18\x01 \x01(\v2\x1b.kno.v1.ConcurrencyDecisionR\bdecision*\xb1\x01\n" +
 	"\vRetryReason\x12\x1c\n" +

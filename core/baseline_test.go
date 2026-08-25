@@ -3540,6 +3540,18 @@ func TestASettlementPastTheCapIsReported(t *testing.T) {
 	if first.GetCaseId() == "" {
 		t.Error("no Case named; the overshoot is attributable and should say to what")
 	}
+	// The delta is what this settlement contributed, and it is NOT
+	// settled-minus-reserved: that over-counts by the headroom still under the
+	// cap. Cap 200k, est 50k, settled 500k — the derived figure is 450k and
+	// the true contribution is 300k, because the first 200k was inside.
+	if got, derived := first.GetDeltaUsdMicros(), first.GetSettledUsdMicros()-first.GetReservedUsdMicros(); got == derived {
+		t.Errorf("delta=%d equals settled-reserved=%d; if the two agree on this "+
+			"fixture the field is not carrying what it exists for", got, derived)
+	}
+	if first.GetDeltaUsdMicros() != first.GetCumulativeOvershootUsdMicros() {
+		t.Errorf("delta=%d cumulative=%d; the FIRST overshoot of a run contributes "+
+			"all of it", first.GetDeltaUsdMicros(), first.GetCumulativeOvershootUsdMicros())
+	}
 	// Bounded by concurrency, not by Case count: at concurrency 1 the cap
 	// binds after the first settlement and nothing further is authorized.
 	if len(seen) > 2 {
