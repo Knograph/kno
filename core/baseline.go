@@ -461,6 +461,12 @@ func Baseline(
 	if err := stopProgress(); err != nil && runErr == nil {
 		runErr = err
 	}
+	// A hot-path event-write failure ends the run, but only here — recorded
+	// during the run rather than returned, so it could not destroy the paid
+	// work it was reporting on.
+	if err := agg.emitFailed(); err != nil && runErr == nil {
+		runErr = err
+	}
 	return opts.closeRun(ctx, run, agg, stats, runErr)
 }
 

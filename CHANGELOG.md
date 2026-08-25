@@ -87,7 +87,9 @@ covenants — breaking any of them requires a major version.
 - **`Reservation.Settle` clamps what an adapter reports.** A negative charge is refused rather than
   subtracted, and a saturating one pins rather than wrapping. Unclamped, two `MaxInt64` settlements
   against a $1.00 cap left spend at **-2**, `Remaining` reporting more than the cap, and the guard
-  authorizing again. Repays [debt #48](docs/debt.md#48).
+  authorizing again. `fitsLocked` and `Restore` saturate too — clamping only `Settle` moved the
+  overflow into the cap comparison, where a pinned total wrapped and the guard authorized without
+  limit. Repays [debt #48](docs/debt.md#48).
 
 ### Added
 
@@ -98,7 +100,9 @@ covenants — breaking any of them requires a major version.
 - **`RetryAttempted`**, emitted *before* the backoff wait, so a watcher can tell a run obeying a
   provider's `Retry-After` from a hung one. Emitted after the sleep it announces, it would report
   idleness only once idleness had ended.
-- **`SpendRecorded`**, on the progress heartbeat rather than per settlement. All three of its
+- **`SpendRecorded`**, on the progress heartbeat rather than per settlement. **Not emitted in any
+  shipped configuration yet** — the heartbeat is off by default and nothing turns it on until the
+  M2-11 flag, so a default run's stream still does not report spend. All three of its
   totals are cumulative — the message was shaped for a heartbeat — and per-settlement emission
   would put another fsync behind every agent call.
 

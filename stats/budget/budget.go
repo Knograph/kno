@@ -275,14 +275,24 @@ func (g *Guard) tryReserve(est Estimate) (res *Reservation, needsConfirm bool, r
 
 // fitsLocked reports whether est fits within the caps, counting outstanding
 // reservations as already consumed. Callers must hold g.mu.
+// fitsLocked reports whether one more estimate stays inside the caps.
+//
+// Every sum saturates. A plain three-term add wraps to MinInt64 once spent
+// approaches the top of the range, the comparison then reads as "well under
+// the cap", and the guard authorizes without limit — measured against a $1.00
+// cap after one saturated settlement: Remaining reporting 0 and Authorize
+// returning nil. Clamping Settle alone moved the overflow here rather than
+// removing it, which is why docs/debt.md#48 needs both.
 func (g *Guard) fitsLocked(est Estimate) bool {
 	if g.limits.MaxCostUSDMicros > 0 {
-		if g.spent.CostUSDMicros+g.reserved.CostUSDMicros+est.CostUSDMicros > g.limits.MaxCostUSDMicros {
+		used := addSpend(addSpend(g.spent.CostUSDMicros, g.reserved.CostUSDMicros), est.CostUSDMicros)
+		if used > g.limits.MaxCostUSDMicros {
 			return false
 		}
 	}
 	if g.limits.MaxLLMCalls > 0 {
-		if g.spent.Calls+g.reserved.Calls+est.Calls > g.limits.MaxLLMCalls {
+		used := addSpend(addSpend(g.spent.Calls, g.reserved.Calls), est.Calls)
+		if used > g.limits.MaxLLMCalls {
 			return false
 		}
 	}
@@ -493,9 +503,9 @@ func (g *Guard) Restore(spent Spend) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	g.spent.Calls += spent.Calls
-	g.spent.CostUSDMicros += spent.CostUSDMicros
-	g.spent.Tokens += spent.Tokens
+	g.spent.Calls = addSpend(g.spent.Calls, spent.Calls)
+	g.spent.CostUSDMicros = addSpend(g.spent.CostUSDMicros, spent.CostUSDMicros)
+	g.spent.Tokens = addSpend(g.spent.Tokens, spent.Tokens)
 }
 
 // Limits reports the caps this Guard enforces.

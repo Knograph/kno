@@ -80,6 +80,21 @@ type aggregator struct {
 	// first emitter that is not.
 	emitMu sync.Mutex
 
+	// emitFailure holds the first hot-path event-write failure.
+	//
+	// Out of band, because an observability failure must never change an
+	// attempt's RESULT. Returning it from the worker discarded a paid,
+	// scoreable answer and recorded the Case as an agent error — and since the
+	// outcome row was still written, a resume skipped it. We would have paid
+	// for an answer, thrown it away, and blamed the agent.
+	//
+	// docs/debt.md#32 already rejected this mechanism for Settle: "making
+	// Settle fail would turn a successful, paid, scored call into an errored
+	// Case and lose paid work." The emitter is the same hazard by another
+	// route. Surfaced at close instead, where it ends the run without
+	// destroying what the run bought.
+	emitFailure atomic.Pointer[error]
+
 	// closed is set when RunFinished is written.
 	//
 	// The payload promises it is "always the last event" and nothing enforced
@@ -175,6 +190,21 @@ func (a *aggregator) meanLocked() *float64 {
 		return nil
 	}
 	return &m
+}
+
+// recordEmitFailure keeps the first hot-path event-write failure.
+func (a *aggregator) recordEmitFailure(err error) {
+	if err != nil {
+		a.emitFailure.CompareAndSwap(nil, &err)
+	}
+}
+
+// emitFailed reports the first hot-path event-write failure, if any.
+func (a *aggregator) emitFailed() error {
+	if p := a.emitFailure.Load(); p != nil {
+		return *p
+	}
+	return nil
 }
 
 // isClosed reports whether RunFinished has been written.
@@ -514,8 +544,15 @@ func (o BaselineOptions) progressTicker(
 // and both report it. The gate is in invokeWithRetry, where the delta is.
 //
 // The cumulative figure below IS read after, which is correct for it — it is a
-// running total, and "as of now" is what it means. A consumer wanting the
-// attributable amount subtracts reserved from settled.
+// running total, and "as of now" is what it means.
+//
+// The per-event contribution is NOT derivable from this payload, and an
+// earlier version of this comment said to get it by subtracting reserved from
+// settled. That over-counts by the pre-cap headroom: reserved 50k, settled
+// 500k, cap 200k gives 450k where the contribution to the overshoot is 300k,
+// because the first 200k was still under the cap. Summing that across events
+// inflates the total. Carrying the delta Settle returns is the fix and needs a
+// proto field — docs/debt.md#50.
 func (o BaselineOptions) emitSettlementOvershoot(
 	ctx context.Context,
 	agg *aggregator,

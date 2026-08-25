@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"math"
 	"time"
 
 	"github.com/knograph/kno/core/errs"
@@ -97,16 +98,29 @@ func (o BaselineOptions) invokeWithRetry(
 	for attempt := 1; attempt <= o.maxAttempts(); attempt++ {
 		attempts++
 		resp, settled, overshoot, invokeErr := o.invokeOnce(ctx, c, est)
-		billed += settled.CostUSDMicros
+		// Saturating, matching Guard.Settle. A plain add wraps where the guard
+		// pins, so the store and the guard would disagree on exactly the
+		// inputs the clamp exists for — and the store is the one that outlives
+		// the process.
+		billed = saturatingAdd(billed, settled.CostUSDMicros)
 		if overshoot > 0 {
 			// Emitted at settle time and gated on the DELTA, so the count is
 			// bounded by concurrency rather than by Case count: once the cap
 			// binds, only reservations already in flight can overshoot.
-			if emitErr := o.emitSettlementOvershoot(
-				ctx, agg, c.GetId(), est.CostUSDMicros, settled.CostUSDMicros,
-			); emitErr != nil {
-				return nil, attempts, billed, emitErr
-			}
+			//
+			// The failure is recorded, NOT returned. Returning it discarded a
+			// paid, scoreable answer — the overshoot check runs before the
+			// success check — and recorded the Case as an agent error while
+			// still writing its outcome row, so a resume skipped it forever.
+			//
+			// WithoutCancel with its own grace, because a budget stop cancels
+			// the worker context and a budget stop is exactly when an
+			// overshoot happens.
+			emitCtx, cancel := context.WithTimeout(
+				context.WithoutCancel(ctx), progressWriteGrace)
+			agg.recordEmitFailure(o.emitSettlementOvershoot(
+				emitCtx, agg, c.GetId(), est.CostUSDMicros, settled.CostUSDMicros))
+			cancel()
 		}
 		if invokeErr == nil {
 			return resp, attempts, billed, nil
@@ -138,10 +152,14 @@ func (o BaselineOptions) invokeWithRetry(
 		// telling a watcher the run is obeying a provider's backoff rather
 		// than hung; emitted after the sleep it announces, it reports
 		// idleness only once idleness has ended.
-		if emitErr := o.emitRetryAttempted(ctx, agg, c.GetId(), attempt,
-			retryReasonOf(invokeErr), wait, time.Until(deadline)); emitErr != nil {
-			return nil, attempts, billed, emitErr
-		}
+		// Recorded rather than returned, for the same reason: an event-store
+		// hiccup must not convert a retryable Case into a terminal error and
+		// inflate the run's error rate past ErrorRateExceeded.
+		retryCtx, cancelRetry := context.WithTimeout(
+			context.WithoutCancel(ctx), progressWriteGrace)
+		agg.recordEmitFailure(o.emitRetryAttempted(retryCtx, agg, c.GetId(), attempt,
+			retryReasonOf(invokeErr), wait, time.Until(deadline)))
+		cancelRetry()
 
 		// A ctx-aware wait. Sleeping through a cancellation would keep a
 		// stopped run alive for the length of the backoff.
@@ -155,11 +173,31 @@ func (o BaselineOptions) invokeWithRetry(
 	return nil, attempts, billed, lastErr
 }
 
+// saturatingAdd adds without wrapping. Non-positive is discarded: a charge
+// that credits the run is not a charge.
+func saturatingAdd(total, add int64) int64 {
+	if add <= 0 {
+		return total
+	}
+	if total > math.MaxInt64-add {
+		return math.MaxInt64
+	}
+	return total + add
+}
+
 // retryReasonOf classifies why a Case is being retried.
 //
-// UNSPECIFIED for anything the enum does not name, which is honest: a reason
-// nobody enumerated is better reported as unknown than mapped to whichever
-// neighbouring value looks closest.
+// Only reached after retryable() has passed, which admits exactly the two
+// sentinels below — so the default arm is unreachable, and deliberately so:
+// the proto says an emitter that cannot classify MUST NOT retry, which makes
+// emitting UNSPECIFIED on a RetryAttempted a contract violation rather than an
+// honest shrug. The arm exists because a future retryable sentinel would
+// otherwise fail to compile into a reason, and that should be caught by the
+// enum growing, not by a panic.
+//
+// TRANSPORT_TRANSIENT is imprecise for a BILLED 5xx: the proto defines it as
+// "no evidence the provider processed the request", and a charge is evidence
+// it did. Naming that case needs an enum value — docs/debt.md#50.
 func retryReasonOf(err error) knov1.RetryReason {
 	switch {
 	case errors.Is(err, errs.ErrRateLimited):

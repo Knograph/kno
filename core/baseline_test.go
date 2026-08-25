@@ -3620,3 +3620,105 @@ func TestABilledFailureBeforeASuccessIsStillPersisted(t *testing.T) {
 			settledInGuard-persisted.CostUSDMicros)
 	}
 }
+
+// selectiveFailStore fails AppendEvent for one payload type and no other.
+type selectiveFailStore struct {
+	store.Store
+	failOn func(*knov1.Event) bool
+}
+
+func (s *selectiveFailStore) AppendEvent(ctx context.Context, ev *knov1.Event) error {
+	if s.failOn(ev) {
+		return errors.New("the event store is unavailable")
+	}
+	return s.Store.AppendEvent(ctx, ev)
+}
+
+// TestAnEventWriteFailureDoesNotDestroyThePaidWorkItReportsOn.
+//
+// The overshoot emit runs before the success check, so returning its error
+// discarded a paid, scoreable answer — and because the outcome row was still
+// written, CompletedCases included it and a resume skipped it forever. We
+// would have paid for an answer, thrown it away, blamed the agent, and never
+// re-attempted.
+//
+// docs/debt.md#32 rejected exactly this mechanism for Settle: "making Settle
+// fail would turn a successful, paid, scored call into an errored Case and
+// lose paid work." An emitter is the same hazard by another route.
+//
+// The failure still ends the run — a stream with a silent hole is worse than a
+// run that stops — but at close, after the work it was reporting on is safe.
+func TestAnEventWriteFailureDoesNotDestroyThePaidWorkItReportsOn(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// Each call costs ten times its estimate, so the first settlement
+	// overshoots and the overshoot emit fires.
+	h := newHarness(t, 4, 2, fake.Options{CostPerCallUSDMicros: 500_000})
+	h.opts.Concurrency = 1
+	h.opts.EstCostPerCallUSDMicros = 50_000
+	h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 200_000}, nil, 0)
+	h.opts.Store = &selectiveFailStore{
+		Store: h.store,
+		failOn: func(ev *knov1.Event) bool {
+			_, isOvershoot := ev.GetPayload().(*knov1.Event_SettlementOvershoot)
+			return isOvershoot
+		},
+	}
+
+	res, err := core.Baseline(ctx, h.evals, h.opts)
+	if err == nil {
+		t.Fatal("the run must end reporting the event-write failure; a silent gap " +
+			"in the stream is worse than a run that stops")
+	}
+
+	// The paid answer survived. Before the fix this was scored=0 errored=1.
+	if res == nil || res.Run.GetScoredCaseCount() == 0 {
+		t.Fatalf("the Case was paid for and answered, and the run recorded no score. "+
+			"An observability failure destroyed the work it was reporting on: %+v", res)
+	}
+	if res.Run.GetErroredCaseCount() > 0 {
+		t.Errorf("%d Cases errored; an event-store failure is not an agent failure, "+
+			"and codeOf would have recorded it as AGENT_ERROR",
+			res.Run.GetErroredCaseCount())
+	}
+}
+
+// TestAFailedRetryEventDoesNotTurnARetryableCaseTerminal.
+//
+// Same hazard, quieter symptom: returning the RetryAttempted emit error
+// converts a Case that would have succeeded on its next attempt into a
+// terminal failure. Enough of those trip ErrorRateExceeded and mark a healthy
+// baseline unusable, on an event-store hiccup.
+func TestAFailedRetryEventDoesNotTurnARetryableCaseTerminal(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	h := newHarness(t, 5, 2, fake.Options{})
+	h.opts.Agent = &flakyBillingAgent{
+		billed: 1_000,
+		answer: &knov1.Response{CostUsdMicros: 1_000},
+	}
+	h.opts.Concurrency = 1
+	h.opts.RetryBackoff = time.Millisecond
+	h.opts.Store = &selectiveFailStore{
+		Store: h.store,
+		failOn: func(ev *knov1.Event) bool {
+			_, isRetry := ev.GetPayload().(*knov1.Event_RetryAttempted)
+			return isRetry
+		},
+	}
+
+	res, err := core.Baseline(ctx, h.evals, h.opts)
+	if err == nil {
+		t.Fatal("the run must end reporting the event-write failure")
+	}
+	if res == nil || res.Run.GetScoredCaseCount() == 0 {
+		t.Fatalf("every Case retries into a success, and none scored — the retry "+
+			"event's failure made them terminal: %+v", res)
+	}
+	if res.Run.GetErrorRateExceeded() {
+		t.Error("the run is marked an unusable baseline because its event store " +
+			"hiccuped, not because its agent failed")
+	}
+}
