@@ -153,6 +153,14 @@ func TestMoneyIsAlwaysInt64MicroUSD(t *testing.T) {
 		"kno.v1.SettlementOvershoot.reserved_usd_micros",
 		"kno.v1.SettlementOvershoot.settled_usd_micros",
 		"kno.v1.SettlementOvershoot.cumulative_overshoot_usd_micros",
+		// M2: what THIS settlement contributed to the overshoot. Carried
+		// because subtracting reserved from settled over-counts by the
+		// headroom that was still under the cap.
+		"kno.v1.SettlementOvershoot.delta_usd_micros",
+		// M2: money spent on a Case that produced no outcome. The store
+		// records the amount against the RUN, so this event is the only
+		// place the attribution to a Case exists.
+		"kno.v1.OrphanSpend.cost_usd_micros",
 		"kno.v1.RunFinished.total_cost_usd_micros",
 		// M2-10b: the two terms of the concurrency reduction's arithmetic. Both
 		// are carried because one is not enough: the engine divides a fraction

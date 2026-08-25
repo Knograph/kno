@@ -346,10 +346,26 @@ func TestRetryReasonOfNamesWhatTheProtoDefines(t *testing.T) {
 			knov1.RetryReason_RETRY_REASON_TRANSPORT_TRANSIENT,
 		},
 		{
+			// A charge is evidence the provider PROCESSED the request, which
+			// is exactly what TRANSPORT_TRANSIENT is defined as not having. An
+			// adapter wraps both a reset connection and a billed 5xx as
+			// ErrTransportTransient, so the sentinel cannot separate them and
+			// the charge can — otherwise the one retry reason that costs money
+			// is reported as the one meaning nothing happened.
+			"a BILLED transient is the provider, not the transport",
+			billedErr{errs.ErrTransportTransient.Wrap(errors.New("502")), 40_000},
+			knov1.RetryReason_RETRY_REASON_PROVIDER_UNAVAILABLE,
+		},
+		{
+			"an unbilled transient is still the transport",
+			billedErr{errs.ErrTransportTransient.Wrap(errors.New("reset")), 0},
+			knov1.RetryReason_RETRY_REASON_TRANSPORT_TRANSIENT,
+		},
+		{
 			// Unreachable through invokeWithRetry, which only emits after
-			// retryable() has admitted one of the two above. Pinned so the arm
-			// stays honest if a third retryable sentinel is added and nobody
-			// grows the enum.
+			// retryable() has admitted one of the sentinels above. Pinned so
+			// the arm stays honest if a third retryable sentinel is added and
+			// nobody grows the enum.
 			"anything retryable() would not admit",
 			errors.New("a plain failure"),
 			knov1.RetryReason_RETRY_REASON_UNSPECIFIED,

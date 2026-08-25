@@ -164,7 +164,7 @@ func (o BaselineOptions) invokeWithRetry(
 			emitCtx, cancel := context.WithTimeout(
 				context.WithoutCancel(ctx), progressWriteGrace)
 			agg.recordEmitFailure(o.emitSettlementOvershoot(
-				emitCtx, agg, c.GetId(), est.CostUSDMicros, settled.CostUSDMicros))
+				emitCtx, agg, c.GetId(), est.CostUSDMicros, settled.CostUSDMicros, overshoot))
 			cancel()
 		}
 		if invokeErr == nil {
@@ -240,13 +240,24 @@ func saturatingAdd(total, add int64) int64 {
 // otherwise fail to compile into a reason, and that should be caught by the
 // enum growing, not by a panic.
 //
-// TRANSPORT_TRANSIENT is imprecise for a BILLED 5xx: the proto defines it as
-// "no evidence the provider processed the request", and a charge is evidence
-// it did. Naming that case needs an enum value — docs/debt.md#50.
+// A billed failure reports PROVIDER_UNAVAILABLE rather than
+// TRANSPORT_TRANSIENT. See the case below for why the charge is the
+// discriminator.
 func retryReasonOf(err error) knov1.RetryReason {
 	switch {
 	case errors.Is(err, errs.ErrRateLimited):
 		return knov1.RetryReason_RETRY_REASON_RATE_LIMITED
+
+	// A CHARGE is evidence the provider processed the request, and
+	// TRANSPORT_TRANSIENT is defined as having none. An adapter wraps both a
+	// reset connection and a billed 5xx as ErrTransportTransient, so the
+	// sentinel alone cannot separate them — the charge can. PROVIDER_UNAVAILABLE
+	// already means "the provider returned a 5xx", so no new enum value is
+	// needed, only an emitter that stops reporting the one retry reason that
+	// costs money as the one that means nothing happened.
+	case billedCostOf(err) > 0:
+		return knov1.RetryReason_RETRY_REASON_PROVIDER_UNAVAILABLE
+
 	case errors.Is(err, errs.ErrTransportTransient):
 		return knov1.RetryReason_RETRY_REASON_TRANSPORT_TRANSIENT
 	default:

@@ -367,13 +367,45 @@ func (o BaselineOptions) emit(ctx context.Context, r executor.Result[*Case, case
 	return o.appendEvent(ctx, agg, ev, "case "+r.Item.GetId())
 }
 
+// emitOrphanSpend puts the orphaned charge on the event stream.
+//
+// The store records the amount against the RUN and cannot say which Case it
+// belonged to, so this event is the only place that attribution exists.
+// Without it the money is a bare integer nothing describes — the side channel
+// CLAUDE.md's Observability section forbids.
+//
+// Emitted from the sink rather than the worker because the sink is where the
+// decision not to record an outcome is made, and the two must not disagree.
+func (o BaselineOptions) emitOrphanSpend(
+	ctx context.Context,
+	agg *aggregator,
+	caseID string,
+	spend budget.Spend,
+	reason knov1.OrphanReason,
+) error {
+	return o.appendEvent(ctx, agg, &knov1.Event{
+		Payload: &knov1.Event_OrphanSpend{OrphanSpend: &knov1.OrphanSpend{
+			CaseId:        caseID,
+			CostUsdMicros: spend.CostUSDMicros,
+			Calls:         spend.Calls,
+			Reason:        reason,
+		}},
+	}, "orphan-spend")
+}
+
 // recordOrphanSpend makes durable the money settled for a Case that produced
 // no outcome.
 //
 // The write predicate is "the guard settled something", not "the Case
 // errored". A Case refused before its first call settled nothing, and writing a
 // call for it would fabricate one that never happened.
-func (o BaselineOptions) recordOrphanSpend(ctx context.Context, out *caseOutcome) error {
+func (o BaselineOptions) recordOrphanSpend(
+	ctx context.Context,
+	agg *aggregator,
+	caseID string,
+	out *caseOutcome,
+	reason knov1.OrphanReason,
+) error {
 	spend := settledSpend(out)
 	if spend.Calls <= 0 && spend.CostUSDMicros <= 0 {
 		return nil
@@ -387,6 +419,22 @@ func (o BaselineOptions) recordOrphanSpend(ctx context.Context, out *caseOutcome
 	if err := o.Store.RecordOrphanSpend(ctx, o.RunID, spend); err != nil {
 		return fmt.Errorf("recording orphan spend: %w", err)
 	}
+	// After the durable write, so the stream never describes money the store
+	// does not hold. The reverse order would put a charge on the wire that a
+	// resume cannot see.
+	//
+	// RECORDED, not returned. This is the sink's return value, and the
+	// executor latches sinkBroken on it — so a failed append here would drop
+	// every result still queued behind it, including scored Cases already paid
+	// for, on the drain path where a budget stop delivers them in a burst.
+	// Worse, the worker sends its result before calling fail(ErrBudgetExceeded),
+	// so the sink's error can lose that race and be swallowed: a clean
+	// BUDGET_STOPPED, and a resume into a double-spend with nothing saying
+	// results were dropped.
+	//
+	// The same conclusion the other hot-path emitters reached, and the
+	// mechanism is already here.
+	agg.recordEmitFailure(o.emitOrphanSpend(ctx, agg, caseID, spend, reason))
 	return nil
 }
 
@@ -569,18 +617,16 @@ func (o BaselineOptions) progressTicker(
 // The cumulative figure below IS read after, which is correct for it — it is a
 // running total, and "as of now" is what it means.
 //
-// The per-event contribution is NOT derivable from this payload, and an
-// earlier version of this comment said to get it by subtracting reserved from
-// settled. That over-counts by the pre-cap headroom: reserved 50k, settled
-// 500k, cap 200k gives 450k where the contribution to the overshoot is 300k,
-// because the first 200k was still under the cap. Summing that across events
-// inflates the total. Carrying the delta Settle returns is the fix and needs a
-// proto field — docs/debt.md#50.
+// The per-event contribution rides along as delta, because it is NOT derivable
+// from the other fields: subtracting reserved from settled over-counts by
+// whatever headroom was left under the cap. Reserved 50k, settled 500k, cap
+// 200k gives 450k where the contribution is 300k, since the first 200k was
+// still inside. A consumer summing the derived figure inflates the total.
 func (o BaselineOptions) emitSettlementOvershoot(
 	ctx context.Context,
 	agg *aggregator,
 	caseID string,
-	reserved, settled int64,
+	reserved, settled, delta int64,
 ) error {
 	return o.appendEventFunc(ctx, agg, func() *knov1.Event {
 		return &knov1.Event{
@@ -590,6 +636,7 @@ func (o BaselineOptions) emitSettlementOvershoot(
 					ReservedUsdMicros:            reserved,
 					SettledUsdMicros:             settled,
 					CumulativeOvershootUsdMicros: o.Guard.Overshoot(),
+					DeltaUsdMicros:               delta,
 				},
 			},
 		}
@@ -751,7 +798,8 @@ func (o BaselineOptions) sinkFunc(runCtx context.Context, draining *atomic.Bool,
 			//
 			// errUnpriceable settles nothing: estimate refuses before
 			// Authorize, so orphanSpend is zero and this is a no-op for it.
-			return o.recordOrphanSpend(ctx, r.Value)
+			return o.recordOrphanSpend(ctx, agg, r.Item.GetId(), r.Value,
+				knov1.OrphanReason_ORPHAN_REASON_BUDGET_EXCEEDED)
 		}
 
 		// A Case the shutdown cancelled before it produced anything is the same
@@ -793,7 +841,18 @@ func (o BaselineOptions) sinkFunc(runCtx context.Context, draining *atomic.Bool,
 			// invokeWithRetry returns ctx.Err() from its backoff wait AFTER
 			// charges have accumulated, so a Ctrl-C during backoff following a
 			// billed 429 lands here with real money settled.
-			return o.recordOrphanSpend(ctx, r.Value)
+			//
+			// The reason is NOT always CANCELLED. A budget stop cancels the
+			// executor's context too, so every in-flight worker's backoff wait
+			// returns ctx.Err() and lands here — at the default concurrency
+			// that is seven Cases reported as "a human interrupted this" for a
+			// run that ran out of money. draining is the discriminator, and it
+			// is already in the expression above.
+			reason := knov1.OrphanReason_ORPHAN_REASON_CANCELLED
+			if draining.Load() {
+				reason = knov1.OrphanReason_ORPHAN_REASON_BUDGET_EXCEEDED
+			}
+			return o.recordOrphanSpend(ctx, agg, r.Item.GetId(), r.Value, reason)
 		}
 
 		out := &store.Outcome{CaseID: r.Item.GetId()}

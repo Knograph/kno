@@ -302,9 +302,10 @@ var migrations = []migration{{
 	// row would count as an errored Case and could stamp a healthy run
 	// ErrorRateExceeded.
 	//
-	// The cost is per-Case attribution, which is LOST rather than relocated.
-	// sinkFunc returns before reaching emit on these paths, and emit skips a
-	// budget refusal anyway, so no event carries the amount. docs/debt.md#52.
+	// The cost is per-Case attribution, which this table cannot carry. The
+	// engine emits an OrphanSpend event naming the Case and the amount, so the
+	// attribution lives on the stream rather than being lost — see
+	// core/baseline_record.go's emitOrphanSpend.
 	stmts: []string{
 		`ALTER TABLE runs ADD COLUMN orphan_cost_usd_micros INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE runs ADD COLUMN orphan_calls INTEGER NOT NULL DEFAULT 0`,
