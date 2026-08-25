@@ -3407,3 +3407,135 @@ func TestTheHeartbeatCarriesTheNumbersItExistsFor(t *testing.T) {
 			last.GetAttempted(), res.Run.GetAttemptedCaseCount())
 	}
 }
+
+// billedFailure is an error carrying a provider's charge for a call that
+// failed, in the shape core reads it — the same anonymous-interface shape
+// retryAfterOf uses, so an adapter can report one without core importing it.
+type billedFailure struct {
+	error
+	micros int64
+}
+
+func (b billedFailure) BilledCostUSDMicros() int64 { return b.micros }
+func (b billedFailure) Unwrap() error              { return b.error }
+
+// billingAgent charges for every call and fails all of them.
+type billingAgent struct {
+	core.Agent
+	perCallUSDMicros int64
+	calls            atomic.Int64
+}
+
+func (a *billingAgent) Invoke(context.Context, *core.Case) (*knov1.Response, error) {
+	a.calls.Add(1)
+	return nil, billedFailure{
+		error:  errs.ErrTransportTransient.Wrap(errors.New("the provider charged and then failed")),
+		micros: a.perCallUSDMicros,
+	}
+}
+
+// TestABilledFailureIsPersistedSoAResumeDoesNotSpendItAgain.
+//
+// The guard settles a provider's charge for a failed call the moment it
+// happens. sinkFunc persists what the run owes, and SettledSpend is the only
+// durable record of money spent — Guard.Restore reads it back on resume.
+//
+// Persisting zero for a billed failure hands the resumed run that difference
+// as headroom, and it spends it a second time. With MaxAttempts 3 the guard
+// can settle three charges for one Case, so the divergence is per attempt.
+func TestABilledFailureIsPersistedSoAResumeDoesNotSpendItAgain(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const perCall = 40_000 // $0.04 a call, charged even though it fails
+
+	h := newHarness(t, 6, 3, fake.Options{})
+	h.opts.Agent = &billingAgent{perCallUSDMicros: perCall}
+	h.opts.Concurrency = 1
+	h.opts.EstCostPerCallUSDMicros = perCall
+	h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 10_000_000}, nil, 0)
+	// One attempt: the retry backoff is real time, and the divergence this
+	// test is about exists at any attempt count.
+	h.opts.MaxAttempts = 1
+
+	// A run of all-errored Cases COMPLETES — an errored Case is counted, not
+	// fatal — so a non-nil error is not the signal here.
+	res, err := core.Baseline(ctx, h.evals, h.opts)
+	if err != nil {
+		t.Fatalf("Baseline: %v", err)
+	}
+	if res.Run.GetErroredCaseCount() == 0 {
+		t.Fatal("no Case errored; the fixture is not exercising a billed failure")
+	}
+
+	settledInGuard := h.opts.Guard.Spent().CostUSDMicros
+	if settledInGuard == 0 {
+		t.Fatal("the guard settled nothing; the fixture is not exercising a billed failure")
+	}
+
+	persisted, err := h.store.SettledSpend(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("SettledSpend: %v", err)
+	}
+
+	if persisted.CostUSDMicros != settledInGuard {
+		t.Errorf("the guard settled %d micro-USD and the store persisted %d. "+
+			"Guard.Restore reads the STORE on resume, so the resumed run gets "+
+			"the %d difference as headroom and spends it again",
+			settledInGuard, persisted.CostUSDMicros,
+			settledInGuard-persisted.CostUSDMicros)
+	}
+}
+
+// TestASettlementPastTheCapIsReported.
+//
+// Guard.Overshoot made the excess computable in M2-2 and nothing surfaced it.
+// The event is gated on the DELTA from each settlement, so once the cap binds
+// and fitsLocked refuses further authorizations, only reservations already in
+// flight can overshoot — the count is bounded by concurrency, not by Cases.
+func TestASettlementPastTheCapIsReported(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// Each call costs ten times what it was estimated at, so the very first
+	// settlement blows a cap sized for the estimate.
+	h := newHarness(t, 8, 3, fake.Options{CostPerCallUSDMicros: 500_000})
+	h.opts.Concurrency = 1
+	h.opts.EstCostPerCallUSDMicros = 50_000
+	h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 200_000}, nil, 0)
+
+	if _, err := core.Baseline(ctx, h.evals, h.opts); err != nil &&
+		!errors.Is(err, errs.ErrBudgetExceeded) {
+		t.Fatalf("Baseline: %v", err)
+	}
+
+	var seen []*knov1.SettlementOvershoot
+	for _, ev := range eventLog(t, h.dbPath, "run-1") {
+		if p, ok := ev.GetPayload().(*knov1.Event_SettlementOvershoot); ok {
+			seen = append(seen, p.SettlementOvershoot)
+		}
+	}
+	if len(seen) == 0 {
+		t.Fatal("a settlement passed the cap and nothing said so; Guard.Overshoot " +
+			"has made this computable since M2-2 and no surface reported it")
+	}
+	first := seen[0]
+	if first.GetSettledUsdMicros() <= first.GetReservedUsdMicros() {
+		t.Errorf("settled=%d reserved=%d; an overshoot means the settlement "+
+			"exceeded what was authorized for it",
+			first.GetSettledUsdMicros(), first.GetReservedUsdMicros())
+	}
+	if first.GetCumulativeOvershootUsdMicros() <= 0 {
+		t.Error("cumulative overshoot is zero on an event that reports one")
+	}
+	if first.GetCaseId() == "" {
+		t.Error("no Case named; the overshoot is attributable and should say to what")
+	}
+	// Bounded by concurrency, not by Case count: at concurrency 1 the cap
+	// binds after the first settlement and nothing further is authorized.
+	if len(seen) > 2 {
+		t.Errorf("%d overshoot events at concurrency 1; once the cap binds, "+
+			"fitsLocked refuses further authorizations, so the count is bounded "+
+			"by in-flight reservations", len(seen))
+	}
+}

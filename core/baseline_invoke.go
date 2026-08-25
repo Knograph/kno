@@ -7,6 +7,7 @@ import (
 
 	"github.com/knograph/kno/core/errs"
 	"github.com/knograph/kno/executor"
+	knov1 "github.com/knograph/kno/gen/kno/v1"
 	"github.com/knograph/kno/stats/budget"
 )
 
@@ -25,7 +26,7 @@ import (
 //
 // It does not touch the aggregator: counting happens after persistence, in
 // emit, so the Run's counts can never outrun the outcomes table.
-func (o BaselineOptions) workFunc() executor.WorkFunc[*Case, caseOutcome] {
+func (o BaselineOptions) workFunc(agg *aggregator) executor.WorkFunc[*Case, caseOutcome] {
 	return func(ctx context.Context, c *Case) (*caseOutcome, error) {
 		// One provider call, estimated before it is made. A zero estimate makes
 		// the dollar cap unenforceable, so callers that care about it must
@@ -35,14 +36,18 @@ func (o BaselineOptions) workFunc() executor.WorkFunc[*Case, caseOutcome] {
 			return nil, err
 		}
 
-		resp, attempts, invokeErr := o.invokeWithRetry(ctx, c, est)
+		resp, attempts, billed, invokeErr := o.invokeWithRetry(ctx, c, agg, est)
 		if invokeErr != nil {
-			return &caseOutcome{Response: nil, Err: invokeErr, Attempts: attempts}, invokeErr
+			return &caseOutcome{
+				Response: nil, Err: invokeErr, Attempts: attempts, BilledUSDMicros: billed,
+			}, invokeErr
 		}
 
 		score, scoreErr := o.Goal.Score(ctx, c, resp)
 		if scoreErr != nil {
-			return &caseOutcome{Response: resp, Err: scoreErr, Attempts: attempts}, scoreErr
+			return &caseOutcome{
+				Response: resp, Err: scoreErr, Attempts: attempts, BilledUSDMicros: billed,
+			}, scoreErr
 		}
 
 		// NOT counted here. An earlier version incremented the scored count on
@@ -51,7 +56,9 @@ func (o BaselineOptions) workFunc() executor.WorkFunc[*Case, caseOutcome] {
 		// claiming more scored Cases than the outcomes table held, and that
 		// inflated count was the last thing durably recorded. Counting happens
 		// after persistence, in emit, where errored Cases are already counted.
-		return &caseOutcome{Response: resp, Score: score, Attempts: attempts}, nil
+		return &caseOutcome{
+			Response: resp, Score: score, Attempts: attempts, BilledUSDMicros: billed,
+		}, nil
 	}
 }
 
@@ -67,8 +74,9 @@ func (o BaselineOptions) workFunc() executor.WorkFunc[*Case, caseOutcome] {
 func (o BaselineOptions) invokeWithRetry(
 	ctx context.Context,
 	c *Case,
+	agg *aggregator,
 	est budget.Estimate,
-) (*Response, int, error) {
+) (resp *Response, attempts int, billedUSDMicros int64, err error) {
 	backoff := o.retryBackoff()
 	// time.Now, not o.now. The budget bounds real elapsed time, and o.now is
 	// injectable — a frozen clock (which BaselineOptions.Now's own godoc
@@ -79,17 +87,34 @@ func (o BaselineOptions) invokeWithRetry(
 	deadline := time.Now().Add(o.retryBudget())
 	var lastErr error
 
-	attempts := 0
+	// Accumulated across attempts, because each one settles into the guard
+	// separately and only the LAST error survives the loop. With MaxAttempts 3
+	// the guard can settle three billed charges that the sink could recover at
+	// most one of — and SettledSpend is the only durable record of money
+	// spent, so the difference is headroom a resumed run spends twice.
+	var billed int64
+
 	for attempt := 1; attempt <= o.maxAttempts(); attempt++ {
 		attempts++
-		resp, err := o.invokeOnce(ctx, c, est)
-		if err == nil {
-			return resp, attempts, nil
+		resp, settled, overshoot, invokeErr := o.invokeOnce(ctx, c, est)
+		billed += settled.CostUSDMicros
+		if overshoot > 0 {
+			// Emitted at settle time and gated on the DELTA, so the count is
+			// bounded by concurrency rather than by Case count: once the cap
+			// binds, only reservations already in flight can overshoot.
+			if emitErr := o.emitSettlementOvershoot(
+				ctx, agg, c.GetId(), est.CostUSDMicros, settled.CostUSDMicros,
+			); emitErr != nil {
+				return nil, attempts, billed, emitErr
+			}
 		}
-		lastErr = err
+		if invokeErr == nil {
+			return resp, attempts, billed, nil
+		}
+		lastErr = invokeErr
 
-		if !retryable(err) {
-			return nil, attempts, err
+		if !retryable(invokeErr) {
+			return nil, attempts, billed, invokeErr
 		}
 		if attempt == o.maxAttempts() {
 			break
@@ -98,7 +123,7 @@ func (o BaselineOptions) invokeWithRetry(
 		wait := backoff
 		// A provider that says how long to wait is the authority on its own
 		// limits; our doubling is only a guess for when it does not say.
-		if after, ok := retryAfterOf(err); ok {
+		if after, ok := retryAfterOf(invokeErr); ok {
 			wait = after
 		}
 
@@ -109,16 +134,41 @@ func (o BaselineOptions) invokeWithRetry(
 			break
 		}
 
+		// BEFORE the wait, not after. The whole value of the signal is
+		// telling a watcher the run is obeying a provider's backoff rather
+		// than hung; emitted after the sleep it announces, it reports
+		// idleness only once idleness has ended.
+		if emitErr := o.emitRetryAttempted(ctx, agg, c.GetId(), attempt,
+			retryReasonOf(invokeErr), wait, time.Until(deadline)); emitErr != nil {
+			return nil, attempts, billed, emitErr
+		}
+
 		// A ctx-aware wait. Sleeping through a cancellation would keep a
 		// stopped run alive for the length of the backoff.
 		select {
 		case <-time.After(wait):
 			backoff *= 2
 		case <-ctx.Done():
-			return nil, attempts, ctx.Err()
+			return nil, attempts, billed, ctx.Err()
 		}
 	}
-	return nil, attempts, lastErr
+	return nil, attempts, billed, lastErr
+}
+
+// retryReasonOf classifies why a Case is being retried.
+//
+// UNSPECIFIED for anything the enum does not name, which is honest: a reason
+// nobody enumerated is better reported as unknown than mapped to whichever
+// neighbouring value looks closest.
+func retryReasonOf(err error) knov1.RetryReason {
+	switch {
+	case errors.Is(err, errs.ErrRateLimited):
+		return knov1.RetryReason_RETRY_REASON_RATE_LIMITED
+	case errors.Is(err, errs.ErrTransportTransient):
+		return knov1.RetryReason_RETRY_REASON_TRANSPORT_TRANSIENT
+	default:
+		return knov1.RetryReason_RETRY_REASON_UNSPECIFIED
+	}
 }
 
 // retryable reports whether an error may succeed on another attempt.
@@ -156,10 +206,10 @@ func (o BaselineOptions) invokeOnce(
 	ctx context.Context,
 	c *Case,
 	est budget.Estimate,
-) (*Response, error) {
+) (resp *Response, settled budget.Spend, overshoot int64, err error) {
 	res, err := o.Guard.Authorize(ctx, est)
 	if err != nil {
-		return nil, err
+		return nil, budget.Spend{}, 0, err
 	}
 	// Reached on every path: the agent erroring, the context cancelling
 	// mid-call, a panic recovered by the executor. Without it each of those
@@ -168,14 +218,38 @@ func (o BaselineOptions) invokeOnce(
 
 	resp, invokeErr := o.Agent.Invoke(ctx, c)
 	if invokeErr != nil {
-		// The attempt still consumed a call, whether or not it answered.
-		res.Settle(budget.Spend{Calls: 1})
-		return nil, invokeErr
+		// The attempt consumed a call, and the provider may have CHARGED for
+		// it: a 200 carrying both an error object and a usage block is a shape
+		// several OpenAI-compatible gateways produce. M2-7 made that
+		// observable on the error; settling zero here is what made it free.
+		spend := budget.Spend{Calls: 1, CostUSDMicros: billedCostOf(invokeErr)}
+		return nil, spend, res.Settle(spend), invokeErr
 	}
 
 	// The same computation the sink persists. Two independent derivations of
 	// one Case's cost could drift, and the persisted one is what
 	// Guard.Restore reads on resume.
-	res.Settle(spendOf(resp))
-	return resp, nil
+	spend := spendOf(resp)
+	return resp, spend, res.Settle(spend), nil
+}
+
+// billedCostOf reports what a provider charged for a call that failed.
+//
+// An anonymous interface, the same shape retryAfterOf uses, so an adapter can
+// report a charge without core importing it — prime directive 3.
+//
+// Non-positive is discarded rather than settled. An adapter reporting a
+// negative would CREDIT the run's cap, and "the provider said nothing" is not
+// the same as "the provider said zero": the absence of a charge is not a
+// charge. Guard.Settle clamps too, but a caller that hands it nonsense and
+// relies on the clamp is describing a bug rather than a charge.
+func billedCostOf(err error) int64 {
+	var b interface{ BilledCostUSDMicros() int64 }
+	if !errors.As(err, &b) {
+		return 0
+	}
+	if v := b.BilledCostUSDMicros(); v > 0 {
+		return v
+	}
+	return 0
 }

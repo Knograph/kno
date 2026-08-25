@@ -74,6 +74,29 @@ covenants — breaking any of them requires a major version.
 
 ### Fixed
 
+- **A provider's charge for a failed call is no longer recorded as free.** The guard settled it and
+  the store persisted zero, and `SettledSpend` is the only durable record of money spent — so a
+  resumed run got the difference as headroom and spent it again. With `--max-attempts 3` the guard
+  could settle three charges for one Case where the store recovered at most one. Repays the core
+  half of [debt #43](docs/debt.md#43); the transport half remains.
+- **`Reservation.Settle` clamps what an adapter reports.** A negative charge is refused rather than
+  subtracted, and a saturating one pins rather than wrapping. Unclamped, two `MaxInt64` settlements
+  against a $1.00 cap left spend at **-2**, `Remaining` reporting more than the cap, and the guard
+  authorizing again. Repays [debt #48](docs/debt.md#48).
+
+### Added
+
+- **`SettlementOvershoot`**, emitted when a settlement pushes spend past the cost cap. `Overshoot()`
+  has made the excess computable since M2-2 and nothing reported it. Gated on the per-settlement
+  delta, so the event count is bounded by concurrency rather than by Case count — once the cap
+  binds, only reservations already in flight can overshoot. Surfaces [debt #32](docs/debt.md#32).
+- **`RetryAttempted`**, emitted *before* the backoff wait, so a watcher can tell a run obeying a
+  provider's `Retry-After` from a hung one. Emitted after the sleep it announces, it would report
+  idleness only once idleness had ended.
+- **`SpendRecorded`**, on the progress heartbeat rather than per settlement. All three of its
+  totals are cumulative — the message was shaped for a heartbeat — and per-settlement emission
+  would put another fsync behind every agent call.
+
 - A resumed run no longer emits a second `RunStarted` carrying the original total, which made a
   live view reset its progress and jump backward on every resume. It emits `RunResumed`, carrying
   what was already completed, what remains, and the spend restored from disk — so a consumer can

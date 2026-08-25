@@ -309,6 +309,19 @@ func formatUSDMicros(micros int64) string {
 
 func spendOf(r *knov1.Response) budget.Spend { return spendOfN(r, 1) }
 
+// billedOf reports what a provider charged for an outcome that produced no
+// Response.
+//
+// Zero for a nil outcome: nothing reached a provider, so nothing was charged.
+// Distinct from spendOf, which derives cost from a Response — a failed attempt
+// can be billed and has none.
+func billedOf(o *caseOutcome) int64 {
+	if o == nil {
+		return 0
+	}
+	return o.BilledUSDMicros
+}
+
 // attemptsOf reports how many provider calls an outcome took, floored at one.
 //
 // A nil outcome means the work never produced one, which is still one call's

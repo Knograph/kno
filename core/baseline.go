@@ -431,7 +431,7 @@ func Baseline(
 	var draining atomic.Bool
 
 	stats, runErr := executor.Run(ctx, cases,
-		opts.workFunc(), opts.sinkFunc(ctx, &draining, agg),
+		opts.workFunc(agg), opts.sinkFunc(ctx, &draining, agg),
 		executor.Options{
 			Concurrency: opts.Concurrency,
 			ID:          func(item any) string { c, _ := item.(*Case); return c.GetId() },
