@@ -18,33 +18,6 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
-- **OpenTelemetry spans**, correlated by run ID: one per run, one per Case, one per provider call.
-  Instrumentation is **unconditional** — the OTel API's global provider is a no-op until something
-  registers a real one, so a run that is not tracing allocates nothing. `--trace-spans` writes
-  them to stderr for local debugging.
-
-  **Spans carry IDs, counts, and money only** — never a prompt, an answer, or a system prompt.
-  `docs/retention.md` tells users their conversation content lives in the local store and that
-  `kno purge` removes it; a span is shipped to a collector, which is the one place purge cannot
-  reach. Enforced by the `observe` package's attribute constructors (nothing there accepts
-  content) and by a test that drives a real run — with an agent whose *errors quote the Case* —
-  and scans every attribute, event, and status description on every span. `span.RecordError` is
-  deliberately unused: it writes the error's text into an event, and a wrapped provider error can
-  carry the prompt that produced it.
-
-  **OTLP export is not here.** `DESIGN.md:399` places OTel *export* at v0.3 and `CLAUDE.md` says
-  tracing is *built in* — read precisely those agree, and separating instrumentation from export
-  honors both without editing either. Measured cost: both OTLP exporters pull 21 modules including
-  `google.golang.org/grpc`; the API + SDK + stdout exporter pulls 11 and no grpc. Partly repays
-  [debt #37](docs/debt.md#37), which stays open for the export half.
-
-  New dependencies: `go.opentelemetry.io/otel`, `/trace`, `/sdk`, and
-  `/exporters/stdout/stdouttrace` (Apache-2.0, CNCF-governed, the standard tracing API for Go).
-  Nothing in stdlib expresses distributed tracing, and a homegrown span format would be a format
-  no collector reads.
-
-### Added
-
 - **`kno baseline` can reach a real provider.** `--agent openai:<model>` (and any OpenAI-compatible
   endpoint via `--base-url`) and `--agent anthropic:<model>` now resolve to the adapters built in
   M2-3 through M2-8, which until now were unreachable from the command line. This is the first
@@ -75,111 +48,32 @@ covenants — breaking any of them requires a major version.
   `concurrency` / `concurrency_requested` / `concurrency_reduced_reason` in `--json`. Partly repays
   [debt #44](docs/debt.md#44); the consent-prompt half stays open.
 
-### Changed
+- **OpenTelemetry spans**, correlated by run ID: one per run, one per Case, one per provider call.
+  Instrumentation is **unconditional** — the OTel API's global provider is a no-op until something
+  registers a real one, so a run that is not tracing allocates nothing. `--trace-spans` writes
+  them to stderr for local debugging. The local exporter's queue holds 2048 spans and drops
+  silently past that, so it is for reading a run, not for auditing a million-Case one.
 
-- **`--cost-per-call-usd` is no longer required alongside `--max-cost-usd`** for an agent that
-  prices its own calls. `--agent anthropic:claude-opus-5 --max-cost-usd 5` was refused even though
-  the adapter prices every Case exactly — and the scalar the user was then forced to supply is
-  *ignored*, because the estimator path never falls back to it. The flag was mandatory, inert, and
-  the only way to run the flagship invocation.
+  **Spans carry IDs, counts, and money only** — never a prompt, an answer, or a system prompt.
+  `docs/retention.md` tells users their conversation content lives in the local store and that
+  `kno purge` removes it; a span is shipped to a collector, which is the one place purge cannot
+  reach. Enforced by the `observe` package's attribute constructors (nothing there accepts
+  content) and by a test that drives a real run — with an agent whose *errors quote the Case* —
+  and scans every attribute, event, and status description on every span. `span.RecordError` is
+  deliberately unused: it writes the error's text into an event, and a wrapped provider error can
+  carry the prompt that produced it.
 
-- **BREAKING (pre-1.0): `openaicompat.Options.KeyBindings` and `.Policy` are replaced** by
-  `KeyEnv map[string]string`, `AllowInsecureBaseURL bool`, and `AllowPrivateAddress bool`. Both old
-  fields were typed by the `internal/transport` package, which made the whole struct
-  **unconstructible from outside `adapters/agent/`** — including from `cli`. `anthropic.Options`
-  never had this problem; this brings the two adapters into line rather than weakening the
-  transport's internal boundary. **Migration:** `KeyBindings: transport.KeyBindings{…}` becomes
-  `KeyEnv: map[string]string{…}`; `Policy: transport.Policy{AllowInsecureHTTP: a,
-  AllowPrivateAddress: b}` becomes the two bools.
+  **OTLP export is not here.** `DESIGN.md:399` places OTel *export* at v0.3 and `CLAUDE.md` says
+  tracing is *built in* — read precisely those agree, and separating instrumentation from export
+  honors both without editing either. Measured cost: both OTLP exporters pull 21 modules including
+  `google.golang.org/grpc`; the API + SDK + stdout exporter pulls 11 and no grpc. Partly repays
+  [debt #37](docs/debt.md#37), which stays open for the export half.
 
-  The map is **not** pre-normalized: the adapter runs it through
-  `transport.ParseKeyBindings` itself, so host casing and ports are handled and the
-  looks-like-a-secret and bound-twice refusals still apply. A caller that previously built a
-  `transport.KeyBindings` by hand was getting that for free and still is.
+  New dependencies: `go.opentelemetry.io/otel`, `/trace`, `/sdk`, and
+  `/exporters/stdout/stdouttrace` (Apache-2.0, CNCF-governed, the standard tracing API for Go).
+  Nothing in stdlib expresses distributed tracing, and a homegrown span format would be a format
+  no collector reads.
 
-- **`anthropic.Options` gains `Price`**, so `--price-input-per-mtok` / `--price-output-per-mtok`
-  reach this adapter. They were accepted, validated as a pair, and then discarded for this scheme,
-  while the cookbook, the CI recipe, and `kno doctor` all named them as the remedy for an unpriced
-  model — a silently ignored flag on the money path.
-
-- **An explicit `--cost-per-call-usd 0` asserts the calls are free.** Read from whether the flag
-  was passed, not from its value: 0 is also the default, so the documented local-model-server
-  recipe passed it and was refused with a fix line naming the flag it had just supplied.
-
-### Fixed
-
-- **A missing credential is refused before any request.** `openaicompat` omitted the
-  `Authorization` header and let every Case collect a 401 — now bounded by run-fatal escalation,
-  but still a paid round trip and a message about a rejected credential that was never sent. Only
-  for the provider's default host: a self-hosted endpoint legitimately needs no key. Repays
-  [debt #57](docs/debt.md#57).
-
-- **`--yes` prints the estimate for every run, not just above the prompt threshold.** It printed
-  from inside the confirmation callback, which the guard short-circuits below $1.00 — so the flag
-  was silent for exactly the runs small enough not to prompt, while its help text, the cookbook,
-  and the CI recipe all promised a figure unconditionally. In `--json` mode the figure travels as
-  `estimated_usd` instead, because a prose line ahead of the document makes stdout unparseable.
-
-- **A narrowed run no longer claims a width the user never asked for.** With no `--concurrency`,
-  the report read `width 1 (asked for 0; cost-cap)`. Fixed in the renderer rather than by recording
-  the defaulted width as a request: `core` deliberately does not, and a test pins that a report
-  saying "you requested 8, we gave you 5" to someone who requested nothing is how a report earns
-  distrust.
-
-- **The test suite could bill you.** `cli`'s tests drive the real command, and a subtest asserting
-  `--agent openai:gpt-4.1` was refused for having "no adapter" started making live API calls the
-  moment the adapters were wired, on any machine exporting `OPENAI_API_KEY`. `cli` now has a
-  `TestMain` that unsets eleven provider credential variables unless `KNO_LIVE_TESTS=1`. Tracked as
-  [debt #63](docs/debt.md#63), because the list is a denylist.
-
-### Changed
-
-- **BREAKING (pre-1.0): `BaselineOptions.ResolvedModel` is removed.** It was caller-supplied and
-  read at run open, before any request, so the only value it could ever hold was one a previous run
-  had recorded — `checkResumable` compared it to itself and the gate never fired once. **Migration:
-  delete the field; nothing replaces it.** The check now runs at first-response time and needs no
-  caller input. Repays [debt #42](docs/debt.md#42).
-
-- **A provider failure that cannot change within a run now ends the run at the first Case.** Six
-  conditions escalate: a rejected credential (401/403), the provider's own spend cap, a user's
-  self-set spend limit, an unpaid account (402), a model that does not exist (404), and a refused
-  destination or key-binding mismatch. A wrong `ANTHROPIC_API_KEY` on a 10,000-Case run previously
-  made 10,000 requests and settled 10,000 calls against `--max-calls` before saying anything.
-  Repays [debt #47](docs/debt.md#47).
-
-  A plain 429, a 5xx, a truncation, and an oversized response are deliberately **not** escalated —
-  each may succeed on the next call, and escalating them would convert a recoverable run into a
-  dead one. That direction has its own test.
-
-- **A capped run against a model with no price row is refused once**, naming pricing, instead of
-  erroring every Case and reporting "too many cases errored" — a verdict naming nothing about
-  pricing, after taking consent for a figure that was never going to apply. **Partly** repays
-  [debt #46](docs/debt.md#46): this is the refusal shape only. The price rows and the per-token
-  override land with the CLI wiring.
-
-- **A timed-out request reports `RETRY_REASON_TIMEOUT`.** A 408 and a 5xx share the
-  `ErrTransportTransient` sentinel, so `core` — which could classify only from sentinels — reported
-  a timeout as `RETRY_REASON_PROVIDER_UNAVAILABLE`, whose schema definition is "the provider
-  returned a 5xx". The enum value existed and nothing ever emitted it. Repays
-  [debt #53](docs/debt.md#53).
-
-- **Orphaned spend from a run-fatal stop is no longer attributed to the budget.** The
-  discriminator was a bool, so every in-flight charged Case on any fatal stop reported "the cost or
-  call cap could not admit another attempt" — sending a user whose credential was rejected to raise
-  a cap that was never binding.
-
-- **`OrphanReason.ORPHAN_REASON_RUN_FATAL`** (proto, additive). A budget stop is resumable as-is; a
-  run-fatal stop is not, and resuming without fixing the condition pays for the same answer again.
-
-- **A run-fatal refusal leaves its Case re-attemptable**, like a budget refusal and an unpriceable
-  one: refused by a condition the user then fixes. Recording it as a terminal outcome put the Case
-  in `CompletedCases`, so a resume skipped it forever — and `closeRun` recomputes
-  `ErrorRateExceeded` over the whole store, branding the **corrected** run "not a usable baseline".
-  Measured: 20 Cases, a bad key, then a resume with a healthy agent — completed, 8 errored, error
-  rate exceeded, recoverable only by paying for all 20 again. The remedy every escalated error
-  advertises is "fix this and re-run", and it now works.
-
-### Added
 
 - `Run.case_execution` is now written for every run that executes Cases, with the counts
   aggregated from what is durably recorded rather than from in-memory counters — so they survive a
@@ -210,161 +104,6 @@ covenants — breaking any of them requires a major version.
   re-reading would have put two contradictory splits on one message, with the presence-carrying
   copy describing a split the run was never measured under.
 
-### Fixed
-
-- **`executor.RecordGrace` bounded the whole run instead of the drain after cancellation.** It was
-  a `context.WithTimeout` built before the first item was dispatched, so on any run longer than the
-  grace (30s by default, and nothing ever set it) the first sink write failed, `sinkBroken` latched
-  so every later result was discarded without being asked, and a resumed run paid for all of them
-  again. Invisible until now only because every test in the tree uses a sub-second in-process fake
-  agent — which stops being true the moment a provider adapter is reachable from the CLI.
-
-  The grace is now armed **by** the caller's cancellation, which is what its godoc always described.
-  A hung sink is bounded separately by `PerRecordTimeout` (new, exported, 30s default) **per call**,
-  because the hazard is one write that never returns, not a budget the run draws down. Repays
-  [debt #54](docs/debt.md#54).
-
-- **`executor.Options.AfterRecord`** (additive), the only path from a *successful* item to shutdown. `IsFatal`
-  is consulted only on a work error, so a condition discovered in an answer the caller has already
-  paid for had nowhere to go: failing the item would discard a paid, scoreable result and record it
-  as an error, and returning an error from `SinkFunc` would latch `sinkBroken` and discard every
-  result after it. `AfterRecord` runs once the result is durable and counted, and ending the run
-  there keeps it — and a panic inside it is recovered, because unguarded it unwound out of the loop
-  that drains results and deadlocked the run permanently.
-
-  It receives the `Result` boxed as `any` rather than splintered into `(item, value, err)`:
-  `Result` documents that exactly one of `Value` and `Err` is meaningful, and three loose
-  parameters discard that invariant and hand the caller a non-nil `any` wrapping a nil pointer on
-  the failure path.
-
-- A sink failure that happens **after the grace has expired** now joins the caller's cancellation
-  cause. Without it, a store surfacing its own error text instead of a wrapped `context.Canceled`
-  turned a Ctrl-C into `RUN_STATUS_FAILED` with a generic exit code — so a CI gate keying on the
-  interrupted code would flip the day a driver reworded.
-
-### Changed
-
-- The fix line on a stale-checkpoint refusal no longer names a cause that is never tested. It
-  offered "the goal, agent, or split configuration changed" for every non-eval mismatch: the split
-  is not compared at all, and the resolved model — which is — was not named. A user whose provider
-  re-pointed a moving alias was told to restore a setting they had never touched; they are now
-  told to pin the model in the agent ref, which is the only thing that prevents it.
-
-- The resume check for a changed provider model now compares **set membership** rather than the
-  first recorded element. With concurrency there is no "first response", and during a provider
-  rollout two workers in one run legitimately see different builds — so a run that saw `{A, B}`
-  and is now served by `B` has not changed, and comparing against whichever element sorted first
-  would have refused it.
-
-  **The check still does not run.** Writing `case_execution` fills the *recorded* half of the
-  comparison; nothing populates the model this process is about to use, because that is a property
-  of a response and the check runs before any call. See [debt #42](docs/debt.md#42).
-
-- **`OrphanSpend`**, naming the Case a charge belonged to when no outcome could carry it. The
-  amount is recorded against the run, so without this event the money is an integer nothing
-  describes — a side channel. Carries a reason, because a run stopped by a human is not a run that
-  ran out of budget. Repays [debt #52](docs/debt.md#52).
-
-- A concurrency the engine chooses is now reported rather than silent. `checkFeasible` narrows the
-  width when the cost cap cannot admit what was asked for; it did so with no event, no log line,
-  and no field on the `Run`. A `ConcurrencyReduced` event now says so while it is happening, and
-  `Run.concurrency` records the decision afterwards — for every Case-executing run, reduced or
-  not, so two runs can be compared. **Partly** repays [debt #44](docs/debt.md#44): the engine now
-  records and emits it, and no surface reads it back yet. The CLI report that entry requires is
-  M2-11.
-- `StageProgress` heartbeats, **off by default**. Every event is one fsync under
-  `synchronous=FULL` on the same serialized writer as the outcome row that prevents double-spend,
-  so a heartbeat nobody watches is write contention in front of the write whose loss costs money.
-  A failed heartbeat write ends the run rather than being swallowed: the append allocates a
-  sequence number immediately before writing, so a silent failure leaves a permanent hole that
-  `MaxEventSequence` cannot heal, and a consumer reading the stream correctly concludes it lost
-  events. `--concurrency` and the interval are both bounds-checked; an unbounded `--concurrency`
-  recorded a negative width on the wire.
-
-  Nothing turns it on yet — the flag is M2-11. `core.DefaultProgressInterval` is 1 Hz. The rate is
-  averaged over **this process's** work and clock: not over the last interval, because a window
-  shorter than one LLM call swings on nothing, and not over the whole run, because a resume's
-  counts span both processes while its clock does not. The counts themselves stay whole-run, since
-  they pair with `total_cases`.
-
-- `ConcurrencyDecision`, carried by `Run.concurrency` and by a new `ConcurrencyReduced` event, for
-  a concurrency the engine chooses rather than the user. **Nothing emits or writes them yet** —
-  the emitter lands with M2-10c, and until then an absent `Run.concurrency` means "not recorded",
-  not "ran at what it asked for".
-
-  The event embeds the same message the `Run` records rather than restating its fields, so the two
-  cannot drift apart. It carries **both** terms of the arithmetic — the cost-cap headroom and the
-  per-Case estimate — because the engine divides a fraction of the first by the second, and a
-  consumer given only one can solve for what they were not told rather than check the result.
-  `requested` is optional, so a width nobody asked for is distinguishable from one that was
-  overridden.
-
-  Proto only, additive, `buf breaking` clean. Toward [debt #44](docs/debt.md#44).
-
-- **The `anthropic` provider adapter** (`adapters/agent/anthropic`) for the Messages API,
-  implementing `core.Agent`, `core.Capable`, and `core.Estimator`. Not the OpenAI-compatible
-  adapter with a different base URL: the system prompt is a top-level field, `max_tokens` is
-  required, `input_tokens` counts only what follows the last cache breakpoint (so billed input
-  is the sum of three fields), `stop_reason: "refusal"` is scored rather than errored, and
-  authentication is `x-api-key`, which Go's redirect handling does not strip. Each difference
-  produces a wrong number rather than a loud failure. Capabilities are static and per model, so
-  `New` refuses `--temperature` for a model that rejects sampling parameters instead of failing
-  every Case with a 400.
-
-- **The first provider adapter.** `adapters/agent/openaicompat` speaks the OpenAI Chat
-  Completions shape and is `base_url`-configurable, so it also reaches OpenAI-compatible
-  servers. Static capabilities (no probing), a pessimistic per-Case `Estimate` with a bounded
-  `WorstCase`, a prompt ceiling enforced on both the estimate and the call, and recorded
-  fixtures. Repays [debt #11](docs/debt.md#11), [#18](docs/debt.md#18), [#23](docs/debt.md#23),
-  [#38](docs/debt.md#38), [#39](docs/debt.md#39); investigates [#20](docs/debt.md#20) and
-  [#43](docs/debt.md#43).
-
-### Fixed
-
-- **Money spent on a Case that never produced an answer is now durable.** A budget refusal on a
-  retry — or a Ctrl-C during backoff — discarded every charge the earlier attempts incurred:
-  measured across a kill and resume at guard $0.36 against store $0.32. `SettledSpend` is the only
-  durable record of money spent
-  and `Guard.Restore` reads it, so a resumed run got the difference back as headroom and spent it
-  again. Repays [debt #50](docs/debt.md#50).
-
-  The spend is recorded against the run, not as an outcome row, so the Case stays absent from the
-  completed set and a resume still re-attempts it.
-
-  `store.Store` gains `RecordOrphanSpend`, which is a compile break for any out-of-tree
-  implementation.
-
-  **This migration cannot be downgraded past.** `kno` refuses to open a database whose schema is
-  newer than the binary understands, so an older build will not start against a migrated file.
-
-- `SettlementOvershoot` reports how much **this** settlement contributed. The figure was not
-  derivable from the payload: subtracting `reserved` from `settled` over-counts by whatever
-  headroom was still under the cap — 450k where the true contribution is 300k — so a consumer
-  summing across events inflated the overshoot.
-- A **billed** retry is reported as `PROVIDER_UNAVAILABLE` rather than `TRANSPORT_TRANSIENT`,
-  which the schema defines as having *no evidence the provider processed the request*. A charge is
-  evidence it did, and it is the only signal that separates the two — an adapter wraps a reset
-  connection and a billed 5xx as the same sentinel. The one retry reason that costs money was
-  being reported as the one that means nothing happened.
-
-- **A provider's charge for a failed call is no longer recorded as free.** The guard settled it and
-  the store persisted zero, and `SettledSpend` is the only durable record of money spent — so a
-  resumed run got the difference as headroom and spent it again. With `--max-attempts 3` the guard
-  could settle three charges for one Case where the store recovered at most one.
-
-  Both paths, not just the obvious one. A Case whose first attempt is charged and fails and whose
-  second succeeds is persisted by the sink's *scored* branch, which derived cost from the final
-  `Response` alone — measured at $0.25 settled against $0.05 persisted. The sink now records what
-  the guard settled in every branch rather than re-deriving it. Repays the core half of
-  [debt #43](docs/debt.md#43); the transport half remains.
-- **`Reservation.Settle` clamps what an adapter reports.** A negative charge is refused rather than
-  subtracted, and a saturating one pins rather than wrapping. Unclamped, two `MaxInt64` settlements
-  against a $1.00 cap left spend at **-2**, `Remaining` reporting more than the cap, and the guard
-  authorizing again. `fitsLocked` and `Restore` saturate too — clamping only `Settle` moved the
-  overflow into the cap comparison, where a pinned total wrapped and the guard authorized without
-  limit. Repays [debt #48](docs/debt.md#48).
-
-### Added
 
 - **`SettlementOvershoot`**, emitted when a settlement pushes spend past the cost cap. `Overshoot()`
   has made the excess computable since M2-2 and nothing reported it. Gated on the per-settlement
@@ -468,83 +207,6 @@ covenants — breaking any of them requires a major version.
   built `covercheck` and `godoccheck` binaries (3.5 MB each) were also tracked in git by
   accident; they are removed and ignored.
 
-### Changed
-
-- `make record-fixtures` and `make test-live` no longer grep Go source for `KNO_MAX_COST_USD`.
-  The cap is now read and enforced by code ([debt #11](docs/debt.md#11)), and a grep that a
-  comment could satisfy would only mislead once real enforcement existed.
-
-- A malformed `--agent` now exits with `INVALID_INPUT` rather than `CAPABILITY_UNSUPPORTED`. Both
-  exit 1, so no CI gate changes, but the message now distinguishes a typo from a provider this
-  build has no adapter for.
-- Go toolchain bumped to `go1.25.13`. Making the first real HTTP call turned seven standard-library
-  advisories from unreachable into reachable — `crypto/x509`, `net/http`, and `golang.org/x/net/idna`
-  — and `govulncheck` failed the build for them. Working exactly as intended.
-- Go toolchain pinned to `go1.25.8` (from 1.25.5), which `govulncheck` flagged for `GO-2026-4602`
-  in the standard library, reachable from `covercheck`. `GOTOOLCHAIN` is pinned in the Makefile so
-  the toolchain is as reproducible as every other tool.
-
-### Fixed
-
-- A budget stop lost the Cases that were in flight when it landed. The drain cancels them mid-call,
-  and each was recorded as terminally errored — which marks it complete, so `--resume` skipped it
-  forever and the run reported a smaller denominator than it measured, with nothing saying why.
-  Measured at concurrency 8 with a 50ms agent: two lost Cases on every run, and a resumed run
-  scoring 51 of 52. CI surfaced it as an intermittent CLI failure; it was not intermittent, just
-  timing-dependent, and the CLI's fake agent has no latency.
-
-  A Case cancelled *by* the shutdown is now left unrecorded so the resume picks it up, exactly like
-  a budget-refused one. A per-Case provider timeout against a healthy run is still recorded — the
-  distinction matters, and collapsing it would hide a broken provider behind a shrinking
-  denominator.
-- `make fuzz-short` is now bounded by **executions rather than wall-clock**. `-fuzztime=30s` failed
-  intermittently on both CI runners with "context deadline exceeded" — the fuzzing coordinator
-  timing out on a worker as the deadline lands, not a failing input. A count also makes the gate do
-  the same work everywhere, so "passes locally" and "passes in CI" stop meaning different things.
-- Two `kno` processes opening the same database at the same moment could fail to start with a raw
-  `SQLITE_BUSY`. Creating a database converts its journal to WAL, which needs an exclusive lock,
-  and the process that loses that race is told the database is locked rather than made to wait —
-  `busy_timeout` does not cover it, and setting the pragma after `journal_mode` in DSN order meant
-  it was not even in effect yet. The base schema now applies under the same write lock migrations
-  use, `busy_timeout` is set first, and the open path retries on a locked database with bounded
-  backoff. Measured 9 of 10 runs failing before, 0 of 18 after.
-- The coverage ratchet compared a platform-dependent measurement against a single-platform
-  baseline, so it failed CI on Linux for code that had not changed. `executor` measures 96.0% on
-  darwin and 94.9% on linux for the same commit with every test passing on both, and the 1.0pp
-  jitter tolerance is not the right instrument for a systematic gap — widening a tolerance until
-  the gap fits is how a gate stops detecting what it exists for. `.coverage-baseline` now holds the
-  lowest reading across the platforms CI runs, and `make update-coverage-baseline` refuses to run
-  anywhere but Linux, because writing it elsewhere raises the floor above what CI can meet.
-- `make record-fixtures` set `KNO_LIVE_TESTS=1` itself while checking neither condition
-  `make test-live` enforces: that `KNO_MAX_COST_USD` is set, and that some Go code actually reads
-  it. It was an unguarded live-spend path that would have armed the moment the first adapter
-  fixture recorder was written. The guard is now a shared `live_spend_guard` define both targets
-  call, and both were verified to fail closed on both conditions. See `docs/debt.md#11`.
-- A resume compared only the caller-supplied input fingerprint, which covers the eval file and the
-  split but not the Goal or the Agent. Resuming a run with a different `--agent` or `--goal` was
-  accepted, blending Cases scored under two different configurations into one `AggregateScore`
-  presented as a single homogeneous number. `core.Baseline` now compares the recorded Goal, Goal
-  direction, and Agent directly and refuses, naming which one changed.
-- The dev/holdout refusal — a run that can never produce a holdout number — was enforced only in
-  `cli/`, so any other caller of `core.Baseline` could run against an empty holdout with no refusal
-  at all. The check now lives in the stage, where the docs already claimed it was.
-- An interrupted run returned a bare `context.Canceled` and exited `1`, indistinguishable from a
-  broken build. It now returns `errs.ErrInterrupted` and exits `4` (see Added).
-- A second Ctrl-C during shutdown was silently swallowed. `signal.NotifyContext` keeps intercepting
-  signals until `stop` is called, and `stop` was deferred to the end of `Execute`; it now runs as
-  soon as the first signal lands, restoring the default behavior for the next one.
-- A negative `--max-cost-usd` or `--max-calls` disabled the cap instead of tightening it, because
-  the guard treats a limit as active only when positive. Both are now refused.
-- A cost cap without `--cost-per-call-usd` failed with a bare error carrying no fix line and exit
-  `1` by fallthrough. It now follows the CLI error grammar.
-- A failure to write the report — a closed stdout pipe — replaced the run's own outcome, so a
-  legitimate budget stop exited `1` instead of `2`. The run's error now wins.
-- `budget.Guard` had no persistence, so a resumed run started at zero spent regardless of what the
-  killed run had actually spent — a run near its cap could authorize nearly the whole cap a second
-  time, for up to twice the intended spend across one kill/resume cycle. `Guard.Restore` reseeds
-  settled spend from the store, which is the only thing that outlives the process.
-
-### Added
 
 - **`errs.ErrTransportTransient`**, and `core` retries it. A stale pooled connection is not the
   agent failing — at concurrency, any pause in a long run produces a handful, and treating them as
@@ -825,3 +487,332 @@ covenants — breaking any of them requires a major version.
 - [ADR-0003](docs/adr/0003-platform-schema-boundary.md): the platform never adds fields to `kno.v1`.
 
 [Unreleased]: https://github.com/knograph/kno/commits/main
+
+### Changed
+
+- **`--cost-per-call-usd` is no longer required alongside `--max-cost-usd`** for an agent that
+  prices its own calls. `--agent anthropic:claude-opus-5 --max-cost-usd 5` was refused even though
+  the adapter prices every Case exactly — and the scalar the user was then forced to supply is
+  *ignored*, because the estimator path never falls back to it. The flag was mandatory, inert, and
+  the only way to run the flagship invocation.
+
+- **BREAKING (pre-1.0): `openaicompat.Options.KeyBindings` and `.Policy` are replaced** by
+  `KeyEnv map[string]string`, `AllowInsecureBaseURL bool`, and `AllowPrivateAddress bool`. Both old
+  fields were typed by the `internal/transport` package, which made the whole struct
+  **unconstructible from outside `adapters/agent/`** — including from `cli`. `anthropic.Options`
+  never had this problem; this brings the two adapters into line rather than weakening the
+  transport's internal boundary. **Migration:** `KeyBindings: transport.KeyBindings{…}` becomes
+  `KeyEnv: map[string]string{…}`; `Policy: transport.Policy{AllowInsecureHTTP: a,
+  AllowPrivateAddress: b}` becomes the two bools.
+
+  The map is **not** pre-normalized: the adapter runs it through
+  `transport.ParseKeyBindings` itself, so host casing and ports are handled and the
+  looks-like-a-secret and bound-twice refusals still apply. A caller that previously built a
+  `transport.KeyBindings` by hand was getting that for free and still is.
+
+- **`anthropic.Options` gains `Price`**, so `--price-input-per-mtok` / `--price-output-per-mtok`
+  reach this adapter. They were accepted, validated as a pair, and then discarded for this scheme,
+  while the cookbook, the CI recipe, and `kno doctor` all named them as the remedy for an unpriced
+  model — a silently ignored flag on the money path.
+
+- **An explicit `--cost-per-call-usd 0` asserts the calls are free.** Read from whether the flag
+  was passed, not from its value: 0 is also the default, so the documented local-model-server
+  recipe passed it and was refused with a fix line naming the flag it had just supplied.
+
+
+- **BREAKING (pre-1.0): `BaselineOptions.ResolvedModel` is removed.** It was caller-supplied and
+  read at run open, before any request, so the only value it could ever hold was one a previous run
+  had recorded — `checkResumable` compared it to itself and the gate never fired once. **Migration:
+  delete the field; nothing replaces it.** The check now runs at first-response time and needs no
+  caller input. Repays [debt #42](docs/debt.md#42).
+
+- **A provider failure that cannot change within a run now ends the run at the first Case.** Six
+  conditions escalate: a rejected credential (401/403), the provider's own spend cap, a user's
+  self-set spend limit, an unpaid account (402), a model that does not exist (404), and a refused
+  destination or key-binding mismatch. A wrong `ANTHROPIC_API_KEY` on a 10,000-Case run previously
+  made 10,000 requests and settled 10,000 calls against `--max-calls` before saying anything.
+  Repays [debt #47](docs/debt.md#47).
+
+  A plain 429, a 5xx, a truncation, and an oversized response are deliberately **not** escalated —
+  each may succeed on the next call, and escalating them would convert a recoverable run into a
+  dead one. That direction has its own test.
+
+- **A capped run against a model with no price row is refused once**, naming pricing, instead of
+  erroring every Case and reporting "too many cases errored" — a verdict naming nothing about
+  pricing, after taking consent for a figure that was never going to apply. **Partly** repays
+  [debt #46](docs/debt.md#46): this is the refusal shape only. The price rows and the per-token
+  override land with the CLI wiring.
+
+- **A timed-out request reports `RETRY_REASON_TIMEOUT`.** A 408 and a 5xx share the
+  `ErrTransportTransient` sentinel, so `core` — which could classify only from sentinels — reported
+  a timeout as `RETRY_REASON_PROVIDER_UNAVAILABLE`, whose schema definition is "the provider
+  returned a 5xx". The enum value existed and nothing ever emitted it. Repays
+  [debt #53](docs/debt.md#53).
+
+- **Orphaned spend from a run-fatal stop is no longer attributed to the budget.** The
+  discriminator was a bool, so every in-flight charged Case on any fatal stop reported "the cost or
+  call cap could not admit another attempt" — sending a user whose credential was rejected to raise
+  a cap that was never binding.
+
+- **`OrphanReason.ORPHAN_REASON_RUN_FATAL`** (proto, additive). A budget stop is resumable as-is; a
+  run-fatal stop is not, and resuming without fixing the condition pays for the same answer again.
+
+- **A run-fatal refusal leaves its Case re-attemptable**, like a budget refusal and an unpriceable
+  one: refused by a condition the user then fixes. Recording it as a terminal outcome put the Case
+  in `CompletedCases`, so a resume skipped it forever — and `closeRun` recomputes
+  `ErrorRateExceeded` over the whole store, branding the **corrected** run "not a usable baseline".
+  Measured: 20 Cases, a bad key, then a resume with a healthy agent — completed, 8 errored, error
+  rate exceeded, recoverable only by paying for all 20 again. The remedy every escalated error
+  advertises is "fix this and re-run", and it now works.
+
+
+- The fix line on a stale-checkpoint refusal no longer names a cause that is never tested. It
+  offered "the goal, agent, or split configuration changed" for every non-eval mismatch: the split
+  is not compared at all, and the resolved model — which is — was not named. A user whose provider
+  re-pointed a moving alias was told to restore a setting they had never touched; they are now
+  told to pin the model in the agent ref, which is the only thing that prevents it.
+
+- The resume check for a changed provider model now compares **set membership** rather than the
+  first recorded element. With concurrency there is no "first response", and during a provider
+  rollout two workers in one run legitimately see different builds — so a run that saw `{A, B}`
+  and is now served by `B` has not changed, and comparing against whichever element sorted first
+  would have refused it.
+
+  **The check still does not run.** Writing `case_execution` fills the *recorded* half of the
+  comparison; nothing populates the model this process is about to use, because that is a property
+  of a response and the check runs before any call. See [debt #42](docs/debt.md#42).
+
+- **`OrphanSpend`**, naming the Case a charge belonged to when no outcome could carry it. The
+  amount is recorded against the run, so without this event the money is an integer nothing
+  describes — a side channel. Carries a reason, because a run stopped by a human is not a run that
+  ran out of budget. Repays [debt #52](docs/debt.md#52).
+
+- A concurrency the engine chooses is now reported rather than silent. `checkFeasible` narrows the
+  width when the cost cap cannot admit what was asked for; it did so with no event, no log line,
+  and no field on the `Run`. A `ConcurrencyReduced` event now says so while it is happening, and
+  `Run.concurrency` records the decision afterwards — for every Case-executing run, reduced or
+  not, so two runs can be compared. **Partly** repays [debt #44](docs/debt.md#44): the engine now
+  records and emits it, and no surface reads it back yet. The CLI report that entry requires is
+  M2-11.
+- `StageProgress` heartbeats, **off by default**. Every event is one fsync under
+  `synchronous=FULL` on the same serialized writer as the outcome row that prevents double-spend,
+  so a heartbeat nobody watches is write contention in front of the write whose loss costs money.
+  A failed heartbeat write ends the run rather than being swallowed: the append allocates a
+  sequence number immediately before writing, so a silent failure leaves a permanent hole that
+  `MaxEventSequence` cannot heal, and a consumer reading the stream correctly concludes it lost
+  events. `--concurrency` and the interval are both bounds-checked; an unbounded `--concurrency`
+  recorded a negative width on the wire.
+
+  Nothing turns it on yet — the flag is M2-11. `core.DefaultProgressInterval` is 1 Hz. The rate is
+  averaged over **this process's** work and clock: not over the last interval, because a window
+  shorter than one LLM call swings on nothing, and not over the whole run, because a resume's
+  counts span both processes while its clock does not. The counts themselves stay whole-run, since
+  they pair with `total_cases`.
+
+- `ConcurrencyDecision`, carried by `Run.concurrency` and by a new `ConcurrencyReduced` event, for
+  a concurrency the engine chooses rather than the user. **Nothing emits or writes them yet** —
+  the emitter lands with M2-10c, and until then an absent `Run.concurrency` means "not recorded",
+  not "ran at what it asked for".
+
+  The event embeds the same message the `Run` records rather than restating its fields, so the two
+  cannot drift apart. It carries **both** terms of the arithmetic — the cost-cap headroom and the
+  per-Case estimate — because the engine divides a fraction of the first by the second, and a
+  consumer given only one can solve for what they were not told rather than check the result.
+  `requested` is optional, so a width nobody asked for is distinguishable from one that was
+  overridden.
+
+  Proto only, additive, `buf breaking` clean. Toward [debt #44](docs/debt.md#44).
+
+- **The `anthropic` provider adapter** (`adapters/agent/anthropic`) for the Messages API,
+  implementing `core.Agent`, `core.Capable`, and `core.Estimator`. Not the OpenAI-compatible
+  adapter with a different base URL: the system prompt is a top-level field, `max_tokens` is
+  required, `input_tokens` counts only what follows the last cache breakpoint (so billed input
+  is the sum of three fields), `stop_reason: "refusal"` is scored rather than errored, and
+  authentication is `x-api-key`, which Go's redirect handling does not strip. Each difference
+  produces a wrong number rather than a loud failure. Capabilities are static and per model, so
+  `New` refuses `--temperature` for a model that rejects sampling parameters instead of failing
+  every Case with a 400.
+
+- **The first provider adapter.** `adapters/agent/openaicompat` speaks the OpenAI Chat
+  Completions shape and is `base_url`-configurable, so it also reaches OpenAI-compatible
+  servers. Static capabilities (no probing), a pessimistic per-Case `Estimate` with a bounded
+  `WorstCase`, a prompt ceiling enforced on both the estimate and the call, and recorded
+  fixtures. Repays [debt #11](docs/debt.md#11), [#18](docs/debt.md#18), [#23](docs/debt.md#23),
+  [#38](docs/debt.md#38), [#39](docs/debt.md#39); investigates [#20](docs/debt.md#20) and
+  [#43](docs/debt.md#43).
+
+
+- `make record-fixtures` and `make test-live` no longer grep Go source for `KNO_MAX_COST_USD`.
+  The cap is now read and enforced by code ([debt #11](docs/debt.md#11)), and a grep that a
+  comment could satisfy would only mislead once real enforcement existed.
+
+- A malformed `--agent` now exits with `INVALID_INPUT` rather than `CAPABILITY_UNSUPPORTED`. Both
+  exit 1, so no CI gate changes, but the message now distinguishes a typo from a provider this
+  build has no adapter for.
+- Go toolchain bumped to `go1.25.13`. Making the first real HTTP call turned seven standard-library
+  advisories from unreachable into reachable — `crypto/x509`, `net/http`, and `golang.org/x/net/idna`
+  — and `govulncheck` failed the build for them. Working exactly as intended.
+- Go toolchain pinned to `go1.25.8` (from 1.25.5), which `govulncheck` flagged for `GO-2026-4602`
+  in the standard library, reachable from `covercheck`. `GOTOOLCHAIN` is pinned in the Makefile so
+  the toolchain is as reproducible as every other tool.
+
+### Fixed
+
+- **A missing credential is refused before any request.** `openaicompat` omitted the
+  `Authorization` header and let every Case collect a 401 — now bounded by run-fatal escalation,
+  but still a paid round trip and a message about a rejected credential that was never sent. Only
+  for the provider's default host: a self-hosted endpoint legitimately needs no key. Repays
+  [debt #57](docs/debt.md#57).
+
+- **`--yes` prints the estimate for every run, not just above the prompt threshold.** It printed
+  from inside the confirmation callback, which the guard short-circuits below $1.00 — so the flag
+  was silent for exactly the runs small enough not to prompt, while its help text, the cookbook,
+  and the CI recipe all promised a figure unconditionally. In `--json` mode the figure travels as
+  `estimated_usd` instead, because a prose line ahead of the document makes stdout unparseable.
+
+- **A narrowed run no longer claims a width the user never asked for.** With no `--concurrency`,
+  the report read `width 1 (asked for 0; cost-cap)`. Fixed in the renderer rather than by recording
+  the defaulted width as a request: `core` deliberately does not, and a test pins that a report
+  saying "you requested 8, we gave you 5" to someone who requested nothing is how a report earns
+  distrust.
+
+- **The test suite could bill you.** `cli`'s tests drive the real command, and a subtest asserting
+  `--agent openai:gpt-4.1` was refused for having "no adapter" started making live API calls the
+  moment the adapters were wired, on any machine exporting `OPENAI_API_KEY`. `cli` now has a
+  `TestMain` that unsets eleven provider credential variables unless `KNO_LIVE_TESTS=1`. Tracked as
+  [debt #63](docs/debt.md#63), because the list is a denylist.
+
+
+- **`executor.RecordGrace` bounded the whole run instead of the drain after cancellation.** It was
+  a `context.WithTimeout` built before the first item was dispatched, so on any run longer than the
+  grace (30s by default, and nothing ever set it) the first sink write failed, `sinkBroken` latched
+  so every later result was discarded without being asked, and a resumed run paid for all of them
+  again. Invisible until now only because every test in the tree uses a sub-second in-process fake
+  agent — which stops being true the moment a provider adapter is reachable from the CLI.
+
+  The grace is now armed **by** the caller's cancellation, which is what its godoc always described.
+  A hung sink is bounded separately by `PerRecordTimeout` (new, exported, 30s default) **per call**,
+  because the hazard is one write that never returns, not a budget the run draws down. Repays
+  [debt #54](docs/debt.md#54).
+
+- **`executor.Options.AfterRecord`** (additive), the only path from a *successful* item to shutdown. `IsFatal`
+  is consulted only on a work error, so a condition discovered in an answer the caller has already
+  paid for had nowhere to go: failing the item would discard a paid, scoreable result and record it
+  as an error, and returning an error from `SinkFunc` would latch `sinkBroken` and discard every
+  result after it. `AfterRecord` runs once the result is durable and counted, and ending the run
+  there keeps it — and a panic inside it is recovered, because unguarded it unwound out of the loop
+  that drains results and deadlocked the run permanently.
+
+  It receives the `Result` boxed as `any` rather than splintered into `(item, value, err)`:
+  `Result` documents that exactly one of `Value` and `Err` is meaningful, and three loose
+  parameters discard that invariant and hand the caller a non-nil `any` wrapping a nil pointer on
+  the failure path.
+
+- A sink failure that happens **after the grace has expired** now joins the caller's cancellation
+  cause. Without it, a store surfacing its own error text instead of a wrapped `context.Canceled`
+  turned a Ctrl-C into `RUN_STATUS_FAILED` with a generic exit code — so a CI gate keying on the
+  interrupted code would flip the day a driver reworded.
+
+
+- **Money spent on a Case that never produced an answer is now durable.** A budget refusal on a
+  retry — or a Ctrl-C during backoff — discarded every charge the earlier attempts incurred:
+  measured across a kill and resume at guard $0.36 against store $0.32. `SettledSpend` is the only
+  durable record of money spent
+  and `Guard.Restore` reads it, so a resumed run got the difference back as headroom and spent it
+  again. Repays [debt #50](docs/debt.md#50).
+
+  The spend is recorded against the run, not as an outcome row, so the Case stays absent from the
+  completed set and a resume still re-attempts it.
+
+  `store.Store` gains `RecordOrphanSpend`, which is a compile break for any out-of-tree
+  implementation.
+
+  **This migration cannot be downgraded past.** `kno` refuses to open a database whose schema is
+  newer than the binary understands, so an older build will not start against a migrated file.
+
+- `SettlementOvershoot` reports how much **this** settlement contributed. The figure was not
+  derivable from the payload: subtracting `reserved` from `settled` over-counts by whatever
+  headroom was still under the cap — 450k where the true contribution is 300k — so a consumer
+  summing across events inflated the overshoot.
+- A **billed** retry is reported as `PROVIDER_UNAVAILABLE` rather than `TRANSPORT_TRANSIENT`,
+  which the schema defines as having *no evidence the provider processed the request*. A charge is
+  evidence it did, and it is the only signal that separates the two — an adapter wraps a reset
+  connection and a billed 5xx as the same sentinel. The one retry reason that costs money was
+  being reported as the one that means nothing happened.
+
+- **A provider's charge for a failed call is no longer recorded as free.** The guard settled it and
+  the store persisted zero, and `SettledSpend` is the only durable record of money spent — so a
+  resumed run got the difference as headroom and spent it again. With `--max-attempts 3` the guard
+  could settle three charges for one Case where the store recovered at most one.
+
+  Both paths, not just the obvious one. A Case whose first attempt is charged and fails and whose
+  second succeeds is persisted by the sink's *scored* branch, which derived cost from the final
+  `Response` alone — measured at $0.25 settled against $0.05 persisted. The sink now records what
+  the guard settled in every branch rather than re-deriving it. Repays the core half of
+  [debt #43](docs/debt.md#43); the transport half remains.
+- **`Reservation.Settle` clamps what an adapter reports.** A negative charge is refused rather than
+  subtracted, and a saturating one pins rather than wrapping. Unclamped, two `MaxInt64` settlements
+  against a $1.00 cap left spend at **-2**, `Remaining` reporting more than the cap, and the guard
+  authorizing again. `fitsLocked` and `Restore` saturate too — clamping only `Settle` moved the
+  overflow into the cap comparison, where a pinned total wrapped and the guard authorized without
+  limit. Repays [debt #48](docs/debt.md#48).
+
+
+- A budget stop lost the Cases that were in flight when it landed. The drain cancels them mid-call,
+  and each was recorded as terminally errored — which marks it complete, so `--resume` skipped it
+  forever and the run reported a smaller denominator than it measured, with nothing saying why.
+  Measured at concurrency 8 with a 50ms agent: two lost Cases on every run, and a resumed run
+  scoring 51 of 52. CI surfaced it as an intermittent CLI failure; it was not intermittent, just
+  timing-dependent, and the CLI's fake agent has no latency.
+
+  A Case cancelled *by* the shutdown is now left unrecorded so the resume picks it up, exactly like
+  a budget-refused one. A per-Case provider timeout against a healthy run is still recorded — the
+  distinction matters, and collapsing it would hide a broken provider behind a shrinking
+  denominator.
+- `make fuzz-short` is now bounded by **executions rather than wall-clock**. `-fuzztime=30s` failed
+  intermittently on both CI runners with "context deadline exceeded" — the fuzzing coordinator
+  timing out on a worker as the deadline lands, not a failing input. A count also makes the gate do
+  the same work everywhere, so "passes locally" and "passes in CI" stop meaning different things.
+- Two `kno` processes opening the same database at the same moment could fail to start with a raw
+  `SQLITE_BUSY`. Creating a database converts its journal to WAL, which needs an exclusive lock,
+  and the process that loses that race is told the database is locked rather than made to wait —
+  `busy_timeout` does not cover it, and setting the pragma after `journal_mode` in DSN order meant
+  it was not even in effect yet. The base schema now applies under the same write lock migrations
+  use, `busy_timeout` is set first, and the open path retries on a locked database with bounded
+  backoff. Measured 9 of 10 runs failing before, 0 of 18 after.
+- The coverage ratchet compared a platform-dependent measurement against a single-platform
+  baseline, so it failed CI on Linux for code that had not changed. `executor` measures 96.0% on
+  darwin and 94.9% on linux for the same commit with every test passing on both, and the 1.0pp
+  jitter tolerance is not the right instrument for a systematic gap — widening a tolerance until
+  the gap fits is how a gate stops detecting what it exists for. `.coverage-baseline` now holds the
+  lowest reading across the platforms CI runs, and `make update-coverage-baseline` refuses to run
+  anywhere but Linux, because writing it elsewhere raises the floor above what CI can meet.
+- `make record-fixtures` set `KNO_LIVE_TESTS=1` itself while checking neither condition
+  `make test-live` enforces: that `KNO_MAX_COST_USD` is set, and that some Go code actually reads
+  it. It was an unguarded live-spend path that would have armed the moment the first adapter
+  fixture recorder was written. The guard is now a shared `live_spend_guard` define both targets
+  call, and both were verified to fail closed on both conditions. See `docs/debt.md#11`.
+- A resume compared only the caller-supplied input fingerprint, which covers the eval file and the
+  split but not the Goal or the Agent. Resuming a run with a different `--agent` or `--goal` was
+  accepted, blending Cases scored under two different configurations into one `AggregateScore`
+  presented as a single homogeneous number. `core.Baseline` now compares the recorded Goal, Goal
+  direction, and Agent directly and refuses, naming which one changed.
+- The dev/holdout refusal — a run that can never produce a holdout number — was enforced only in
+  `cli/`, so any other caller of `core.Baseline` could run against an empty holdout with no refusal
+  at all. The check now lives in the stage, where the docs already claimed it was.
+- An interrupted run returned a bare `context.Canceled` and exited `1`, indistinguishable from a
+  broken build. It now returns `errs.ErrInterrupted` and exits `4` (see Added).
+- A second Ctrl-C during shutdown was silently swallowed. `signal.NotifyContext` keeps intercepting
+  signals until `stop` is called, and `stop` was deferred to the end of `Execute`; it now runs as
+  soon as the first signal lands, restoring the default behavior for the next one.
+- A negative `--max-cost-usd` or `--max-calls` disabled the cap instead of tightening it, because
+  the guard treats a limit as active only when positive. Both are now refused.
+- A cost cap without `--cost-per-call-usd` failed with a bare error carrying no fix line and exit
+  `1` by fallthrough. It now follows the CLI error grammar.
+- A failure to write the report — a closed stdout pipe — replaced the run's own outcome, so a
+  legitimate budget stop exited `1` instead of `2`. The run's error now wins.
+- `budget.Guard` had no persistence, so a resumed run started at zero spent regardless of what the
+  killed run had actually spent — a run near its cap could authorize nearly the whole cap a second
+  time, for up to twice the intended spend across one kill/resume cycle. `Guard.Restore` reseeds
+  settled spend from the store, which is the only thing that outlives the process.
+

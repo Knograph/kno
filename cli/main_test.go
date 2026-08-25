@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"testing"
+
+	"go.uber.org/goleak"
 )
 
 // providerKeyVars are every environment variable a provider adapter will read
@@ -46,6 +48,17 @@ var providerKeyVars = []string{
 // KNO_LIVE_TESTS=1 leaves the environment alone, so a deliberate live run
 // still works.
 func TestMain(m *testing.M) {
+	// goleak here too, now that this package owns a background goroutine: the
+	// span batcher. Nothing else in cli spawns one, and a batcher that
+	// outlives its run would keep exporting into a writer that is gone.
+	//
+	// VerifyTestMain, not a per-test helper — goleak takes a process-global
+	// census, so a parallel sibling's goroutines are indistinguishable from a
+	// leak. See CONTRIBUTING.md and docs/debt.md#18.
+	//
+	// It runs m and exits, so the env scrubbing has to happen BEFORE it and it
+	// has to be the last statement. A deferred VerifyTestMain would never run:
+	// os.Exit does not unwind.
 	if os.Getenv("KNO_LIVE_TESTS") != "1" {
 		for _, v := range providerKeyVars {
 			if err := os.Unsetenv(v); err != nil {
@@ -54,5 +67,5 @@ func TestMain(m *testing.M) {
 			}
 		}
 	}
-	os.Exit(m.Run())
+	goleak.VerifyTestMain(m)
 }

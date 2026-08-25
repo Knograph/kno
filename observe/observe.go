@@ -16,14 +16,21 @@
 // # Cost when tracing is off
 //
 // The OTel API's global provider is a no-op until something registers a real
-// one, and a no-op span allocates nothing and records nothing. So the
-// instrumentation is unconditional and the EXPORT is opt-in, which is the
-// split DESIGN.md and CLAUDE.md already describe between them: tracing built
-// in, export configured.
+// one, so an untraced span does no I/O and nothing accumulates — the streaming
+// memory profile CLAUDE.md requires is unaffected.
+//
+// It is NOT free, and an earlier version of this comment claimed it was.
+// Measured at otel v1.46.0: a no-op span costs ~95ns and 3 small allocations,
+// because ContextWithSpan is a context.WithValue, the non-recording span boxes
+// into an interface, and WithAttributes builds its slice at the call site
+// whether or not the tracer reads it. Two spans per Case is roughly 690 bytes
+// of transient allocation on the DEFAULT path. That is affordable next to a
+// network call and it is not nothing, which is the honest way to say it.
 package observe
 
 import (
 	"context"
+	"regexp"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -37,10 +44,18 @@ const scope = "github.com/knograph/kno"
 
 // Tracer returns Kno's tracer.
 //
-// Fetched per call rather than cached in a package variable: the global
-// provider is a no-op until the CLI installs one, and a cached tracer captured
-// at init would be that no-op forever — spans would silently never appear, and
-// the only symptom is an empty trace.
+// Fetched per call, not cached in a package variable — and the reason is not
+// the one an earlier version of this comment gave. That version said a cached
+// tracer "would be that no-op forever", which is false: OTel's global package
+// hands back a delegating shim that picks up a provider registered later.
+//
+// The real reason, measured: a cached tracer binds to the FIRST provider
+// installed and silently ignores every later one. One process installing once
+// is fine, so a CLI would not notice — but an embedder, or a test binary
+// installing a recorder per test, gets zero spans with no error anywhere.
+// "Silently produces no spans" is the failure mode this package exists to
+// avoid, so it pays a global map lookup (~200ns, 3 allocations) per span to
+// avoid it. That is affordable next to the network call it is describing.
 func Tracer() trace.Tracer { return otel.Tracer(scope) }
 
 // StartRun opens the span every other span in a run hangs from.
@@ -100,12 +115,27 @@ func CostUSDMicros(v int64) attribute.KeyValue {
 	return attribute.Int64("kno.cost.usd_micros", v)
 }
 
+// codeShape is what a machine-readable error code may look like.
+//
+// The codes constructed in this tree are all constants, but errs.FromProto
+// rebuilds an Actionable from the WIRE with no validation — so a Ring-2 plugin
+// or an API response could put arbitrary text where a code belongs, and a span
+// is the one artifact designed to leave the machine. CLAUDE.md's rule is that
+// the plugin boundary is hostile; a plugin sees the Case it was handed.
+//
+// Not reachable today (docs/debt.md#56 tracks the same seam), and one line is
+// cheaper than remembering to add it when it becomes reachable.
+var codeShape = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,63}$`)
+
 // ErrorCode records a FAILURE'S CLASS, never its message.
 //
 // codeOf's machine-readable code, for the same reason the persisted Outcome
 // stores that rather than provider prose: an error message can quote a prompt
 // back, and a span is shipped off the machine.
 func ErrorCode(code string) attribute.KeyValue {
+	if !codeShape.MatchString(code) {
+		return attribute.String("kno.error.code", "UNCLASSIFIED")
+	}
 	return attribute.String("kno.error.code", code)
 }
 
@@ -116,6 +146,10 @@ func ErrorCode(code string) attribute.KeyValue {
 // prompt that produced it. The class is enough to find the span; the store has
 // the detail, locally, where retention.md says it is.
 func Fail(span trace.Span, code string) {
-	span.SetAttributes(ErrorCode(code))
-	span.SetStatus(codes.Error, code)
+	kv := ErrorCode(code)
+	span.SetAttributes(kv)
+	// The description gets the SANITIZED code, not the argument: the status is
+	// exported the same as an attribute, so validating one and not the other
+	// would leave the door open next to the lock.
+	span.SetStatus(codes.Error, kv.Value.AsString())
 }

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"sync/atomic"
@@ -10,6 +11,7 @@ import (
 	"github.com/knograph/kno/adapters/evals/jsonl"
 	"github.com/knograph/kno/core"
 	knov1 "github.com/knograph/kno/gen/kno/v1"
+	"go.opentelemetry.io/otel"
 )
 
 // TestSignalHandlerIsUnregisteredOnTheFirstSignal.
@@ -168,5 +170,61 @@ func TestTheCountsFallBackWhenCaseExecutionIsAbsent(t *testing.T) {
 	}
 	if got := erroredOf(run); got != 4 {
 		t.Errorf("errored = %d, want 4", got)
+	}
+}
+
+// TestStartTracingRestoresThePreviousProvider.
+//
+// startTracing installs a PROCESS-GLOBAL TracerProvider, and its exporter
+// writes to a writer captured at install time. Leaving it installed means
+// every later run in the same process keeps exporting into a writer that is
+// long gone — a CLI runs once so it would never notice, but a test binary and
+// any embedder do.
+//
+// This is the root cause behind both of this flag's tests passing on spans
+// emitted by OTHER tests: 1032 Case spans and 10 run spans landed in a test
+// that ran 30 Cases. Serializing the tests hides that; restoring the provider
+// fixes it, so this asserts the restore directly rather than through stderr,
+// where the leaked spans are invisible by construction (they go to the first
+// buffer, not the current one).
+func TestStartTracingRestoresThePreviousProvider(t *testing.T) {
+	before := otel.GetTracerProvider()
+
+	var buf bytes.Buffer
+	stop, err := startTracing(context.Background(), &buf, true)
+	if err != nil {
+		t.Fatalf("startTracing: %v", err)
+	}
+
+	if otel.GetTracerProvider() == before {
+		t.Fatal("startTracing installed no provider, so this proves nothing")
+	}
+
+	stop()
+
+	if got := otel.GetTracerProvider(); got != before {
+		t.Error("startTracing left its provider installed. Every later run in " +
+			"this process keeps exporting into a writer captured when this one " +
+			"started.")
+	}
+}
+
+// TestStartTracingIsANoOpWhenOff, so the flag is a real opt-in rather than a
+// filter over output that was being produced anyway.
+func TestStartTracingIsANoOpWhenOff(t *testing.T) {
+	before := otel.GetTracerProvider()
+
+	var buf bytes.Buffer
+	stop, err := startTracing(context.Background(), &buf, false)
+	if err != nil {
+		t.Fatalf("startTracing: %v", err)
+	}
+	defer stop()
+
+	if otel.GetTracerProvider() != before {
+		t.Error("tracing off still installed a provider")
+	}
+	if buf.Len() != 0 {
+		t.Errorf("tracing off wrote %d bytes", buf.Len())
 	}
 }

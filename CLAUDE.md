@@ -98,7 +98,7 @@ make check        # runs everything below; this is the only command you need to 
 ## Observability
 
 - **Structured logging** (charmbracelet/log): human-first at INFO, machine-parseable with `--json`. Every log line answers "what stage, what run ID, what case/asset". No naked `fmt.Println` outside `tui/`.
-- **OTel tracing** built in: every stage, every adapter call, every plugin invocation is a span with run ID correlation. Local default is off; `--otel-endpoint` turns it on. Spans never contain conversation content or asset content — IDs and metrics only.
+- **OTel tracing** built in: every stage, every adapter call, every plugin invocation is a span with run ID correlation. Instrumentation is unconditional and costs nothing but a few allocations when no provider is installed; EXPORT is opt-in. `--trace-spans` writes them to stderr for local debugging; `--otel-endpoint`, which ships them to a collector over OTLP, is the v0.3 half (DESIGN.md places "OTel export" there, and separating instrumentation from export is what makes the two documents agree). Spans never contain conversation content or asset content — IDs and metrics only, enforced by `observe`'s constructors and by a test that drives a real run.
 - **The event stream is the single spine:** engine emits typed events (proto-defined); tui renders them, api streams them (SSE), logs record them. New user-visible state = new event type, never a side channel.
 - **Product telemetry is OPT-IN only** (`telemetry: true` in kno.yaml, off by default, prominently documented): anonymous command + version + duration + error class. Never content, never counts of user data, never endpoints. This audience will read the telemetry code — write it to be read.
 

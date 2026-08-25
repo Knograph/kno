@@ -317,7 +317,7 @@ func Baseline(
 	ctx context.Context,
 	evals *SealedEvals,
 	opts BaselineOptions,
-) (*BaselineResult, error) {
+) (result *BaselineResult, err error) {
 	if err := opts.validate(evals); err != nil {
 		return nil, err
 	}
@@ -326,7 +326,19 @@ func Baseline(
 	// caller installed a TracerProvider, so this costs nothing on the default
 	// path — which is why it is unconditional rather than behind a flag.
 	ctx, runSpan := observe.StartRun(ctx, opts.RunID)
-	defer runSpan.End()
+	// Named return plus one deferred close, rather than marking the span at
+	// the single place the run finishes normally. There are fourteen early
+	// returns between here and there — every store failure, a stale
+	// checkpoint, an unreadable eval source, and BOTH budget refusals — and
+	// each of them ended the span with status Unset, which a collector renders
+	// identically to a clean run. A refused run is the one run-level event a
+	// trace has to show.
+	defer func() {
+		if err != nil {
+			observe.Fail(runSpan, codeOf(err))
+		}
+		runSpan.End()
+	}()
 
 	// Resume state first: both guards below need it. checkFeasible must see the
 	// headroom a resume actually has, and confirmRun must quote only the Cases
@@ -548,7 +560,7 @@ func Baseline(
 	if err := agg.emitFailed(); err != nil && runErr == nil {
 		runErr = err
 	}
-	res, err := opts.closeRun(ctx, run, agg, stats, runErr)
+	res, closeErr := opts.closeRun(ctx, run, agg, stats, runErr)
 
 	// Recorded on the run span before it ends, so a trace answers "what did
 	// this run cost and how much of it worked" without joining to the store.
@@ -560,10 +572,9 @@ func Baseline(
 			attribute.Int("kno.cases.errored", int(res.Run.GetErroredCaseCount())),
 		)
 	}
-	if err != nil {
-		observe.Fail(runSpan, codeOf(err))
-	}
-	return res, err
+	// The deferred close marks the failure; assigning the named return is what
+	// tells it to.
+	return res, closeErr
 }
 
 func (o BaselineOptions) validate(evals *SealedEvals) error {

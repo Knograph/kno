@@ -3,6 +3,7 @@ package cli_test
 import (
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/knograph/kno/cli"
@@ -676,13 +677,28 @@ func TestTheLocalModelServerRecipeRuns(t *testing.T) {
 	}
 }
 
+// tracingMu serializes the tests that install a global TracerProvider.
+//
+// otel.SetTracerProvider is process-wide and `run` executes the CLI IN
+// PROCESS, so a tracing test running beside the package's other ~17 tests
+// captures their spans into its own buffer. Measured before this: 1032 Case
+// spans and 10 run spans in a test that ran 30 Cases — both of this flag's
+// tests were passing on other tests' output, and the off-by-default test could
+// not fail at all.
+//
+// The mutex is half the fix; startTracing restoring the previous provider is
+// the other half, and that one is a real bug rather than a test concern.
+// Neither test calls t.Parallel().
+var tracingMu sync.Mutex
+
 // TestTraceSpansGoToStderrNotStdout.
 //
 // stdout is the report, and --json makes it a machine contract. A span
 // document interleaved there makes it unparseable — the same failure a
 // one-line consent notice already caused once in this milestone.
 func TestTraceSpansGoToStderrNotStdout(t *testing.T) {
-	t.Parallel()
+	tracingMu.Lock()
+	defer tracingMu.Unlock()
 
 	cases := writeCases(t, 30)
 	stdout, stderr, code := run(t, "baseline", "--evals", cases, "--agent", "fake:",
@@ -694,11 +710,19 @@ func TestTraceSpansGoToStderrNotStdout(t *testing.T) {
 	if _, err := cli.DecodeRaw([]byte(stdout)); err != nil {
 		t.Errorf("--trace-spans corrupted the --json contract: %v\n%s", err, stdout)
 	}
-	if !strings.Contains(stderr, "kno.baseline") {
-		t.Errorf("no run span reached stderr:\n%s", stderr)
+	// EXACT counts. Asserting only that the names appear passes on spans another
+	// test emitted into this buffer, which is what was happening.
+	if n := strings.Count(stderr, `"Name":"kno.baseline"`); n != 1 {
+		t.Errorf("run spans = %d, want exactly 1 — a count above one means this "+
+			"buffer is collecting other tests' spans", n)
 	}
-	if !strings.Contains(stderr, "kno.case") {
-		t.Errorf("no Case spans reached stderr:\n%s", stderr)
+	// Bounded rather than exact: the dev/holdout split is seeded, so the dev
+	// count varies run to run. The BOUND is what matters — contamination from
+	// the package's other tests pushed this into the hundreds.
+	if n := strings.Count(stderr, `"Name":"kno.case"`); n == 0 || n > 30 {
+		t.Errorf("Case spans = %d, want between 1 and 30 (the dev half of 30 "+
+			"Cases); a count above 30 means this buffer is collecting other "+
+			"tests' spans", n)
 	}
 }
 
@@ -706,7 +730,8 @@ func TestTraceSpansGoToStderrNotStdout(t *testing.T) {
 // and so the flag is a real opt-in rather than a filter over output that was
 // being produced anyway.
 func TestTracingIsOffByDefault(t *testing.T) {
-	t.Parallel()
+	tracingMu.Lock()
+	defer tracingMu.Unlock()
 
 	cases := writeCases(t, 30)
 	_, stderr, code := run(t, "baseline", "--evals", cases, "--agent", "fake:",

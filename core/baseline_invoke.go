@@ -365,11 +365,19 @@ func (o BaselineOptions) invokeOnce(
 	// ours. Opened before Authorize so a budget refusal is visible as a call
 	// that never happened rather than as a gap.
 	ctx, span := observe.StartAgentCall(ctx, o.AgentRef.GetScheme(), attempt)
-	defer span.End()
+	// Named return, so the panic path marks the span too. A recovered panic
+	// unwinds through here with err set, and without this the provider-call
+	// span ended Unset while its parent Case span was correctly marked failed
+	// — a trace showing a healthy call inside a broken Case.
+	defer func() {
+		if err != nil {
+			observe.Fail(span, codeOf(err))
+		}
+		span.End()
+	}()
 
 	res, err := o.Guard.Authorize(ctx, est)
 	if err != nil {
-		observe.Fail(span, codeOf(err))
 		return nil, budget.Spend{}, 0, err
 	}
 	// Reached on every path: the agent erroring, the context cancelling
@@ -379,7 +387,6 @@ func (o BaselineOptions) invokeOnce(
 
 	resp, invokeErr := o.Agent.Invoke(ctx, c)
 	if invokeErr != nil {
-		observe.Fail(span, codeOf(invokeErr))
 		// The attempt consumed a call, and the provider may have CHARGED for
 		// it: a 200 carrying both an error object and a usage block is a shape
 		// several OpenAI-compatible gateways produce. M2-7 made that
@@ -392,6 +399,16 @@ func (o BaselineOptions) invokeOnce(
 	// one Case's cost could drift, and the persisted one is what
 	// Guard.Restore reads on resume.
 	spend := spendOf(resp)
+
+	// What the call actually cost and which model answered, on the span that
+	// made it. Without these the provider-call span carried only a scheme and
+	// an attempt number, and "spans carry IDs, counts, and money" was true
+	// only of the run's three aggregates. The RESOLVED model, not the ref: a
+	// moving alias tells a reader nothing about what was measured.
+	span.SetAttributes(observe.ResolvedModel(resp.GetResolvedModel()))
+	span.SetAttributes(observe.Tokens(resp.GetPromptTokens(), resp.GetCompletionTokens())...)
+	span.SetAttributes(observe.CostUSDMicros(spend.CostUSDMicros))
+
 	return resp, spend, res.Settle(spend), nil
 }
 
