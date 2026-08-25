@@ -77,8 +77,13 @@ covenants — breaking any of them requires a major version.
 - **A provider's charge for a failed call is no longer recorded as free.** The guard settled it and
   the store persisted zero, and `SettledSpend` is the only durable record of money spent — so a
   resumed run got the difference as headroom and spent it again. With `--max-attempts 3` the guard
-  could settle three charges for one Case where the store recovered at most one. Repays the core
-  half of [debt #43](docs/debt.md#43); the transport half remains.
+  could settle three charges for one Case where the store recovered at most one.
+
+  Both paths, not just the obvious one. A Case whose first attempt is charged and fails and whose
+  second succeeds is persisted by the sink's *scored* branch, which derived cost from the final
+  `Response` alone — measured at $0.25 settled against $0.05 persisted. The sink now records what
+  the guard settled in every branch rather than re-deriving it. Repays the core half of
+  [debt #43](docs/debt.md#43); the transport half remains.
 - **`Reservation.Settle` clamps what an adapter reports.** A negative charge is refused rather than
   subtracted, and a saturating one pins rather than wrapping. Unclamped, two `MaxInt64` settlements
   against a $1.00 cap left spend at **-2**, `Remaining` reporting more than the cap, and the guard

@@ -3454,9 +3454,12 @@ func TestABilledFailureIsPersistedSoAResumeDoesNotSpendItAgain(t *testing.T) {
 	h.opts.Concurrency = 1
 	h.opts.EstCostPerCallUSDMicros = perCall
 	h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 10_000_000}, nil, 0)
-	// One attempt: the retry backoff is real time, and the divergence this
-	// test is about exists at any attempt count.
-	h.opts.MaxAttempts = 1
+	// THREE attempts, not one. The guard settles each separately while only
+	// the last error survives the loop, so the accumulation across attempts is
+	// the thing under test — an earlier version of this test used one attempt
+	// and could not have caught a sink that persisted a single charge.
+	h.opts.MaxAttempts = 3
+	h.opts.RetryBackoff = time.Millisecond
 
 	// A run of all-errored Cases COMPLETES — an errored Case is counted, not
 	// fatal — so a non-nil error is not the signal here.
@@ -3484,6 +3487,12 @@ func TestABilledFailureIsPersistedSoAResumeDoesNotSpendItAgain(t *testing.T) {
 			"the %d difference as headroom and spends it again",
 			settledInGuard, persisted.CostUSDMicros,
 			settledInGuard-persisted.CostUSDMicros)
+	}
+	// And the accumulation is real: three attempts per Case, each charged.
+	if want := int64(6 * 3 * perCall); settledInGuard != want {
+		t.Errorf("guard settled %d, want %d — 6 Cases x 3 attempts x %d. A figure "+
+			"matching one attempt per Case means the retries were not charged",
+			settledInGuard, want, perCall)
 	}
 }
 
@@ -3537,5 +3546,77 @@ func TestASettlementPastTheCapIsReported(t *testing.T) {
 		t.Errorf("%d overshoot events at concurrency 1; once the cap binds, "+
 			"fitsLocked refuses further authorizations, so the count is bounded "+
 			"by in-flight reservations", len(seen))
+	}
+}
+
+// flakyBillingAgent charges for a failed first attempt, then succeeds.
+type flakyBillingAgent struct {
+	failedOnce sync.Map // case id -> struct{}
+	billed     int64
+	answer     *knov1.Response
+}
+
+func (a *flakyBillingAgent) Invoke(_ context.Context, c *core.Case) (*knov1.Response, error) {
+	if _, seen := a.failedOnce.LoadOrStore(c.GetId(), struct{}{}); !seen {
+		return nil, billedFailure{
+			error:  errs.ErrTransportTransient.Wrap(errors.New("charged, then failed")),
+			micros: a.billed,
+		}
+	}
+	r := proto.CloneOf(a.answer)
+	r.Output = c.GetExpected()
+	return r, nil
+}
+
+func (a *flakyBillingAgent) Capabilities() *knov1.Capabilities { return &knov1.Capabilities{} }
+
+// TestABilledFailureBeforeASuccessIsStillPersisted.
+//
+// The retry-EXHAUSTED branch was the obvious half and is covered. This is the
+// other one: a Case whose first attempt is charged and fails, and whose second
+// succeeds, is persisted by the sink's SCORED branch — which derives cost from
+// the final Response and knows nothing about what earlier attempts cost.
+//
+// The guard settles both. The store is what Guard.Restore reads on resume, so
+// the difference is headroom the resumed run spends again — the same defect as
+// the exhausted path, on the path that actually succeeds.
+func TestABilledFailureBeforeASuccessIsStillPersisted(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const billedOnFailure = 40_000 // $0.04, charged for the attempt that failed
+	const costOnSuccess = 10_000   // $0.01, the answer that worked
+
+	h := newHarness(t, 5, 3, fake.Options{})
+	h.opts.Agent = &flakyBillingAgent{
+		billed: billedOnFailure,
+		answer: &knov1.Response{CostUsdMicros: costOnSuccess},
+	}
+	h.opts.Concurrency = 1
+	h.opts.EstCostPerCallUSDMicros = billedOnFailure + costOnSuccess
+	h.opts.RetryBackoff = time.Millisecond
+	h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 10_000_000}, nil, 0)
+
+	res, err := core.Baseline(ctx, h.evals, h.opts)
+	if err != nil {
+		t.Fatalf("Baseline: %v", err)
+	}
+	if res.Run.GetScoredCaseCount() == 0 {
+		t.Fatal("no Case scored; the fixture must retry into a success")
+	}
+
+	settledInGuard := h.opts.Guard.Spent().CostUSDMicros
+	persisted, err := h.store.SettledSpend(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("SettledSpend: %v", err)
+	}
+
+	if persisted.CostUSDMicros != settledInGuard {
+		t.Errorf("the guard settled %d micro-USD and the store persisted %d, a gap "+
+			"of %d. Every Case here was charged once for a failed attempt and once "+
+			"for the success; the sink derives cost from the final Response alone, "+
+			"so the failed attempt's charge is lost. Guard.Restore reads the STORE",
+			settledInGuard, persisted.CostUSDMicros,
+			settledInGuard-persisted.CostUSDMicros)
 	}
 }

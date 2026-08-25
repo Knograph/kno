@@ -732,7 +732,7 @@ func (o BaselineOptions) sinkFunc(runCtx context.Context, draining *atomic.Bool,
 		case r.Done():
 			out.Response = r.Value.Response
 			out.Score = r.Value.Score
-			out.Spend = spendOfN(r.Value.Response, int64(r.Value.Attempts))
+			out.Spend = settledSpend(r.Value)
 		default:
 			out.Err = codeOf(r.Err)
 			// A Case can fail AFTER a paid call — a Goal erroring on malformed
@@ -742,7 +742,7 @@ func (o BaselineOptions) sinkFunc(runCtx context.Context, draining *atomic.Bool,
 			// spent than really was, reopening the amnesia M1-0 closed.
 			if r.Value != nil && r.Value.Response != nil {
 				out.Response = r.Value.Response
-				out.Spend = spendOfN(r.Value.Response, int64(r.Value.Attempts))
+				out.Spend = settledSpend(r.Value)
 			} else {
 				// No Response, which is the retry-EXHAUSTED path — every
 				// attempt failed. Hardcoding one call here is what made the
@@ -755,10 +755,7 @@ func (o BaselineOptions) sinkFunc(runCtx context.Context, draining *atomic.Bool,
 				// Guard.Restore reads it on resume. Persisting zero here while
 				// the guard holds a real figure gives the resumed run that
 				// difference as headroom and it spends it again.
-				out.Spend = budget.Spend{
-					Calls:         attemptsOf(r.Value),
-					CostUSDMicros: billedOf(r.Value),
-				}
+				out.Spend = settledSpend(r.Value)
 			}
 		}
 
