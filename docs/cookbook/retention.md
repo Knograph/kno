@@ -76,6 +76,20 @@ The same message covers a Score blob that fails to read back for any other reaso
 
 See [What the numbers mean](../what-the-numbers-mean.md#a-purged-run-has-no-baseline-score) for why refusing beats averaging the survivors.
 
+**Spend the run could not attribute to a Case survives too.** A Case that was charged for an
+attempt and then refused by the budget — or interrupted mid-backoff — has no outcome to hang its
+cost on, so that money is recorded against the run itself rather than against a Case. Purge does
+not touch it, for the same reason it keeps the scores: a dollar figure is not conversation
+content, and losing it would let a resumed run spend its cap a second time.
+
+The consequence, and it is not only about purge: you can still see what a run cost and which
+Cases completed, but for these charges you cannot see **which Case** the money went to. That
+attribution is not recorded anywhere. The event stream names the Cases that were retried, and
+carries no cost with them.
+
+This is a known gap rather than a design choice we are happy with — see
+[`docs/debt.md#52`](../debt.md#52).
+
 Keeping them is also load-bearing. **Kno has no separate "this Case is done" marker: the recorded outcome _is_ the marker.** Delete those rows and a resumed run has no way to know the work happened, so it runs every Case again and pays for every Case again. A purge that reopened the double-spend hole would be a privacy feature that costs you money.
 
 So `kno purge` nulls the content columns and never deletes a row. If you want the rows gone too, delete the database file — that is a real and supported answer, and it makes the run unresumable, which is the honest trade.

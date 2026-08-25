@@ -3722,3 +3722,232 @@ func TestAFailedRetryEventDoesNotTurnARetryableCaseTerminal(t *testing.T) {
 			"hiccuped, not because its agent failed")
 	}
 }
+
+// TestAKilledRunResumesWithTheMoneyItAlreadySpent.
+//
+// CLAUDE.md's resume-from-checkpoint rule: kill mid-run, resume, assert no
+// double-spend. This is the test whose absence let docs/debt.md#50 through —
+// M2-10d compared the guard against the store INSIDE one process, which cannot
+// see a resume defect by construction.
+//
+// The first process is stopped by its cost cap after several Cases have been
+// charged for attempts that never produced an outcome. Guard.Restore reads
+// SettledSpend, so anything the store failed to record is headroom the second
+// process spends again.
+func TestAKilledRunResumesWithTheMoneyItAlreadySpent(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const perCall = 40_000 // $0.04, charged even when the call fails
+
+	h := newHarness(t, 30, 10, fake.Options{})
+	orphans := &orphanCountingStore{Store: h.store}
+	h.opts.Store = orphans
+	h.opts.Agent = &billingAgent{perCallUSDMicros: perCall}
+	h.opts.Concurrency = 1
+	h.opts.MaxAttempts = 2
+	h.opts.RetryBackoff = time.Millisecond
+	h.opts.EstCostPerCallUSDMicros = perCall
+	// NINE calls, deliberately odd. Every Case here uses exactly two attempts,
+	// so an even cap always runs out on some Case's FIRST attempt — which
+	// settles nothing and produces no orphan spend. The refusal has to land
+	// BETWEEN two attempts of one Case for this test to exercise what it is
+	// about, and an earlier version of it used ten and proved nothing.
+	h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 9 * perCall}, nil, 0)
+
+	if _, err := core.Baseline(ctx, h.evals, h.opts); err != nil &&
+		!errors.Is(err, errs.ErrBudgetExceeded) {
+		t.Fatalf("first run: %v", err)
+	}
+
+	settledByFirst := h.opts.Guard.Spent().CostUSDMicros
+	// The orphan path must actually have run, or this test proves nothing
+	// about it. An earlier fixture used an even call cap, so the refusal
+	// always landed on some Case's FIRST attempt — which settles nothing —
+	// and the test passed against code that dropped the spend entirely.
+	if orphans.n == 0 {
+		t.Fatal("no orphan spend was recorded, so the refusal never landed between " +
+			"two attempts of one Case and this test is not exercising docs/debt.md#50")
+	}
+	if settledByFirst == 0 {
+		t.Fatal("the first process settled nothing; the fixture proves nothing")
+	}
+
+	// Exactly what a resume reconstructs.
+	restored, err := h.store.SettledSpend(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("SettledSpend: %v", err)
+	}
+	if restored.CostUSDMicros != settledByFirst {
+		t.Errorf("the first process settled %d micro-USD and the store holds %d, a "+
+			"gap of %d. Guard.Restore reads the store, so the resumed run gets "+
+			"that gap as headroom and spends it a second time",
+			settledByFirst, restored.CostUSDMicros,
+			settledByFirst-restored.CostUSDMicros)
+	}
+
+	// And the Cases that were refused are still re-attemptable — the money is
+	// durable without the Case being marked done.
+	done, err := h.store.CompletedCases(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("CompletedCases: %v", err)
+	}
+	if len(done) >= 30 {
+		t.Errorf("%d of 30 Cases are marked complete after a budget stop; recording "+
+			"the spend must not mark a Case done that never got an answer", len(done))
+	}
+
+	// The resume itself cannot exceed the cap, which is the point.
+	opts := h.opts
+	opts.Resume = true
+	opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 9 * perCall}, nil, 0)
+	if _, err := core.Baseline(ctx, h.evals, opts); err != nil &&
+		!errors.Is(err, errs.ErrBudgetExceeded) {
+		t.Fatalf("resumed run: %v", err)
+	}
+	if total, ceiling := opts.Guard.Spent().CostUSDMicros, int64(9*perCall); total > ceiling {
+		t.Errorf("the run spent %d micro-USD against a %d cap across two processes; "+
+			"the resumed process did not inherit what the first one spent",
+			total, ceiling)
+	}
+}
+
+type orphanCountingStore struct {
+	store.Store
+	n     int
+	total int64
+}
+
+func (o *orphanCountingStore) RecordOrphanSpend(ctx context.Context, runID string, sp budget.Spend) error {
+	o.n++
+	o.total += sp.CostUSDMicros
+	return o.Store.RecordOrphanSpend(ctx, runID, sp)
+}
+
+// TestACancelDuringBackoffKeepsTheChargeItAlreadyIncurred.
+//
+// The second skip path, and the one the first draft of this fix missed.
+// invokeWithRetry returns ctx.Err() from its backoff wait AFTER charges have
+// accumulated, so a Ctrl-C landing there follows a billed attempt with real
+// money settled and no outcome to attach it to.
+//
+// docs/debt.md#50 and #20 both name this path. It is distinct from the budget
+// refusal: the run is stopping because a human asked, not because the cap was
+// reached, and it reaches a different predicate in the sink.
+func TestACancelDuringBackoffKeepsTheChargeItAlreadyIncurred(t *testing.T) {
+	t.Parallel()
+
+	const perCall = 40_000
+
+	h := newHarness(t, 6, 3, fake.Options{})
+	orphans := &orphanCountingStore{Store: h.store}
+	h.opts.Store = orphans
+	h.opts.Agent = &billingAgent{perCallUSDMicros: perCall}
+	h.opts.Concurrency = 1
+	h.opts.MaxAttempts = 3
+	// Long enough that the cancellation below lands inside the wait rather
+	// than between Cases.
+	h.opts.RetryBackoff = 300 * time.Millisecond
+	h.opts.EstCostPerCallUSDMicros = perCall
+	h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 10_000_000}, nil, 0)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		// After the first attempt is billed and the backoff has begun.
+		time.Sleep(80 * time.Millisecond)
+		cancel()
+	}()
+
+	_, err := core.Baseline(ctx, h.evals, h.opts)
+	if err == nil {
+		t.Fatal("the run was cancelled and reported success")
+	}
+
+	settled := h.opts.Guard.Spent().CostUSDMicros
+	if settled == 0 {
+		t.Fatal("nothing was billed before the cancellation; the fixture did not " +
+			"reach the backoff wait")
+	}
+	if orphans.n == 0 {
+		t.Fatal("a charge was settled and no orphan spend recorded — this test is " +
+			"not exercising the cancel-during-backoff path")
+	}
+
+	persisted, err := h.store.SettledSpend(context.Background(), "run-1")
+	if err != nil {
+		t.Fatalf("SettledSpend: %v", err)
+	}
+	if persisted.CostUSDMicros != settled {
+		t.Errorf("the guard settled %d micro-USD and the store holds %d. A resume "+
+			"reads the store, so the %d difference is money spent twice",
+			settled, persisted.CostUSDMicros, settled-persisted.CostUSDMicros)
+	}
+}
+
+// panickingAgent bills for its first attempt, then panics.
+type panickingAgent struct {
+	billed int64
+	seen   sync.Map
+}
+
+func (a *panickingAgent) Invoke(_ context.Context, c *core.Case) (*knov1.Response, error) {
+	if _, again := a.seen.LoadOrStore(c.GetId(), struct{}{}); !again {
+		return nil, billedFailure{
+			error:  errs.ErrTransportTransient.Wrap(errors.New("charged, then failed")),
+			micros: a.billed,
+		}
+	}
+	panic("the adapter came apart")
+}
+
+func (a *panickingAgent) Capabilities() *knov1.Capabilities { return &knov1.Capabilities{} }
+
+// TestAPanicDoesNotTakeTheMoneyWithIt.
+//
+// The executor recovers a panic and discards the value — deliberately, so a
+// half-built outcome cannot be persisted. But the guard settled every attempt
+// BEFORE the panic, and a discarded value means the sink persists nothing for
+// a Case that really cost money.
+//
+// The dollars were already lost this way before orphan spend existed. What
+// this pins is that they are not, and that the CALL count agrees too: a Case
+// that made two charged attempts and then panicked must not report zero to a
+// cap that counts calls.
+func TestAPanicDoesNotTakeTheMoneyWithIt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	const perCall = 40_000
+
+	h := newHarness(t, 4, 2, fake.Options{})
+	h.opts.Agent = &panickingAgent{billed: perCall}
+	h.opts.Concurrency = 1
+	h.opts.MaxAttempts = 3
+	h.opts.RetryBackoff = time.Millisecond
+	h.opts.EstCostPerCallUSDMicros = perCall
+	h.opts.Guard = budget.New(budget.Limits{MaxCostUSDMicros: 10_000_000}, nil, 0)
+
+	if _, err := core.Baseline(ctx, h.evals, h.opts); err != nil {
+		t.Fatalf("a panicking agent errors its Cases, it does not fail the run: %v", err)
+	}
+
+	settled := h.opts.Guard.Spent()
+	if settled.CostUSDMicros == 0 {
+		t.Fatal("nothing was billed before the panic; the fixture proves nothing")
+	}
+
+	persisted, err := h.store.SettledSpend(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("SettledSpend: %v", err)
+	}
+	if persisted.CostUSDMicros != settled.CostUSDMicros {
+		t.Errorf("the guard settled %d micro-USD and the store holds %d. The panic "+
+			"discarded the outcome that carried it, and a resume reads the store",
+			settled.CostUSDMicros, persisted.CostUSDMicros)
+	}
+	if persisted.Calls != settled.Calls {
+		t.Errorf("the guard settled %d calls and the store holds %d; --max-calls "+
+			"is enforced against the guard and restored from the store",
+			settled.Calls, persisted.Calls)
+	}
+}

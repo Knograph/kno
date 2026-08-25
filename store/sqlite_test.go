@@ -732,3 +732,237 @@ func TestClosedStoreRefusesEveryOperation(t *testing.T) {
 		t.Error("FinishRun on a closed store returned no error")
 	}
 }
+
+// TestRecordOrphanSpendIsDurableWithoutMarkingACaseDone.
+//
+// The whole point of the method: money the guard settled for a Case that
+// produced no outcome has to survive into SettledSpend, which Guard.Restore
+// reads on resume — while the Case stays absent from CompletedCases so a
+// resumed run re-attempts it.
+//
+// Recording it as an outcome row would do the opposite on both counts.
+// RecordOutcome is INSERT OR IGNORE, so a spend-only row would permanently
+// block the real outcome for that Case.
+func TestRecordOrphanSpendIsDurableWithoutMarkingACaseDone(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	st := newStore(t)
+	if err := st.CreateRun(ctx, newRun("run-1")); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	// One Case completes normally.
+	if err := st.RecordOutcome(ctx, "run-1", &store.Outcome{
+		CaseID: "done-1",
+		Score:  &knov1.Score{Value: 1},
+		Spend:  budget.Spend{Calls: 1, CostUSDMicros: 10_000, Tokens: 5},
+	}); err != nil {
+		t.Fatalf("RecordOutcome: %v", err)
+	}
+
+	// Another was charged and then refused, so it has no outcome.
+	if err := st.RecordOrphanSpend(ctx, "run-1",
+		budget.Spend{Calls: 2, CostUSDMicros: 80_000, Tokens: 3}); err != nil {
+		t.Fatalf("RecordOrphanSpend: %v", err)
+	}
+
+	spend, err := st.SettledSpend(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("SettledSpend: %v", err)
+	}
+	want := budget.Spend{Calls: 3, CostUSDMicros: 90_000, Tokens: 8}
+	if spend != want {
+		t.Errorf("SettledSpend = %+v, want %+v — a resume restores this figure, so "+
+			"anything missing from it is headroom spent twice", spend, want)
+	}
+
+	done, err := st.CompletedCases(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("CompletedCases: %v", err)
+	}
+	if len(done) != 1 {
+		t.Errorf("%d Cases marked complete, want 1; orphan spend must not mark a "+
+			"Case done that never produced an answer", len(done))
+	}
+	if _, ok := done["done-1"]; !ok {
+		t.Error("the completed Case is missing from CompletedCases")
+	}
+}
+
+// TestOrphanSpendAccumulates.
+//
+// Additive, because a run can refuse several Cases after charging for them,
+// and each is a separate settlement the guard already made.
+func TestOrphanSpendAccumulates(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	st := newStore(t)
+	if err := st.CreateRun(ctx, newRun("run-1")); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	for range 3 {
+		if err := st.RecordOrphanSpend(ctx, "run-1",
+			budget.Spend{Calls: 1, CostUSDMicros: 20_000}); err != nil {
+			t.Fatalf("RecordOrphanSpend: %v", err)
+		}
+	}
+
+	spend, err := st.SettledSpend(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("SettledSpend: %v", err)
+	}
+	if spend.CostUSDMicros != 60_000 || spend.Calls != 3 {
+		t.Errorf("SettledSpend = %+v, want 3 calls and 60000 micro-USD; the writes "+
+			"must add rather than replace", spend)
+	}
+}
+
+// TestRecordOrphanSpendRefusesANegativeCharge.
+//
+// This UPDATE is the first subtraction primitive on the money path. A negative
+// folds into the sum inside SQLite before Guard.Restore sees it, so addSpend's
+// refusal of negatives protects nothing: a run with real spend plus a negative
+// orphan write restores less than it spent and gets the difference as free
+// headroom.
+//
+// Clamped in the statement rather than trusted from the caller — the same
+// conclusion docs/debt.md#48 reached for Reservation.Settle.
+func TestRecordOrphanSpendRefusesANegativeCharge(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	st := newStore(t)
+	if err := st.CreateRun(ctx, newRun("run-1")); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	if err := st.RecordOutcome(ctx, "run-1", scoredOutcome("c1", 1, 5_000)); err != nil {
+		t.Fatalf("RecordOutcome: %v", err)
+	}
+
+	if err := st.RecordOrphanSpend(ctx, "run-1",
+		budget.Spend{Calls: -5, CostUSDMicros: -1_000, Tokens: -3}); err != nil {
+		t.Fatalf("RecordOrphanSpend: %v", err)
+	}
+
+	spend, err := st.SettledSpend(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("SettledSpend: %v", err)
+	}
+	if spend.CostUSDMicros != 5_000 {
+		t.Errorf("settled spend = %d, want 5000 — a negative charge must not "+
+			"subtract from what the run has already spent, or a resume restores "+
+			"less than it owes and spends the difference again", spend.CostUSDMicros)
+	}
+	if spend.Calls < 0 || spend.Tokens < 0 {
+		t.Errorf("settled spend went negative: %+v", spend)
+	}
+}
+
+// TestRecordOrphanSpendRefusesAnUnknownRun.
+//
+// Silently dropping the spend is the failure this method exists to prevent, so
+// a caller bug must be loud rather than a no-op that reads as success.
+func TestRecordOrphanSpendRefusesAnUnknownRun(t *testing.T) {
+	t.Parallel()
+
+	st := newStore(t)
+	err := st.RecordOrphanSpend(context.Background(), "no-such-run",
+		budget.Spend{Calls: 1, CostUSDMicros: 1_000})
+	if err == nil {
+		t.Fatal("recording spend against a run that does not exist succeeded; the " +
+			"money would vanish with nothing reporting it")
+	}
+}
+
+// TestSettledSpendOnAFreshRunIsZero.
+//
+// SettledSpend now joins runs against outcomes, so a run with no outcomes must
+// still read as zero rather than as a scan error — Guard.Restore calls this on
+// every resume, including the first one after a run was created.
+func TestSettledSpendOnAFreshRunIsZero(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	st := newStore(t)
+	if err := st.CreateRun(ctx, newRun("run-1")); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	spend, err := st.SettledSpend(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("SettledSpend on a run with no outcomes: %v", err)
+	}
+	if (spend != budget.Spend{}) {
+		t.Errorf("SettledSpend = %+v, want zero", spend)
+	}
+
+	// And a run that does not exist at all is zero, not an error: the guard
+	// restores nothing and the run proceeds.
+	if spend, err = st.SettledSpend(ctx, "never-created"); err != nil {
+		t.Errorf("SettledSpend on an unknown run: %v", err)
+	}
+	if (spend != budget.Spend{}) {
+		t.Errorf("SettledSpend on an unknown run = %+v, want zero", spend)
+	}
+}
+
+// TestPurgeLeavesOrphanSpendIntact.
+//
+// docs/debt.md#25 records that `kno purge` and the resume done-marker share a
+// row, and that a purge which DELETED rows would reopen the double-spend hole
+// the store exists to close. Orphan spend adds a second place money lives, so
+// purge has to be checked against it too.
+//
+// It survives by design rather than by accident: the spend is columns on
+// `runs`, never trace content, and Purge only nulls blob columns on
+// `outcomes`. Asserted so a future purge that widened its reach would fail
+// here rather than silently erase a run's spend record.
+func TestPurgeLeavesOrphanSpendIntact(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	st := newStore(t)
+	if err := st.CreateRun(ctx, newRun("run-1")); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	if err := st.RecordOutcome(ctx, "run-1", scoredOutcome("c1", 1, 10_000)); err != nil {
+		t.Fatalf("RecordOutcome: %v", err)
+	}
+	if err := st.RecordOrphanSpend(ctx, "run-1",
+		budget.Spend{Calls: 2, CostUSDMicros: 80_000, Tokens: 7}); err != nil {
+		t.Fatalf("RecordOrphanSpend: %v", err)
+	}
+
+	before, err := st.SettledSpend(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("SettledSpend: %v", err)
+	}
+
+	if _, err := st.Purge(ctx, "run-1"); err != nil {
+		t.Fatalf("Purge: %v", err)
+	}
+
+	after, err := st.SettledSpend(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("SettledSpend after purge: %v", err)
+	}
+	if after != before {
+		t.Errorf("purge changed the run's settled spend from %+v to %+v. Spend is "+
+			"not trace content, and a resumed run restores this figure — losing it "+
+			"lets the run spend its cap a second time", before, after)
+	}
+
+	// And the completed Case is still marked complete, which is #25's own
+	// invariant: a purge that reopened the double-spend hole would be a
+	// privacy feature that costs money.
+	done, err := st.CompletedCases(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("CompletedCases: %v", err)
+	}
+	if _, ok := done["c1"]; !ok {
+		t.Error("purge removed the done-marker for a completed Case")
+	}
+}

@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"time"
 
@@ -28,7 +29,21 @@ import (
 // It does not touch the aggregator: counting happens after persistence, in
 // emit, so the Run's counts can never outrun the outcomes table.
 func (o BaselineOptions) workFunc(agg *aggregator) executor.WorkFunc[*Case, caseOutcome] {
-	return func(ctx context.Context, c *Case) (*caseOutcome, error) {
+	return func(ctx context.Context, c *Case) (out *caseOutcome, err error) {
+		// The same guard one frame up, for a panic AFTER the provider call —
+		// Goal.Score is a Ring-1 plug-in point on this goroutine, and a panic
+		// there would otherwise discard everything the call was charged for.
+		var billed, settledCalls int64
+		var attempts int
+		defer func() {
+			if p := recover(); p != nil {
+				out = &caseOutcome{
+					Attempts: attempts, BilledUSDMicros: billed, SettledCalls: settledCalls,
+					Err: fmt.Errorf("panic scoring case %s: %T", c.GetId(), p),
+				}
+				err = out.Err
+			}
+		}()
 		// One provider call, estimated before it is made. A zero estimate makes
 		// the dollar cap unenforceable, so callers that care about it must
 		// supply EstCostPerCallUSDMicros.
@@ -37,17 +52,21 @@ func (o BaselineOptions) workFunc(agg *aggregator) executor.WorkFunc[*Case, case
 			return nil, err
 		}
 
-		resp, attempts, billed, invokeErr := o.invokeWithRetry(ctx, c, agg, est)
+		var resp *Response
+		var invokeErr error
+		resp, attempts, billed, settledCalls, invokeErr = o.invokeWithRetry(ctx, c, agg, est)
 		if invokeErr != nil {
 			return &caseOutcome{
-				Response: nil, Err: invokeErr, Attempts: attempts, BilledUSDMicros: billed,
+				Response: nil, Err: invokeErr, Attempts: attempts,
+				BilledUSDMicros: billed, SettledCalls: settledCalls,
 			}, invokeErr
 		}
 
 		score, scoreErr := o.Goal.Score(ctx, c, resp)
 		if scoreErr != nil {
 			return &caseOutcome{
-				Response: resp, Err: scoreErr, Attempts: attempts, BilledUSDMicros: billed,
+				Response: resp, Err: scoreErr, Attempts: attempts,
+				BilledUSDMicros: billed, SettledCalls: settledCalls,
 			}, scoreErr
 		}
 
@@ -58,7 +77,8 @@ func (o BaselineOptions) workFunc(agg *aggregator) executor.WorkFunc[*Case, case
 		// inflated count was the last thing durably recorded. Counting happens
 		// after persistence, in emit, where errored Cases are already counted.
 		return &caseOutcome{
-			Response: resp, Score: score, Attempts: attempts, BilledUSDMicros: billed,
+			Response: resp, Score: score, Attempts: attempts,
+			BilledUSDMicros: billed, SettledCalls: settledCalls,
 		}, nil
 	}
 }
@@ -77,7 +97,7 @@ func (o BaselineOptions) invokeWithRetry(
 	c *Case,
 	agg *aggregator,
 	est budget.Estimate,
-) (resp *Response, attempts int, billedUSDMicros int64, err error) {
+) (resp *Response, attempts int, billedUSDMicros, settledCallCount int64, err error) {
 	backoff := o.retryBackoff()
 	// time.Now, not o.now. The budget bounds real elapsed time, and o.now is
 	// injectable — a frozen clock (which BaselineOptions.Now's own godoc
@@ -95,6 +115,30 @@ func (o BaselineOptions) invokeWithRetry(
 	// spent, so the difference is headroom a resumed run spends twice.
 	var billed int64
 
+	// Calls the guard actually SETTLED, which is not the attempt count.
+	// attempts++ runs at the top of the loop, before invokeOnce, and a refused
+	// Authorize returns before settling anything — so a Case that made one
+	// real call and was refused on attempt 2 would otherwise persist Calls: 2
+	// against a guard that settled 1.
+	var settledCalls int64
+
+	// A panic must not take the money with it. The executor recovers, but it
+	// discards the value — deliberately — so an outcome built after the
+	// unwind would carry no spend, and sinkFunc would persist zero for a Case
+	// the guard had already settled. Measured before this: guard 3 calls,
+	// store 0.
+	//
+	// %T rather than %v, matching the executor: a panic value is arbitrary and
+	// may embed a prompt or a response, and this string is persisted.
+	defer func() {
+		if p := recover(); p != nil {
+			resp = nil
+			billedUSDMicros = billed
+			settledCallCount = settledCalls
+			err = fmt.Errorf("panic invoking case %s: %T", c.GetId(), p)
+		}
+	}()
+
 	for attempt := 1; attempt <= o.maxAttempts(); attempt++ {
 		attempts++
 		resp, settled, overshoot, invokeErr := o.invokeOnce(ctx, c, est)
@@ -103,6 +147,7 @@ func (o BaselineOptions) invokeWithRetry(
 		// inputs the clamp exists for — and the store is the one that outlives
 		// the process.
 		billed = saturatingAdd(billed, settled.CostUSDMicros)
+		settledCalls = saturatingAdd(settledCalls, settled.Calls)
 		if overshoot > 0 {
 			// Emitted at settle time and gated on the DELTA, so the count is
 			// bounded by concurrency rather than by Case count: once the cap
@@ -123,12 +168,12 @@ func (o BaselineOptions) invokeWithRetry(
 			cancel()
 		}
 		if invokeErr == nil {
-			return resp, attempts, billed, nil
+			return resp, attempts, billed, settledCalls, nil
 		}
 		lastErr = invokeErr
 
 		if !retryable(invokeErr) {
-			return nil, attempts, billed, invokeErr
+			return nil, attempts, billed, settledCalls, invokeErr
 		}
 		if attempt == o.maxAttempts() {
 			break
@@ -167,10 +212,10 @@ func (o BaselineOptions) invokeWithRetry(
 		case <-time.After(wait):
 			backoff *= 2
 		case <-ctx.Done():
-			return nil, attempts, billed, ctx.Err()
+			return nil, attempts, billed, settledCalls, ctx.Err()
 		}
 	}
-	return nil, attempts, billed, lastErr
+	return nil, attempts, billed, settledCalls, lastErr
 }
 
 // saturatingAdd adds without wrapping. Non-positive is discarded: a charge

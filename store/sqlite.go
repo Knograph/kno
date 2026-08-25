@@ -22,7 +22,7 @@ import (
 //
 // Version 0 is the M1 schema. Every later version is a numbered step in
 // migrations below.
-const schemaVersion = 1
+const schemaVersion = 2
 
 // schema is the version-0 base, applied on open. It is idempotent.
 //
@@ -288,6 +288,28 @@ var migrations = []migration{{
 		`ALTER TABLE outcomes ADD COLUMN resolved_model TEXT NOT NULL DEFAULT ''`,
 	},
 	backfill: backfillScoreValues,
+}, {
+	to: 2,
+	// M2: spend the guard settled for a Case that never produced an outcome.
+	//
+	// On runs rather than as a row in outcomes. RecordOutcome is INSERT OR
+	// IGNORE — deliberately, so a resumed run's second attempt cannot silently
+	// replace the first result — so a spend-only row in that table would
+	// permanently BLOCK the real outcome for its Case: the insert is ignored,
+	// every resume re-attempts the Case, pays again, and discards the answer.
+	// A second row type would also need a predicate on every query that reads
+	// outcomes, and OutcomeCounts is SUM(1 - scored) with none, so an orphan
+	// row would count as an errored Case and could stamp a healthy run
+	// ErrorRateExceeded.
+	//
+	// The cost is per-Case attribution, which is LOST rather than relocated.
+	// sinkFunc returns before reaching emit on these paths, and emit skips a
+	// budget refusal anyway, so no event carries the amount. docs/debt.md#52.
+	stmts: []string{
+		`ALTER TABLE runs ADD COLUMN orphan_cost_usd_micros INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE runs ADD COLUMN orphan_calls INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE runs ADD COLUMN orphan_tokens INTEGER NOT NULL DEFAULT 0`,
+	},
 }}
 
 // migrate brings the database up to schemaVersion.
@@ -668,16 +690,86 @@ func (s *SQLite) SettledSpend(ctx context.Context, runID string) (budget.Spend, 
 	}
 
 	var spend budget.Spend
+	// Both sources, in one statement. Money the guard settled for a Case that
+	// never produced an outcome lives on the run — see migration 2 — and a
+	// resume that read only the outcomes would get it back as headroom and
+	// spend it again.
+	//
 	// COALESCE because SUM over zero rows is NULL, and a fresh run legitimately
 	// has none — that must read as zero spent, not as a scan error.
 	err = db.QueryRowContext(ctx,
-		`SELECT COALESCE(SUM(calls), 0), COALESCE(SUM(cost_usd_micros), 0), COALESCE(SUM(tokens), 0)
-		 FROM outcomes WHERE run_id = ?`, runID).
+		`SELECT COALESCE(o.calls, 0)  + r.orphan_calls,
+		        COALESCE(o.cost, 0)   + r.orphan_cost_usd_micros,
+		        COALESCE(o.tokens, 0) + r.orphan_tokens
+		 FROM runs r
+		 LEFT JOIN (
+		     SELECT run_id,
+		            SUM(calls) AS calls,
+		            SUM(cost_usd_micros) AS cost,
+		            SUM(tokens) AS tokens
+		     FROM outcomes WHERE run_id = ?
+		 ) o ON o.run_id = r.id
+		 WHERE r.id = ?`, runID, runID).
 		Scan(&spend.Calls, &spend.CostUSDMicros, &spend.Tokens)
+	if errors.Is(err, sql.ErrNoRows) {
+		// No run row yet. A fresh run has spent nothing, which is what the
+		// caller needs — Guard.Restore is a no-op against zero.
+		return budget.Spend{}, nil
+	}
 	if err != nil {
 		return budget.Spend{}, fmt.Errorf("summing spend for %s: %w", runID, err)
 	}
 	return spend, nil
+}
+
+// RecordOrphanSpend adds spend the guard settled for a Case that produced no
+// outcome.
+//
+// Additive, and separate from RecordOutcome, because the two answer different
+// questions: RecordOutcome says a Case is DONE, and this says money was spent
+// on one that is not. A Case with orphan spend stays absent from
+// CompletedCases and is re-attempted on resume; its earlier charge is already
+// in SettledSpend and is not spent twice.
+//
+// Not a row in outcomes: RecordOutcome is INSERT OR IGNORE, so a spend-only
+// row would permanently block the real outcome for that Case.
+func (s *SQLite) RecordOrphanSpend(ctx context.Context, runID string, spend budget.Spend) error {
+	db, err := s.conn()
+	if err != nil {
+		return err
+	}
+	return retryOnBusy(ctx, func() error {
+		// MAX(0, ?) on every dimension. Without it this is the first
+		// SUBTRACTION primitive on the money path: a negative folds into the
+		// sum inside SQLite before Guard.Restore ever sees it, so addSpend's
+		// refusal of negatives protects nothing. Measured unclamped — a run
+		// with $0.005 of real spend and a -$0.001 orphan write restored $0.004
+		// and got the difference as free headroom.
+		//
+		// Clamped here rather than trusted from the caller, which is the same
+		// conclusion docs/debt.md#48 reached for Reservation.Settle: this is
+		// the choke point, and every future caller would have to remember.
+		res, err := db.ExecContext(ctx,
+			`UPDATE runs
+			 SET orphan_calls           = orphan_calls + MAX(0, ?),
+			     orphan_cost_usd_micros = orphan_cost_usd_micros + MAX(0, ?),
+			     orphan_tokens          = orphan_tokens + MAX(0, ?)
+			 WHERE id = ?`,
+			spend.Calls, spend.CostUSDMicros, spend.Tokens, runID)
+		if err != nil {
+			return fmt.Errorf("recording orphan spend for %s: %w", runID, err)
+		}
+		// A missing run is a caller bug, not a no-op. Silently dropping the
+		// spend is the failure this method exists to prevent.
+		n, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("recording orphan spend for %s: %w", runID, err)
+		}
+		if n == 0 {
+			return fmt.Errorf("recording orphan spend: run %s does not exist", runID)
+		}
+		return nil
+	})
 }
 
 // AppendEvent records one event.

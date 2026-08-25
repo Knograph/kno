@@ -323,14 +323,21 @@ func spendOf(r *knov1.Response) budget.Spend { return spendOfN(r, 1) }
 // reads it, so any difference between this and what the guard holds is
 // headroom a resumed run spends a second time.
 //
+// CALLS come from what the guard settled, not from the attempt count. attempts
+// is incremented before invokeOnce and a refused Authorize returns before
+// settling, so a Case refused on its second attempt has two attempts and one
+// settled call — and persisting two would over-report against the call cap.
+//
 // Tokens still come from the Response: a failed attempt reports none, and the
 // token figure is descriptive rather than a cap the guard enforces.
 func settledSpend(o *caseOutcome) budget.Spend {
 	if o == nil {
-		return budget.Spend{Calls: 1}
+		// Nothing reached a provider: the executor recovered a panic and the
+		// reservation was released rather than settled.
+		return budget.Spend{}
 	}
 	return budget.Spend{
-		Calls:         attemptsOf(o),
+		Calls:         o.SettledCalls,
 		CostUSDMicros: o.BilledUSDMicros,
 		Tokens:        o.Response.GetPromptTokens() + o.Response.GetCompletionTokens(),
 	}
