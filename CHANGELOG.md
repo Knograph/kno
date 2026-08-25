@@ -52,10 +52,16 @@ covenants — breaking any of them requires a major version.
   call cap could not admit another attempt" — sending a user whose credential was rejected to raise
   a cap that was never binding.
 
-### Added
-
 - **`OrphanReason.ORPHAN_REASON_RUN_FATAL`** (proto, additive). A budget stop is resumable as-is; a
   run-fatal stop is not, and resuming without fixing the condition pays for the same answer again.
+
+- **A run-fatal refusal leaves its Case re-attemptable**, like a budget refusal and an unpriceable
+  one: refused by a condition the user then fixes. Recording it as a terminal outcome put the Case
+  in `CompletedCases`, so a resume skipped it forever — and `closeRun` recomputes
+  `ErrorRateExceeded` over the whole store, branding the **corrected** run "not a usable baseline".
+  Measured: 20 Cases, a bad key, then a resume with a healthy agent — completed, 8 errored, error
+  rate exceeded, recoverable only by paying for all 20 again. The remedy every escalated error
+  advertises is "fix this and re-run", and it now works.
 
 ### Added
 

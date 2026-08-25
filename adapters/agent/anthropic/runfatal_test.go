@@ -195,3 +195,38 @@ func TestTheEscalationDoesNotDestroyTheCodeItWraps(t *testing.T) {
 		t.Error("the sentinel no longer matches")
 	}
 }
+
+// TestARefusedDestinationIsRunFatalHereToo.
+//
+// Config is read once, so the policy that refused this request refuses every
+// one after it. Untested until now: mutating the escalation to an identity
+// function left the whole suite green, so this condition — listed in the
+// CHANGELOG and in docs/debt.md#47 as one of the six — could have been deleted
+// from both adapters without a failure.
+func TestARefusedDestinationIsRunFatalHereToo(t *testing.T) {
+	t.Parallel()
+
+	elsewhere, _ := serve(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	// 302, not 307. GetBody is cleared so net/http cannot replay a request,
+	// and a 307/308 is therefore never followed — it comes back as the ANSWER
+	// and CheckRedirect is never consulted.
+	srv, _ := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL+r.URL.Path, http.StatusFound)
+	})
+	a := newAgent(t, srv)
+
+	_, err := a.Invoke(context.Background(), &core.Case{Id: "c", Input: "q", Expected: "a"})
+	if err == nil {
+		t.Fatal("a cross-host redirect was followed")
+	}
+	if !runFatal(err) {
+		t.Error("a refused destination is not run-fatal, so every remaining " +
+			"Case re-offers the credential and gets the same refusal")
+	}
+	var act *errs.Actionable
+	if !errors.As(err, &act) || act.Fix == "" {
+		t.Error("the refusal carries no Actionable with a fix line")
+	}
+}

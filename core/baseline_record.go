@@ -791,15 +791,44 @@ func (o BaselineOptions) sinkFunc(runCtx context.Context, stopReason *atomic.Int
 		// nothing was spent. Recording it would charge a resumed run for a call
 		// that never happened AND mark the Case done, so fixing the pricing
 		// table and re-running with --resume would never re-attempt it.
-		if errors.Is(r.Err, errs.ErrBudgetExceeded) || errors.Is(r.Err, errUnpriceable) {
+		// A RUN-FATAL Case is the same shape again, and this is the case that
+		// makes the escalation usable rather than merely fast. The whole
+		// remedy every escalated error advertises is "fix the credential and
+		// re-run" — but recording the refusal as a terminal outcome puts the
+		// Case in CompletedCases, so the resume skips it forever, and
+		// closeRun recomputes ErrorRateExceeded over the store and brands the
+		// CORRECTED run "not a usable baseline". Measured: 20 Cases, a bad
+		// key, then a resume with a healthy agent — COMPLETED, 8 errored,
+		// error_rate_exceeded true, recoverable only by paying for all 20
+		// again.
+		if errors.Is(r.Err, errs.ErrBudgetExceeded) ||
+			errors.Is(r.Err, errUnpriceable) ||
+			runFatalOf(r.Err) {
 			// The Case is not recorded — it has no result and must stay
 			// re-attemptable — but money the guard already settled for it has
 			// to become durable, or a resume gets it back as headroom.
 			//
 			// errUnpriceable settles nothing: estimate refuses before
 			// Authorize, so orphanSpend is zero and this is a no-op for it.
-			return o.recordOrphanSpend(ctx, agg, r.Item.GetId(), r.Value,
-				knov1.OrphanReason_ORPHAN_REASON_BUDGET_EXCEEDED)
+			//
+			// The reason comes from THIS Case's error, not from stopReason.
+			// Hardcoding BUDGET_EXCEEDED would tell a user whose credential was
+			// rejected that the cost cap could not admit another attempt,
+			// sending them to raise a limit that was never binding — the
+			// mis-attribution #52 exists to prevent, through a second door.
+			//
+			// And reading stopReason here would be a race, not a shortcut: the
+			// worker sends its result BEFORE the executor consults IsFatal, so
+			// the very Case that causes the stop can reach this line while
+			// stopReason is still UNSPECIFIED and attribute itself to the
+			// budget. Caught by `make test` under -race -shuffle=on after six
+			// clean targeted runs, which is exactly the failure mode a local
+			// derivation does not have.
+			why := knov1.OrphanReason_ORPHAN_REASON_BUDGET_EXCEEDED
+			if runFatalOf(r.Err) {
+				why = knov1.OrphanReason_ORPHAN_REASON_RUN_FATAL
+			}
+			return o.recordOrphanSpend(ctx, agg, r.Item.GetId(), r.Value, why)
 		}
 
 		// A Case the shutdown cancelled before it produced anything is the same

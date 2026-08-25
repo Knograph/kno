@@ -109,7 +109,17 @@ func classify(err error) error {
 	// one answer, and a single fat response must not kill the run.
 	if errors.Is(err, transport.ErrRefusedDestination) ||
 		errors.Is(err, transport.ErrKeyBinding) {
-		return agenterr.AsRunFatal(err)
+		// Wrapped in an Actionable before it is marked, matching what
+		// anthropic does for the identical condition. The bare transport error
+		// was harmless while it was one Case's failure; as the RUN-ending
+		// error it reaches codeOf, which records "AGENT_ERROR", and
+		// ExitCodeOf, which returns the unclassified default — so the user
+		// gets no fix line for a misconfiguration that has an obvious one.
+		return agenterr.AsRunFatal(errs.ErrInvalidInput.
+			WithFix("point --base-url at the endpoint directly, and bind a key " +
+				"for that host with --key-env host=VAR; Kno does not follow " +
+				"redirects off the host a key is bound to").
+			Wrap(err))
 	}
 	return err
 }

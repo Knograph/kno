@@ -4220,12 +4220,17 @@ func TestTheModelGateRefusesOnlyAModelTheRunNeverSaw(t *testing.T) {
 	}
 }
 
-// TestTheModelGateAnswersOnceUnderConcurrency.
+// TestTheModelGateIsStatelessUnderConcurrency.
 //
-// N workers can reach the gate together — there is no "first response" at
-// concurrency — and the answer cannot differ between them. sync.Once also keeps
-// the check off the hot path after it has run.
-func TestTheModelGateAnswersOnceUnderConcurrency(t *testing.T) {
+// The gate memoized its verdict under a sync.Once, which made it blind to the
+// case it was moved to first-response time to catch: if the FIRST response
+// matched, the Once was spent and every later re-point returned nil. Removing
+// the memo is only safe if the gate is a pure comparison, so this asserts that
+// — every concurrent caller gets the same answer, and no earlier call can
+// change a later one's.
+//
+// Run with -race, which is this repo's default.
+func TestTheModelGateIsStatelessUnderConcurrency(t *testing.T) {
 	t.Parallel()
 
 	check := core.ModelGateForTest("model-a")
@@ -4243,9 +4248,20 @@ func TestTheModelGateAnswersOnceUnderConcurrency(t *testing.T) {
 
 	for i, err := range errsSeen {
 		if err == nil {
-			t.Fatalf("worker %d was told the model is fine while worker 0 was "+
-				"told it changed; the gate must give one answer", i)
+			t.Fatalf("worker %d was told the model is fine while the others "+
+				"were told it changed; a gate carrying state across calls "+
+				"answers about the wrong moment", i)
 		}
+	}
+
+	// And a matching call afterwards does not consume anything: the next
+	// re-point is still caught.
+	if err := check("model-a"); err != nil {
+		t.Errorf("a matching model was refused: %v", err)
+	}
+	if err := check("model-b"); err == nil {
+		t.Error("a mismatching model after a matching one returned nil — the " +
+			"gate is memoizing again")
 	}
 }
 
@@ -4351,36 +4367,6 @@ func TestAResumeDoesNotRewriteTheRunsSplit(t *testing.T) {
 	}
 }
 
-// TestAnAliasThatRepointsMidRunEndsTheRun.
-//
-// The end-to-end test debt #42's trigger demanded and no earlier PR could
-// write. The gate used to compare BaselineOptions.ResolvedModel, a
-// caller-supplied field read before any request, so the only value it could
-// hold was one a previous run recorded — comparing a value to itself. It never
-// fired once in production.
-//
-// Driven through a real run: the fake reports a model, the alias re-points
-// mid-run, and the gate sees it in a response rather than in a synthesized Run.
-func TestAnAliasThatRepointsMidRunEndsTheRun(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-
-	// First run, measured entirely against one model.
-	h := newHarness(t, 30, 5, fake.Options{ResolvedModel: "gpt-4.1-2026-05-01"})
-	if _, err := core.Baseline(ctx, h.evals, h.opts); err != nil {
-		t.Fatalf("first run: %v", err)
-	}
-
-	stored, err := h.store.GetRun(ctx, "run-1")
-	if err != nil {
-		t.Fatalf("GetRun: %v", err)
-	}
-	if !slices.Contains(stored.GetCaseExecution().GetResolvedModels(), "gpt-4.1-2026-05-01") {
-		t.Fatalf("the first run recorded no model, so the gate has nothing to "+
-			"compare: %v", stored.GetCaseExecution().GetResolvedModels())
-	}
-}
-
 // TestAResumeServedADifferentModelIsRefusedMidRun.
 //
 // A run interrupted on Monday and resumed on Friday after the alias re-points
@@ -4471,9 +4457,18 @@ func TestAFreshRunSeeingTwoModelsIsNotRefused(t *testing.T) {
 // `RunFatal() bool` escalates and nothing crosses the boundary in either
 // direction. A test that had to import the adapter's type would be proving the
 // opposite of prime directive 3.
-type runFatalErr struct{ error }
+type runFatalErr struct {
+	error
+	billed int64
+}
 
 func (runFatalErr) RunFatal() bool { return true }
+
+// BilledCostUSDMicros reports a charge the provider made for the failed call,
+// the way a gateway that bills a rejected request does. Without a charge there
+// is no orphaned spend to attribute, and a test inspecting OrphanSpend events
+// inspects an empty list.
+func (e runFatalErr) BilledCostUSDMicros() int64 { return e.billed }
 
 func (e runFatalErr) Unwrap() error { return e.error }
 
@@ -4504,17 +4499,24 @@ func TestARunFatalErrorEndsTheRunAtTheFirstCase(t *testing.T) {
 	h.opts.Concurrency = 1
 	h.opts.Agent = &runFatalAgent{
 		Agent: h.agent,
-		err:   runFatalErr{errs.ErrInvalidInput.Wrap(errors.New("rejected the credential"))},
+		err:   runFatalErr{error: errs.ErrInvalidInput.Wrap(errors.New("rejected the credential"))},
 	}
 
 	res, err := core.Baseline(ctx, h.evals, h.opts)
 	if err == nil {
 		t.Fatal("a rejected credential did not end the run")
 	}
-	if got := res.Run.GetAttemptedCaseCount(); got != 1 {
-		t.Errorf("attempted = %d of 200, want 1. Every Case after the first "+
+	// Nothing is recorded: the refused Case has no result and must stay
+	// re-attemptable, so the run stops having durably recorded nothing rather
+	// than having branded 200 Cases errored.
+	if got := res.Run.GetAttemptedCaseCount(); got != 0 {
+		t.Errorf("attempted = %d of 200, want 0. Every Case after the first "+
 			"made a request that got the same answer and settled a call "+
 			"against the cap", got)
+	}
+	if calls := h.agent.Calls(); calls > 2 {
+		t.Errorf("the agent was called %d times; the run did not stop at the "+
+			"first refusal", calls)
 	}
 
 	// The adapter's classification survives into the record. Wrapping a
@@ -4541,7 +4543,7 @@ func TestARunFatalErrorAtConcurrencyStopsWithinOneDispatch(t *testing.T) {
 	h.opts.Concurrency = concurrency
 	h.opts.Agent = &runFatalAgent{
 		Agent: h.agent,
-		err:   runFatalErr{errs.ErrInvalidInput.Wrap(errors.New("rejected the credential"))},
+		err:   runFatalErr{error: errs.ErrInvalidInput.Wrap(errors.New("rejected the credential"))},
 	}
 
 	res, err := core.Baseline(ctx, h.evals, h.opts)
@@ -4593,17 +4595,26 @@ func TestARunFatalStopIsNotReportedAsABudgetStop(t *testing.T) {
 	h.opts.Concurrency = 8
 	h.opts.Agent = &runFatalAgent{
 		Agent: h.agent,
-		err:   runFatalErr{errs.ErrInvalidInput.Wrap(errors.New("rejected the credential"))},
+		err: runFatalErr{
+			error:  errs.ErrInvalidInput.Wrap(errors.New("rejected the credential")),
+			billed: 250,
+		},
 	}
 
 	if _, err := core.Baseline(ctx, h.evals, h.opts); err == nil {
 		t.Fatal("the run did not stop")
 	}
 
+	seen := 0
 	for _, e := range eventLog(t, h.dbPath, "run-1") {
-		if payloadName(e) != "OrphanSpend" {
+		// On the payload, not on payloadName — that returns the generated
+		// WRAPPER type ("*knov1.Event_OrphanSpend"), so a string compare
+		// against "OrphanSpend" silently matches nothing and the loop below
+		// never runs. It did.
+		if e.GetOrphanSpend() == nil {
 			continue
 		}
+		seen++
 		got := e.GetOrphanSpend().GetReason()
 		if got == knov1.OrphanReason_ORPHAN_REASON_BUDGET_EXCEEDED {
 			t.Errorf("a credential failure attributed its orphaned spend to the " +
@@ -4612,5 +4623,187 @@ func TestARunFatalStopIsNotReportedAsABudgetStop(t *testing.T) {
 		if got != knov1.OrphanReason_ORPHAN_REASON_RUN_FATAL {
 			t.Errorf("orphan reason = %v, want RUN_FATAL", got)
 		}
+	}
+	// Without this the whole loop above is dead and the assertion proves
+	// nothing — which it did: the fixture emitted zero OrphanSpend events, so
+	// storing BUDGET_EXCEEDED instead of RUN_FATAL left the suite green.
+	if seen == 0 {
+		t.Fatal("no OrphanSpend events, so this test asserts nothing about the " +
+			"reason it exists to check")
+	}
+}
+
+// TestFixingTheCredentialAndResumingProducesAUsableBaseline.
+//
+// The remedy every escalated error advertises is "fix this and re-run". That
+// only works if the refused Cases stay re-attemptable. Recording a run-fatal
+// refusal as a terminal outcome puts the Case in CompletedCases, so the resume
+// SKIPS it forever — and closeRun recomputes ErrorRateExceeded over the whole
+// store, branding the CORRECTED run "not a usable baseline". Measured before
+// the fix: 20 Cases, a bad key, then a resume with a healthy agent — COMPLETED,
+// 8 errored, error_rate_exceeded true, recoverable only by paying for all 20
+// again.
+//
+// A run-fatal refusal is the same shape as a budget refusal and an unpriceable
+// one: refused before or during a call, by a condition the user then fixes.
+func TestFixingTheCredentialAndResumingProducesAUsableBaseline(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	h := newHarness(t, 20, 5, fake.Options{})
+	h.opts.Concurrency = 8
+	h.opts.Agent = &runFatalAgent{
+		Agent: h.agent,
+		err:   runFatalErr{error: errs.ErrInvalidInput.Wrap(errors.New("rejected the credential"))},
+	}
+
+	if _, err := core.Baseline(ctx, h.evals, h.opts); err == nil {
+		t.Fatal("the bad credential did not end the run")
+	}
+
+	// Nothing was marked done, so every Case is still owed.
+	done, err := h.store.CompletedCases(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("CompletedCases: %v", err)
+	}
+	if len(done) != 0 {
+		t.Errorf("%d Cases were marked complete by a refusal that made no "+
+			"measurement; a resume skips them forever even after the "+
+			"credential is fixed", len(done))
+	}
+
+	// The user fixes the key and resumes.
+	opts := h.opts
+	opts.Resume = true
+	opts.Agent = h.agent
+
+	res, err := core.Baseline(ctx, h.evals, opts)
+	if err != nil {
+		t.Fatalf("the resumed run failed: %v", err)
+	}
+	if got := res.Run.GetScoredCaseCount(); got != 20 {
+		t.Errorf("scored = %d, want 20; the Cases refused by the bad credential "+
+			"were never re-attempted", got)
+	}
+	if res.Run.GetErrorRateExceeded() {
+		t.Errorf("the corrected run is branded unusable: %q",
+			res.Run.GetIncompleteReason())
+	}
+}
+
+// TestAnAliasThatRepointsPartWayThroughAResumeIsCaught.
+//
+// The end-to-end test debt #42's trigger demanded, and the reason the gate
+// moved to first-response time at all: a provider can re-point a moving alias
+// at ANY point in a long run, not only between two of them.
+//
+// The first version of this test was a stub — it ran one baseline and asserted
+// a model was recorded, while its name and docstring claimed to drive a
+// mid-run re-point. It would have passed against a gate that never fired.
+func TestAnAliasThatRepointsPartWayThroughAResumeIsCaught(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	// A first run measured entirely against one model, stopped early so there
+	// is work left to resume.
+	h := newHarness(t, 40, 5, fake.Options{ResolvedModel: "gpt-4.1-2026-05-01"})
+	h.opts.Guard = budget.New(budget.Limits{MaxLLMCalls: 8}, nil, 0)
+	if _, err := core.Baseline(ctx, h.evals, h.opts); !errors.Is(err, errs.ErrBudgetExceeded) {
+		t.Fatalf("the first run was meant to stop early: %v", err)
+	}
+
+	// The resume starts on the SAME model the run was measured against, and the
+	// alias re-points several Cases in. A gate that answers once, on the first
+	// response, sees only the matching model and is spent before the re-point
+	// ever happens.
+	opts := h.opts
+	opts.Resume = true
+	opts.Concurrency = 1
+	opts.Guard = budget.New(budget.Limits{MaxLLMCalls: 1_000}, nil, 0)
+	opts.Agent = fake.New(fake.Options{
+		ResolvedModel:      "gpt-4.1-2026-05-01",
+		ResolvedModelAfter: 5,
+		ResolvedModelThen:  "gpt-4.1-2026-08-01",
+	})
+
+	res, err := core.Baseline(ctx, h.evals, opts)
+	if !errors.Is(err, errs.ErrCheckpointStale) {
+		t.Fatalf("error = %v, want ErrCheckpointStale. The alias re-pointed "+
+			"mid-resume and the gate did not notice — which is the whole "+
+			"reason it moved off run-open", err)
+	}
+	if !contains(err.Error(), "pin the model") {
+		t.Errorf("the refusal does not say how to prevent it: %v", err)
+	}
+
+	// It stopped rather than scoring the rest under the new model.
+	if got := res.Run.GetScoredCaseCount(); got >= 40 {
+		t.Errorf("scored = %d; the run did not stop", got)
+	}
+	// And it did NOT stop before the re-point: the Cases served the original
+	// model were scored normally, so the gate is not simply refusing everything.
+	if got := res.Run.GetScoredCaseCount(); got < 5 {
+		t.Errorf("scored = %d; the gate fired before the alias moved", got)
+	}
+}
+
+// reasonAgent fails with an error carrying an adapter-supplied retry reason.
+type reasonAgent struct {
+	core.Agent
+	reason knov1.RetryReason
+}
+
+type reasonErr struct {
+	error
+	reason knov1.RetryReason
+}
+
+func (e reasonErr) RetryReason() knov1.RetryReason { return e.reason }
+
+func (e reasonErr) Unwrap() error { return e.error }
+
+func (a *reasonAgent) Invoke(context.Context, *core.Case) (*core.Response, error) {
+	return nil, reasonErr{
+		error:  errs.ErrTransportTransient.Wrap(errors.New("did not answer in time")),
+		reason: a.reason,
+	}
+}
+
+// TestCoreEmitsTheReasonTheAdapterAttached is core's half of docs/debt.md#53.
+//
+// The adapter-side test proves the reason is ATTACHED. Nothing proved core
+// reads it: deleting the preference branch in retryReasonOf left the whole
+// suite green, while #53's complaint is literally that RETRY_REASON_TIMEOUT
+// "is defined and never emitted". A repayment claimed without a test that the
+// emission happens is the false repayment this ledger has been burned by.
+func TestCoreEmitsTheReasonTheAdapterAttached(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	h := newHarness(t, 3, 1, fake.Options{})
+	h.opts.Concurrency = 1
+	h.opts.Agent = &reasonAgent{
+		Agent:  h.agent,
+		reason: knov1.RetryReason_RETRY_REASON_TIMEOUT,
+	}
+
+	_, _ = core.Baseline(ctx, h.evals, h.opts)
+
+	seen := 0
+	for _, e := range eventLog(t, h.dbPath, "run-1") {
+		r := e.GetRetryAttempted()
+		if r == nil {
+			continue
+		}
+		seen++
+		if got := r.GetReason(); got != knov1.RetryReason_RETRY_REASON_TIMEOUT {
+			t.Errorf("reason = %v, want TIMEOUT. core fell back to its own "+
+				"sentinel switch, which cannot tell a timeout from a 5xx — "+
+				"they share ErrTransportTransient", got)
+		}
+	}
+	if seen == 0 {
+		t.Fatal("no RetryAttempted events, so this asserts nothing about the " +
+			"reason it exists to check")
 	}
 }

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"slices"
 	"strings"
-	"sync"
 
 	"github.com/knograph/kno/core/errs"
 	"github.com/knograph/kno/executor"
@@ -30,16 +29,24 @@ import (
 // modelGate compares what is answering now against what the run recorded.
 //
 // State lives here rather than on BaselineOptions because every method on that
-// struct has a value receiver, so it is copied per call — a sync.Once field
-// would be a govet copylocks failure, and a copied Once is a check that runs
-// once per worker instead of once per run.
+// struct has a value receiver, so it is copied per call.
+//
+// Stateless on purpose. The first version memoized the verdict under a
+// sync.Once, which made the gate blind to exactly the case it was moved to
+// first-response time to catch: if the FIRST response matched, the Once was
+// spent and every later re-point returned nil. Measured — check("model-a")
+// then check("model-b") against a run recording {model-a} returned nil twice.
+//
+// The Once was defending a race that cannot happen. AfterRecord runs only on
+// the sink goroutine, which is single, and the executor latches gateFired so
+// the hook stops firing after the first error. Its stated justification — "the
+// answer cannot differ between workers" — also contradicted the membership
+// rule below, which exists precisely because two workers CAN see different
+// models.
 type modelGate struct {
 	// recorded is the set of models the resumed Run observed. Empty on a fresh
 	// run, which is why a fresh run is never gated.
 	recorded []string
-
-	once sync.Once
-	err  error
 }
 
 // newModelGate arms the gate from a Run's record.
@@ -53,9 +60,10 @@ func newModelGate(run *knov1.Run) *modelGate {
 
 // check reports whether this response's model contradicts the record.
 //
-// Runs at most once per run, under sync.Once: with concurrency there is no
-// "first response", N workers can arrive together, and the answer cannot differ
-// between them. The losers see the same stored result.
+// Evaluated on EVERY response, not memoized. A provider can re-point a moving
+// alias at any point in a long run, and a gate that answers once answers about
+// the wrong moment. The executor stops calling AfterRecord after the first
+// error, so "once per run" is enforced where it belongs rather than here.
 //
 // Membership, not models[0]. The field is repeated because during a provider
 // rollout two workers in one run legitimately see different builds, so a run
@@ -67,21 +75,15 @@ func newModelGate(run *knov1.Run) *modelGate {
 // on absence would make every run that stopped before its first answer
 // unresumable.
 func (g *modelGate) check(now string) error {
-	if len(g.recorded) == 0 || now == "" {
+	if len(g.recorded) == 0 || now == "" || slices.Contains(g.recorded, now) {
 		return nil
 	}
-	g.once.Do(func() {
-		if slices.Contains(g.recorded, now) {
-			return
-		}
-		g.err = errs.ErrCheckpointStale.
-			WithFix("re-run without --resume, or pin the model in the agent ref " +
-				"so a provider rollout cannot re-point it mid-run").
-			Wrap(fmt.Errorf("this run was measured against %s and is now being "+
-				"served %q; continuing would average two models into one score",
-				strings.Join(g.recorded, ", "), now))
-	})
-	return g.err
+	return errs.ErrCheckpointStale.
+		WithFix("re-run without --resume, or pin the model in the agent ref " +
+			"so a provider rollout cannot re-point it mid-run").
+		Wrap(fmt.Errorf("this run was measured against %s and is now being "+
+			"served %q; continuing would average two models into one score",
+			strings.Join(g.recorded, ", "), now))
 }
 
 // afterRecord is the executor hook.
@@ -92,11 +94,14 @@ func (g *modelGate) check(now string) error {
 // SettlementOvershoot already fixed once. Here the answer is kept, the store
 // says so, and the run stops after it.
 //
-// The stop is not free and the plan says so plainly: IsFatal-driven shutdown
-// reaches the other workers asynchronously, so up to concurrency-1 further
-// Cases can be recorded under the new model before the run ends. The gate stops
-// this getting worse; it cannot undo what is already mixed. incomplete_reason
-// says which two models, and the fix line says to re-run without --resume.
+// The stop is not free, and two limits are worth stating rather than
+// discovering. IsFatal-driven shutdown reaches the other workers
+// asynchronously, so up to concurrency-1 further Cases can be recorded under
+// the new model before the run ends — the gate stops this getting worse, it
+// cannot undo what is already mixed. And the tripping Case is kept, so its new
+// model joins resolved_models at close: a SECOND --resume arms the gate from
+// the enlarged set, matches, and completes a blended run. Both are
+// docs/debt.md#55, and neither is annotated on the Run today.
 func (g *modelGate) afterRecord(result any) error {
 	r, ok := result.(executor.Result[*Case, caseOutcome])
 	if !ok || r.Value == nil {

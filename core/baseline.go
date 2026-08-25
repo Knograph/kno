@@ -485,11 +485,17 @@ func Baseline(
 			// the two apart.
 			IsFatal: func(err error) bool {
 				if errors.Is(err, errs.ErrBudgetExceeded) {
-					stopReason.Store(int32(knov1.OrphanReason_ORPHAN_REASON_BUDGET_EXCEEDED))
+					// CompareAndSwap, not Store: executor.fail keeps the FIRST
+					// error, so a reason that overwrote would describe a
+					// different stop than the one being reported. A resume near
+					// its cap with a bad key hits both.
+					stopReason.CompareAndSwap(0,
+						int32(knov1.OrphanReason_ORPHAN_REASON_BUDGET_EXCEEDED))
 					return true
 				}
 				if runFatalOf(err) {
-					stopReason.Store(int32(knov1.OrphanReason_ORPHAN_REASON_RUN_FATAL))
+					stopReason.CompareAndSwap(0,
+						int32(knov1.OrphanReason_ORPHAN_REASON_RUN_FATAL))
 					return true
 				}
 				return false
