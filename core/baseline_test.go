@@ -3798,6 +3798,37 @@ func TestAKilledRunResumesWithTheMoneyItAlreadySpent(t *testing.T) {
 			settledByFirst-restored.CostUSDMicros)
 	}
 
+	// The attribution exists on the stream, which is the only place it can:
+	// the store records the amount against the RUN.
+	var orphanEvents []*knov1.OrphanSpend
+	for _, ev := range eventLog(t, h.dbPath, "run-1") {
+		if p, ok := ev.GetPayload().(*knov1.Event_OrphanSpend); ok {
+			orphanEvents = append(orphanEvents, p.OrphanSpend)
+		}
+	}
+	if len(orphanEvents) == 0 {
+		t.Error("money was recorded against the run and no event says which Case " +
+			"it belonged to; a column nothing describes is a side channel")
+	}
+	var fromEvents int64
+	for _, e := range orphanEvents {
+		if e.GetCaseId() == "" {
+			t.Error("an orphan-spend event names no Case, which is the one thing " +
+				"it exists to carry")
+		}
+		if e.GetReason() != knov1.OrphanReason_ORPHAN_REASON_BUDGET_EXCEEDED {
+			t.Errorf("reason=%v, want BUDGET_EXCEEDED", e.GetReason())
+		}
+		fromEvents += e.GetCostUsdMicros()
+	}
+	// The stream and the store must agree: outcomes carry their own spend, so
+	// the events account for exactly the difference.
+	if inOutcomesOnly := settledByFirst - fromEvents; inOutcomesOnly < 0 {
+		t.Errorf("the orphan events total %d micro-USD against %d settled overall; "+
+			"the stream is describing money the run never spent",
+			fromEvents, settledByFirst)
+	}
+
 	// And the Cases that were refused are still re-attemptable — the money is
 	// durable without the Case being marked done.
 	done, err := h.store.CompletedCases(ctx, "run-1")
@@ -3893,6 +3924,23 @@ func TestACancelDuringBackoffKeepsTheChargeItAlreadyIncurred(t *testing.T) {
 		t.Errorf("the guard settled %d micro-USD and the store holds %d. A resume "+
 			"reads the store, so the %d difference is money spent twice",
 			settled, persisted.CostUSDMicros, settled-persisted.CostUSDMicros)
+	}
+
+	// The cancel path reports its own reason, not the budget one.
+	var saw bool
+	for _, ev := range eventLog(t, h.dbPath, "run-1") {
+		p, ok := ev.GetPayload().(*knov1.Event_OrphanSpend)
+		if !ok {
+			continue
+		}
+		saw = true
+		if p.OrphanSpend.GetReason() != knov1.OrphanReason_ORPHAN_REASON_CANCELLED {
+			t.Errorf("reason=%v, want CANCELLED — a run stopped by a human is not "+
+				"a run that ran out of budget", p.OrphanSpend.GetReason())
+		}
+	}
+	if !saw {
+		t.Error("no orphan-spend event; the charge is durable but unattributed")
 	}
 }
 

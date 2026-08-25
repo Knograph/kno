@@ -367,13 +367,45 @@ func (o BaselineOptions) emit(ctx context.Context, r executor.Result[*Case, case
 	return o.appendEvent(ctx, agg, ev, "case "+r.Item.GetId())
 }
 
+// emitOrphanSpend puts the orphaned charge on the event stream.
+//
+// The store records the amount against the RUN and cannot say which Case it
+// belonged to, so this event is the only place that attribution exists.
+// Without it the money is a bare integer nothing describes — the side channel
+// CLAUDE.md's Observability section forbids. docs/debt.md#52.
+//
+// Emitted from the sink rather than the worker because the sink is where the
+// decision not to record an outcome is made, and the two must not disagree.
+func (o BaselineOptions) emitOrphanSpend(
+	ctx context.Context,
+	agg *aggregator,
+	caseID string,
+	spend budget.Spend,
+	reason knov1.OrphanReason,
+) error {
+	return o.appendEvent(ctx, agg, &knov1.Event{
+		Payload: &knov1.Event_OrphanSpend{OrphanSpend: &knov1.OrphanSpend{
+			CaseId:        caseID,
+			CostUsdMicros: spend.CostUSDMicros,
+			Calls:         spend.Calls,
+			Reason:        reason,
+		}},
+	}, "orphan-spend")
+}
+
 // recordOrphanSpend makes durable the money settled for a Case that produced
 // no outcome.
 //
 // The write predicate is "the guard settled something", not "the Case
 // errored". A Case refused before its first call settled nothing, and writing a
 // call for it would fabricate one that never happened.
-func (o BaselineOptions) recordOrphanSpend(ctx context.Context, out *caseOutcome) error {
+func (o BaselineOptions) recordOrphanSpend(
+	ctx context.Context,
+	agg *aggregator,
+	caseID string,
+	out *caseOutcome,
+	reason knov1.OrphanReason,
+) error {
 	spend := settledSpend(out)
 	if spend.Calls <= 0 && spend.CostUSDMicros <= 0 {
 		return nil
@@ -387,7 +419,10 @@ func (o BaselineOptions) recordOrphanSpend(ctx context.Context, out *caseOutcome
 	if err := o.Store.RecordOrphanSpend(ctx, o.RunID, spend); err != nil {
 		return fmt.Errorf("recording orphan spend: %w", err)
 	}
-	return nil
+	// After the durable write, so the stream never describes money the store
+	// does not hold. The reverse order would put a charge on the wire that a
+	// resume cannot see.
+	return o.emitOrphanSpend(ctx, agg, caseID, spend, reason)
 }
 
 // emitRunStarted opens the event stream.
@@ -750,7 +785,8 @@ func (o BaselineOptions) sinkFunc(runCtx context.Context, draining *atomic.Bool,
 			//
 			// errUnpriceable settles nothing: estimate refuses before
 			// Authorize, so orphanSpend is zero and this is a no-op for it.
-			return o.recordOrphanSpend(ctx, r.Value)
+			return o.recordOrphanSpend(ctx, agg, r.Item.GetId(), r.Value,
+				knov1.OrphanReason_ORPHAN_REASON_BUDGET_EXCEEDED)
 		}
 
 		// A Case the shutdown cancelled before it produced anything is the same
@@ -792,7 +828,8 @@ func (o BaselineOptions) sinkFunc(runCtx context.Context, draining *atomic.Bool,
 			// invokeWithRetry returns ctx.Err() from its backoff wait AFTER
 			// charges have accumulated, so a Ctrl-C during backoff following a
 			// billed 429 lands here with real money settled.
-			return o.recordOrphanSpend(ctx, r.Value)
+			return o.recordOrphanSpend(ctx, agg, r.Item.GetId(), r.Value,
+				knov1.OrphanReason_ORPHAN_REASON_CANCELLED)
 		}
 
 		out := &store.Outcome{CaseID: r.Item.GetId()}

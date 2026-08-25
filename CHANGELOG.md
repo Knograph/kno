@@ -18,6 +18,11 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
+- **`OrphanSpend`**, naming the Case a charge belonged to when no outcome could carry it. The
+  amount is recorded against the run, so without this event the money is an integer nothing
+  describes — a side channel. Carries a reason, because a run stopped by a human is not a run that
+  ran out of budget. Repays [debt #52](docs/debt.md#52).
+
 - A concurrency the engine chooses is now reported rather than silent. `checkFeasible` narrows the
   width when the cost cap cannot admit what was asked for; it did so with no event, no log line,
   and no field on the `Run`. A `ConcurrencyReduced` event now says so while it is happening, and
@@ -82,8 +87,7 @@ covenants — breaking any of them requires a major version.
   again. Repays [debt #50](docs/debt.md#50).
 
   The spend is recorded against the run, not as an outcome row, so the Case stays absent from the
-  completed set and a resume still re-attempts it. Which Case the money went to is **not**
-  preserved — see [debt #52](docs/debt.md#52).
+  completed set and a resume still re-attempts it.
 
   `store.Store` gains `RecordOrphanSpend`, which is a compile break for any out-of-tree
   implementation.

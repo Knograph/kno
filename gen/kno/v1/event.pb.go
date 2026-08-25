@@ -21,6 +21,61 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// OrphanReason names why a Case was abandoned after being charged.
+type OrphanReason int32
+
+const (
+	// Unset. An emitter that cannot say why should not be emitting this.
+	OrphanReason_ORPHAN_REASON_UNSPECIFIED OrphanReason = 0
+	// The cost or call cap could not admit another attempt. The run is stopping
+	// resumably and this Case will be re-attempted.
+	OrphanReason_ORPHAN_REASON_BUDGET_EXCEEDED OrphanReason = 1
+	// The run was cancelled — a Ctrl-C, a deadline — while the Case was waiting
+	// out a retry backoff.
+	OrphanReason_ORPHAN_REASON_CANCELLED OrphanReason = 2
+)
+
+// Enum value maps for OrphanReason.
+var (
+	OrphanReason_name = map[int32]string{
+		0: "ORPHAN_REASON_UNSPECIFIED",
+		1: "ORPHAN_REASON_BUDGET_EXCEEDED",
+		2: "ORPHAN_REASON_CANCELLED",
+	}
+	OrphanReason_value = map[string]int32{
+		"ORPHAN_REASON_UNSPECIFIED":     0,
+		"ORPHAN_REASON_BUDGET_EXCEEDED": 1,
+		"ORPHAN_REASON_CANCELLED":       2,
+	}
+)
+
+func (x OrphanReason) Enum() *OrphanReason {
+	p := new(OrphanReason)
+	*p = x
+	return p
+}
+
+func (x OrphanReason) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (OrphanReason) Descriptor() protoreflect.EnumDescriptor {
+	return file_kno_v1_event_proto_enumTypes[0].Descriptor()
+}
+
+func (OrphanReason) Type() protoreflect.EnumType {
+	return &file_kno_v1_event_proto_enumTypes[0]
+}
+
+func (x OrphanReason) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use OrphanReason.Descriptor instead.
+func (OrphanReason) EnumDescriptor() ([]byte, []int) {
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{0}
+}
+
 // RetryReason is why an attempt is being retried.
 //
 // Closed set, deliberately. Only transient conditions belong here: a permanent
@@ -72,11 +127,11 @@ func (x RetryReason) String() string {
 }
 
 func (RetryReason) Descriptor() protoreflect.EnumDescriptor {
-	return file_kno_v1_event_proto_enumTypes[0].Descriptor()
+	return file_kno_v1_event_proto_enumTypes[1].Descriptor()
 }
 
 func (RetryReason) Type() protoreflect.EnumType {
-	return &file_kno_v1_event_proto_enumTypes[0]
+	return &file_kno_v1_event_proto_enumTypes[1]
 }
 
 func (x RetryReason) Number() protoreflect.EnumNumber {
@@ -85,7 +140,7 @@ func (x RetryReason) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use RetryReason.Descriptor instead.
 func (RetryReason) EnumDescriptor() ([]byte, []int) {
-	return file_kno_v1_event_proto_rawDescGZIP(), []int{0}
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{1}
 }
 
 // Event is one thing that happened during a Run.
@@ -134,6 +189,7 @@ type Event struct {
 	//	*Event_RateLimitWaiting
 	//	*Event_SettlementOvershoot
 	//	*Event_ConcurrencyReduced
+	//	*Event_OrphanSpend
 	Payload       isEvent_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -296,6 +352,15 @@ func (x *Event) GetConcurrencyReduced() *ConcurrencyReduced {
 	return nil
 }
 
+func (x *Event) GetOrphanSpend() *OrphanSpend {
+	if x != nil {
+		if x, ok := x.Payload.(*Event_OrphanSpend); ok {
+			return x.OrphanSpend
+		}
+	}
+	return nil
+}
+
 type isEvent_Payload interface {
 	isEvent_Payload()
 }
@@ -355,6 +420,11 @@ type Event_ConcurrencyReduced struct {
 	ConcurrencyReduced *ConcurrencyReduced `protobuf:"bytes,20,opt,name=concurrency_reduced,json=concurrencyReduced,proto3,oneof"`
 }
 
+type Event_OrphanSpend struct {
+	// Money was spent on a Case that produced no outcome.
+	OrphanSpend *OrphanSpend `protobuf:"bytes,21,opt,name=orphan_spend,json=orphanSpend,proto3,oneof"`
+}
+
 func (*Event_RunStarted) isEvent_Payload() {}
 
 func (*Event_CaseScored) isEvent_Payload() {}
@@ -376,6 +446,8 @@ func (*Event_RateLimitWaiting) isEvent_Payload() {}
 func (*Event_SettlementOvershoot) isEvent_Payload() {}
 
 func (*Event_ConcurrencyReduced) isEvent_Payload() {}
+
+func (*Event_OrphanSpend) isEvent_Payload() {}
 
 // EventError is a failure as it appears ON THE EVENT STREAM.
 //
@@ -1407,6 +1479,93 @@ func (x *SettlementOvershoot) GetDeltaUsdMicros() int64 {
 	return 0
 }
 
+// OrphanSpend reports money spent on a Case that produced no outcome.
+//
+// A Case whose earlier attempts were charged and which was then refused by the
+// budget, or interrupted mid-backoff, has no outcome to hang its cost on. The
+// engine records the amount against the RUN so a resume cannot spend it twice,
+// and that record cannot say which Case it belonged to.
+//
+// This event is the only place that attribution exists. Without it the amount
+// is a bare integer on the run and nothing describes it — which is the side
+// channel CLAUDE.md's Observability section forbids, and is what
+// docs/debt.md#52 records.
+//
+// A consumer summing these gets the run's unattributed spend; the same total
+// appears inside SpendRecorded, which does not separate it.
+type OrphanSpend struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Which Case the money was spent on.
+	CaseId string `protobuf:"bytes,1,opt,name=case_id,json=caseId,proto3" json:"case_id,omitempty"`
+	// What the provider charged across the attempts that were made, in
+	// MICRO-USD.
+	CostUsdMicros int64 `protobuf:"varint,2,opt,name=cost_usd_micros,json=costUsdMicros,proto3" json:"cost_usd_micros,omitempty"`
+	// How many provider calls the guard settled for it.
+	Calls int64 `protobuf:"varint,3,opt,name=calls,proto3" json:"calls,omitempty"`
+	// Why the Case never produced an outcome.
+	Reason        OrphanReason `protobuf:"varint,4,opt,name=reason,proto3,enum=kno.v1.OrphanReason" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *OrphanSpend) Reset() {
+	*x = OrphanSpend{}
+	mi := &file_kno_v1_event_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *OrphanSpend) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*OrphanSpend) ProtoMessage() {}
+
+func (x *OrphanSpend) ProtoReflect() protoreflect.Message {
+	mi := &file_kno_v1_event_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use OrphanSpend.ProtoReflect.Descriptor instead.
+func (*OrphanSpend) Descriptor() ([]byte, []int) {
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *OrphanSpend) GetCaseId() string {
+	if x != nil {
+		return x.CaseId
+	}
+	return ""
+}
+
+func (x *OrphanSpend) GetCostUsdMicros() int64 {
+	if x != nil {
+		return x.CostUsdMicros
+	}
+	return 0
+}
+
+func (x *OrphanSpend) GetCalls() int64 {
+	if x != nil {
+		return x.Calls
+	}
+	return 0
+}
+
+func (x *OrphanSpend) GetReason() OrphanReason {
+	if x != nil {
+		return x.Reason
+	}
+	return OrphanReason_ORPHAN_REASON_UNSPECIFIED
+}
+
 // ConcurrencyReduced reports that the engine narrowed the run's concurrency.
 //
 // NOT EMITTED YET. Nothing sends this before M2-10c.
@@ -1434,7 +1593,7 @@ type ConcurrencyReduced struct {
 
 func (x *ConcurrencyReduced) Reset() {
 	*x = ConcurrencyReduced{}
-	mi := &file_kno_v1_event_proto_msgTypes[12]
+	mi := &file_kno_v1_event_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1446,7 +1605,7 @@ func (x *ConcurrencyReduced) String() string {
 func (*ConcurrencyReduced) ProtoMessage() {}
 
 func (x *ConcurrencyReduced) ProtoReflect() protoreflect.Message {
-	mi := &file_kno_v1_event_proto_msgTypes[12]
+	mi := &file_kno_v1_event_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1459,7 +1618,7 @@ func (x *ConcurrencyReduced) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConcurrencyReduced.ProtoReflect.Descriptor instead.
 func (*ConcurrencyReduced) Descriptor() ([]byte, []int) {
-	return file_kno_v1_event_proto_rawDescGZIP(), []int{12}
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *ConcurrencyReduced) GetDecision() *ConcurrencyDecision {
@@ -1473,7 +1632,7 @@ var File_kno_v1_event_proto protoreflect.FileDescriptor
 
 const file_kno_v1_event_proto_rawDesc = "" +
 	"\n" +
-	"\x12kno/v1/event.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/portfolio.proto\x1a\x10kno/v1/run.proto\"\xab\x06\n" +
+	"\x12kno/v1/event.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/portfolio.proto\x1a\x10kno/v1/run.proto\"\xe5\x06\n" +
 	"\x05Event\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x1d\n" +
 	"\n" +
@@ -1493,7 +1652,8 @@ const file_kno_v1_event_proto_rawDesc = "" +
 	"\x0fretry_attempted\x18\x11 \x01(\v2\x16.kno.v1.RetryAttemptedH\x00R\x0eretryAttempted\x12H\n" +
 	"\x12rate_limit_waiting\x18\x12 \x01(\v2\x18.kno.v1.RateLimitWaitingH\x00R\x10rateLimitWaiting\x12P\n" +
 	"\x14settlement_overshoot\x18\x13 \x01(\v2\x1b.kno.v1.SettlementOvershootH\x00R\x13settlementOvershoot\x12M\n" +
-	"\x13concurrency_reduced\x18\x14 \x01(\v2\x1a.kno.v1.ConcurrencyReducedH\x00R\x12concurrencyReducedB\t\n" +
+	"\x13concurrency_reduced\x18\x14 \x01(\v2\x1a.kno.v1.ConcurrencyReducedH\x00R\x12concurrencyReduced\x128\n" +
+	"\forphan_spend\x18\x15 \x01(\v2\x13.kno.v1.OrphanSpendH\x00R\vorphanSpendB\t\n" +
 	"\apayload\"W\n" +
 	"\n" +
 	"EventError\x12\x12\n" +
@@ -1574,9 +1734,18 @@ const file_kno_v1_event_proto_rawDesc = "" +
 	"\x13reserved_usd_micros\x18\x02 \x01(\x03R\x11reservedUsdMicros\x12,\n" +
 	"\x12settled_usd_micros\x18\x03 \x01(\x03R\x10settledUsdMicros\x12E\n" +
 	"\x1fcumulative_overshoot_usd_micros\x18\x04 \x01(\x03R\x1ccumulativeOvershootUsdMicros\x12(\n" +
-	"\x10delta_usd_micros\x18\x05 \x01(\x03R\x0edeltaUsdMicros\"M\n" +
+	"\x10delta_usd_micros\x18\x05 \x01(\x03R\x0edeltaUsdMicros\"\x92\x01\n" +
+	"\vOrphanSpend\x12\x17\n" +
+	"\acase_id\x18\x01 \x01(\tR\x06caseId\x12&\n" +
+	"\x0fcost_usd_micros\x18\x02 \x01(\x03R\rcostUsdMicros\x12\x14\n" +
+	"\x05calls\x18\x03 \x01(\x03R\x05calls\x12,\n" +
+	"\x06reason\x18\x04 \x01(\x0e2\x14.kno.v1.OrphanReasonR\x06reason\"M\n" +
 	"\x12ConcurrencyReduced\x127\n" +
-	"\bdecision\x18\x01 \x01(\v2\x1b.kno.v1.ConcurrencyDecisionR\bdecision*\xb1\x01\n" +
+	"\bdecision\x18\x01 \x01(\v2\x1b.kno.v1.ConcurrencyDecisionR\bdecision*m\n" +
+	"\fOrphanReason\x12\x1d\n" +
+	"\x19ORPHAN_REASON_UNSPECIFIED\x10\x00\x12!\n" +
+	"\x1dORPHAN_REASON_BUDGET_EXCEEDED\x10\x01\x12\x1b\n" +
+	"\x17ORPHAN_REASON_CANCELLED\x10\x02*\xb1\x01\n" +
 	"\vRetryReason\x12\x1c\n" +
 	"\x18RETRY_REASON_UNSPECIFIED\x10\x00\x12\x1d\n" +
 	"\x19RETRY_REASON_RATE_LIMITED\x10\x01\x12$\n" +
@@ -1599,57 +1768,61 @@ func file_kno_v1_event_proto_rawDescGZIP() []byte {
 	return file_kno_v1_event_proto_rawDescData
 }
 
-var file_kno_v1_event_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_kno_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_kno_v1_event_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_kno_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_kno_v1_event_proto_goTypes = []any{
-	(RetryReason)(0),            // 0: kno.v1.RetryReason
-	(*Event)(nil),               // 1: kno.v1.Event
-	(*EventError)(nil),          // 2: kno.v1.EventError
-	(*RunStarted)(nil),          // 3: kno.v1.RunStarted
-	(*CaseScored)(nil),          // 4: kno.v1.CaseScored
-	(*CaseErrored)(nil),         // 5: kno.v1.CaseErrored
-	(*StageProgress)(nil),       // 6: kno.v1.StageProgress
-	(*SpendRecorded)(nil),       // 7: kno.v1.SpendRecorded
-	(*RunFinished)(nil),         // 8: kno.v1.RunFinished
-	(*RunResumed)(nil),          // 9: kno.v1.RunResumed
-	(*RetryAttempted)(nil),      // 10: kno.v1.RetryAttempted
-	(*RateLimitWaiting)(nil),    // 11: kno.v1.RateLimitWaiting
-	(*SettlementOvershoot)(nil), // 12: kno.v1.SettlementOvershoot
-	(*ConcurrencyReduced)(nil),  // 13: kno.v1.ConcurrencyReduced
-	(Stage)(0),                  // 14: kno.v1.Stage
-	(*AgentRef)(nil),            // 15: kno.v1.AgentRef
-	(Direction)(0),              // 16: kno.v1.Direction
-	(*Budget)(nil),              // 17: kno.v1.Budget
-	(RunStatus)(0),              // 18: kno.v1.RunStatus
-	(*ConcurrencyDecision)(nil), // 19: kno.v1.ConcurrencyDecision
+	(OrphanReason)(0),           // 0: kno.v1.OrphanReason
+	(RetryReason)(0),            // 1: kno.v1.RetryReason
+	(*Event)(nil),               // 2: kno.v1.Event
+	(*EventError)(nil),          // 3: kno.v1.EventError
+	(*RunStarted)(nil),          // 4: kno.v1.RunStarted
+	(*CaseScored)(nil),          // 5: kno.v1.CaseScored
+	(*CaseErrored)(nil),         // 6: kno.v1.CaseErrored
+	(*StageProgress)(nil),       // 7: kno.v1.StageProgress
+	(*SpendRecorded)(nil),       // 8: kno.v1.SpendRecorded
+	(*RunFinished)(nil),         // 9: kno.v1.RunFinished
+	(*RunResumed)(nil),          // 10: kno.v1.RunResumed
+	(*RetryAttempted)(nil),      // 11: kno.v1.RetryAttempted
+	(*RateLimitWaiting)(nil),    // 12: kno.v1.RateLimitWaiting
+	(*SettlementOvershoot)(nil), // 13: kno.v1.SettlementOvershoot
+	(*OrphanSpend)(nil),         // 14: kno.v1.OrphanSpend
+	(*ConcurrencyReduced)(nil),  // 15: kno.v1.ConcurrencyReduced
+	(Stage)(0),                  // 16: kno.v1.Stage
+	(*AgentRef)(nil),            // 17: kno.v1.AgentRef
+	(Direction)(0),              // 18: kno.v1.Direction
+	(*Budget)(nil),              // 19: kno.v1.Budget
+	(RunStatus)(0),              // 20: kno.v1.RunStatus
+	(*ConcurrencyDecision)(nil), // 21: kno.v1.ConcurrencyDecision
 }
 var file_kno_v1_event_proto_depIdxs = []int32{
-	3,  // 0: kno.v1.Event.run_started:type_name -> kno.v1.RunStarted
-	4,  // 1: kno.v1.Event.case_scored:type_name -> kno.v1.CaseScored
-	5,  // 2: kno.v1.Event.case_errored:type_name -> kno.v1.CaseErrored
-	6,  // 3: kno.v1.Event.stage_progress:type_name -> kno.v1.StageProgress
-	7,  // 4: kno.v1.Event.spend_recorded:type_name -> kno.v1.SpendRecorded
-	8,  // 5: kno.v1.Event.run_finished:type_name -> kno.v1.RunFinished
-	9,  // 6: kno.v1.Event.run_resumed:type_name -> kno.v1.RunResumed
-	10, // 7: kno.v1.Event.retry_attempted:type_name -> kno.v1.RetryAttempted
-	11, // 8: kno.v1.Event.rate_limit_waiting:type_name -> kno.v1.RateLimitWaiting
-	12, // 9: kno.v1.Event.settlement_overshoot:type_name -> kno.v1.SettlementOvershoot
-	13, // 10: kno.v1.Event.concurrency_reduced:type_name -> kno.v1.ConcurrencyReduced
-	14, // 11: kno.v1.RunStarted.stage:type_name -> kno.v1.Stage
-	15, // 12: kno.v1.RunStarted.agent:type_name -> kno.v1.AgentRef
-	16, // 13: kno.v1.RunStarted.goal_direction:type_name -> kno.v1.Direction
-	17, // 14: kno.v1.RunStarted.budget:type_name -> kno.v1.Budget
-	2,  // 15: kno.v1.CaseErrored.error:type_name -> kno.v1.EventError
-	14, // 16: kno.v1.StageProgress.stage:type_name -> kno.v1.Stage
-	18, // 17: kno.v1.RunFinished.status:type_name -> kno.v1.RunStatus
-	2,  // 18: kno.v1.RunFinished.error:type_name -> kno.v1.EventError
-	0,  // 19: kno.v1.RetryAttempted.reason:type_name -> kno.v1.RetryReason
-	19, // 20: kno.v1.ConcurrencyReduced.decision:type_name -> kno.v1.ConcurrencyDecision
-	21, // [21:21] is the sub-list for method output_type
-	21, // [21:21] is the sub-list for method input_type
-	21, // [21:21] is the sub-list for extension type_name
-	21, // [21:21] is the sub-list for extension extendee
-	0,  // [0:21] is the sub-list for field type_name
+	4,  // 0: kno.v1.Event.run_started:type_name -> kno.v1.RunStarted
+	5,  // 1: kno.v1.Event.case_scored:type_name -> kno.v1.CaseScored
+	6,  // 2: kno.v1.Event.case_errored:type_name -> kno.v1.CaseErrored
+	7,  // 3: kno.v1.Event.stage_progress:type_name -> kno.v1.StageProgress
+	8,  // 4: kno.v1.Event.spend_recorded:type_name -> kno.v1.SpendRecorded
+	9,  // 5: kno.v1.Event.run_finished:type_name -> kno.v1.RunFinished
+	10, // 6: kno.v1.Event.run_resumed:type_name -> kno.v1.RunResumed
+	11, // 7: kno.v1.Event.retry_attempted:type_name -> kno.v1.RetryAttempted
+	12, // 8: kno.v1.Event.rate_limit_waiting:type_name -> kno.v1.RateLimitWaiting
+	13, // 9: kno.v1.Event.settlement_overshoot:type_name -> kno.v1.SettlementOvershoot
+	15, // 10: kno.v1.Event.concurrency_reduced:type_name -> kno.v1.ConcurrencyReduced
+	14, // 11: kno.v1.Event.orphan_spend:type_name -> kno.v1.OrphanSpend
+	16, // 12: kno.v1.RunStarted.stage:type_name -> kno.v1.Stage
+	17, // 13: kno.v1.RunStarted.agent:type_name -> kno.v1.AgentRef
+	18, // 14: kno.v1.RunStarted.goal_direction:type_name -> kno.v1.Direction
+	19, // 15: kno.v1.RunStarted.budget:type_name -> kno.v1.Budget
+	3,  // 16: kno.v1.CaseErrored.error:type_name -> kno.v1.EventError
+	16, // 17: kno.v1.StageProgress.stage:type_name -> kno.v1.Stage
+	20, // 18: kno.v1.RunFinished.status:type_name -> kno.v1.RunStatus
+	3,  // 19: kno.v1.RunFinished.error:type_name -> kno.v1.EventError
+	1,  // 20: kno.v1.RetryAttempted.reason:type_name -> kno.v1.RetryReason
+	0,  // 21: kno.v1.OrphanSpend.reason:type_name -> kno.v1.OrphanReason
+	21, // 22: kno.v1.ConcurrencyReduced.decision:type_name -> kno.v1.ConcurrencyDecision
+	23, // [23:23] is the sub-list for method output_type
+	23, // [23:23] is the sub-list for method input_type
+	23, // [23:23] is the sub-list for extension type_name
+	23, // [23:23] is the sub-list for extension extendee
+	0,  // [0:23] is the sub-list for field type_name
 }
 
 func init() { file_kno_v1_event_proto_init() }
@@ -1672,6 +1845,7 @@ func file_kno_v1_event_proto_init() {
 		(*Event_RateLimitWaiting)(nil),
 		(*Event_SettlementOvershoot)(nil),
 		(*Event_ConcurrencyReduced)(nil),
+		(*Event_OrphanSpend)(nil),
 	}
 	file_kno_v1_event_proto_msgTypes[6].OneofWrappers = []any{}
 	file_kno_v1_event_proto_msgTypes[7].OneofWrappers = []any{}
@@ -1680,8 +1854,8 @@ func file_kno_v1_event_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kno_v1_event_proto_rawDesc), len(file_kno_v1_event_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   13,
+			NumEnums:      2,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

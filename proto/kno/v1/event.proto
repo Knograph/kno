@@ -73,6 +73,9 @@ message Event {
 
     // The engine chose a narrower concurrency than the run asked for.
     ConcurrencyReduced concurrency_reduced = 20;
+
+    // Money was spent on a Case that produced no outcome.
+    OrphanSpend orphan_spend = 21;
   }
 }
 
@@ -400,6 +403,49 @@ message SettlementOvershoot {
   // inflates the total, which is why the engine carries the figure it already
   // computes rather than leaving a consumer to derive a wrong one.
   int64 delta_usd_micros = 5;
+}
+
+// OrphanSpend reports money spent on a Case that produced no outcome.
+//
+// A Case whose earlier attempts were charged and which was then refused by the
+// budget, or interrupted mid-backoff, has no outcome to hang its cost on. The
+// engine records the amount against the RUN so a resume cannot spend it twice,
+// and that record cannot say which Case it belonged to.
+//
+// This event is the only place that attribution exists. Without it the amount
+// is a bare integer on the run and nothing describes it — which is the side
+// channel CLAUDE.md's Observability section forbids, and is what
+// docs/debt.md#52 records.
+//
+// A consumer summing these gets the run's unattributed spend; the same total
+// appears inside SpendRecorded, which does not separate it.
+message OrphanSpend {
+  // Which Case the money was spent on.
+  string case_id = 1;
+
+  // What the provider charged across the attempts that were made, in
+  // MICRO-USD.
+  int64 cost_usd_micros = 2;
+
+  // How many provider calls the guard settled for it.
+  int64 calls = 3;
+
+  // Why the Case never produced an outcome.
+  OrphanReason reason = 4;
+}
+
+// OrphanReason names why a Case was abandoned after being charged.
+enum OrphanReason {
+  // Unset. An emitter that cannot say why should not be emitting this.
+  ORPHAN_REASON_UNSPECIFIED = 0;
+
+  // The cost or call cap could not admit another attempt. The run is stopping
+  // resumably and this Case will be re-attempted.
+  ORPHAN_REASON_BUDGET_EXCEEDED = 1;
+
+  // The run was cancelled — a Ctrl-C, a deadline — while the Case was waiting
+  // out a retry backoff.
+  ORPHAN_REASON_CANCELLED = 2;
 }
 
 // ConcurrencyReduced reports that the engine narrowed the run's concurrency.

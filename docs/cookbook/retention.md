@@ -82,13 +82,10 @@ cost on, so that money is recorded against the run itself rather than against a 
 not touch it, for the same reason it keeps the scores: a dollar figure is not conversation
 content, and losing it would let a resumed run spend its cap a second time.
 
-The consequence, and it is not only about purge: you can still see what a run cost and which
-Cases completed, but for these charges you cannot see **which Case** the money went to. That
-attribution is not recorded anywhere. The event stream names the Cases that were retried, and
-carries no cost with them.
-
-This is a known gap rather than a design choice we are happy with — see
-[`docs/debt.md#52`](../debt.md#52).
+Which Case the money went to is on the **event stream**, not in the outcomes table: an
+`OrphanSpend` event names the Case, the amount, and whether the run stopped because it hit its
+budget or because someone interrupted it. So a purged run can still answer "what did this cost
+and where did it go", it just answers the second half from a different place.
 
 Keeping them is also load-bearing. **Kno has no separate "this Case is done" marker: the recorded outcome _is_ the marker.** Delete those rows and a resumed run has no way to know the work happened, so it runs every Case again and pays for every Case again. A purge that reopened the double-spend hole would be a privacy feature that costs you money.
 
