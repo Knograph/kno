@@ -142,14 +142,30 @@ func (o BaselineOptions) closeRun(
 	// were all refused after being charged, which is the inverted ambiguity
 	// run.proto forbids. A stage that invokes no agent leaves it absent by not
 	// writing it.
-	if err := o.writeCaseExecution(closeCtx, run); err != nil {
-		return result, err
-	}
+	// NOT fatal, and NOT sequenced ahead of the writes that end the run.
+	//
+	// This is a READ. Letting it gate FinishRun meant one transient store error
+	// left the Run in RUNNING with no finished_at — indistinguishable from a
+	// crash — suppressed RunFinished, which the schema promises is always the
+	// last event and which an SSE consumer waits on forever, and replaced the
+	// real run error, so a budget stop reported "reading case observations"
+	// and exited with the generic failure code.
+	//
+	// The same argument recordOrphanSpend makes one level down: an
+	// observability failure must never change the result it describes.
+	obsErr := o.writeCaseExecution(closeCtx, run)
+
 	if err := o.Store.FinishRun(closeCtx, run); err != nil {
 		return result, fmt.Errorf("finishing run %s: %w", o.RunID, err)
 	}
 	if err := o.emitRunFinished(closeCtx, agg, run); err != nil {
 		return result, err
+	}
+	// Surfaced only once the run is durably closed, and only if nothing worse
+	// happened — a budget stop keeps its own classification and its own exit
+	// code.
+	if obsErr != nil && runErr == nil {
+		runErr = obsErr
 	}
 	return result, runErr
 }
@@ -174,18 +190,35 @@ func classifyRunErr(err error) error {
 // The counts come from the STORE, not from the aggregator: aggregating what is
 // durable is what makes them survive a crash and stay correct across a resume.
 //
-// dev and holdout come from the OPTIONS, never from SQL. They describe what was
-// loaded rather than what executed, and ADR-0004 records that aggregating them
-// from outcomes reports a zero holdout count — the number that sets every
-// interval's width.
+// dev and holdout come from the RUN RECORD, never from SQL and never from this
+// process's options. They describe what was loaded, and ADR-0004 records that
+// aggregating them from outcomes reports a zero holdout count — the number
+// that sets every interval's width. openRun wrote them at creation; a resume
+// must not overwrite them with its own.
 func (o BaselineOptions) writeCaseExecution(ctx context.Context, run *knov1.Run) error {
 	obs, err := o.Store.CaseObservations(ctx, o.RunID)
 	if err != nil {
-		return fmt.Errorf("reading case observations: %w", err)
+		// Plain wrapping, matching FinishRun's on the same path. This is a
+		// store failure rather than something the user did, and the run has
+		// already succeeded — the flat counters still carry every number the
+		// report needs.
+		return fmt.Errorf("reading case observations for %s: %w", o.RunID, err)
 	}
 	run.CaseExecution = &knov1.CaseExecution{
-		DevCaseCount:            int32(o.DevCases),     //nolint:gosec // bounded by the eval set
-		HoldoutCaseCount:        int32(o.HoldoutCases), //nolint:gosec // bounded by the eval set
+		// Carried forward from the Run, NOT re-read from the options. openRun
+		// reloads the stored record on a resume and keeps the first process's
+		// split; taking this process's would put two different splits on one
+		// message, with the presence-carrying copy describing a split the run
+		// was never measured under. checkResumable does not compare the split
+		// — InputFingerprint is the eval SOURCE only — so a resume with a
+		// different --holdout-frac passes every check and would have recorded
+		// holdout=22 beside holdout=5 for the same run.
+		//
+		// ADR-0004 calls holdout_case_count the number that sets every
+		// interval's width, which is why it is ingested rather than
+		// aggregated — and why it must be ingested ONCE.
+		DevCaseCount:            run.GetDevCaseCount(),
+		HoldoutCaseCount:        run.GetHoldoutCaseCount(),
 		AttemptedCaseCount:      obs.Attempted,
 		ScoredCaseCount:         obs.Scored,
 		ErroredCaseCount:        obs.Errored,

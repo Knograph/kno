@@ -122,3 +122,51 @@ func TestWarningsDistinguishTheTwoEmptyScores(t *testing.T) {
 		})
 	}
 }
+
+// TestTheCountsFallBackWhenCaseExecutionIsAbsent.
+//
+// CaseExecution is composed from a store READ at close. A read that fails
+// leaves it absent, and the chained getters then return 0 — so the report
+// would print "0 scored, 0 errored" for a run that scored every Case, with the
+// correct number sitting in the flat counter beside it. Reporting zero work
+// for a run that did the work is worse than reporting nothing: a CI gate reads
+// it as a total failure, and a human reads it as a bug in the engine.
+//
+// The flat counters are written on every path, including that one.
+func TestTheCountsFallBackWhenCaseExecutionIsAbsent(t *testing.T) {
+	t.Parallel()
+
+	run := &knov1.Run{
+		AttemptedCaseCount: 25,
+		ScoredCaseCount:    20,
+		ErroredCaseCount:   5,
+	}
+
+	if got := attemptedOf(run); got != 25 {
+		t.Errorf("attempted = %d, want 25", got)
+	}
+	if got := scoredOf(run); got != 20 {
+		t.Errorf("scored = %d, want 20 — the run scored 20 Cases", got)
+	}
+	if got := erroredOf(run); got != 5 {
+		t.Errorf("errored = %d, want 5", got)
+	}
+
+	// And when it IS present it wins: it aggregates what is durable, so it is
+	// the copy that survives a crash and stays correct across a resume.
+	run.CaseExecution = &knov1.CaseExecution{
+		AttemptedCaseCount: 40,
+		ScoredCaseCount:    36,
+		ErroredCaseCount:   4,
+	}
+	if got := scoredOf(run); got != 36 {
+		t.Errorf("scored = %d, want 36 — CaseExecution is the presence-carrying "+
+			"copy and must win where the two disagree", got)
+	}
+	if got := attemptedOf(run); got != 40 {
+		t.Errorf("attempted = %d, want 40", got)
+	}
+	if got := erroredOf(run); got != 4 {
+		t.Errorf("errored = %d, want 4", got)
+	}
+}

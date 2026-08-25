@@ -72,7 +72,10 @@ func (o BaselineOptions) openRun(ctx context.Context) (*knov1.Run, error) {
 // AggregateScore and presents it as a single homogeneous number — the
 // corrupted-reference failure prime directive 5 exists to prevent.
 func (o BaselineOptions) checkResumable(run *knov1.Run) error {
-	var changed string
+	var (
+		changed      string
+		modelChanged bool
+	)
 	switch {
 	case run.GetInputFingerprint() != o.InputFingerprint:
 		changed = "different inputs"
@@ -85,6 +88,7 @@ func (o BaselineOptions) checkResumable(run *knov1.Run) error {
 		changed = fmt.Sprintf("a different agent (recorded %q, now %q)",
 			run.GetAgent().GetRef(), o.AgentRef.GetRef())
 	case resolvedModelChanged(run, o.ResolvedModel):
+		modelChanged = true
 		// A ref like openai:gpt-4.1 is a moving pointer. A run interrupted on
 		// Monday and resumed on Friday after the alias re-points passes every
 		// check above and blends two models into one AggregateScore.
@@ -99,7 +103,7 @@ func (o BaselineOptions) checkResumable(run *knov1.Run) error {
 	default:
 		return nil
 	}
-	return errs.ErrCheckpointStale.WithFix(o.staleFix(run)).
+	return errs.ErrCheckpointStale.WithFix(o.staleFix(run, modelChanged)).
 		Wrap(fmt.Errorf("run %s was recorded against %s", o.RunID, changed))
 }
 
@@ -136,12 +140,28 @@ func recordedModels(run *knov1.Run) string {
 	return strings.Join(run.GetCaseExecution().GetResolvedModels(), ", ")
 }
 
-// staleFix names which input changed, rather than only that something did.
-func (o BaselineOptions) staleFix(run *knov1.Run) string {
-	if run.GetEvalContentHash() != o.EvalContentHash {
+// staleFix names what to DO about the change the caller already identified.
+//
+// It must not name causes checkResumable does not test. It previously offered
+// "the goal, agent, or split configuration changed" for every non-eval
+// mismatch, which named the split — never compared, since InputFingerprint
+// covers the eval SOURCE only — and omitted the resolved model, which is. A
+// user re-pointed by an alias got told to restore a setting they never
+// touched.
+func (o BaselineOptions) staleFix(run *knov1.Run, modelChanged bool) string {
+	switch {
+	case modelChanged:
+		// Not a setting the user can restore: the ref is a moving pointer and
+		// the provider moved it. Pinning is the only thing that makes the run
+		// resumable, and re-running is the only thing that makes it comparable.
+		return "the agent ref resolved to a different model than this run was " +
+			"measured against; re-run without --resume, or pin the model in the " +
+			"agent ref so a provider rollout cannot re-point it mid-run"
+	case run.GetEvalContentHash() != o.EvalContentHash:
 		return "the eval source changed since this run started; re-run without --resume, " +
 			"or restore the original file"
+	default:
+		return "the goal or agent changed since this run started; re-run without " +
+			"--resume, or restore the setting it was recorded against"
 	}
-	return "the goal, agent, or split configuration changed since this run started; " +
-		"re-run without --resume, or restore the setting it was recorded against"
 }

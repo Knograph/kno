@@ -722,6 +722,7 @@ type failingStore struct {
 	failMaxSeq bool
 	failCounts bool
 	failScores bool
+	failObs    bool
 }
 
 var errStore = errors.New("store is unavailable")
@@ -780,6 +781,13 @@ func (f *failingStore) MaxEventSequence(ctx context.Context, id string) (int64, 
 		return 0, errStore
 	}
 	return f.Store.MaxEventSequence(ctx, id)
+}
+
+func (f *failingStore) CaseObservations(ctx context.Context, id string) (store.Observations, error) {
+	if f.failObs {
+		return store.Observations{}, errStore
+	}
+	return f.Store.CaseObservations(ctx, id)
 }
 
 func (f *failingStore) OutcomeCounts(ctx context.Context, id string) (int, int, error) {
@@ -877,7 +885,11 @@ func TestFinishRunFailureIsReported(t *testing.T) {
 }
 
 // TestStaleFixNamesTheGoalWhenTheEvalsAreUnchanged covers the other branch of
-// the staleness message: the fix must name what actually changed.
+// the staleness message: the fix must name what actually changed, and must NOT
+// name a cause checkResumable never tests. It named "split configuration" for
+// years; the split is not compared at all — InputFingerprint covers the eval
+// SOURCE only — so the message sent users to restore a setting they had not
+// touched.
 func TestStaleFixNamesTheGoalWhenTheEvalsAreUnchanged(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -897,8 +909,54 @@ func TestStaleFixNamesTheGoalWhenTheEvalsAreUnchanged(t *testing.T) {
 	if !errors.Is(err, errs.ErrCheckpointStale) {
 		t.Fatalf("error = %v, want ErrCheckpointStale", err)
 	}
-	if got := err.Error(); !contains(got, "goal, agent, or split") {
-		t.Errorf("error = %q, want it to name the goal/agent/split rather than the evals", got)
+	got := err.Error()
+	if !contains(got, "goal or agent") {
+		t.Errorf("error = %q, want it to name the goal/agent rather than the evals", got)
+	}
+	if contains(got, "split") {
+		t.Errorf("error = %q names the split, which checkResumable never compares", got)
+	}
+}
+
+// TestStaleFixNamesTheModelRatherThanASettingToRestore.
+//
+// A resolved-model mismatch fell through to the goal/agent branch, which tells
+// the user to "restore the setting it was recorded against" — there is no such
+// setting. The provider re-pointed a moving alias; only pinning prevents it.
+func TestStaleFixNamesTheModelRatherThanASettingToRestore(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	h := newHarness(t, 8, 2, fake.Options{})
+	h.opts.ResolvedModel = "gpt-4.1-2026-05-01"
+	if _, err := core.Baseline(ctx, h.evals, h.opts); err != nil {
+		t.Fatalf("first run: %v", err)
+	}
+
+	run, err := h.store.GetRun(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	run.CaseExecution = &knov1.CaseExecution{ResolvedModels: []string{"gpt-4.1-2026-05-01"}}
+	if err := h.store.FinishRun(ctx, run); err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	opts := h.opts
+	opts.Resume = true
+	// Every other input is identical; the alias re-pointed.
+	opts.ResolvedModel = "gpt-4.1-2026-08-01"
+
+	_, err = core.Baseline(ctx, h.evals, opts)
+	if !errors.Is(err, errs.ErrCheckpointStale) {
+		t.Fatalf("error = %v, want ErrCheckpointStale", err)
+	}
+	got := err.Error()
+	if !contains(got, "pin the model") {
+		t.Errorf("error = %q, want the fix to say to pin the model", got)
+	}
+	if contains(got, "restore the setting") {
+		t.Errorf("error = %q tells the user to restore a setting they never changed", got)
 	}
 }
 
@@ -4279,5 +4337,107 @@ func recordedRun(o core.BaselineOptions, models ...string) *knov1.Run {
 		GoalDirection:    o.Goal.Direction(),
 		Agent:            o.AgentRef,
 		CaseExecution:    &knov1.CaseExecution{ResolvedModels: models},
+	}
+}
+
+// TestAFailedObservationsReadStillClosesTheRun.
+//
+// CaseObservations is a READ, and it was sequenced ahead of FinishRun. One
+// transient store error then left the Run in RUNNING with no finished_at —
+// indistinguishable from a crash — suppressed RunFinished, which the schema
+// promises is always the last event and which an SSE consumer waits on
+// forever, and replaced the real run error so a budget stop reported the wrong
+// cause and exited with the wrong code.
+//
+// An observability failure must not change the result it describes. That is
+// the same argument recordOrphanSpend makes one level down.
+func TestAFailedObservationsReadStillClosesTheRun(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	h := newHarness(t, 15, 5, fake.Options{})
+	h.opts.Store = &failingStore{Store: h.store, failObs: true}
+
+	res, err := core.Baseline(ctx, h.evals, h.opts)
+	if err == nil {
+		t.Fatal("the failed read must be reported, not swallowed")
+	}
+	if res == nil {
+		t.Fatal("no result at all; the run completed and its outcome is durable")
+	}
+
+	// The Run is durably closed, not stranded.
+	stored, getErr := h.store.GetRun(ctx, "run-1")
+	if getErr != nil {
+		t.Fatalf("GetRun: %v", getErr)
+	}
+	if stored.GetStatus() == knov1.RunStatus_RUN_STATUS_RUNNING {
+		t.Error("the Run is still RUNNING, which is indistinguishable from a crash")
+	}
+	if stored.GetFinishedAt() == "" {
+		t.Error("the Run has no finished_at")
+	}
+
+	// RunFinished still closes the stream.
+	log := eventLog(t, h.dbPath, "run-1")
+	if len(log) == 0 || payloadName(log[len(log)-1]) != "RunFinished" {
+		t.Error("the event stream was never closed; a consumer waits on RunFinished " +
+			"and the schema promises it is last")
+	}
+
+	// And the report still has its numbers, from the flat counters.
+	if res.Run.GetScoredCaseCount() == 0 {
+		t.Error("the run scored Cases and the record says zero")
+	}
+}
+
+// TestAResumeDoesNotRewriteTheRunsSplit.
+//
+// openRun reloads the stored Run on a resume and keeps the first process's
+// dev/holdout counts. Composing CaseExecution from THIS process's options
+// would put two different splits on one message, with the presence-carrying
+// copy describing a split the run was never measured under.
+//
+// checkResumable does not compare the split — InputFingerprint is the eval
+// SOURCE only — so a resume declaring a different holdout fraction passes
+// every check and reaches this code.
+func TestAResumeDoesNotRewriteTheRunsSplit(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	h := newHarness(t, 20, 5, fake.Options{})
+	h.opts.Guard = budget.New(budget.Limits{MaxLLMCalls: 8}, nil, 0)
+	if _, err := core.Baseline(ctx, h.evals, h.opts); !errors.Is(err, errs.ErrBudgetExceeded) {
+		t.Fatalf("the first run was meant to stop early: %v", err)
+	}
+
+	// A resume declaring a different split. Nothing refuses it today.
+	opts := h.opts
+	opts.Resume = true
+	opts.DevCases = 3
+	opts.HoldoutCases = 22
+	opts.Guard = budget.New(budget.Limits{MaxLLMCalls: 1_000}, nil, 0)
+
+	res, err := core.Baseline(ctx, h.evals, opts)
+	if err != nil {
+		t.Fatalf("resumed run: %v", err)
+	}
+
+	ce := res.Run.GetCaseExecution()
+	if ce == nil {
+		t.Fatal("no CaseExecution")
+	}
+	if ce.GetDevCaseCount() != res.Run.GetDevCaseCount() ||
+		ce.GetHoldoutCaseCount() != res.Run.GetHoldoutCaseCount() {
+		t.Errorf("CaseExecution says dev=%d holdout=%d and the Run says dev=%d "+
+			"holdout=%d. One message cannot state two splits, and the "+
+			"presence-carrying copy is the one every interval's width is "+
+			"computed from",
+			ce.GetDevCaseCount(), ce.GetHoldoutCaseCount(),
+			res.Run.GetDevCaseCount(), res.Run.GetHoldoutCaseCount())
+	}
+	if ce.GetHoldoutCaseCount() != 5 {
+		t.Errorf("holdout=%d, want 5 — the split the run was measured under, not "+
+			"the one the resuming process declared", ce.GetHoldoutCaseCount())
 	}
 }
