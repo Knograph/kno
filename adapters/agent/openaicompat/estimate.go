@@ -82,9 +82,21 @@ func (a *Agent) WorstCase() budget.Estimate {
 	if a.price == nil {
 		return budget.Estimate{}
 	}
-	// A single field is enough: the estimate reads Prompt only through its
-	// total size, and which part the bytes belong to does not change the price.
-	worst := pricing.Prompt{Input: strings.Repeat("x", a.maxPrompt)}
+	// The ceiling is a TOTAL, and checkPromptSize enforces it against the same
+	// four fields — so an injected Asset does not raise this number, it spends
+	// part of it. Charging the Asset ON TOP would still be an upper bound, but a
+	// loose one, and core plans concurrency against this: a WorstCase inflated
+	// by an Asset the ceiling already covers makes the feasibility check hold
+	// headroom for spend that cannot happen and run fewer Cases at once.
+	//
+	// Context carries the Asset rather than folding it into Input because the
+	// term has to be visible at the call site. The price is identical either
+	// way — the estimate reads Prompt only through its total size — which is
+	// exactly why an omitted term here would be invisible in the number.
+	worst := pricing.Prompt{
+		Context: a.asset,
+		Input:   strings.Repeat("x", a.maxPrompt-len(a.asset)),
+	}
 	est, err := pricing.EstimateWithPrice(a.price, a.model, worst, a.maxOutput)
 	if err != nil {
 		return budget.Estimate{}
@@ -206,9 +218,11 @@ func (a *Agent) checkPromptSize(prompt pricing.Prompt) error {
 // history, plus its input. A signature taking a single "input" makes the
 // forgotten term invisible in the number rather than visible at the call site.
 //
-// Context is empty in this build and will stay empty until core.ContextInjector
-// is implemented; it is named here so the term is present rather than
-// rediscovered.
+// Context carries the injected Asset, and it is the term that makes the cost
+// cap bind on the thing being measured: it is typically the LARGEST part of the
+// prompt, so an estimate that omitted it would reserve against a Case-sized
+// prompt while sending an Asset-sized one. Empty on an Agent that carries no
+// Asset, which is every Agent WithContext has not copied.
 func (a *Agent) promptOf(c *core.Case) pricing.Prompt {
 	var history strings.Builder
 	for _, t := range c.GetHistory() {
@@ -219,6 +233,7 @@ func (a *Agent) promptOf(c *core.Case) pricing.Prompt {
 	}
 	return pricing.Prompt{
 		System:  a.system,
+		Context: a.asset,
 		History: history.String(),
 		Input:   c.GetInput(),
 	}

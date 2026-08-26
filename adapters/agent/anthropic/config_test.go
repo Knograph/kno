@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/knograph/kno/adapters/agent/anthropic"
+	"github.com/knograph/kno/core"
 	"github.com/knograph/kno/core/errs"
 )
 
@@ -94,8 +95,22 @@ func TestCapabilitiesDeclareOnlyWhatThisAdapterDoes(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	c := a.Capabilities()
-	if c.GetContextInject() || c.GetKnowledgeWrite() {
-		t.Error("an injection capability is declared that M2 does not implement")
+	if !c.GetContextInject() {
+		t.Error("context_inject is not declared, but WithContext is implemented — " +
+			"the Value stage refuses an Asset before any spend when this is false, " +
+			"so an under-claim disables the stage rather than degrading it")
+	}
+	if c.GetKnowledgeWrite() {
+		t.Error("knowledge_write is declared and the Messages API has no index to write")
+	}
+	// The declaration and the interface must not be able to drift: an
+	// over-claim is a run reporting a measurement mode it never used, and an
+	// under-claim is a stage that refuses to run at all.
+	if _, ok := any(a).(core.ContextInjector); ok != c.GetContextInject() {
+		t.Error("the declared context_inject capability and the implemented interface disagree")
+	}
+	if _, ok := any(a).(core.KnowledgeInjector); ok != c.GetKnowledgeWrite() {
+		t.Error("the declared knowledge_write capability and the implemented interface disagree")
 	}
 	if c.GetStream() {
 		t.Error("streaming is declared and is not implemented")

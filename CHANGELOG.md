@@ -67,6 +67,25 @@ covenants — breaking any of them requires a major version.
   portfolio by content type. It also takes a *model*, and an Asset's cost is read before a model is
   chosen — a denominator that moved with the run's model would make two pools' rankings
   incomparable. The residual bias is documented with its direction ([debt #68](docs/debt.md#68)).
+- **`core.ContextInjector` on both provider adapters.** `WithContext(asset)` returns an Agent
+  carrying the Asset in its prompt, and `Capabilities().ContextInject` is now true. Nothing calls
+  it yet.
+
+  It returns a **shallow copy of the Agent**, not a wrapper. The receiver stays usable as the
+  control arm of the same measurement — get that wrong and every Value measurement compares an
+  Asset against itself — and because the result is still the same type, `Estimator` and `Capable`
+  forwarding cannot be forgotten. A hand-written wrapper that forwarded only `Invoke` would leave
+  every reservation made against a run-scoped constant while the prompt carried the Asset, which
+  `core/ring0.go` records having already quoted $0.06 for a run whose real exposure was $12.00.
+
+  The Asset goes **after the system prompt and before the Case**. Providers cache on prefix, and
+  `[system][asset]` is constant across an Asset's whole sample while the Case varies — so position,
+  not which field each adapter uses, is what makes the Asset's tokens cacheable.
+
+  Refused before any spend: a nil Asset, an empty one (byte-identical to the control, so every
+  difference is zero with a tight interval and "inert" is indistinguishable from "not injected"), a
+  non-UTF-8 one (JSON substitutes U+FFFD, so the model sees something other than what was priced),
+  and a second injection into an already-injected Agent.
 
 - **Proto for the Value stage** (additive; `buf breaking` clean). Nothing emits these yet — this is
   the wire contract the stage is built against, landed first per CLAUDE.md's coordination rule.

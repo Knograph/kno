@@ -90,7 +90,7 @@ func (a *Agent) encode(c *core.Case) ([]byte, error) {
 // refused, because inventing a user turn to put in front of it would measure a
 // prompt the Case does not describe.
 func (a *Agent) compose(c *core.Case) (string, []message, error) {
-	system := a.opts.System
+	system := a.systemPrefix()
 	var msgs []message
 
 	for _, t := range c.GetHistory() {

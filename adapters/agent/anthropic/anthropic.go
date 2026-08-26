@@ -188,6 +188,12 @@ type Agent struct {
 	client *transport.Client
 	base   string
 
+	// asset is the injected Asset's content, empty on an Agent that carries
+	// none. Set only by WithContext, and only on a COPY — the un-injected
+	// receiver is the control arm of the measurement and must keep sending the
+	// prompt it sent before.
+	asset string
+
 	// worst is WorstCase, computed once. Nothing about it depends on a Case,
 	// and rebuilding the several-hundred-kilobyte placeholder prompt on every
 	// planning call would be work for an answer that cannot change.
@@ -357,10 +363,18 @@ func resolveKey(host string, keyEnv map[string]string) (string, error) {
 // monthly, and a probe failure is indistinguishable from an outage.
 func (a *Agent) Capabilities() *core.Capabilities {
 	return &knov1.Capabilities{
-		// M2 does not inject. WithContext and WithKnowledge are the valuation
-		// stage's surface and land with it; declaring them here would let a run
-		// report a measurement mode it never used.
-		ContextInject:  false,
+		// ContextInject is true for the ADAPTER, not for the individual Agent:
+		// it says this adapter implements core.ContextInjector, which is what
+		// the Value stage checks before it routes an Asset and before it spends
+		// anything. An adapter that answered per-Agent would report false on
+		// the un-injected control arm, and the stage would refuse the Asset it
+		// was about to measure.
+		//
+		// KnowledgeWrite stays false: the Messages API has no index to write,
+		// so the deployment-faithful mode is not something this adapter can
+		// offer, and declaring it would let a run report a measurement mode it
+		// never used.
+		ContextInject:  true,
 		KnowledgeWrite: false,
 
 		// Streaming is accepted debt, not an oversight — the plan's §11 records
