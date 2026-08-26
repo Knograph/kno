@@ -805,9 +805,9 @@ func (f *failingStore) OutcomeCounts(ctx context.Context, id string) (int, int, 
 	return f.Store.OutcomeCounts(ctx, id)
 }
 
-func (f *failingStore) ScoreSum(ctx context.Context, id string) (float64, int, int, error) {
+func (f *failingStore) ScoreSum(ctx context.Context, id string) (store.ScoreSummary, error) {
 	if f.failScores {
-		return 0, 0, 0, errStore
+		return store.ScoreSummary{}, errStore
 	}
 	return f.Store.ScoreSum(ctx, id)
 }
@@ -2358,7 +2358,8 @@ func TestResumedRunReportsTheWholeRunsMean(t *testing.T) {
 	}
 
 	// The truth, computed from the store rather than from the aggregator.
-	sum, counted, _, err := h.store.ScoreSum(ctx, "run-1")
+	got, err := h.store.ScoreSum(ctx, "run-1")
+	sum, counted := got.Sum, got.Counted
 	if err != nil {
 		t.Fatalf("ScoreSum: %v", err)
 	}

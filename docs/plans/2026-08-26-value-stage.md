@@ -303,7 +303,7 @@ Draft 1's V-4 was the entire stage in one branch. Split, with proto first per CL
 
 **Q4.** System block or message body for the injected Asset? Decides whether provider prompt caching hits across an Asset's whole sample, which is priced separately.
 
-**Q5.** `CaseScores`'s signature. `ScoreSum` returns `(sum, counted, unrecoverable)` because "scored but the number is gone" is a real state; a `map[string]float64` collapses it into "absent". Does Value need Baseline's refusal, or does it drop and report?
+**Q5. RESOLVED in V-4a.** `CaseScores` returns `map[string]CaseScore`, where `CaseScore` carries the value and an `Unrecoverable` flag. Presence means the Case scored; absence means it never did. A `map[string]float64` collapses "scored, number purged" into "absent", and pairing against the resulting zero manufactures a delta — so the state is kept rather than flattened, and the Value stage drops such a Case from the pair and reports the count rather than refusing the run the way Baseline does. Baseline refuses because its aggregate IS the deliverable; Value's deliverable is per-Asset and a handful of unpairable Cases shrinks one denominator rather than invalidating the run, provided the shrinkage is reported — which `Valuation.n_routed` against the pair count already makes visible. *(Original question: `CaseScores`'s signature. `ScoreSum` returns `(sum, counted, unrecoverable)` because "scored but the number is gone" is a real state; a `map[string]float64` collapses it into "absent". Does Value need Baseline's refusal, or does it drop and report?)*
 
 **Q6.** `delta_per_cost` for a zero-cost Asset — all three `CostVector` terms zero. Undefined is honest; a separate ranking tier is probably the handling.
 

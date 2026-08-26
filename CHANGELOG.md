@@ -18,6 +18,40 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
+- **The store can hold a Value run** (`schemaVersion` 3). Nothing writes to it yet.
+
+  A `measurements` table keyed `(run_id, asset_id, case_id, arm, trial)`, because `outcomes` is
+  keyed `(run_id, case_id)` and `RecordOutcome` is `INSERT OR IGNORE`. Value measures the same
+  Case against many Assets in one run, so 200 Assets over 50 Cases would have written 50 rows and
+  **silently discarded the other 9,950** — every one of them paid for — while `CompletedCases`
+  reported the whole run finished and a resume skipped it.
+
+  Every field of that key is load-bearing, and dropping any one reproduces the same bug one level
+  down: two Assets measured on one Case, the two arms of one pair (the control arm is measured
+  **fresh** whenever routing may have conditioned on the baseline —
+  [ADR-0005](docs/adr/0005-value-cannot-see-user-side-conditioning.md)), and the trials bought to
+  reduce variance. All three collisions are asserted, each verified against a primary key with
+  that field removed.
+
+  **The readers that assumed `outcomes` was the whole record now span both tables**, which is a
+  double-spend rather than a reporting gap. `SettledSpend` is the only durable record of money
+  spent and the budget guard is reseeded from it on resume: a Value run killed after $8 of a $10
+  cap would have restarted the guard at zero and authorized another $10. `CaseObservations` and
+  the distinct-model set behind the mid-run model gate span both for the same reason — otherwise a
+  Run reports zero Cases beside real spend, and the gate compares against an empty set and reports
+  success.
+
+  `Purge` and `PurgeableCount` cover measurement content. A purge that cleared only outcomes would
+  have printed a count larger than what it removed and reported success over content still on disk.
+
+  New readers: `CompletedMeasurements` (what a Value resume consults — `CompletedCases` returns
+  empty for every Value run, so a resume driven by it re-pays for everything), `CaseScores`,
+  `WriteValuation`, and `Valuations`. A `Valuation` is written only once every measurement behind
+  it is durable, so a run stopped mid-Asset leaves the paid measurements and no `Valuation`:
+  resume finishes the Asset without paying twice, and nothing downstream reads a delta over half a
+  sample.
+
+
 - **`stats/interval`** — confidence intervals on paired differences, the machinery prime directive 5
   requires before any delta can be reported. Nothing calls it yet.
 
@@ -596,9 +630,22 @@ covenants — breaking any of them requires a major version.
 - [ADR-0002](docs/adr/0002-generated-code-layout.md): generated code is checked in under `gen/`.
 - [ADR-0003](docs/adr/0003-platform-schema-boundary.md): the platform never adds fields to `kno.v1`.
 
-[Unreleased]: https://github.com/knograph/kno/commits/main
 
 ### Changed
+
+- **`Store.ScoreSum` returns a `ScoreSummary`** rather than `(float64, int, int, error)` — a
+  public Go API break, permitted pre-1.0. It repays [debt #31](docs/debt.md#31): a scored row with
+  no readable number has two possible causes, a purge before the score lived in a column of its
+  own, or a binary that predated the column, and reporting both as a purge sends a user looking
+  for a deletion nobody performed. `writer_schema_version` on both tables distinguishes them from
+  schema version 3 onward; rows predating the marker are reported as being of unknown provenance
+  rather than assigned to whichever cause reads better.
+
+  `CaseScores` returns `map[string]CaseScore`, not `map[string]float64`, for the neighbouring
+  reason: absent must mean *never scored*, because a pair built against a Case whose number was
+  purged is not a pair with a zero in it — it is a pair that cannot be formed, and a zero there is
+  indistinguishable from a real score of zero.
+
 
 - **`--cost-per-call-usd` is no longer required alongside `--max-cost-usd`** for an agent that
   prices its own calls. `--agent anthropic:claude-opus-5 --max-cost-usd 5` was refused even though
@@ -935,3 +982,4 @@ covenants — breaking any of them requires a major version.
   time, for up to twice the intended spend across one kill/resume cycle. `Guard.Restore` reseeds
   settled spend from the store, which is the only thing that outlives the process.
 
+[Unreleased]: https://github.com/knograph/kno/commits/main

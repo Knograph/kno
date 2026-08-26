@@ -426,11 +426,17 @@ func Baseline(
 		// priorCounted, not priorScored, is priorSum's denominator: it comes
 		// from the same query over the same predicate. Dividing by the count
 		// from the OTHER query would reintroduce the defect one level down.
-		priorSum, priorCounted, unrecoverable, err := opts.Store.ScoreSum(ctx, opts.RunID)
+		prior, err := opts.Store.ScoreSum(ctx, opts.RunID)
 		if err != nil {
 			return nil, fmt.Errorf("loading prior scores: %w", err)
 		}
-		agg.seedCounts(priorScored, priorErrored, priorSum, priorCounted, unrecoverable)
+		// Unrecoverable() rather than either count alone: Baseline suppresses
+		// the aggregate whenever a score is missing, and it is missing either
+		// way. The split exists so the REASON can be reported (docs/debt.md#31)
+		// — a purge the user performed reads differently from a row an older
+		// binary wrote — and the reporting of it lands with the reader that
+		// renders it, not here.
+		agg.seedCounts(priorScored, priorErrored, prior.Sum, prior.Counted, prior.Unrecoverable())
 	}
 	// RunResumed continues a stream; RunStarted opens one. The predicate is
 	// therefore the STREAM's state, not the user's flag.

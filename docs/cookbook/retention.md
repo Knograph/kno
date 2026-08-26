@@ -95,6 +95,14 @@ Keeping them is also load-bearing. **Kno has no separate "this Case is done" mar
 
 So `kno purge` nulls the content columns and never deletes a row. If you want the rows gone too, delete the database file — that is a real and supported answer, and it makes the run unresumable, which is the honest trade.
 
+### Both kinds of recorded work
+
+Kno records a Case two ways, and purge covers both.
+
+A **Baseline** run records one *outcome* per Case. A **Value** run records one *measurement* per Case per Asset per arm — the same Case measured many times, because that is what comparing Assets means — and those live in their own table with their own key. A measurement's response holds exactly the same end-user conversation content an outcome's does.
+
+Purge clears the content columns of both, and the count it prints before asking spans both. That is worth stating rather than assuming: a purge that cleared only outcomes would print "this would remove content from 44 rows", remove less than that, and report success over content still on disk — which is worse than failing, because you would act on the report.
+
 ## In a scheduled job
 
 ```bash
