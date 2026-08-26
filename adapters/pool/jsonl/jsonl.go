@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"strconv"
+	"unicode/utf8"
 
 	"github.com/knograph/kno/core"
 	knov1 "github.com/knograph/kno/gen/kno/v1"
@@ -149,6 +150,24 @@ func (p *Pool) Assets(ctx context.Context) (iter.Seq2[*core.Asset, error], error
 //
 // seen is updated in place; a duplicate ID is refused rather than tolerated.
 func (p *Pool) assetAt(raw []byte, line int, seen map[string]struct{}) (*core.Asset, error) {
+	// Validated on the RAW bytes, before decoding, and this ordering is the
+	// whole point. encoding/json silently substitutes U+FFFD for any invalid
+	// byte, lone surrogate, or CESU-8 sequence and returns no error — so by the
+	// time a record is a Go string the corruption has already happened and
+	// utf8.ValidString reports true on the damaged result. The adapters' own
+	// non-UTF-8 refusal sits downstream of this and therefore cannot see it.
+	//
+	// The damage is not cosmetic: the Asset a run measures would differ from
+	// the Asset on disk, with provenance still pointing at this line, and the
+	// provider bills three bytes where the estimate counted one.
+	if !utf8.Valid(raw) {
+		return nil, fmt.Errorf(
+			"%s line %d: the record is not valid UTF-8, and decoding it would "+
+				"silently replace the bad bytes rather than fail — so the Asset "+
+				"measured would differ from the Asset on disk",
+			p.opts.Path, line)
+	}
+
 	rec, err := decode(raw)
 	if err != nil {
 		return nil, fmt.Errorf("%s line %d: %w", p.opts.Path, line, err)

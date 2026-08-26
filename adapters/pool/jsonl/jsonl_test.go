@@ -506,6 +506,8 @@ func TestOversizedRecordIsRejected(t *testing.T) {
 	t.Parallel()
 
 	const limit = 4 << 10
+	// The oversized record is the SECOND line.
+	const oversizedLine = 2
 	huge := fmt.Sprintf(`{"id":"big","content":%q}`, strings.Repeat("x", 8<<10))
 	path := writeAssets(t, assetLine("a1", "one"), huge)
 
@@ -523,6 +525,14 @@ func TestOversizedRecordIsRejected(t *testing.T) {
 	}
 	if !strings.Contains(gotErr.Error(), "MaxRecordBytes") {
 		t.Errorf("error = %q, want it to name the knob that would fix it", gotErr)
+	}
+
+	// The LINE NUMBER, not just the message. sc.Scan() returned false on the
+	// oversized record, so `line` was never incremented for it — the error has
+	// to name line+1, and an off-by-one here points a user at the record
+	// before the one that broke.
+	if !strings.Contains(gotErr.Error(), fmt.Sprintf("line %d", oversizedLine)) {
+		t.Errorf("the refusal names the wrong line: %v", gotErr)
 	}
 }
 
@@ -681,5 +691,52 @@ func TestNewRejectsBadOptions(t *testing.T) {
 				t.Error("bad options were accepted")
 			}
 		})
+	}
+}
+
+// TestInvalidUTF8IsRefusedRatherThanSilentlyReplaced.
+//
+// encoding/json substitutes U+FFFD for an invalid byte, a lone surrogate, or a
+// CESU-8 sequence and returns NO error — so a record decoded first is already
+// damaged, and utf8.ValidString reports true on the damage. The provider
+// adapters refuse non-UTF-8 content, but that guard sits downstream of the
+// decode and is therefore unreachable from this Pool.
+//
+// The consequence is not cosmetic. The Asset a run measures would differ from
+// the Asset on disk, with provenance still pointing at the line it came from,
+// and the provider would bill three bytes where the cost estimate counted one.
+func TestInvalidUTF8IsRefusedRatherThanSilentlyReplaced(t *testing.T) {
+	t.Parallel()
+
+	// A latin-1 byte inside an otherwise well-formed JSON record.
+	raw := []byte(`{"id":"a1","content":"caf` + "\xe9" + `"}`)
+
+	path := filepath.Join(t.TempDir(), "pool.jsonl")
+	if err := os.WriteFile(path, append(raw, '\n'), 0o600); err != nil {
+		t.Fatalf("writing the pool: %v", err)
+	}
+
+	p, err := jsonl.New(jsonl.Options{Path: path})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	seq, err := p.Assets(context.Background())
+	if err != nil {
+		t.Fatalf("Assets: %v", err)
+	}
+
+	var gotErr error
+	var gotAsset *core.Asset
+	for a, err := range seq {
+		gotAsset, gotErr = a, err
+		break
+	}
+
+	if gotErr == nil {
+		t.Fatalf("the record was accepted; content = %q, which is not what the "+
+			"file holds", gotAsset.GetContent())
+	}
+	if !strings.Contains(gotErr.Error(), "UTF-8") {
+		t.Errorf("the refusal does not say what is wrong: %v", gotErr)
 	}
 }
