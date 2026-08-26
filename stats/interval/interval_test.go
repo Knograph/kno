@@ -14,6 +14,24 @@ const (
 	continuous = knov1.ScoreDomain_SCORE_DOMAIN_CONTINUOUS_UNBOUNDED
 )
 
+// coverageFloor is the lowest coverage a correct method can plausibly show,
+// given that the measurement is itself a sample.
+//
+// Derived from the run count rather than picked, because a picked floor is
+// where a real defect hides: this package shipped a z-interval labelled "t"
+// that covered 0.930 at fifteen pairs, and the test that should have caught it
+// used a hand-chosen 0.90 floor while its comment claimed "at least nominal".
+//
+// Three standard errors of a binomial proportion at the nominal rate. A method
+// that genuinely covers will land above this essentially always; one that
+// systematically under-covers — which is what every bug in this package's
+// history looked like — will not.
+func coverageFloor(runs int) float64 {
+	const level = interval.DefaultLevel
+	se := math.Sqrt(level * (1 - level) / float64(runs))
+	return level - 3*se
+}
+
 // pairedBinary draws n paired observations where the control succeeds with
 // probability pCtrl and the treatment with pCtrl+effect, returning the paired
 // differences.
@@ -64,7 +82,7 @@ func TestTheIntervalCoversTheTruthAtItsStatedRate(t *testing.T) {
 			t.Parallel()
 
 			rng := rand.New(rand.NewSource(1))
-			const runs = 3000
+			const runs = 20000
 			truth := math.Min(1, tc.pCtrl+tc.effect) - tc.pCtrl
 
 			covered := 0
@@ -80,11 +98,12 @@ func TestTheIntervalCoversTheTruthAtItsStatedRate(t *testing.T) {
 			}
 
 			got := float64(covered) / runs
-			if got < 0.93 {
-				t.Errorf("coverage = %.3f at a nominal %.2f. Under-coverage is a "+
+			if got < coverageFloor(runs) {
+				t.Errorf("coverage = %.4f, below the %.4f floor at a nominal %.2f. "+
+					"Under-coverage is a "+
 					"claim of confidence the data does not support, and every "+
 					"delta this project reports rests on it",
-					got, interval.DefaultLevel)
+					got, coverageFloor(runs), interval.DefaultLevel)
 			}
 		})
 	}
@@ -199,8 +218,8 @@ func TestTheMethodIsChosenByTheDECLAREDDomain(t *testing.T) {
 		t.Errorf("both domains produced method %q; the declared domain is not "+
 			"reaching the dispatch", asBinary.GetMethod())
 	}
-	if asBinary.GetMethod() != interval.MethodAgrestiMin {
-		t.Errorf("binary method = %q, want %q", asBinary.GetMethod(), interval.MethodAgrestiMin)
+	if asBinary.GetMethod() != interval.MethodAdjustedWald {
+		t.Errorf("binary method = %q, want %q", asBinary.GetMethod(), interval.MethodAdjustedWald)
 	}
 
 	// Repeated trials leave the binary path: the difference takes trials+1
@@ -209,46 +228,72 @@ func TestTheMethodIsChosenByTheDECLAREDDomain(t *testing.T) {
 	if repeated == nil {
 		t.Fatal("no interval")
 	}
-	if repeated.GetMethod() == interval.MethodAgrestiMin {
+	if repeated.GetMethod() == interval.MethodAdjustedWald {
 		t.Error("repeated trials still took the paired-binary path, where the " +
 			"discordant-count methods are undefined on fractional differences")
 	}
 }
 
-// TestAHarmBoundIsOneSidedAndSaysSo.
+// TestAHarmBoundActuallyDetectsHarm.
 //
-// A control arm asks "did this break something", which is one-sided. Written
-// into a two-sided field it is read as two-sided by RejectionReason.NO_EFFECT,
-// whose shipped definition is "the interval crosses zero", and by the report's
-// coloring rule — so the sidedness has to travel with the number.
-func TestAHarmBoundIsOneSidedAndSaysSo(t *testing.T) {
+// The first version of this test asserted the sidedness and the tightness and
+// never that the bound ANSWERS ITS QUESTION — so it passed against a bound
+// pointing the wrong way, which is what shipped. Paired's deltas are
+// sign-corrected so positive is better, which makes an UPPER bound a statement
+// about how much the Asset helps. Harm is delta >= -epsilon, so the bound is
+// the one below.
+//
+// Asserted by POWER, not by shape: a harm detector that cannot see a real
+// regression is the failure this instrument exists to prevent, and shape
+// assertions cannot see that.
+func TestAHarmBoundActuallyDetectsHarm(t *testing.T) {
 	t.Parallel()
 
-	deltas := []float64{0, 0, -1, 0, 0, 0, 0, 0, -1, 0}
+	// A -0.30 regression: three Cases in ten that the Asset broke.
+	regressed := []float64{0, -1, 0, 0, -1, 0, 0, -1, 0, 0}
+	inert := make([]float64, 10)
 
-	bound := interval.HarmBound(deltas, binary, 1, interval.DefaultLevel)
-	if bound == nil {
+	harm := interval.HarmBound(regressed, binary, 1, interval.DefaultLevel)
+	if harm == nil {
 		t.Fatal("no bound")
 	}
-	if bound.GetSidedness() != knov1.Sidedness_SIDEDNESS_UPPER {
-		t.Errorf("sidedness = %v, want UPPER", bound.GetSidedness())
+	if harm.GetSidedness() != knov1.Sidedness_SIDEDNESS_LOWER {
+		t.Errorf("sidedness = %v, want LOWER. An upper bound on a "+
+			"positive-is-better delta bounds how much the Asset HELPS, which is "+
+			"the opposite of the question", harm.GetSidedness())
 	}
-	if bound.GetLow() != 0 {
-		t.Errorf("low = %g, want 0 — an infinity there does not survive "+
-			"protojson, which serializes it as a string into a numeric field",
-			bound.GetLow())
+	if harm.GetHigh() != 0 {
+		t.Errorf("high = %g, want 0 — an infinity does not survive protojson, "+
+			"which serializes it as a string into a numeric field", harm.GetHigh())
 	}
 
-	// A one-sided bound at the same level is TIGHTER than the upper end of the
-	// two-sided interval, because it spends its whole error budget on one tail.
-	twoSided := interval.Paired(deltas, binary, 1, interval.DefaultLevel)
+	// The bound must exclude "no harm" for a real regression: if the true
+	// effect could be zero, the bound has told us nothing.
+	if harm.GetLow() >= 0 {
+		t.Errorf("low = %g on a -0.30 regression; the bound admits zero harm, "+
+			"so it cannot distinguish a broken Asset from an inert one",
+			harm.GetLow())
+	}
+
+	// And it must NOT cry harm on an inert Asset.
+	clean := interval.HarmBound(inert, binary, 1, interval.DefaultLevel)
+	if clean == nil {
+		t.Fatal("no bound for an inert Asset")
+	}
+	if clean.GetLow() > 0 {
+		t.Errorf("low = %g on an Asset that changed nothing", clean.GetLow())
+	}
+
+	// A one-sided bound spends its whole error budget on one tail, so it is
+	// tighter than the matching end of the two-sided interval.
+	twoSided := interval.Paired(regressed, binary, 1, interval.DefaultLevel)
 	if twoSided == nil {
 		t.Fatal("no interval")
 	}
-	if bound.GetHigh() >= twoSided.GetHigh() {
-		t.Errorf("one-sided high %g is not tighter than two-sided high %g; the "+
-			"level is being applied to both tails on a bound that has one",
-			bound.GetHigh(), twoSided.GetHigh())
+	if harm.GetLow() <= twoSided.GetLow() {
+		t.Errorf("one-sided low %g is not tighter than two-sided low %g; the "+
+			"level is being spread over two tails on a bound that has one",
+			harm.GetLow(), twoSided.GetLow())
 	}
 }
 
@@ -356,7 +401,7 @@ func TestTheContinuousPathAlsoCoversTheTruthAtItsStatedRate(t *testing.T) {
 			t.Parallel()
 
 			rng := rand.New(rand.NewSource(3))
-			const runs = 3000
+			const runs = 20000
 
 			covered := 0
 			for range runs {
@@ -374,10 +419,73 @@ func TestTheContinuousPathAlsoCoversTheTruthAtItsStatedRate(t *testing.T) {
 			}
 
 			got := float64(covered) / runs
-			if got < 0.90 {
-				t.Errorf("coverage = %.3f at a nominal %.2f on the CONTINUOUS "+
-					"path. Every judged Goal will land here", got, interval.DefaultLevel)
+			// At the NOMINAL level, not below it. The first version of this
+			// test used a 0.90 floor while its own comment claimed "at least
+			// nominal" — which is exactly the slack a z-interval mislabelled
+			// as t hid in: 0.930 at fifteen pairs, inside a 0.90 floor.
+			if got < coverageFloor(runs) {
+				t.Errorf("coverage = %.4f, below the %.4f floor at a nominal %.2f, "+
+					"on the CONTINUOUS path. Every judged Goal lands here",
+					got, coverageFloor(runs), interval.DefaultLevel)
 			}
 		})
+	}
+}
+
+// TestPairedTrialsMakesPseudoReplicationUnrepresentable.
+//
+// Paired takes one value per Case. A caller holding per-Case-per-trial
+// measurements — which is exactly what the measurement loop produces — can
+// flatten them into one slice, and nothing errors: the pair count is not
+// recoverable from the slice, so the interval comes back about sqrt(k) too
+// narrow with n_pairs k times too large. That is pseudo-replication, and it is
+// the failure a shape can prevent and a comment cannot.
+func TestPairedTrialsMakesPseudoReplicationUnrepresentable(t *testing.T) {
+	t.Parallel()
+
+	perCase := [][]float64{
+		{1, 0, 1},
+		{0, 0, 0},
+		{1, 1, 1},
+		{0, -1, 0},
+		{1, 0, 0},
+		{0, 0, 1},
+		{1, 1, 0},
+		{0, 0, 0},
+	}
+
+	grouped := interval.PairedTrials(perCase, binary, interval.DefaultLevel)
+	if grouped == nil {
+		t.Fatal("no interval")
+	}
+	if grouped.GetNPairs() != int32(len(perCase)) {
+		t.Errorf("n_pairs = %d, want %d — the pair count must be the number of "+
+			"CASES, not of measurements", grouped.GetNPairs(), len(perCase))
+	}
+
+	// The flattened mistake, for comparison: same data, wrong shape.
+	var flat []float64
+	for _, tr := range perCase {
+		flat = append(flat, tr...)
+	}
+	flattened := interval.Paired(flat, binary, 1, interval.DefaultLevel)
+	if flattened == nil {
+		t.Fatal("no interval")
+	}
+	if flattened.GetHigh()-flattened.GetLow() >= grouped.GetHigh()-grouped.GetLow() {
+		t.Error("flattening trials did not narrow the interval, so this test " +
+			"is not exercising the hazard it describes")
+	}
+
+	// A ragged input is refused rather than averaged over mixed denominators.
+	if interval.PairedTrials([][]float64{{1, 0}, {1}}, binary, interval.DefaultLevel) != nil {
+		t.Error("a ragged input was accepted; Cases measured a different number " +
+			"of times would be weighted equally, which nothing downstream sees")
+	}
+
+	// trials < 1 is refused: Valuation.trials is a proto int32 whose unset
+	// value is zero, and zero would select the paired-binary method.
+	if interval.Paired([]float64{1, 0, 1}, binary, 0, interval.DefaultLevel) != nil {
+		t.Error("trials = 0 was accepted, which is what an unpopulated proto field reads as")
 	}
 }

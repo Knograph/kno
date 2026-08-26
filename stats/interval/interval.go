@@ -30,8 +30,9 @@ import (
 // claim: a delta whose method changed between two runs did not become more
 // precise, it was measured differently.
 const (
-	// MethodAgrestiMin is the score-based interval for paired binary data.
-	MethodAgrestiMin = "agresti-min"
+	// MethodAdjustedWald is the score-based interval for paired binary data:
+	// the Agresti-Min form with a unit adjustment.
+	MethodAdjustedWald = "adjusted-wald"
 
 	// MethodStudentT is the paired t-interval for continuous data.
 	MethodStudentT = "t"
@@ -46,18 +47,74 @@ const DefaultLevel = 0.95
 
 // Paired returns a two-sided interval on the mean of deltas.
 //
-// deltas are per-Case paired differences, already sign-corrected for the Goal's
-// direction by the caller — this package has no opinion about which way is
-// better, only about how wide the uncertainty is.
+// deltas is ONE VALUE PER CASE, already sign-corrected for the Goal's direction
+// by the caller — this package has no opinion about which way is better, only
+// about how wide the uncertainty is.
+//
+// With repeated trials, each Case's value is the MEAN of its trials, not one
+// entry per trial. Handing over k x n values instead returns an interval about
+// sqrt(k) too narrow with n_pairs k times too large, and nothing errors: the
+// count of pairs is not recoverable from the slice. PairedTrials does the
+// averaging so a caller cannot get this wrong.
+//
+// trials < 1 is refused rather than treated as 1, because Valuation.trials is
+// a proto int32 whose unset value is zero — and a caller reading it off a
+// not-yet-populated message would otherwise select the paired-binary method
+// and apply a discordance-count interval to means of k draws.
 //
 // Returns nil when no interval can be computed, which is a real answer and the
 // reason knov1.Interval is a message. A nil interval means delta must not be
 // reported; it never means the delta is zero.
 func Paired(deltas []float64, domain knov1.ScoreDomain, trials int, level float64) *knov1.Interval {
+	if trials < 1 {
+		return nil
+	}
 	return compute(deltas, domain, trials, level, knov1.Sidedness_SIDEDNESS_TWO_SIDED)
 }
 
-// HarmBound returns a one-sided UPPER bound on the mean of deltas.
+// PairedTrials is Paired for per-Case trial vectors, averaging each Case's
+// trials into its single paired difference.
+//
+// The shape that makes the mistake Paired's godoc warns about unrepresentable:
+// the caller hands over what it has — measurements grouped by Case — and the
+// count of pairs is len(perCase) by construction rather than by convention.
+func PairedTrials(perCase [][]float64, domain knov1.ScoreDomain, level float64) *knov1.Interval {
+	deltas, trials, ok := meanPerCase(perCase)
+	if !ok {
+		return nil
+	}
+	return Paired(deltas, domain, trials, level)
+}
+
+// meanPerCase collapses trial vectors to one value per Case.
+//
+// Refuses a ragged input rather than averaging over different denominators: a
+// Case measured twice and one measured five times contribute differently to
+// the mean, and silently weighting them equally is a bias nothing downstream
+// could see.
+func meanPerCase(perCase [][]float64) (deltas []float64, trials int, ok bool) {
+	if len(perCase) == 0 {
+		return nil, 0, false
+	}
+	trials = len(perCase[0])
+	if trials == 0 {
+		return nil, 0, false
+	}
+	deltas = make([]float64, len(perCase))
+	for i, tr := range perCase {
+		if len(tr) != trials {
+			return nil, 0, false
+		}
+		var sum float64
+		for _, v := range tr {
+			sum += v
+		}
+		deltas[i] = sum / float64(trials)
+	}
+	return deltas, trials, true
+}
+
+// HarmBound returns a one-sided LOWER bound on the mean of deltas.
 //
 // The question a control arm asks is "did this Asset break something it should
 // not have touched", and that is one-sided. A two-sided interval answers a
@@ -66,11 +123,27 @@ func Paired(deltas []float64, domain knov1.ScoreDomain, trials int, level float6
 // under the report's coloring rule as "no regression". An underpowered harm
 // test that looks identical to a passed one is worse than no test.
 //
-// Only `high` is meaningful on the result, and `low` is written as zero rather
+// LOWER, not upper, and the direction is the whole point. Paired's deltas are
+// already sign-corrected so that positive is better, which makes "the true
+// effect is at MOST x" a bound on how much the Asset HELPS — the opposite of
+// the question. Harm is delta >= -epsilon, so the bound that answers it is the
+// one below.
+//
+// The first version of this function returned an upper bound, and the
+// consequence was measurable: the only rule a consumer could write against it
+// was "high < 0 means harm", which at a control arm of ten pairs fired on a
+// true -0.30 regression just 43% of the time while firing on the null 6.4% of
+// the time. That is verbatim the failure this function exists to prevent — an
+// underpowered harm test that looks identical to a passed one.
+//
+// Only `low` is meaningful on the result, and `high` is written as zero rather
 // than an infinity: protojson serializes infinities as the strings "Infinity"
 // and "-Infinity", which the generated OpenAPI declares as a number.
 func HarmBound(deltas []float64, domain knov1.ScoreDomain, trials int, level float64) *knov1.Interval {
-	return compute(deltas, domain, trials, level, knov1.Sidedness_SIDEDNESS_UPPER)
+	if trials < 1 {
+		return nil
+	}
+	return compute(deltas, domain, trials, level, knov1.Sidedness_SIDEDNESS_LOWER)
 }
 
 // compute dispatches on the DECLARED domain and never on the observed data.
@@ -102,26 +175,33 @@ func compute(
 	// takes trials+1 values and is no longer a discordance count at all, so it
 	// takes the continuous path.
 	if domain == knov1.ScoreDomain_SCORE_DOMAIN_BINARY && trials <= 1 {
-		return agrestiMin(deltas, level, side)
+		return adjustedWald(deltas, level, side)
 	}
 	return paired(deltas, level, side)
 }
 
-// agrestiMin is the score-based interval on a paired difference of proportions.
+// adjustedWald is the score-based interval on a paired difference of
+// proportions: the Agresti-Min form, with the adjustment chosen by simulation
+// rather than inherited.
 //
-// Chosen by simulation over the alternatives at the sample sizes this stage
-// actually runs at (n = 20 and 50, control success rates 0.5 to 0.95, true
-// effects 0 and 0.10). It was the only candidate whose coverage never fell
-// below nominal — MOVER-Wilson under-covered in every cell measured (0.907 to
-// 0.932 against a nominal 0.95), and a percentile bootstrap covered on average
-// while returning a ZERO-WIDTH interval in 13.6% of runs at p=0.95, n=20.
-// Under-coverage and false certainty are the two failures this package exists
-// to avoid, and Agresti-Min avoids both at the cost of being slightly wide.
+// The family was chosen over the alternatives at the sample sizes this stage
+// runs at. MOVER-Wilson under-covered in every cell measured (0.907 to 0.932
+// against a nominal 0.95), and a percentile bootstrap covered on average while
+// returning a ZERO-WIDTH interval in 13.6% of runs at p=0.95, n=20 — the two
+// failures this package exists to avoid.
 //
-// The +0.5 adjustment on each discordant count is what keeps it non-degenerate:
-// with b = c = 0 — every pair agreeing, which is what an inert Asset looks
-// like — the unadjusted variance is zero and the interval collapses.
-func agrestiMin(deltas []float64, level float64, side knov1.Sidedness) *knov1.Interval {
+// The ADJUSTMENT is 1.0 per discordant count against a denominator of n+2, not
+// the published 0.5. Measured across the grid, the 0.5 form under-covers where
+// the variance is highest — 0.938 at n=20, p=0.50 — and this package's own
+// comments and CHANGELOG had claimed it never fell below nominal. A unit
+// adjustment is conservative everywhere measured (minimum 0.955), which is the
+// right side to err on: over-covering is a wide interval, under-covering is a
+// claim of confidence the data does not support.
+//
+// The adjustment is also what keeps this non-degenerate. With b = c = 0 —
+// every pair agreeing, which is exactly what an inert Asset looks like — the
+// unadjusted variance is zero and the interval collapses to a point.
+func adjustedWald(deltas []float64, level float64, side knov1.Sidedness) *knov1.Interval {
 	var b, c float64 // pairs that improved, pairs that regressed
 	for _, d := range deltas {
 		switch {
@@ -133,13 +213,13 @@ func agrestiMin(deltas []float64, level float64, side knov1.Sidedness) *knov1.In
 	}
 	n := float64(len(deltas))
 
-	const adj = 0.5
+	const adj = 1.0
 	bb, cc, nn := b+adj, c+adj, n+2*adj
 	center := (bb - cc) / nn
 	variance := (bb + cc - (bb-cc)*(bb-cc)/nn) / (nn * nn)
 	half := zFor(level, side) * math.Sqrt(math.Max(variance, 0))
 
-	return build(center, half, level, side, MethodAgrestiMin, len(deltas))
+	return build(center, half, level, side, MethodAdjustedWald, len(deltas))
 }
 
 // paired is the t-interval on the mean difference, with a distribution-free
@@ -172,7 +252,8 @@ func paired(deltas []float64, level float64, side knov1.Sidedness) *knov1.Interv
 		return signBound(deltas, mean, level, side)
 	}
 
-	half := zFor(level, side) * math.Sqrt(variance/n)
+	q := studentTQuantile(quantileFor(level, side), n-1)
+	half := q * math.Sqrt(variance/n)
 	return build(mean, half, level, side, MethodStudentT, len(deltas))
 }
 
@@ -238,6 +319,20 @@ func build(
 	return iv
 }
 
+// quantileFor returns the cumulative probability a bound needs.
+//
+// A one-sided bound at level L spends its whole error budget on one tail, so it
+// uses the probability a two-sided interval would use at 2L-1 — which is why a
+// one-sided 95% bound is tighter than either end of a two-sided 95% interval,
+// and why Interval.level means different things for different sidedness.
+func quantileFor(level float64, side knov1.Sidedness) float64 {
+	tail := (1 - level) / 2
+	if side != knov1.Sidedness_SIDEDNESS_TWO_SIDED {
+		tail = 1 - level
+	}
+	return 1 - tail
+}
+
 // zFor returns the normal quantile for the level and sidedness.
 //
 // A one-sided bound at level L uses the same quantile a two-sided interval
@@ -245,11 +340,7 @@ func build(
 // upper end of a two-sided 95% interval, and why Interval.level means
 // different things for different sidedness.
 func zFor(level float64, side knov1.Sidedness) float64 {
-	tail := (1 - level) / 2
-	if side != knov1.Sidedness_SIDEDNESS_TWO_SIDED {
-		tail = 1 - level
-	}
-	return normalQuantile(1 - tail)
+	return normalQuantile(quantileFor(level, side))
 }
 
 func validLevel(level float64) bool {
