@@ -240,16 +240,63 @@ func assertGrewByTheAsset(t *testing.T, base, grown budget.Estimate, assetBytes 
 	}
 }
 
-// TestWorstCaseStillBoundsEveryCaseTheInjectedAgentWillSend.
+// TestBothArmsAcceptExactlyTheSameCases.
 //
-// MaxPromptBytes is a TOTAL in this adapter — checkPromptSize enforces it
-// against the same four fields the estimate prices — so an injected Asset
-// spends part of that budget rather than adding to it, and WorstCase does not
-// move. What must hold is the property WorstCase's godoc claims: there is no
-// Case this Agent will send whose Estimate exceeds it. A WorstCase that priced
-// the Case allowance while forgetting the Asset would break exactly that, and
-// core plans concurrency and quotes the human against this number.
-func TestWorstCaseStillBoundsEveryCaseTheInjectedAgentWillSend(t *testing.T) {
+// The regression test for the bias this ceiling used to introduce. When
+// MaxPromptBytes was a TOTAL, an Asset spent part of the Case's allowance, so
+// a Case large enough to fit under the ceiling alone but not beside the Asset
+// was measured by the control arm and REFUSED by the treatment arm.
+//
+// That is attrition correlated with the treatment, and not at random: it drops
+// exactly the long-prompt Cases, and drops more of them as the Asset grows. A
+// Δ computed over the survivors rises with Asset size, in delta_per_cost's
+// numerator, against a denominator that grew for the honest reason — so the
+// Assets that looked most efficient would be the large ones that had quietly
+// discarded their own hardest Cases. Nothing downstream could see it: both
+// arms report an n, and both n values are whatever survived.
+//
+// The ceiling now bounds the Case and the Asset is charged on top, so the two
+// arms take the same decision on every Case by construction. This test asserts
+// it across the band where the old code diverged.
+func TestBothArmsAcceptExactlyTheSameCases(t *testing.T) {
+	t.Parallel()
+
+	const ceiling = 4096
+	srv, _ := recording(t)
+	control := newAgent(t, srv, func(o *openaicompat.Options) { o.MaxPromptBytes = ceiling })
+
+	asset := strings.Repeat("a", 3000)
+	treatment, ok := injected(t, control, asset).(core.Estimator)
+	if !ok {
+		t.Fatal("the injected Agent is not an Estimator")
+	}
+
+	// Case sizes spanning the old divergence band and both sides of it. Under
+	// the old total semantics every size from ceiling-len(asset) upward was
+	// accepted by control and refused by treatment.
+	for _, size := range []int{1, 512, 1096, 1097, 2000, ceiling - 64, ceiling * 2} {
+		c := newCase("c", strings.Repeat("c", size))
+
+		_, controlErr := control.Estimate(t.Context(), c)
+		_, treatmentErr := treatment.Estimate(t.Context(), c)
+
+		if (controlErr == nil) != (treatmentErr == nil) {
+			t.Errorf("a %d-byte Case: control err=%v, treatment err=%v — the arms "+
+				"disagree, so the Asset is selecting which Cases it is measured on "+
+				"and the delta is biased by its own size", size, controlErr, treatmentErr)
+		}
+	}
+}
+
+// TestWorstCaseRisesByTheAssetAndStillBoundsEveryCase.
+//
+// Charging the Asset on top is what buys the symmetry above, and it has a
+// price: the number core plans concurrency against and quotes to the human
+// grows with the Asset. That is correct — the run really will send those bytes
+// on every Case — but it must be the WHOLE truth, because a WorstCase that
+// priced the Case allowance and forgot the Asset would under-reserve on every
+// call, and the run would walk past the cap the human agreed to.
+func TestWorstCaseRisesByTheAssetAndStillBoundsEveryCase(t *testing.T) {
 	t.Parallel()
 
 	const ceiling = 4096
@@ -262,15 +309,14 @@ func TestWorstCaseStillBoundsEveryCaseTheInjectedAgentWillSend(t *testing.T) {
 		t.Fatal("the injected Agent is not an Estimator")
 	}
 
-	if got, want := est.WorstCase(), a.WorstCase(); got.CostUSDMicros != want.CostUSDMicros {
-		t.Errorf("WorstCase moved from %d to %d under injection; the ceiling is a "+
-			"total, so the Asset spends part of it rather than adding to it",
-			want.CostUSDMicros, got.CostUSDMicros)
+	if got, want := est.WorstCase().CostUSDMicros, a.WorstCase().CostUSDMicros; got <= want {
+		t.Errorf("WorstCase is %d injected and %d bare; the Asset rides on every "+
+			"call, so a WorstCase that did not move is an estimate missing a term "+
+			"that is spent every time", got, want)
 	}
 
-	// The largest Case that still fits beside the Asset. Its estimate is the
-	// most this Agent can be asked to reserve for one call.
-	largest, err := est.Estimate(t.Context(), newCase("c", strings.Repeat("c", ceiling-len(asset))))
+	// The largest Case this Agent will now send: a whole ceiling's worth.
+	largest, err := est.Estimate(t.Context(), newCase("c", strings.Repeat("c", ceiling)))
 	if err != nil {
 		t.Fatalf("Estimate for the largest permissible Case: %v", err)
 	}
@@ -313,7 +359,10 @@ func TestWithContextRefusesAnAssetItCannotHonestlyMeasure(t *testing.T) {
 			wants: "not valid UTF-8",
 		},
 		{
-			name:  "an Asset that leaves no room for a Case",
+			// The ceiling bounds the Case; this is the Asset measured against
+			// it as its OWN bound, refused once rather than per Case. The same
+			// rule anthropic applies to the same flag.
+			name:  "an Asset past what may ride on every Case",
 			tweak: func(o *openaicompat.Options) { o.MaxPromptBytes = 1024 },
 			asset: anAsset(strings.Repeat("a", 2048)),
 			wants: "--max-prompt-bytes",

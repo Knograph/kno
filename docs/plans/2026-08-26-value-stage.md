@@ -266,7 +266,7 @@ Draft 1's V-4 was the entire stage in one branch. Split, with proto first per CL
 | No baseline score for a routed Case | Dropped from the pair, **counted and reported**. `CaseScores` must distinguish "absent" from "unrecoverable" (§7 Q5) |
 | Baseline model or generation config differs | Refused (§2.1) |
 | Baseline marked `error_rate_exceeded` | Refused (§2.1) |
-| Asset exceeds `--max-prompt-bytes` | Refused per Asset, recorded, run continues. **Not** the model's context window — the fix line must name the knob that actually bound |
+| Asset exceeds `--max-prompt-bytes` | Refused per Asset, recorded, run continues. **Not** the model's context window — the fix line must name the knob that actually bound. The flag bounds the Case; the Asset is bounded by it separately and charged **on top**, so no Case is ever accepted by the control arm and refused by the treatment arm (V-3 Phase 3, P1-3) |
 | Injected Asset pushes a Case over the limit | Case dropped from that Asset's sample, counted. **This is attrition correlated with the treatment** — a large Asset gets measured only on short Cases. Reported, not hidden |
 | Cap stops the run mid-Asset | Measurements are durable; no `Valuation` is written for that Asset; resume continues from the measurement rows and re-pays nothing |
 | Duplicate Asset IDs | Refused at ingestion |

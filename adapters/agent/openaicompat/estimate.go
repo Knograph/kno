@@ -82,12 +82,20 @@ func (a *Agent) WorstCase() budget.Estimate {
 	if a.price == nil {
 		return budget.Estimate{}
 	}
-	// The ceiling is a TOTAL, and checkPromptSize enforces it against the same
-	// four fields — so an injected Asset does not raise this number, it spends
-	// part of it. Charging the Asset ON TOP would still be an upper bound, but a
-	// loose one, and core plans concurrency against this: a WorstCase inflated
-	// by an Asset the ceiling already covers makes the feasibility check hold
-	// headroom for spend that cannot happen and run fewer Cases at once.
+	// The ceiling bounds the CASE, and the Asset is charged on top.
+	//
+	// It used to be a total the Asset spent part of, which was tighter and
+	// wrong: a Case large enough to fit under the ceiling alone but not
+	// alongside the Asset was measured by the CONTROL arm and refused by the
+	// TREATMENT arm. That is attrition correlated with the treatment — it
+	// removes exactly the long-prompt Cases, more of them for larger Assets —
+	// so the delta rises with Asset size in delta_per_cost's numerator against
+	// its own denominator. Measured at a 4096-byte ceiling with a 3000-byte
+	// Asset and a 2000-byte Case: control measured, treatment refused.
+	//
+	// Charging on top is looser, and it is the same rule anthropic already
+	// applies, so one --max-prompt-bytes now means one thing on both adapters
+	// rather than producing different consent quotes for the same Asset.
 	//
 	// Context carries the Asset rather than folding it into Input because the
 	// term has to be visible at the call site. The price is identical either
@@ -95,7 +103,10 @@ func (a *Agent) WorstCase() budget.Estimate {
 	// exactly why an omitted term here would be invisible in the number.
 	worst := pricing.Prompt{
 		Context: a.asset,
-		Input:   strings.Repeat("x", a.maxPrompt-len(a.asset)),
+		// The full ceiling, not the ceiling minus the Asset: the Asset is
+		// charged on top now, so the worst Case is still a whole ceiling's
+		// worth of Case plus whatever the Asset costs.
+		Input: strings.Repeat("x", a.maxPrompt),
 	}
 	est, err := pricing.EstimateWithPrice(a.price, a.model, worst, a.maxOutput)
 	if err != nil {
@@ -197,7 +208,10 @@ const maxPromptCeiling = 64 << 20
 // rejects is not something we can observe, so the free refusal is strictly
 // better than the paid one.
 func (a *Agent) checkPromptSize(prompt pricing.Prompt) error {
-	size := promptSize(prompt)
+	// The Asset is excluded from what the ceiling bounds. Both arms of a
+	// measurement must accept or refuse the same Cases, or the Asset silently
+	// selects which Cases it is measured on. See WorstCase.
+	size := promptSize(prompt) - len(prompt.Context)
 	if size <= a.maxPrompt {
 		return nil
 	}

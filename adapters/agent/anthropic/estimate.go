@@ -144,14 +144,15 @@ func (a *Agent) computeWorstCase() budget.Estimate {
 	n := a.promptCeiling()
 
 	// The Asset is charged ON TOP of the ceiling rather than out of it, which
-	// is the opposite of what openaicompat does — deliberately, because the two
-	// adapters mean different things by MaxPromptBytes. openaicompat ENFORCES
-	// it on every assembled prompt, so there the ceiling is a true total and an
-	// Asset spends part of it. Here nothing enforces it per Case, so
-	// subtracting the Asset from the Case's allowance would leave a Case free
-	// to consume the whole ceiling anyway and this number would stop being an
-	// upper bound. Over-stating it only makes planning conservative;
-	// under-stating it is how a run quotes $0.06 for $12.00 of exposure.
+	// is now what openaicompat does too: subtracting it from the Case's
+	// allowance makes the treatment arm refuse Cases the control arm accepts,
+	// which is attrition correlated with the treatment. The adapters still
+	// differ in that openaicompat ENFORCES the ceiling per Case and this one
+	// does not — its godoc says so — which only makes charging on top more
+	// necessary here: a Case is free to consume the whole ceiling anyway, so
+	// subtracting would stop this being an upper bound. Over-stating it makes
+	// planning conservative; under-stating it is how a run quotes $0.06 for
+	// $12.00 of exposure.
 	//
 	// Through priceOf, so an explicit override reaches the figure
 	// checkCostIsKnowable reads. Without it, supplying a price for an unpriced

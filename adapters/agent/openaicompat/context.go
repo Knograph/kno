@@ -91,12 +91,16 @@ func (a *Agent) injectable(asset *core.Asset) (string, error) {
 			Wrap(fmt.Errorf("openaicompat: asset %s is not valid UTF-8", asset.GetId()))
 	}
 
-	// MaxPromptBytes bounds the WHOLE prompt in this adapter — checkPromptSize
-	// counts pricing.Prompt.Context along with everything else — so an injected
-	// Asset spends part of the same budget the Case does. An Asset that leaves
-	// no room for a Case is refused here rather than per Case, because
-	// otherwise it is one identical refusal for every Case in the sample and
-	// the run ends as "too many cases errored", naming nothing about the Asset.
+	// MaxPromptBytes bounds the CASE, and the Asset is charged on top — see
+	// WorstCase for why the alternative biases the delta. So this is not the
+	// Case's allowance being crowded; it is the bound on the Asset itself,
+	// which the flag has to supply because nothing else does.
+	//
+	// The same rule anthropic applies, checked at the same moment: once per
+	// Asset, before any Case. Per Case it would be one identical refusal for
+	// every Case in the sample, and the run would end as "too many cases
+	// errored", naming nothing about the Asset. Refusing per ASSET is also
+	// what keeps it symmetric — a refused Asset is measured by neither arm.
 	if len(a.system)+len(content) >= a.maxPrompt {
 		return "", errs.ErrInvalidInput.WithFix(fmt.Sprintf(
 			"raise --max-prompt-bytes above %d, or measure a smaller Asset — note "+
@@ -104,8 +108,8 @@ func (a *Agent) injectable(asset *core.Asset) (string, error) {
 				"run concurrently under a cost cap", len(a.system)+len(content),
 		)).
 			Wrap(fmt.Errorf("openaicompat: asset %s is %d bytes and the system prompt is "+
-				"%d, against a --max-prompt-bytes ceiling of %d; no Case would fit "+
-				"alongside it", asset.GetId(), len(content), len(a.system), a.maxPrompt))
+				"%d, together past the --max-prompt-bytes ceiling of %d that bounds "+
+				"what may ride on every Case", asset.GetId(), len(content), len(a.system), a.maxPrompt))
 	}
 
 	return string(content), nil

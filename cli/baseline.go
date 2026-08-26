@@ -141,7 +141,7 @@ continues without paying for anything twice.`,
 	flags.Int64Var(&f.maxOutputTokens, "max-output-tokens", 0,
 		"generation ceiling, which also bounds every cost estimate")
 	flags.Int64Var(&f.maxPromptBytes, "max-prompt-bytes", 0,
-		"refuse a Case whose prompt exceeds this")
+		"refuse a Case whose prompt exceeds this (an injected Asset is bounded separately, and charged on top)")
 	flags.Float64Var(&f.temperature, "temperature", math.NaN(),
 		"sampling temperature (unset leaves the provider default)")
 	flags.Int64Var(&f.seed, "seed", 0, "sampling seed, where the provider supports one")

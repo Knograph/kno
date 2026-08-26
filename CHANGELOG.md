@@ -87,6 +87,15 @@ covenants — breaking any of them requires a major version.
   non-UTF-8 one (JSON substitutes U+FFFD, so the model sees something other than what was priced),
   and a second injection into an already-injected Agent.
 
+  `--max-prompt-bytes` now bounds the **Case**, and an injected Asset is bounded by it separately
+  and charged **on top** — one meaning across both adapters. It was previously a total on
+  `openai:`, which meant a Case large enough to fit under the ceiling alone but not beside the
+  Asset was measured by the control arm and refused by the treatment arm: attrition correlated
+  with the treatment, dropping exactly the long-prompt Cases and more of them as the Asset grew.
+  A delta over the survivors rises with Asset size, in `delta_per_cost`'s numerator against a
+  denominator that grew for the honest reason. Both arms now accept the same Cases by
+  construction. `WorstCase` rises by the Asset accordingly, which is the run's real exposure.
+
 - **Proto for the Value stage** (additive; `buf breaking` clean). Nothing emits these yet — this is
   the wire contract the stage is built against, landed first per CLAUDE.md's coordination rule.
 
