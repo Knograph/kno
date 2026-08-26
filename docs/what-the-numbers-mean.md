@@ -101,6 +101,18 @@ Kno's response, in order of increasing faithfulness and cost:
 
 A number from step 3 is a *ranking* signal. Only step 4 is a result.
 
+## What a confidence interval on a delta claims
+
+Every delta Kno reports comes with an interval, and the interval is the product — a Δ of +0.04 with a range of [−0.11, +0.19] is not a finding, and shipping it as one is what the whole discipline exists to prevent.
+
+Three things about how they are computed, because they change how you read them:
+
+**They are paired.** Each Case is compared against itself rather than against the average of other Cases, which removes the difference between an easy Case and a hard one from the uncertainty. For the same money the interval is much tighter than an unpaired comparison would give.
+
+**They are wide when the sample is small, and they say so.** Each interval records how many pairs it came from. An interval of ±0.30 from twenty Cases is not a measurement failure; it is twenty Cases honestly reported. Buy more Cases and it narrows.
+
+**Every one is a PER-COMPARISON claim.** A 95% interval is right 95% of the time *about that one asset*. Value a pool of 200 and roughly ten assets that do nothing will have intervals excluding zero purely by chance — and they cluster among the small, cheap assets, which is exactly where the ranking puts things at the top. The run records how many comparisons it made so a reader can weigh that. This is one of the reasons `validate` exists: it measures the assets you selected against Cases nothing in the loop has touched.
+
 ## What Kno cannot tell you
 
 Stated plainly, because a tool that lists its limits is easier to trust than one that doesn't:

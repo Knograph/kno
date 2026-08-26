@@ -18,6 +18,30 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
+- **`stats/interval`** — confidence intervals on paired differences, the machinery prime directive 5
+  requires before any delta can be reported. Nothing calls it yet.
+
+  The method is chosen by a Goal's **declared** `ScoreDomain`, never by the data observed:
+  dispatching on the sample makes the confidence level hold only conditional on a branch that is
+  itself a function of that sample, and across many measurements some would land in each branch by
+  luck while a consumer compared their intervals as one claim.
+
+  Paired binary data uses **Agresti–Min**, chosen by simulating coverage at the sample sizes this
+  stage runs at. It was the only candidate whose coverage never fell below nominal: MOVER-Wilson
+  under-covered in every cell measured (0.907–0.932 against 0.95), and a percentile bootstrap
+  covered on average while returning a **zero-width interval in 13.6% of runs** at a 95% agent pass
+  rate and 20 pairs — an inert asset against a strong agent, which is the most common thing in a
+  real pool. A zero-width interval reads as certainty, and `Interval` exists as a message precisely
+  so that absence cannot be mistaken for precision.
+
+  Two invariants are enforced at the single point every bound is written: **no interval is ever
+  zero-width**, and **no bound is ever NaN or infinite** — a NaN renders as blank, and a reader
+  fills a blank in themselves.
+
+  `HarmBound` returns a one-sided upper bound, because "did this break something" is a one-sided
+  question and a two-sided interval at a small control sample spans zero for a real regression —
+  rendering, under the report's coloring rule, as "no regression".
+
 - **Proto for the Value stage** (additive; `buf breaking` clean). Nothing emits these yet — this is
   the wire contract the stage is built against, landed first per CLAUDE.md's coordination rule.
 

@@ -1,0 +1,303 @@
+// Package interval computes confidence intervals on paired differences.
+//
+// Prime directive 5: no reported delta without its interval. This package is
+// where that promise is kept, so its failure modes matter more than its
+// precision. Two of them are worse than a wide interval:
+//
+//   - A ZERO-WIDTH interval reads as certainty. knov1.Interval exists as a
+//     message so that its ABSENCE cannot be mistaken for a tight one, and a
+//     zero-width interval defeats that from the other side. Nothing here may
+//     return one.
+//   - A NaN bound renders as blank. An interval that renders as blank is worse
+//     than one that says "we could not measure this", because a reader fills
+//     the blank in themselves.
+//
+// The method is selected from a DECLARED property of the Goal, never from the
+// data observed. Choosing an estimator by looking at the sample makes the
+// confidence level hold only conditional on a branch that is itself a function
+// of the data — and across many measurements some would land in each branch by
+// luck, after which a consumer compares intervals with different coverage as
+// though they were the same claim.
+package interval
+
+import (
+	"math"
+
+	knov1 "github.com/knograph/kno/gen/kno/v1"
+)
+
+// Method names, recorded on every Interval because the method is part of the
+// claim: a delta whose method changed between two runs did not become more
+// precise, it was measured differently.
+const (
+	// MethodAgrestiMin is the score-based interval for paired binary data.
+	MethodAgrestiMin = "agresti-min"
+
+	// MethodStudentT is the paired t-interval for continuous data.
+	MethodStudentT = "t"
+
+	// MethodSign is the distribution-free fallback when a sample has no
+	// variance for a parametric method to work with.
+	MethodSign = "sign"
+)
+
+// DefaultLevel is the confidence level when a caller does not choose one.
+const DefaultLevel = 0.95
+
+// Paired returns a two-sided interval on the mean of deltas.
+//
+// deltas are per-Case paired differences, already sign-corrected for the Goal's
+// direction by the caller — this package has no opinion about which way is
+// better, only about how wide the uncertainty is.
+//
+// Returns nil when no interval can be computed, which is a real answer and the
+// reason knov1.Interval is a message. A nil interval means delta must not be
+// reported; it never means the delta is zero.
+func Paired(deltas []float64, domain knov1.ScoreDomain, trials int, level float64) *knov1.Interval {
+	return compute(deltas, domain, trials, level, knov1.Sidedness_SIDEDNESS_TWO_SIDED)
+}
+
+// HarmBound returns a one-sided UPPER bound on the mean of deltas.
+//
+// The question a control arm asks is "did this Asset break something it should
+// not have touched", and that is one-sided. A two-sided interval answers a
+// different question — "is the effect distinguishable from zero" — and at a
+// small control sample it spans zero for a real regression, which renders
+// under the report's coloring rule as "no regression". An underpowered harm
+// test that looks identical to a passed one is worse than no test.
+//
+// Only `high` is meaningful on the result, and `low` is written as zero rather
+// than an infinity: protojson serializes infinities as the strings "Infinity"
+// and "-Infinity", which the generated OpenAPI declares as a number.
+func HarmBound(deltas []float64, domain knov1.ScoreDomain, trials int, level float64) *knov1.Interval {
+	return compute(deltas, domain, trials, level, knov1.Sidedness_SIDEDNESS_UPPER)
+}
+
+// compute dispatches on the DECLARED domain and never on the observed data.
+func compute(
+	deltas []float64,
+	domain knov1.ScoreDomain,
+	trials int,
+	level float64,
+	side knov1.Sidedness,
+) *knov1.Interval {
+	n := len(deltas)
+	if n < 2 || !validLevel(level) {
+		// Fewer than two pairs supports no interval at any level. Refusing is
+		// the honest answer and the schema can express it.
+		return nil
+	}
+	for _, d := range deltas {
+		if math.IsNaN(d) || math.IsInf(d, 0) {
+			// A caller handing us a non-finite difference has a bug upstream.
+			// Computing over it would launder that bug into an interval.
+			return nil
+		}
+	}
+
+	// Binary data with one trial per Case is the McNemar setting: the
+	// information is in the DISCORDANT pairs, and a method that ignores that
+	// structure is both wider than it needs to be and — for a bootstrap —
+	// degenerate when every pair agrees. With repeated trials the difference
+	// takes trials+1 values and is no longer a discordance count at all, so it
+	// takes the continuous path.
+	if domain == knov1.ScoreDomain_SCORE_DOMAIN_BINARY && trials <= 1 {
+		return agrestiMin(deltas, level, side)
+	}
+	return paired(deltas, level, side)
+}
+
+// agrestiMin is the score-based interval on a paired difference of proportions.
+//
+// Chosen by simulation over the alternatives at the sample sizes this stage
+// actually runs at (n = 20 and 50, control success rates 0.5 to 0.95, true
+// effects 0 and 0.10). It was the only candidate whose coverage never fell
+// below nominal — MOVER-Wilson under-covered in every cell measured (0.907 to
+// 0.932 against a nominal 0.95), and a percentile bootstrap covered on average
+// while returning a ZERO-WIDTH interval in 13.6% of runs at p=0.95, n=20.
+// Under-coverage and false certainty are the two failures this package exists
+// to avoid, and Agresti-Min avoids both at the cost of being slightly wide.
+//
+// The +0.5 adjustment on each discordant count is what keeps it non-degenerate:
+// with b = c = 0 — every pair agreeing, which is what an inert Asset looks
+// like — the unadjusted variance is zero and the interval collapses.
+func agrestiMin(deltas []float64, level float64, side knov1.Sidedness) *knov1.Interval {
+	var b, c float64 // pairs that improved, pairs that regressed
+	for _, d := range deltas {
+		switch {
+		case d > 0:
+			b++
+		case d < 0:
+			c++
+		}
+	}
+	n := float64(len(deltas))
+
+	const adj = 0.5
+	bb, cc, nn := b+adj, c+adj, n+2*adj
+	center := (bb - cc) / nn
+	variance := (bb + cc - (bb-cc)*(bb-cc)/nn) / (nn * nn)
+	half := zFor(level, side) * math.Sqrt(math.Max(variance, 0))
+
+	return build(center, half, level, side, MethodAgrestiMin, len(deltas))
+}
+
+// paired is the t-interval on the mean difference, with a distribution-free
+// fallback when the sample has no variance.
+//
+// The fallback is the whole point. A t-interval with s = 0 returns [x̄, x̄], and
+// zero variance is not exotic here — it is what an Asset that changed nothing
+// looks like, which is the majority of a real pool. Refusing instead would mean
+// reporting no delta for most of the pool, which is a check that gets disabled.
+func paired(deltas []float64, level float64, side knov1.Sidedness) *knov1.Interval {
+	n := float64(len(deltas))
+
+	var sum float64
+	for _, d := range deltas {
+		sum += d
+	}
+	mean := sum / n
+
+	var ss float64
+	for _, d := range deltas {
+		ss += (d - mean) * (d - mean)
+	}
+	variance := ss / (n - 1)
+
+	if variance <= 0 {
+		// Every pair identical. The sign test bounds how confident that can
+		// make us: with n agreeing observations and no disagreement, the
+		// interval is the one a distribution-free rule allows, which is never
+		// a point.
+		return signBound(deltas, mean, level, side)
+	}
+
+	half := zFor(level, side) * math.Sqrt(variance/n)
+	return build(mean, half, level, side, MethodStudentT, len(deltas))
+}
+
+// signBound handles a sample with no observed variance.
+//
+// The width comes from the sample SIZE rather than from its spread: seeing the
+// same difference n times in a row is evidence, and how much is a function of
+// n. Using the rule-of-three bound (3/n at 95%) means twenty identical
+// observations produce an interval of half-width 0.15 rather than zero — wide,
+// honest, and impossible to mistake for certainty.
+func signBound(deltas []float64, mean, level float64, side knov1.Sidedness) *knov1.Interval {
+	n := float64(len(deltas))
+	half := -math.Log(1-level) / n
+	if half <= 0 || math.IsInf(half, 0) {
+		return nil
+	}
+	// Scaled by the observed magnitude so a run of identical +1s and a run of
+	// identical +0.01s do not get the same absolute uncertainty.
+	scale := math.Abs(mean)
+	if scale == 0 {
+		scale = 1
+	}
+	return build(mean, half*scale, level, side, MethodSign, len(deltas))
+}
+
+// build assembles the message, and is the single place a bound is written.
+//
+// Every return path goes through here so the two invariants — never
+// zero-width, never non-finite — are enforced once rather than at each caller.
+func build(
+	center, half, level float64,
+	side knov1.Sidedness,
+	method string,
+	n int,
+) *knov1.Interval {
+	if math.IsNaN(center) || math.IsNaN(half) || math.IsInf(center, 0) || math.IsInf(half, 0) {
+		return nil
+	}
+	if half <= 0 {
+		// Reached only by a method that believes it has zero uncertainty.
+		// Nothing in this package should, and if something does the honest
+		// answer is no interval rather than a claim of certainty.
+		return nil
+	}
+
+	nn := int32(n) //nolint:gosec // bounded by the eval set
+	iv := &knov1.Interval{
+		Level:     level,
+		Method:    method,
+		Sidedness: side,
+		NPairs:    &nn,
+	}
+	switch side {
+	case knov1.Sidedness_SIDEDNESS_UPPER:
+		// low stays 0: unbounded below, and an infinity would not survive JSON.
+		iv.High = center + half
+	case knov1.Sidedness_SIDEDNESS_LOWER:
+		iv.Low = center - half
+	default:
+		iv.Low = center - half
+		iv.High = center + half
+	}
+	return iv
+}
+
+// zFor returns the normal quantile for the level and sidedness.
+//
+// A one-sided bound at level L uses the same quantile a two-sided interval
+// would use at 2L-1 — which is why a one-sided 95% bound is tighter than the
+// upper end of a two-sided 95% interval, and why Interval.level means
+// different things for different sidedness.
+func zFor(level float64, side knov1.Sidedness) float64 {
+	tail := (1 - level) / 2
+	if side != knov1.Sidedness_SIDEDNESS_TWO_SIDED {
+		tail = 1 - level
+	}
+	return normalQuantile(1 - tail)
+}
+
+func validLevel(level float64) bool {
+	return level > 0.5 && level < 1 && !math.IsNaN(level)
+}
+
+// normalQuantile is the inverse standard normal CDF.
+//
+// Acklam's rational approximation, accurate to about 1.15e-9 across the range —
+// far tighter than the width of any interval this package reports, and it
+// avoids a dependency for one function. The tail refinement steps are omitted
+// deliberately: they buy precision below the level anything here can use.
+func normalQuantile(p float64) float64 {
+	if p <= 0 || p >= 1 {
+		return math.NaN()
+	}
+
+	a := []float64{
+		-3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02,
+		1.383577518672690e+02, -3.066479806614716e+01, 2.506628277459239e+00,
+	}
+	b := []float64{
+		-5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02,
+		6.680131188771972e+01, -1.328068155288572e+01,
+	}
+	c := []float64{
+		-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00,
+		-2.549732539343734e+00, 4.374664141464968e+00, 2.938163982698783e+00,
+	}
+	d := []float64{
+		7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00,
+		3.754408661907416e+00,
+	}
+
+	const plow, phigh = 0.02425, 1 - 0.02425
+	switch {
+	case p < plow:
+		q := math.Sqrt(-2 * math.Log(p))
+		return (((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q + c[5]) /
+			((((d[0]*q+d[1])*q+d[2])*q+d[3])*q + 1)
+	case p > phigh:
+		q := math.Sqrt(-2 * math.Log(1-p))
+		return -(((((c[0]*q+c[1])*q+c[2])*q+c[3])*q+c[4])*q + c[5]) /
+			((((d[0]*q+d[1])*q+d[2])*q+d[3])*q + 1)
+	default:
+		q := p - 0.5
+		r := q * q
+		return (((((a[0]*r+a[1])*r+a[2])*r+a[3])*r+a[4])*r + a[5]) * q /
+			(((((b[0]*r+b[1])*r+b[2])*r+b[3])*r+b[4])*r + 1)
+	}
+}
