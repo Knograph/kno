@@ -1,6 +1,6 @@
 # Value: measuring what each Asset is worth
 
-**Status:** Phase 0, draft 3 — two Phase 1 passes, both **BLOCK** (5 P0s, then 4). Every finding verified against the tree; all upheld. Pass 2 changed the measurement design itself, not a detail of it.
+**Status:** Phase 0, draft 4 — three Phase 1 passes, all **BLOCK** (5 P0s, 4, then 3). Every finding verified; all upheld. Pass 3 worked the estimator algebra directly and **the fresh-control-arm design survives** — what did not survive was the *scope* of its rule.
 **Stage:** Value — DESIGN.md §2, the differentiated step
 **Repayment triggers coming due:** [#1](../debt.md#1) ("construction-time invariant when the Value stage lands"), [#55](../debt.md#55) ("the first stage that consumes a Baseline as a reference"), [#58](../debt.md#58) (`Capabilities()` gets its first caller)
 
@@ -42,6 +42,8 @@ Value needs a `measurements` table keyed `(run_id, asset_id, case_id)` — `sche
 
 Worse, draft 2's test for exactly this — *"resume re-pays nothing, asserted against `SettledSpend`"* — would have **passed against a method that structurally cannot see the spend it asserts on**. `0 == 0`. That is the same class of un-failable test that Phase 3 caught four times in M2-11, arriving this time in a plan.
 
+**Orphan spend needs the same treatment**, and draft 3 omitted it: `SettledSpend` reads `outcomes` **plus the run row's orphan columns**, which exist precisely because money settled for a Case that never produced an outcome would otherwise be invisible (migration 2). A *measurement* billed but never recorded — process death between settle and write — reappears as the double-spend this whole section exists to prevent. V-4a reads all three sources; V-4c attributes orphan spend the way `core/baseline_record` does.
+
 `CompletedCases`, `OutcomeCounts`, and `ScoreSum` are the same shape: all three return empty or zero for a Value run, so whatever resume consults skips nothing. **V-4a therefore ships the readers, not just the table**: `SettledSpend` gains the measurements source in the same statement (the pattern its own comment already describes for two sources), and a `CompletedMeasurements` reader exists and is what V-4c's resume consults. The resume test becomes **end-to-end** — kill, resume, assert total provider calls across both processes equals the single-process count — because an equality on `SettledSpend` cannot catch this.
 
 [Debt #22](../debt.md#22) is re-dated here: it accepted `CompletedCases` loading the full set into memory at Baseline's scale, and the Value set is `assets × sample` — two orders of magnitude past the bound that entry accepted.
@@ -68,7 +70,9 @@ The reason is regression to the mean. Selecting Cases where the recorded baselin
 
 Draft 2 concluded from this that routing may never read baseline scores, and rejected failure-routing outright. That was one step too far, and it cost the design its cost model (§2.3). **Measuring a fresh control arm on the routed slice removes the bias entirely**: `X'` and `Y` are both fresh draws from the same conditionally-selected set, so `E[δ] = 0` under the null. Between-Case difficulty variance is still removed, since both arms run the same Cases. The price is 2× on the routed slice — and the routed slice is the small one, which is exactly the arithmetic DESIGN.md already budgets.
 
-**Comparability is a gate**, and `resolved_models` alone is not enough: `Run.generation` records temperature, seed, top_p, and `max_output_tokens`, and `input_fingerprint` explicitly does not cover them (`common.proto:278-283`). A baseline at `max_output_tokens=512` paired against a Value run at 2048 yields a δ that is truncation plus Asset. The gate compares both, and refuses a baseline marked `error_rate_exceeded` — `what-the-numbers-mean.md` already commits later stages to that refusal, and Value is the first later stage.
+**`δ_i` under `--trials k` is the mean of the k draws in each arm**, so `δ_i` takes *k+1* values and the two arms get *k* draws each. Draft 3 shipped the flag and never said which of three possible estimators it meant — per-trial pairs, mean-of-trials, or a single control against k treatments — and they have different variances (`2E[p(1−p)]/k` versus `2E[p(1−p)]`), different supports, and therefore different dispatch outcomes.
+
+**Comparability is a gate**, and `resolved_models` alone is not enough: `Run.generation` records temperature, seed, top_p, and `max_output_tokens`, and `input_fingerprint` explicitly does not cover them (`common.proto:278-283`). A baseline at `max_output_tokens=512` paired against a Value run at 2048 yields a δ that is truncation plus Asset. The gate compares both **and the baseline's `trials`**: a baseline at `trials = 3` records `X_i ∈ {0, ⅓, ⅔, 1}`, so a 1-trial Value run paired against it produces non-binary δ and silently takes the continuous branch — a run measured weeks earlier deciding this run's estimator. It refuses a baseline marked `error_rate_exceeded` — `what-the-numbers-mean.md` already commits later stages to that refusal, and Value is the first later stage.
 
 **A model gate runs on the Value run itself.** `modelGate` exists to catch a model changing *mid-run*, and a Value run is ~100× the wall-clock of the Baseline that produced it, so a provider rollover is likelier — and a blend splits δ across two models *inside one Asset's sample*. #55 records that when the gate fires the tripping Case is still recorded and a second resume completes a blended run with nothing on the record; §7 Q8 asks whether `modelGate` is exported from `core` or reimplemented.
 
@@ -84,15 +88,22 @@ Draft 2 concluded from this that routing may never read baseline scores, and rej
 - **`Score.value` is a `double`** and judged Goals are on the v0.2 path. The moment one lands, either the paired-binary estimator is called on continuous δ (invalid, silently) or there is no interval — and prime directive 5 then means **`delta_goal` is not reported at all**.
 - A `DIRECTION_MINIMIZE` Goal (latency, cost) is not on [0,1] in the first place.
 
-**So `stats/interval` dispatches on the observed support of δ:**
+**Draft 3 dispatched on the observed support of δ. That is a method selected from the sample**, and it has three costs: the 95% claim becomes conditional on a branch that is a function of the data, so V-1's coverage test proves nothing about the reported number; one extra routed Case can flip an Asset between branches and change its interval discontinuously; and with 200 Assets at different *n*, some land in each branch **by luck**, after which Select applies "the interval crosses zero" across intervals computed by different estimators with different coverage.
 
-| Observed δ | Method |
-|---|---|
-| ⊆ {−1, 0, +1} and `trials == 1` | Score-based paired-binary interval (§7 Q1) |
-| anything else | A paired continuous interval — studentised or BCa bootstrap, or a t-interval on the differences |
-| neither applies (n < 2, degenerate) | **Refuse**: return no `Interval`, which the schema is built to represent |
+**So dispatch on a DECLARED property instead.** V-0 is open anyway: `Goal` declares its score domain — binary, bounded-continuous, unbounded — which is a fact about the Goal rather than about the draw. Undeclared means continuous.
 
-A refusal means `delta_goal` is not reported, and `kno value` says which Assets were unmeasurable and why rather than printing a bare number. A ledger entry is triggered on **the first non-binary Goal**, so the judge PR cannot land without touching this.
+| Declared domain | `trials` | Method |
+|---|---|---|
+| binary | 1 | Score-based paired-binary interval (§7 Q1) |
+| binary | > 1 | Continuous: δ takes *k+1* values, and McNemar-family methods are undefined on fractional discordance |
+| bounded / unbounded / undeclared | any | Paired continuous interval |
+| **any, where the estimator is degenerate on this sample** | any | **A named non-degenerate fallback, never a refusal** |
+
+That last row is P0-3, and draft 3 got it wrong in the way it spent four paragraphs warning against. Draft 3 scoped the refusal to `n < 2`, so **zero observed variance with n ≥ 2 fell into the continuous branch** — where a t-interval gives `s = 0` → **[0.000, 0.000]**, a percentile bootstrap gives identical resamples → **[0.000, 0.000]**, and BCa's bias correction is `Φ⁻¹(0) = −∞` → **NaN in `Interval.low`**. That is verbatim the failure A5 was rejected for, and the shipping default (`--trials 3` with `exactmatch`, which is DESIGN's own example) takes that branch.
+
+Refusing instead is not an option either: an inert Asset has zero variance, inert Assets are the *majority* of a real pool, and a stage that reports no `delta_goal` for most of the pool is a check that gets disabled. So the degenerate case gets a distribution-free bound or a continuity-corrected interval on the nonzero-δ count — a stated mechanism, not an assertion that NaN will not happen.
+
+Declaring the domain also **removes the ledger trigger draft 3 needed**: a judge PR must declare its Goal's domain to compile, so it cannot land without touching this.
 
 **Q1 narrows to score-based methods.** An exact conditional interval conditions on the discordant total, and at `b + c = 0` — the all-δ-zero case that motivated this whole section — the conditional likelihood is flat and the interval is uninformative rather than merely wide. Tango, Agresti–Min, and Newcombe/MOVER-Wilson all stay non-degenerate there.
 
@@ -119,7 +130,19 @@ A refusal means `delta_goal` is not reported, and `kno value` says which Assets 
 
 Draft 1 said controls come free. **Arithmetically false**: for an un-routed Case the with-Asset score is never measured, so `δ = baseline − baseline = 0` identically, and `delta_control` would be a hard 0.000 with interval [0.000, 0.000] — not a regression signal, a constant that renders as "no regression, measured with perfect precision."
 
-So controls are measured: `--control-sample-rate`, drawn from Cases the Asset was **not** routed to, and **in the consent quote**.
+**Draft 3 said controls could reuse the recorded baseline "because that selection is not conditioned on the baseline outcome". That is false, and it is §2.1's own bug mirrored.** Routing selects `X_i = 0`, so the complement is selected on `X_i = 1` — **the complement of an outcome-conditioned selection is outcome-conditioned.** For a null Asset:
+
+```
+E[δ_control | X = 1] = E[Z_i] − 1 = p − 1
+```
+
+At p = 0.7 that is **−0.30 with a tight interval, for an Asset that does nothing** — and §2.4's instrument is a one-sided *harm* bound, so this would have been a systematic harm signal aimed at inert Assets, read through the detector most sensitive to it. `REJECTION_REASON_REGRESSION`, which `valuation.proto` calls the strongest reason to exclude something, would fire on the null. Simulated over 14,043 Cases: **−0.2947 against −0.30 predicted.**
+
+The magnitude also varies per Asset — in the tag-routed path the complement is `(baseline passed) ∪ (tags do not overlap)`, so the bias depends on each Asset's overlap and is not comparable across the ranking; in the no-tags fallback the complement is exactly the passed set and the bias is maximal.
+
+**The fix is free: partition the dev split at random BEFORE routing runs.** Routing operates only inside the routing-eligible portion; controls are drawn from the reserved portion, which is outcome-independent **by construction**. The recorded baseline is then a valid control there, so the control arm costs one measurement per Case rather than two, and the reservation is auditable from the seed V-0 already records.
+
+So controls are measured: `--control-sample-rate`, drawn from the **reserved partition**, and **in the consent quote**.
 
 **The quote is a ceiling and it carries every multiplier:**
 
@@ -129,13 +152,18 @@ assets × (routed_sample × arms + control_sample) × trials
 
 where `arms` is 2 when routing conditioned on the baseline outcome (§2.1) and 1 otherwise. Draft 2 fixed the missing control arm and then **omitted `trials` — the same defect, in the same sentence, one multiplier over.** DESIGN.md's worked example uses 3 trials, so the quote would have under-stated by 3×.
 
-Stated as a ceiling, because routing may send an Asset to fewer Cases than the sample allows and no pre-run number can know. §6 asserts `quoted ceiling ≥ actual settled calls` for a run with all three flags non-default. Because that selection is not conditioned on the baseline outcome, the recorded baseline is a valid control there (§2.1) — the control arm costs one measurement per Case, not two.
+**It is a ceiling on MEASUREMENTS, not on calls, and draft 3 asserted the stronger thing.** `invokeWithRetry` bills every attempt, so a single rate-limit retry breaks `quoted ≥ actual settled calls` — and a test asserting it would pass only on a run that happened not to hit a 429. That is the same "one multiplier over" defect this plan's review record already names twice, arriving a third time in the same formula. The quote says what it is: *calls at one attempt per measurement; transient-failure retries and settlement overshoot are additional and bounded by `--max-cost-usd`, not by this number.* §6 asserts the bound at one attempt per measurement.
+
+**And DESIGN.md's arithmetic does not survive, which draft 3 claimed it did.** On DESIGN's own inputs (50 assets, 15 failure + 40 control, 3 trials), its figure is `50 × 55 × 3 ≈ 8,250` **at one arm**. Draft 4 costs `50 × (15×2 + 40) × 3 = 10,500` — **+27%**, and the `$15–40` headline moves with it. §2.3 asserted "there is nothing to flag"; there is. `DESIGN.md`'s cost-model section is in §9 for the number as well as the mechanism.
+
+**Two further gaps between DESIGN's example and what v1 ships**, both inherited without support: DESIGN's `~1.5 clusters` concentration and `~30% of assets route to zero` are properties of *diagnosis-based* routing, and v1's router is free tag overlap; and DESIGN budgets a per-Asset **routing call** that has no term in the formula above. Because that selection is not conditioned on the baseline outcome, the recorded baseline is a valid control there (§2.1) — the control arm costs one measurement per Case, not two.
 
 **Draft 2 then argued a smaller control sample was fine because "a coarse bound answers it". That is wrong, and in the dangerous direction.** A two-sided interval does not answer "did this break something"; it answers "is the control effect distinguishable from zero". At M=10 paired binary observations the interval is roughly ±0.3, so a true −0.10 regression returns an interval spanning zero — and `what-the-numbers-mean.md`'s shipped rule colors deltas by whether the interval crosses zero, so it renders as **not a regression**. An underpowered harm test that looks identical to a passed one is worse than no test.
 
 So:
 
-- The control quantity is a **one-sided upper confidence bound on harm**, not a two-sided interval.
+- The control quantity is a **one-sided upper confidence bound on harm**, not a two-sided interval — and **the shipped schema cannot represent one.** `Interval` is `{low, high, level, method}` with no sidedness field and no *n*. A one-sided bound written into `control_interval` is read as two-sided by everything downstream: `REJECTION_REASON_NO_EFFECT` is defined in shipped proto as "the confidence interval crosses it" and returns garbage; `what-the-numbers-mean.md`'s coloring rule cannot tell it from the two-sided interval §2.4 is arguing against; `level` means two different things in two fields of one message; and `high = +Inf` **is not serializable in JSON**, which the generated OpenAPI serves. So V-0 adds a sidedness discriminator (or a distinct `HarmBound`), the *n* behind each interval, and the underpowered marker — which draft 3 said would "travel with the number" through a field that does not exist.
+- **A bound is not a decision rule.** The instrument that answers "did this break something" is a **non-inferiority test against a stated harm margin ε** — and ε is what `--control-sample-rate`'s default derives from, so it is named rather than left implicit.
 - `delta_control` is marked **underpowered** below a stated M, and the marker travels with the number — the convention `what-the-numbers-mean.md` already uses for a holdout under 20 Cases.
 - `what-the-numbers-mean.md` gains: *an interval crossing zero on controls means untested, not safe.*
 - `--control-sample-rate`'s default comes from the harm size worth catching (§7 Q2), not from "smaller than treatment".
@@ -205,6 +233,8 @@ Proto comments are the single source for the published OpenAPI, so shipping Valu
 
 **A5 — Percentile bootstrap over paired δ.** Rejected: zero-width intervals on binary data, in the direction that reads as certainty (§2.2).
 
+**A7 — Sample-split the baseline's own trials.** DESIGN.md's example runs the baseline at 3 trials. Route on trial 1's outcome and use trials 2–3 as the control: the selecting draw and the control draw are then independent given the Case's latent difficulty, so `E[δ] = 0` by §2.1's argument **at zero incremental spend** — the baseline already paid for all three. DESIGN's 8,250 survives intact. Not universally available (a `trials = 1` baseline has nothing to split, and the gate would need to record which trial routed), so the fresh arm stays as the fallback — but this is strictly better where it applies, and draft 3 did not consider it. §7 Q11 asks whether V-1 ships it.
+
 **A6 — Leave `delta_control` absent and skip the control arm.** Considered seriously — it halves the stage's cost and `Interval`'s absence is representable by design. Rejected because the regression signal is the thing that catches an Asset that helps its slice and breaks another, and DESIGN.md promises it. Recorded as the lever to pull if §7 Q2's cost proves unacceptable.
 
 ## 4. The PR decomposition
@@ -269,7 +299,7 @@ Draft 1's V-4 was the entire stage in one branch. Split, with proto first per CL
 
 **Q2.** Defaults for `--sample-rate`, `--control-sample-rate`, and `--trials`. Q1 comes first — the treatment default follows from the method. The control default follows from the harm size worth catching (§2.4), not from the treatment default.
 
-**Q3.** What does a Value Run write into `CaseExecution` **and into `Run`'s own `attempted`/`scored`/`errored` counts**? Those are separate fields the API serializes for every stage, and for a Value run whose rows live in `measurements` they close at zero — a Run record asserting the stage did nothing. And what does `error_rate_exceeded` mean when 0 of 0 Cases scored? Resolving §2.8.
+**Q3.** *(merged with the former Q8.)* What does a Value Run write into `CaseExecution` **and into `Run`'s own `attempted`/`scored`/`errored` counts**? Those are separate fields the API serializes for every stage, and for a Value run whose rows live in `measurements` they close at zero — a Run record asserting the stage did nothing. And what does `error_rate_exceeded` mean when 0 of 0 Cases scored? Resolving §2.8.
 
 **Q4.** System block or message body for the injected Asset? Decides whether provider prompt caching hits across an Asset's whole sample, which is priced separately.
 
@@ -279,7 +309,13 @@ Draft 1's V-4 was the entire stage in one branch. Split, with proto first per CL
 
 **Q7.** `--route none` leaves no un-routed set, so the control arm silently disappears. Refuse the combination, or draw controls from the complement within the full dev split?
 
-**Q8.** Is `modelGate` exported from `core` for V-4c's use, or reimplemented in `core/value`?
+**Q8.** ~~Merged into Q3.~~ Half of it is a mechanical fact rather than a question: `modelGate` is unexported in `package core`, so `core/value` cannot reach it either way. The half that matters is inside Q3 — **`newModelGate` reads `run.GetCaseExecution().GetResolvedModels()`, so if Q3 resolves to "a Value Run writes no `CaseExecution`", the mid-run model gate §2.1 argues is essential becomes a no-op that reports success.**
+
+**Q10.** A Goal or an `Invoke` that errors mid-valuation: `REJECTION_REASON_MEASUREMENT_FAILED`, or a `Valuation` over a shrunken pair set? Note the direction — dropping a pair because the *treatment* arm errored removes exactly the Cases where the Asset was most harmful (long injected context → timeout), so Δ is biased **upward**, and the bias scales with Asset size, which is `delta_per_cost`'s numerator against its own denominator. §5's other two attrition rows are symmetric; this one is not.
+
+**Q11.** Does V-1 ship A7 (sample-splitting the baseline's trials) where the baseline has `trials > 1`? It removes the 2× on the routed slice for free and preserves DESIGN.md's arithmetic.
+
+**Q12.** Asset ordering. With Q4's prompt caching, measuring A before B changes B's cost; under a binding cap, order decides which Assets get a `Valuation` at all. What is the order, and what asserts that valuing A before B does not change B's Δ?
 
 **Q9.** How is `CostVector.context_tokens` computed? §2.7 rules out `countTokens` — it reserves ~3× for prose, so two Assets of equal real cost differ ~2.4× in the ranking denominator — but the only unbiased alternative is a real BPE tokenizer, which that same godoc rejects as "a large dependency plus a per-model vocabulary that goes stale silently". Draft 2 asserted a computation that does not exist. Either accept the bias with its direction stated, or name the dependency.
 
@@ -306,10 +342,10 @@ CLAUDE.md makes Phase 1 exit conditional on remaining objections being explicitl
 |---|---|---|
 | R1 | **The estimand varies per Asset** (§2.5). A tagged Asset's Δ is over its routed slice; an untagged one's is over all dev Cases; Select ranks them together on `delta_per_cost` as if commensurable. Named and recorded (`n_routed`, `n_dev`), not fixed — ranking heterogeneous estimands is Select's design problem | The Select stage |
 | R2 | **Multiplicity is per-comparison** (§2.6). V-0 records N so Select *can* correct; this stage does not | The Select stage, with the winner's-curse test as its evidence |
-| R3 | **Kno cannot detect user-side conditioning on the baseline** (§2.3) — tags assigned after reading a failure report, a pool assembled from failures, a second `kno value` run informed by the first. Stated on the epistemics page rather than guarded | None: this is a permanent limit, and the entry records it as "won't fix" with the rationale in the ADR |
+| R3 | **Kno cannot detect user-side conditioning on the baseline** (§2.3) — tags assigned after reading a failure report, a pool assembled from failures, a second `kno value` run informed by the first. Stated on the epistemics page rather than guarded | A permanent limit, so CLAUDE.md requires "won't fix" with the rationale **moved into an ADR** — `docs/adr/0005-value-cannot-see-user-side-conditioning.md`, written in V-0. An entry with no trigger and no ADR is a rejected finding, not accepted debt |
 | R4 | **No net-loss judgement.** `valuation.proto:96` promises one; combining treatment and control across two differently-sized populations is not computed | The Select stage, which is where a net judgement is acted on |
 | R5 | **`context_tokens` carries the tokenizer's bias** (§2.7, Q9) unless Q9 resolves to a real tokenizer. The ranking denominator is content-type-dependent | Q9's resolution, or the first report of a mis-ranked pool |
-| R6 | **A Goal that errors mid-valuation is a third attrition channel** alongside the two in §5, correlated with the treatment for the same reason (bigger Asset → more timeouts) | V-4c must decide `REJECTION_REASON_MEASUREMENT_FAILED` vs a `Valuation` over a shrunken pair set |
+| R6 | ~~moved to §7 Q10~~ — a decision V-4c must make is a task inside this plan, not a repayment trigger. CLAUDE.md: "'Someday' is not a trigger" | — |
 
 ## 11. Review record
 
@@ -317,8 +353,11 @@ CLAUDE.md makes Phase 1 exit conditional on remaining objections being explicitl
 |---|---|---|
 | 1 | **BLOCK**, 5 P0s | All verified and upheld. Three invalidated the decomposition: the proto is not done, the store cannot hold the run, and the control arm was unbudgeted. Two decided the interval method. Draft 2. |
 | 2 | **BLOCK**, 4 P0s | All verified and upheld, and one changed the measurement design. Draft 3. |
+| 3 | **BLOCK**, 3 P0s + 9 P1s | **The estimator was attacked directly and survives.** Pass 3 worked the algebra: `E[δ] = 0` under the null holds for the routed arm, and pairing removes `2Var(p)` even with two fresh draws, because the shared object is the latent difficulty rather than the realization. Fresh-vs-fresh and fresh-vs-recorded have *identical* variance — the second arm buys **bias removal only**, which is the honest framing. What did not survive was the rule's SCOPE. Draft 4. |
 
 **What pass 2 changed, and it is the important one.** Draft 2 concluded that routing may never condition on the baseline outcome, and rejected DESIGN.md's failure-clustered routing to enforce it. The bias is real, but the cause is **reusing the selecting draw as the control**, not the conditioning — so a fresh control arm on the routed slice removes it entirely. Draft 2's over-correction had silently overturned DESIGN.md's headline cost model (8,250 calls, $15–40) without the stop-and-flag CLAUDE.md requires. Draft 3 restores failure routing and keeps the arithmetic.
+
+**The pattern, now three times, and pass 3 named it inside the draft that diagnosed it.** §2.1 stated a conditional rule and §2.4 violated it in writing — on the complement of the very selection §2.1 was about, in the direction that fires the harm detector. The plan's own self-diagnosis was accurate and recurred one paragraph later.
 
 **The failure pattern, now twice.** Both passes found the readings of the tree accurate and the *inferences* one step short: the store diagnosis stopped at the write path and missed four readers, the control-arm fix stopped at the quote and missed `trials`, the routing finding stopped at the code path and missed the user. Reading correctly is necessary and has not been sufficient.
 
