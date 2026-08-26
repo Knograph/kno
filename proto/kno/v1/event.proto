@@ -3,6 +3,7 @@ syntax = "proto3";
 package kno.v1;
 
 import "kno/v1/common.proto";
+import "kno/v1/valuation.proto";
 import "kno/v1/portfolio.proto";
 import "kno/v1/run.proto";
 
@@ -76,6 +77,16 @@ message Event {
 
     // Money was spent on a Case that produced no outcome.
     OrphanSpend orphan_spend = 21;
+
+    // An Asset was routed, measured, or set aside. Value's unit of work is the
+    // Asset, and every payload above is Case- or Run-scoped — so before these
+    // the stage's user-visible state had nowhere to go, which CLAUDE.md
+    // forbids ("new user-visible state = new event type, never a side
+    // channel") and which left the TUI with nothing to render.
+    AssetRouted asset_routed = 22;
+
+    // An Asset's measurement finished, with its delta and interval.
+    AssetValued asset_valued = 23;
   }
 }
 
@@ -504,4 +515,66 @@ enum RetryReason {
 
   // The request timed out before a response began.
   RETRY_REASON_TIMEOUT = 4;
+}
+
+// AssetRouted reports which Cases an Asset will be measured against, and how
+// many it will actually cost.
+//
+// Emitted BEFORE any measurement, so a watcher sees the shape of the work
+// before the money is spent — and so an Asset that routes to nothing is
+// visible as a decision rather than as silence.
+message AssetRouted {
+  // Which Asset.
+  string asset_id = 1;
+
+  // Cases this Asset could plausibly affect.
+  int32 n_routed = 2;
+
+  // Cases actually drawn from those, after --sample-rate.
+  int32 n_sampled = 3;
+
+  // Control Cases drawn from the reserved partition.
+  int32 n_control = 4;
+
+  // Set when the Asset routed to nothing and will not be measured. The
+  // interesting case is IRRELEVANT, which costs nothing and is a real answer.
+  RejectionReason not_measured = 5;
+
+  // Whether the control arm is measured fresh rather than read from the
+  // baseline.
+  //
+  // True when routing conditioned on the baseline outcome, because reusing the
+  // draw that SELECTED a Case as that Case's control manufactures the effect
+  // being measured. Recorded per Asset because it changes both the cost and
+  // what the delta is an estimate of.
+  bool fresh_control_arm = 6;
+}
+
+// AssetValued reports a finished Valuation.
+//
+// The Valuation itself is the durable record; this is the event a dashboard
+// renders as it happens. It carries the identity and the headline numbers, not
+// a copy of the whole message — an event stream that duplicates the store is
+// two things to keep consistent.
+message AssetValued {
+  // Which Asset.
+  string asset_id = 1;
+
+  // The measured effect and its interval. Both, always: a delta without its
+  // interval is the thing prime directive 5 exists to prevent, and an event
+  // is exactly where that discipline slips.
+  double delta_goal = 2;
+
+  // The interval on delta_goal. Never omitted: a delta without its interval is
+  // the thing prime directive 5 exists to prevent.
+  Interval delta_interval = 3;
+
+  // Improvement per unit cost — the ranking metric.
+  double delta_per_cost = 4;
+
+  // What this measurement cost, in MICRO-USD.
+  int64 measurement_cost_usd_micros = 5;
+
+  // Set when the valuation could not be completed.
+  RejectionReason not_measured = 6;
 }

@@ -288,7 +288,8 @@ type Run struct {
 	// Cases held back. A small holdout produces a wide interval, so this number
 	// is part of reading the final result honestly.
 	HoldoutCaseCount int32 `protobuf:"varint,15,opt,name=holdout_case_count,json=holdoutCaseCount,proto3" json:"holdout_case_count,omitempty"`
-	// Cases the Run tried to execute.
+	// Cases the Run tried to execute. For a stage that measures a Case more than
+	// once, this counts MEASUREMENTS — see CaseExecution.
 	AttemptedCaseCount int32 `protobuf:"varint,16,opt,name=attempted_case_count,json=attemptedCaseCount,proto3" json:"attempted_case_count,omitempty"`
 	// Cases that produced a Score. This is the denominator.
 	ScoredCaseCount int32 `protobuf:"varint,17,opt,name=scored_case_count,json=scoredCaseCount,proto3" json:"scored_case_count,omitempty"`
@@ -350,7 +351,18 @@ type Run struct {
 	// bit means "this Run executed Cases" (ADR-0004), and concurrency is decided
 	// before any Case runs — before the Run record exists. Putting it there
 	// would make a scheduling fact share a presence bit with an execution fact.
-	Concurrency   *ConcurrencyDecision `protobuf:"bytes,25,opt,name=concurrency,proto3,oneof" json:"concurrency,omitempty"`
+	Concurrency *ConcurrencyDecision `protobuf:"bytes,25,opt,name=concurrency,proto3,oneof" json:"concurrency,omitempty"`
+	// The seed behind every random choice this Run made: which Cases were
+	// reserved as controls, and which were sampled.
+	//
+	// NOT Generation.seed, which is the provider's sampler and a different
+	// thing. Recorded because a sample nobody can reproduce is a number nobody
+	// can audit — and because the control partition is drawn BEFORE routing, so
+	// whether a control set was outcome-independent is a claim only the seed can
+	// substantiate after the fact.
+	//
+	// ABSENT for a Run that made no random choice.
+	SamplingSeed  *int64 `protobuf:"varint,26,opt,name=sampling_seed,json=samplingSeed,proto3,oneof" json:"sampling_seed,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -560,6 +572,13 @@ func (x *Run) GetConcurrency() *ConcurrencyDecision {
 	return nil
 }
 
+func (x *Run) GetSamplingSeed() int64 {
+	if x != nil && x.SamplingSeed != nil {
+		return *x.SamplingSeed
+	}
+	return 0
+}
+
 // ConcurrencyDecision is the width a Run executed at, and why.
 //
 // Written for every Run whose stage executes Cases, reduced or not. Presence
@@ -569,8 +588,14 @@ func (x *Run) GetConcurrency() *ConcurrencyDecision {
 // one that ran at 8 byte-identical, so the record could not answer whether two
 // Runs are comparable.
 //
-// Absent for a stage that invokes no agent: Value works over Assets and has no
-// concurrency to report.
+// Absent for a stage that invokes no agent — Select attempts none.
+//
+// Value DOES have a concurrency: it injects an Asset and re-runs Cases, which
+// is agent work with a width. An earlier version of this comment said Value
+// "works over Assets and has no concurrency to report", contradicting
+// docs/adr/0004, which records that "Value also executes Cases". Proto
+// comments are the single source for the published OpenAPI, so the two could
+// not both stand.
 type ConcurrencyDecision struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// What the user asked for.
@@ -680,10 +705,18 @@ func (x *ConcurrencyDecision) GetPerCaseEstimateUsdMicros() int64 {
 // CaseExecution carries the facts that only mean something for a Run that
 // actually executed Cases.
 //
-// It exists for message presence: a stage that executes no Cases — Value works
-// over Assets, Select attempts none — would otherwise write hard zeros
-// indistinguishable from genuinely attempting nothing and scoring nothing.
-// That is docs/debt.md#26.
+// It exists for message presence: a stage that executes no Cases — Select
+// attempts none — would otherwise write hard zeros indistinguishable from
+// genuinely attempting nothing and scoring nothing. That is docs/debt.md#26.
+//
+// Value DOES execute Cases and writes this message, per docs/adr/0004. Its
+// counts are of MEASUREMENTS, not of distinct Cases: Value measures one Case
+// once per Asset, so a run of 200 Assets over 50 Cases attempts 10,000
+// measurements over 50 Cases. Counting distinct Cases instead would put a
+// denominator of 50 beside the spend for 10,000 calls — two numbers in one
+// message describing different populations, which is exactly the defect
+// docs/what-the-numbers-mean.md names. Per-Asset denominators live on
+// Valuation.n_routed, where they belong.
 //
 // Its numbers are aggregated from persisted outcome rows at close, not from
 // in-memory counters. Deriving a run-level figure from what is already durable
@@ -839,7 +872,7 @@ var File_kno_v1_run_proto protoreflect.FileDescriptor
 
 const file_kno_v1_run_proto_rawDesc = "" +
 	"\n" +
-	"\x10kno/v1/run.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/portfolio.proto\"\x92\t\n" +
+	"\x10kno/v1/run.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/portfolio.proto\"\xce\t\n" +
 	"\x03Run\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12#\n" +
 	"\x05stage\x18\x02 \x01(\x0e2\r.kno.v1.StageR\x05stage\x12\x1d\n" +
@@ -871,11 +904,13 @@ const file_kno_v1_run_proto_rawDesc = "" +
 	"generation\x18\x17 \x01(\v2\x12.kno.v1.GenerationH\x02R\n" +
 	"generation\x88\x01\x01\x122\n" +
 	"\x15pricing_table_version\x18\x18 \x01(\tR\x13pricingTableVersion\x12B\n" +
-	"\vconcurrency\x18\x19 \x01(\v2\x1b.kno.v1.ConcurrencyDecisionH\x03R\vconcurrency\x88\x01\x01B\x0e\n" +
+	"\vconcurrency\x18\x19 \x01(\v2\x1b.kno.v1.ConcurrencyDecisionH\x03R\vconcurrency\x88\x01\x01\x12(\n" +
+	"\rsampling_seed\x18\x1a \x01(\x03H\x04R\fsamplingSeed\x88\x01\x01B\x0e\n" +
 	"\f_finished_atB\x11\n" +
 	"\x0f_case_executionB\r\n" +
 	"\v_generationB\x0e\n" +
-	"\f_concurrency\"\x87\x02\n" +
+	"\f_concurrencyB\x10\n" +
+	"\x0e_sampling_seed\"\x87\x02\n" +
 	"\x13ConcurrencyDecision\x12!\n" +
 	"\trequested\x18\x01 \x01(\x05H\x00R\trequested\x88\x01\x01\x12\x1c\n" +
 	"\teffective\x18\x02 \x01(\x05R\teffective\x121\n" +

@@ -12,18 +12,59 @@ import "kno/v1/common.proto";
 // That distinction is load-bearing. No delta is reported without its interval;
 // an absent one must be impossible to mistake for a tight one.
 message Interval {
-  // Lower bound.
+  // Lower bound. Meaningless when sidedness is UPPER — read `sidedness` first.
   double low = 1;
 
-  // Upper bound.
+  // Upper bound. Meaningless when sidedness is LOWER.
   double high = 2;
 
   // Confidence level, e.g. 0.95.
+  //
+  // Its meaning depends on `sidedness`: for a TWO_SIDED interval it is the
+  // probability the interval covers the true value; for a one-sided bound it
+  // is the probability the true value lies on the bounded side. Reading a
+  // one-sided 0.95 as a two-sided 0.95 overstates confidence.
   double level = 3;
 
-  // How the interval was computed: "bootstrap", "t", "wilson". Recorded
-  // because the method is part of the claim.
+  // How the interval was computed: "bootstrap", "t", "wilson", "tango",
+  // "agresti-min", "mover-wilson", "sign". Recorded because the method is
+  // part of the claim, and because a delta whose method changed between two
+  // runs did not become more precise — it was measured differently.
   string method = 4;
+
+  // Which sides are bounded.
+  //
+  // A one-sided bound written into a two-sided field is read as a two-sided
+  // interval by everything downstream: RejectionReason.NO_EFFECT is defined
+  // as "the interval crosses zero", the report colors deltas by whether they
+  // cross zero, and both would silently accept a bound that is unbounded on
+  // the side they are testing.
+  Sidedness sidedness = 5;
+
+  // How many paired observations the interval was computed from.
+  //
+  // Present because "the interval is wide" and "the interval is wide AND the
+  // sample was tiny" call for different responses, and because a consumer
+  // correcting for multiple comparisons cannot do so from `level` alone.
+  int32 n = 6;
+}
+
+// Sidedness records which ends of an Interval are bounded.
+enum Sidedness {
+  // Unset. An emitter that cannot say should not be emitting an Interval.
+  SIDEDNESS_UNSPECIFIED = 0;
+
+  // Both ends bounded. The default for a delta.
+  SIDEDNESS_TWO_SIDED = 1;
+
+  // Only `high` is meaningful: the true value is at most `high`, with
+  // probability `level`. This is the shape of a harm bound — "this Asset costs
+  // you no more than X" — which is a different question from "is the effect
+  // distinguishable from zero" and needs a different instrument.
+  SIDEDNESS_UPPER = 2;
+
+  // Only `low` is meaningful.
+  SIDEDNESS_LOWER = 3;
 }
 
 // RejectionReason is why an Asset did not make the Portfolio. Every excluded
@@ -130,4 +171,52 @@ message Valuation {
   // Set when the valuation could not be completed. A failed measurement is
   // recorded rather than dropped; dropping failures biases the whole run.
   string error = 13;
+
+  // Why no measurement was made, when none was.
+  //
+  // An Asset that routed to zero Cases costs nothing and is answered cheaply —
+  // "this is irrelevant to your evals" is a valuable early result, not a
+  // failure. Without this field the Value stage had nowhere to record it, and
+  // the only carrier was Select's Rejection, which would hand Select's
+  // rejection log to the wrong stage.
+  //
+  // Absent means a measurement WAS made; read it before reading delta_goal.
+  RejectionReason not_measured = 15;
+
+  // How many Cases this Asset was routed to, and how many were in the dev
+  // split it was routed from.
+  //
+  // Both, because delta_goal is the mean effect over the routed Cases AND
+  // NOTHING ELSE. A tagged Asset's delta is over its slice; an untagged one's
+  // is over the whole split; the two are different quantities and Select ranks
+  // them together on delta_per_cost anyway. These are what let a reader scale
+  // one to the other, and what make the incomparability visible instead of
+  // implied.
+  int32 n_routed = 16;
+
+  // Cases in the dev split this Asset was routed from. See n_routed.
+  int32 n_dev = 17;
+
+  // Set when the control arm was too small to detect the harm it is testing
+  // for.
+  //
+  // A two-sided interval that crosses zero renders as "no regression" under
+  // the report's coloring rule — identically to a genuine pass. An
+  // underpowered harm test that looks like a passed one is worse than an
+  // absent one, so it is marked and the marker travels with the number.
+  bool control_underpowered = 18;
+
+  // How many Valuations this run produced, i.e. how many comparisons the
+  // intervals in it are drawn from.
+  //
+  // delta_interval controls a PER-COMPARISON error rate. With 200 Assets and a
+  // 95% level, roughly ten null Assets have intervals excluding zero by
+  // construction — and they concentrate where delta_per_cost ranks highest,
+  // because small n and small cost are the same Assets. A consumer cannot
+  // correct for that from `level` alone, so the count travels with the claim.
+  //
+  // A floor, not the number: where the recorded baseline is reused as the
+  // control, every Asset is paired against the SAME draw, so their errors are
+  // positively correlated and independent-comparison arithmetic understates.
+  int32 n_comparisons = 19;
 }

@@ -203,6 +203,8 @@ type Event struct {
 	//	*Event_SettlementOvershoot
 	//	*Event_ConcurrencyReduced
 	//	*Event_OrphanSpend
+	//	*Event_AssetRouted
+	//	*Event_AssetValued
 	Payload       isEvent_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -374,6 +376,24 @@ func (x *Event) GetOrphanSpend() *OrphanSpend {
 	return nil
 }
 
+func (x *Event) GetAssetRouted() *AssetRouted {
+	if x != nil {
+		if x, ok := x.Payload.(*Event_AssetRouted); ok {
+			return x.AssetRouted
+		}
+	}
+	return nil
+}
+
+func (x *Event) GetAssetValued() *AssetValued {
+	if x != nil {
+		if x, ok := x.Payload.(*Event_AssetValued); ok {
+			return x.AssetValued
+		}
+	}
+	return nil
+}
+
 type isEvent_Payload interface {
 	isEvent_Payload()
 }
@@ -438,6 +458,20 @@ type Event_OrphanSpend struct {
 	OrphanSpend *OrphanSpend `protobuf:"bytes,21,opt,name=orphan_spend,json=orphanSpend,proto3,oneof"`
 }
 
+type Event_AssetRouted struct {
+	// An Asset was routed, measured, or set aside. Value's unit of work is the
+	// Asset, and every payload above is Case- or Run-scoped — so before these
+	// the stage's user-visible state had nowhere to go, which CLAUDE.md
+	// forbids ("new user-visible state = new event type, never a side
+	// channel") and which left the TUI with nothing to render.
+	AssetRouted *AssetRouted `protobuf:"bytes,22,opt,name=asset_routed,json=assetRouted,proto3,oneof"`
+}
+
+type Event_AssetValued struct {
+	// An Asset's measurement finished, with its delta and interval.
+	AssetValued *AssetValued `protobuf:"bytes,23,opt,name=asset_valued,json=assetValued,proto3,oneof"`
+}
+
 func (*Event_RunStarted) isEvent_Payload() {}
 
 func (*Event_CaseScored) isEvent_Payload() {}
@@ -461,6 +495,10 @@ func (*Event_SettlementOvershoot) isEvent_Payload() {}
 func (*Event_ConcurrencyReduced) isEvent_Payload() {}
 
 func (*Event_OrphanSpend) isEvent_Payload() {}
+
+func (*Event_AssetRouted) isEvent_Payload() {}
+
+func (*Event_AssetValued) isEvent_Payload() {}
 
 // EventError is a failure as it appears ON THE EVENT STREAM.
 //
@@ -1641,11 +1679,213 @@ func (x *ConcurrencyReduced) GetDecision() *ConcurrencyDecision {
 	return nil
 }
 
+// AssetRouted reports which Cases an Asset will be measured against, and how
+// many it will actually cost.
+//
+// Emitted BEFORE any measurement, so a watcher sees the shape of the work
+// before the money is spent — and so an Asset that routes to nothing is
+// visible as a decision rather than as silence.
+type AssetRouted struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Which Asset.
+	AssetId string `protobuf:"bytes,1,opt,name=asset_id,json=assetId,proto3" json:"asset_id,omitempty"`
+	// Cases this Asset could plausibly affect.
+	NRouted int32 `protobuf:"varint,2,opt,name=n_routed,json=nRouted,proto3" json:"n_routed,omitempty"`
+	// Cases actually drawn from those, after --sample-rate.
+	NSampled int32 `protobuf:"varint,3,opt,name=n_sampled,json=nSampled,proto3" json:"n_sampled,omitempty"`
+	// Control Cases drawn from the reserved partition.
+	NControl int32 `protobuf:"varint,4,opt,name=n_control,json=nControl,proto3" json:"n_control,omitempty"`
+	// Set when the Asset routed to nothing and will not be measured. The
+	// interesting case is IRRELEVANT, which costs nothing and is a real answer.
+	NotMeasured RejectionReason `protobuf:"varint,5,opt,name=not_measured,json=notMeasured,proto3,enum=kno.v1.RejectionReason" json:"not_measured,omitempty"`
+	// Whether the control arm is measured fresh rather than read from the
+	// baseline.
+	//
+	// True when routing conditioned on the baseline outcome, because reusing the
+	// draw that SELECTED a Case as that Case's control manufactures the effect
+	// being measured. Recorded per Asset because it changes both the cost and
+	// what the delta is an estimate of.
+	FreshControlArm bool `protobuf:"varint,6,opt,name=fresh_control_arm,json=freshControlArm,proto3" json:"fresh_control_arm,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *AssetRouted) Reset() {
+	*x = AssetRouted{}
+	mi := &file_kno_v1_event_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AssetRouted) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AssetRouted) ProtoMessage() {}
+
+func (x *AssetRouted) ProtoReflect() protoreflect.Message {
+	mi := &file_kno_v1_event_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AssetRouted.ProtoReflect.Descriptor instead.
+func (*AssetRouted) Descriptor() ([]byte, []int) {
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *AssetRouted) GetAssetId() string {
+	if x != nil {
+		return x.AssetId
+	}
+	return ""
+}
+
+func (x *AssetRouted) GetNRouted() int32 {
+	if x != nil {
+		return x.NRouted
+	}
+	return 0
+}
+
+func (x *AssetRouted) GetNSampled() int32 {
+	if x != nil {
+		return x.NSampled
+	}
+	return 0
+}
+
+func (x *AssetRouted) GetNControl() int32 {
+	if x != nil {
+		return x.NControl
+	}
+	return 0
+}
+
+func (x *AssetRouted) GetNotMeasured() RejectionReason {
+	if x != nil {
+		return x.NotMeasured
+	}
+	return RejectionReason_REJECTION_REASON_UNSPECIFIED
+}
+
+func (x *AssetRouted) GetFreshControlArm() bool {
+	if x != nil {
+		return x.FreshControlArm
+	}
+	return false
+}
+
+// AssetValued reports a finished Valuation.
+//
+// The Valuation itself is the durable record; this is the event a dashboard
+// renders as it happens. It carries the identity and the headline numbers, not
+// a copy of the whole message — an event stream that duplicates the store is
+// two things to keep consistent.
+type AssetValued struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Which Asset.
+	AssetId string `protobuf:"bytes,1,opt,name=asset_id,json=assetId,proto3" json:"asset_id,omitempty"`
+	// The measured effect and its interval. Both, always: a delta without its
+	// interval is the thing prime directive 5 exists to prevent, and an event
+	// is exactly where that discipline slips.
+	DeltaGoal float64 `protobuf:"fixed64,2,opt,name=delta_goal,json=deltaGoal,proto3" json:"delta_goal,omitempty"`
+	// The interval on delta_goal. Never omitted: a delta without its interval is
+	// the thing prime directive 5 exists to prevent.
+	DeltaInterval *Interval `protobuf:"bytes,3,opt,name=delta_interval,json=deltaInterval,proto3" json:"delta_interval,omitempty"`
+	// Improvement per unit cost — the ranking metric.
+	DeltaPerCost float64 `protobuf:"fixed64,4,opt,name=delta_per_cost,json=deltaPerCost,proto3" json:"delta_per_cost,omitempty"`
+	// What this measurement cost, in MICRO-USD.
+	MeasurementCostUsdMicros int64 `protobuf:"varint,5,opt,name=measurement_cost_usd_micros,json=measurementCostUsdMicros,proto3" json:"measurement_cost_usd_micros,omitempty"`
+	// Set when the valuation could not be completed.
+	NotMeasured   RejectionReason `protobuf:"varint,6,opt,name=not_measured,json=notMeasured,proto3,enum=kno.v1.RejectionReason" json:"not_measured,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AssetValued) Reset() {
+	*x = AssetValued{}
+	mi := &file_kno_v1_event_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AssetValued) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AssetValued) ProtoMessage() {}
+
+func (x *AssetValued) ProtoReflect() protoreflect.Message {
+	mi := &file_kno_v1_event_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AssetValued.ProtoReflect.Descriptor instead.
+func (*AssetValued) Descriptor() ([]byte, []int) {
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *AssetValued) GetAssetId() string {
+	if x != nil {
+		return x.AssetId
+	}
+	return ""
+}
+
+func (x *AssetValued) GetDeltaGoal() float64 {
+	if x != nil {
+		return x.DeltaGoal
+	}
+	return 0
+}
+
+func (x *AssetValued) GetDeltaInterval() *Interval {
+	if x != nil {
+		return x.DeltaInterval
+	}
+	return nil
+}
+
+func (x *AssetValued) GetDeltaPerCost() float64 {
+	if x != nil {
+		return x.DeltaPerCost
+	}
+	return 0
+}
+
+func (x *AssetValued) GetMeasurementCostUsdMicros() int64 {
+	if x != nil {
+		return x.MeasurementCostUsdMicros
+	}
+	return 0
+}
+
+func (x *AssetValued) GetNotMeasured() RejectionReason {
+	if x != nil {
+		return x.NotMeasured
+	}
+	return RejectionReason_REJECTION_REASON_UNSPECIFIED
+}
+
 var File_kno_v1_event_proto protoreflect.FileDescriptor
 
 const file_kno_v1_event_proto_rawDesc = "" +
 	"\n" +
-	"\x12kno/v1/event.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/portfolio.proto\x1a\x10kno/v1/run.proto\"\xe5\x06\n" +
+	"\x12kno/v1/event.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/valuation.proto\x1a\x16kno/v1/portfolio.proto\x1a\x10kno/v1/run.proto\"\xd9\a\n" +
 	"\x05Event\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x1d\n" +
 	"\n" +
@@ -1666,7 +1906,9 @@ const file_kno_v1_event_proto_rawDesc = "" +
 	"\x12rate_limit_waiting\x18\x12 \x01(\v2\x18.kno.v1.RateLimitWaitingH\x00R\x10rateLimitWaiting\x12P\n" +
 	"\x14settlement_overshoot\x18\x13 \x01(\v2\x1b.kno.v1.SettlementOvershootH\x00R\x13settlementOvershoot\x12M\n" +
 	"\x13concurrency_reduced\x18\x14 \x01(\v2\x1a.kno.v1.ConcurrencyReducedH\x00R\x12concurrencyReduced\x128\n" +
-	"\forphan_spend\x18\x15 \x01(\v2\x13.kno.v1.OrphanSpendH\x00R\vorphanSpendB\t\n" +
+	"\forphan_spend\x18\x15 \x01(\v2\x13.kno.v1.OrphanSpendH\x00R\vorphanSpend\x128\n" +
+	"\fasset_routed\x18\x16 \x01(\v2\x13.kno.v1.AssetRoutedH\x00R\vassetRouted\x128\n" +
+	"\fasset_valued\x18\x17 \x01(\v2\x13.kno.v1.AssetValuedH\x00R\vassetValuedB\t\n" +
 	"\apayload\"W\n" +
 	"\n" +
 	"EventError\x12\x12\n" +
@@ -1754,7 +1996,22 @@ const file_kno_v1_event_proto_rawDesc = "" +
 	"\x05calls\x18\x03 \x01(\x03R\x05calls\x12,\n" +
 	"\x06reason\x18\x04 \x01(\x0e2\x14.kno.v1.OrphanReasonR\x06reason\"M\n" +
 	"\x12ConcurrencyReduced\x127\n" +
-	"\bdecision\x18\x01 \x01(\v2\x1b.kno.v1.ConcurrencyDecisionR\bdecision*\x8a\x01\n" +
+	"\bdecision\x18\x01 \x01(\v2\x1b.kno.v1.ConcurrencyDecisionR\bdecision\"\xe5\x01\n" +
+	"\vAssetRouted\x12\x19\n" +
+	"\basset_id\x18\x01 \x01(\tR\aassetId\x12\x19\n" +
+	"\bn_routed\x18\x02 \x01(\x05R\anRouted\x12\x1b\n" +
+	"\tn_sampled\x18\x03 \x01(\x05R\bnSampled\x12\x1b\n" +
+	"\tn_control\x18\x04 \x01(\x05R\bnControl\x12:\n" +
+	"\fnot_measured\x18\x05 \x01(\x0e2\x17.kno.v1.RejectionReasonR\vnotMeasured\x12*\n" +
+	"\x11fresh_control_arm\x18\x06 \x01(\bR\x0ffreshControlArm\"\xa1\x02\n" +
+	"\vAssetValued\x12\x19\n" +
+	"\basset_id\x18\x01 \x01(\tR\aassetId\x12\x1d\n" +
+	"\n" +
+	"delta_goal\x18\x02 \x01(\x01R\tdeltaGoal\x127\n" +
+	"\x0edelta_interval\x18\x03 \x01(\v2\x10.kno.v1.IntervalR\rdeltaInterval\x12$\n" +
+	"\x0edelta_per_cost\x18\x04 \x01(\x01R\fdeltaPerCost\x12=\n" +
+	"\x1bmeasurement_cost_usd_micros\x18\x05 \x01(\x03R\x18measurementCostUsdMicros\x12:\n" +
+	"\fnot_measured\x18\x06 \x01(\x0e2\x17.kno.v1.RejectionReasonR\vnotMeasured*\x8a\x01\n" +
 	"\fOrphanReason\x12\x1d\n" +
 	"\x19ORPHAN_REASON_UNSPECIFIED\x10\x00\x12!\n" +
 	"\x1dORPHAN_REASON_BUDGET_EXCEEDED\x10\x01\x12\x1b\n" +
@@ -1783,7 +2040,7 @@ func file_kno_v1_event_proto_rawDescGZIP() []byte {
 }
 
 var file_kno_v1_event_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_kno_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_kno_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
 var file_kno_v1_event_proto_goTypes = []any{
 	(OrphanReason)(0),           // 0: kno.v1.OrphanReason
 	(RetryReason)(0),            // 1: kno.v1.RetryReason
@@ -1801,12 +2058,16 @@ var file_kno_v1_event_proto_goTypes = []any{
 	(*SettlementOvershoot)(nil), // 13: kno.v1.SettlementOvershoot
 	(*OrphanSpend)(nil),         // 14: kno.v1.OrphanSpend
 	(*ConcurrencyReduced)(nil),  // 15: kno.v1.ConcurrencyReduced
-	(Stage)(0),                  // 16: kno.v1.Stage
-	(*AgentRef)(nil),            // 17: kno.v1.AgentRef
-	(Direction)(0),              // 18: kno.v1.Direction
-	(*Budget)(nil),              // 19: kno.v1.Budget
-	(RunStatus)(0),              // 20: kno.v1.RunStatus
-	(*ConcurrencyDecision)(nil), // 21: kno.v1.ConcurrencyDecision
+	(*AssetRouted)(nil),         // 16: kno.v1.AssetRouted
+	(*AssetValued)(nil),         // 17: kno.v1.AssetValued
+	(Stage)(0),                  // 18: kno.v1.Stage
+	(*AgentRef)(nil),            // 19: kno.v1.AgentRef
+	(Direction)(0),              // 20: kno.v1.Direction
+	(*Budget)(nil),              // 21: kno.v1.Budget
+	(RunStatus)(0),              // 22: kno.v1.RunStatus
+	(*ConcurrencyDecision)(nil), // 23: kno.v1.ConcurrencyDecision
+	(RejectionReason)(0),        // 24: kno.v1.RejectionReason
+	(*Interval)(nil),            // 25: kno.v1.Interval
 }
 var file_kno_v1_event_proto_depIdxs = []int32{
 	4,  // 0: kno.v1.Event.run_started:type_name -> kno.v1.RunStarted
@@ -1821,22 +2082,27 @@ var file_kno_v1_event_proto_depIdxs = []int32{
 	13, // 9: kno.v1.Event.settlement_overshoot:type_name -> kno.v1.SettlementOvershoot
 	15, // 10: kno.v1.Event.concurrency_reduced:type_name -> kno.v1.ConcurrencyReduced
 	14, // 11: kno.v1.Event.orphan_spend:type_name -> kno.v1.OrphanSpend
-	16, // 12: kno.v1.RunStarted.stage:type_name -> kno.v1.Stage
-	17, // 13: kno.v1.RunStarted.agent:type_name -> kno.v1.AgentRef
-	18, // 14: kno.v1.RunStarted.goal_direction:type_name -> kno.v1.Direction
-	19, // 15: kno.v1.RunStarted.budget:type_name -> kno.v1.Budget
-	3,  // 16: kno.v1.CaseErrored.error:type_name -> kno.v1.EventError
-	16, // 17: kno.v1.StageProgress.stage:type_name -> kno.v1.Stage
-	20, // 18: kno.v1.RunFinished.status:type_name -> kno.v1.RunStatus
-	3,  // 19: kno.v1.RunFinished.error:type_name -> kno.v1.EventError
-	1,  // 20: kno.v1.RetryAttempted.reason:type_name -> kno.v1.RetryReason
-	0,  // 21: kno.v1.OrphanSpend.reason:type_name -> kno.v1.OrphanReason
-	21, // 22: kno.v1.ConcurrencyReduced.decision:type_name -> kno.v1.ConcurrencyDecision
-	23, // [23:23] is the sub-list for method output_type
-	23, // [23:23] is the sub-list for method input_type
-	23, // [23:23] is the sub-list for extension type_name
-	23, // [23:23] is the sub-list for extension extendee
-	0,  // [0:23] is the sub-list for field type_name
+	16, // 12: kno.v1.Event.asset_routed:type_name -> kno.v1.AssetRouted
+	17, // 13: kno.v1.Event.asset_valued:type_name -> kno.v1.AssetValued
+	18, // 14: kno.v1.RunStarted.stage:type_name -> kno.v1.Stage
+	19, // 15: kno.v1.RunStarted.agent:type_name -> kno.v1.AgentRef
+	20, // 16: kno.v1.RunStarted.goal_direction:type_name -> kno.v1.Direction
+	21, // 17: kno.v1.RunStarted.budget:type_name -> kno.v1.Budget
+	3,  // 18: kno.v1.CaseErrored.error:type_name -> kno.v1.EventError
+	18, // 19: kno.v1.StageProgress.stage:type_name -> kno.v1.Stage
+	22, // 20: kno.v1.RunFinished.status:type_name -> kno.v1.RunStatus
+	3,  // 21: kno.v1.RunFinished.error:type_name -> kno.v1.EventError
+	1,  // 22: kno.v1.RetryAttempted.reason:type_name -> kno.v1.RetryReason
+	0,  // 23: kno.v1.OrphanSpend.reason:type_name -> kno.v1.OrphanReason
+	23, // 24: kno.v1.ConcurrencyReduced.decision:type_name -> kno.v1.ConcurrencyDecision
+	24, // 25: kno.v1.AssetRouted.not_measured:type_name -> kno.v1.RejectionReason
+	25, // 26: kno.v1.AssetValued.delta_interval:type_name -> kno.v1.Interval
+	24, // 27: kno.v1.AssetValued.not_measured:type_name -> kno.v1.RejectionReason
+	28, // [28:28] is the sub-list for method output_type
+	28, // [28:28] is the sub-list for method input_type
+	28, // [28:28] is the sub-list for extension type_name
+	28, // [28:28] is the sub-list for extension extendee
+	0,  // [0:28] is the sub-list for field type_name
 }
 
 func init() { file_kno_v1_event_proto_init() }
@@ -1845,6 +2111,7 @@ func file_kno_v1_event_proto_init() {
 		return
 	}
 	file_kno_v1_common_proto_init()
+	file_kno_v1_valuation_proto_init()
 	file_kno_v1_portfolio_proto_init()
 	file_kno_v1_run_proto_init()
 	file_kno_v1_event_proto_msgTypes[0].OneofWrappers = []any{
@@ -1860,6 +2127,8 @@ func file_kno_v1_event_proto_init() {
 		(*Event_SettlementOvershoot)(nil),
 		(*Event_ConcurrencyReduced)(nil),
 		(*Event_OrphanSpend)(nil),
+		(*Event_AssetRouted)(nil),
+		(*Event_AssetValued)(nil),
 	}
 	file_kno_v1_event_proto_msgTypes[6].OneofWrappers = []any{}
 	file_kno_v1_event_proto_msgTypes[7].OneofWrappers = []any{}
@@ -1869,7 +2138,7 @@ func file_kno_v1_event_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kno_v1_event_proto_rawDesc), len(file_kno_v1_event_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   14,
+			NumMessages:   16,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

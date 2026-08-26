@@ -21,6 +21,66 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// Sidedness records which ends of an Interval are bounded.
+type Sidedness int32
+
+const (
+	// Unset. An emitter that cannot say should not be emitting an Interval.
+	Sidedness_SIDEDNESS_UNSPECIFIED Sidedness = 0
+	// Both ends bounded. The default for a delta.
+	Sidedness_SIDEDNESS_TWO_SIDED Sidedness = 1
+	// Only `high` is meaningful: the true value is at most `high`, with
+	// probability `level`. This is the shape of a harm bound — "this Asset costs
+	// you no more than X" — which is a different question from "is the effect
+	// distinguishable from zero" and needs a different instrument.
+	Sidedness_SIDEDNESS_UPPER Sidedness = 2
+	// Only `low` is meaningful.
+	Sidedness_SIDEDNESS_LOWER Sidedness = 3
+)
+
+// Enum value maps for Sidedness.
+var (
+	Sidedness_name = map[int32]string{
+		0: "SIDEDNESS_UNSPECIFIED",
+		1: "SIDEDNESS_TWO_SIDED",
+		2: "SIDEDNESS_UPPER",
+		3: "SIDEDNESS_LOWER",
+	}
+	Sidedness_value = map[string]int32{
+		"SIDEDNESS_UNSPECIFIED": 0,
+		"SIDEDNESS_TWO_SIDED":   1,
+		"SIDEDNESS_UPPER":       2,
+		"SIDEDNESS_LOWER":       3,
+	}
+)
+
+func (x Sidedness) Enum() *Sidedness {
+	p := new(Sidedness)
+	*p = x
+	return p
+}
+
+func (x Sidedness) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (Sidedness) Descriptor() protoreflect.EnumDescriptor {
+	return file_kno_v1_valuation_proto_enumTypes[0].Descriptor()
+}
+
+func (Sidedness) Type() protoreflect.EnumType {
+	return &file_kno_v1_valuation_proto_enumTypes[0]
+}
+
+func (x Sidedness) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use Sidedness.Descriptor instead.
+func (Sidedness) EnumDescriptor() ([]byte, []int) {
+	return file_kno_v1_valuation_proto_rawDescGZIP(), []int{0}
+}
+
 // RejectionReason is why an Asset did not make the Portfolio. Every excluded
 // Asset gets one — a rejection log with reasons is what turns "we cut your
 // data" into "here is what your data did and did not do".
@@ -99,11 +159,11 @@ func (x RejectionReason) String() string {
 }
 
 func (RejectionReason) Descriptor() protoreflect.EnumDescriptor {
-	return file_kno_v1_valuation_proto_enumTypes[0].Descriptor()
+	return file_kno_v1_valuation_proto_enumTypes[1].Descriptor()
 }
 
 func (RejectionReason) Type() protoreflect.EnumType {
-	return &file_kno_v1_valuation_proto_enumTypes[0]
+	return &file_kno_v1_valuation_proto_enumTypes[1]
 }
 
 func (x RejectionReason) Number() protoreflect.EnumNumber {
@@ -112,7 +172,7 @@ func (x RejectionReason) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use RejectionReason.Descriptor instead.
 func (RejectionReason) EnumDescriptor() ([]byte, []int) {
-	return file_kno_v1_valuation_proto_rawDescGZIP(), []int{0}
+	return file_kno_v1_valuation_proto_rawDescGZIP(), []int{1}
 }
 
 // Interval is a confidence interval. It is a message rather than a pair of
@@ -124,15 +184,36 @@ func (RejectionReason) EnumDescriptor() ([]byte, []int) {
 // an absent one must be impossible to mistake for a tight one.
 type Interval struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Lower bound.
+	// Lower bound. Meaningless when sidedness is UPPER — read `sidedness` first.
 	Low float64 `protobuf:"fixed64,1,opt,name=low,proto3" json:"low,omitempty"`
-	// Upper bound.
+	// Upper bound. Meaningless when sidedness is LOWER.
 	High float64 `protobuf:"fixed64,2,opt,name=high,proto3" json:"high,omitempty"`
 	// Confidence level, e.g. 0.95.
+	//
+	// Its meaning depends on `sidedness`: for a TWO_SIDED interval it is the
+	// probability the interval covers the true value; for a one-sided bound it
+	// is the probability the true value lies on the bounded side. Reading a
+	// one-sided 0.95 as a two-sided 0.95 overstates confidence.
 	Level float64 `protobuf:"fixed64,3,opt,name=level,proto3" json:"level,omitempty"`
-	// How the interval was computed: "bootstrap", "t", "wilson". Recorded
-	// because the method is part of the claim.
-	Method        string `protobuf:"bytes,4,opt,name=method,proto3" json:"method,omitempty"`
+	// How the interval was computed: "bootstrap", "t", "wilson", "tango",
+	// "agresti-min", "mover-wilson", "sign". Recorded because the method is
+	// part of the claim, and because a delta whose method changed between two
+	// runs did not become more precise — it was measured differently.
+	Method string `protobuf:"bytes,4,opt,name=method,proto3" json:"method,omitempty"`
+	// Which sides are bounded.
+	//
+	// A one-sided bound written into a two-sided field is read as a two-sided
+	// interval by everything downstream: RejectionReason.NO_EFFECT is defined
+	// as "the interval crosses zero", the report colors deltas by whether they
+	// cross zero, and both would silently accept a bound that is unbounded on
+	// the side they are testing.
+	Sidedness Sidedness `protobuf:"varint,5,opt,name=sidedness,proto3,enum=kno.v1.Sidedness" json:"sidedness,omitempty"`
+	// How many paired observations the interval was computed from.
+	//
+	// Present because "the interval is wide" and "the interval is wide AND the
+	// sample was tiny" call for different responses, and because a consumer
+	// correcting for multiple comparisons cannot do so from `level` alone.
+	N             int32 `protobuf:"varint,6,opt,name=n,proto3" json:"n,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -195,6 +276,20 @@ func (x *Interval) GetMethod() string {
 	return ""
 }
 
+func (x *Interval) GetSidedness() Sidedness {
+	if x != nil {
+		return x.Sidedness
+	}
+	return Sidedness_SIDEDNESS_UNSPECIFIED
+}
+
+func (x *Interval) GetN() int32 {
+	if x != nil {
+		return x.N
+	}
+	return 0
+}
+
 // Valuation is an Asset's measured record: what it did, how sure we are, what
 // it costs, and how it was measured.
 type Valuation struct {
@@ -239,7 +334,50 @@ type Valuation struct {
 	Kind Kind `protobuf:"varint,12,opt,name=kind,proto3,enum=kno.v1.Kind" json:"kind,omitempty"`
 	// Set when the valuation could not be completed. A failed measurement is
 	// recorded rather than dropped; dropping failures biases the whole run.
-	Error         string `protobuf:"bytes,13,opt,name=error,proto3" json:"error,omitempty"`
+	Error string `protobuf:"bytes,13,opt,name=error,proto3" json:"error,omitempty"`
+	// Why no measurement was made, when none was.
+	//
+	// An Asset that routed to zero Cases costs nothing and is answered cheaply —
+	// "this is irrelevant to your evals" is a valuable early result, not a
+	// failure. Without this field the Value stage had nowhere to record it, and
+	// the only carrier was Select's Rejection, which would hand Select's
+	// rejection log to the wrong stage.
+	//
+	// Absent means a measurement WAS made; read it before reading delta_goal.
+	NotMeasured RejectionReason `protobuf:"varint,15,opt,name=not_measured,json=notMeasured,proto3,enum=kno.v1.RejectionReason" json:"not_measured,omitempty"`
+	// How many Cases this Asset was routed to, and how many were in the dev
+	// split it was routed from.
+	//
+	// Both, because delta_goal is the mean effect over the routed Cases AND
+	// NOTHING ELSE. A tagged Asset's delta is over its slice; an untagged one's
+	// is over the whole split; the two are different quantities and Select ranks
+	// them together on delta_per_cost anyway. These are what let a reader scale
+	// one to the other, and what make the incomparability visible instead of
+	// implied.
+	NRouted int32 `protobuf:"varint,16,opt,name=n_routed,json=nRouted,proto3" json:"n_routed,omitempty"`
+	// Cases in the dev split this Asset was routed from. See n_routed.
+	NDev int32 `protobuf:"varint,17,opt,name=n_dev,json=nDev,proto3" json:"n_dev,omitempty"`
+	// Set when the control arm was too small to detect the harm it is testing
+	// for.
+	//
+	// A two-sided interval that crosses zero renders as "no regression" under
+	// the report's coloring rule — identically to a genuine pass. An
+	// underpowered harm test that looks like a passed one is worse than an
+	// absent one, so it is marked and the marker travels with the number.
+	ControlUnderpowered bool `protobuf:"varint,18,opt,name=control_underpowered,json=controlUnderpowered,proto3" json:"control_underpowered,omitempty"`
+	// How many Valuations this run produced, i.e. how many comparisons the
+	// intervals in it are drawn from.
+	//
+	// delta_interval controls a PER-COMPARISON error rate. With 200 Assets and a
+	// 95% level, roughly ten null Assets have intervals excluding zero by
+	// construction — and they concentrate where delta_per_cost ranks highest,
+	// because small n and small cost are the same Assets. A consumer cannot
+	// correct for that from `level` alone, so the count travels with the claim.
+	//
+	// A floor, not the number: where the recorded baseline is reused as the
+	// control, every Asset is paired against the SAME draw, so their errors are
+	// positively correlated and independent-comparison arithmetic understates.
+	NComparisons  int32 `protobuf:"varint,19,opt,name=n_comparisons,json=nComparisons,proto3" json:"n_comparisons,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -372,16 +510,53 @@ func (x *Valuation) GetError() string {
 	return ""
 }
 
+func (x *Valuation) GetNotMeasured() RejectionReason {
+	if x != nil {
+		return x.NotMeasured
+	}
+	return RejectionReason_REJECTION_REASON_UNSPECIFIED
+}
+
+func (x *Valuation) GetNRouted() int32 {
+	if x != nil {
+		return x.NRouted
+	}
+	return 0
+}
+
+func (x *Valuation) GetNDev() int32 {
+	if x != nil {
+		return x.NDev
+	}
+	return 0
+}
+
+func (x *Valuation) GetControlUnderpowered() bool {
+	if x != nil {
+		return x.ControlUnderpowered
+	}
+	return false
+}
+
+func (x *Valuation) GetNComparisons() int32 {
+	if x != nil {
+		return x.NComparisons
+	}
+	return 0
+}
+
 var File_kno_v1_valuation_proto protoreflect.FileDescriptor
 
 const file_kno_v1_valuation_proto_rawDesc = "" +
 	"\n" +
-	"\x16kno/v1/valuation.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\"^\n" +
+	"\x16kno/v1/valuation.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\"\x9d\x01\n" +
 	"\bInterval\x12\x10\n" +
 	"\x03low\x18\x01 \x01(\x01R\x03low\x12\x12\n" +
 	"\x04high\x18\x02 \x01(\x01R\x04high\x12\x14\n" +
 	"\x05level\x18\x03 \x01(\x01R\x05level\x12\x16\n" +
-	"\x06method\x18\x04 \x01(\tR\x06method\"\x9a\x04\n" +
+	"\x06method\x18\x04 \x01(\tR\x06method\x12/\n" +
+	"\tsidedness\x18\x05 \x01(\x0e2\x11.kno.v1.SidednessR\tsidedness\x12\f\n" +
+	"\x01n\x18\x06 \x01(\x05R\x01n\"\xde\x05\n" +
 	"\tValuation\x12\x19\n" +
 	"\basset_id\x18\x01 \x01(\tR\aassetId\x12\x15\n" +
 	"\x06run_id\x18\x0e \x01(\tR\x05runId\x12\x1d\n" +
@@ -398,7 +573,17 @@ const file_kno_v1_valuation_proto_rawDesc = "" +
 	" \x01(\v2\x12.kno.v1.CostVectorR\x04cost\x12$\n" +
 	"\x0edelta_per_cost\x18\v \x01(\x01R\fdeltaPerCost\x12 \n" +
 	"\x04kind\x18\f \x01(\x0e2\f.kno.v1.KindR\x04kind\x12\x14\n" +
-	"\x05error\x18\r \x01(\tR\x05error*\xd0\x02\n" +
+	"\x05error\x18\r \x01(\tR\x05error\x12:\n" +
+	"\fnot_measured\x18\x0f \x01(\x0e2\x17.kno.v1.RejectionReasonR\vnotMeasured\x12\x19\n" +
+	"\bn_routed\x18\x10 \x01(\x05R\anRouted\x12\x13\n" +
+	"\x05n_dev\x18\x11 \x01(\x05R\x04nDev\x121\n" +
+	"\x14control_underpowered\x18\x12 \x01(\bR\x13controlUnderpowered\x12#\n" +
+	"\rn_comparisons\x18\x13 \x01(\x05R\fnComparisons*i\n" +
+	"\tSidedness\x12\x19\n" +
+	"\x15SIDEDNESS_UNSPECIFIED\x10\x00\x12\x17\n" +
+	"\x13SIDEDNESS_TWO_SIDED\x10\x01\x12\x13\n" +
+	"\x0fSIDEDNESS_UPPER\x10\x02\x12\x13\n" +
+	"\x0fSIDEDNESS_LOWER\x10\x03*\xd0\x02\n" +
 	"\x0fRejectionReason\x12 \n" +
 	"\x1cREJECTION_REASON_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aREJECTION_REASON_NO_EFFECT\x10\x01\x12\x1f\n" +
@@ -424,27 +609,30 @@ func file_kno_v1_valuation_proto_rawDescGZIP() []byte {
 	return file_kno_v1_valuation_proto_rawDescData
 }
 
-var file_kno_v1_valuation_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_kno_v1_valuation_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
 var file_kno_v1_valuation_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_kno_v1_valuation_proto_goTypes = []any{
-	(RejectionReason)(0), // 0: kno.v1.RejectionReason
-	(*Interval)(nil),     // 1: kno.v1.Interval
-	(*Valuation)(nil),    // 2: kno.v1.Valuation
-	(InjectionMode)(0),   // 3: kno.v1.InjectionMode
-	(*CostVector)(nil),   // 4: kno.v1.CostVector
-	(Kind)(0),            // 5: kno.v1.Kind
+	(Sidedness)(0),       // 0: kno.v1.Sidedness
+	(RejectionReason)(0), // 1: kno.v1.RejectionReason
+	(*Interval)(nil),     // 2: kno.v1.Interval
+	(*Valuation)(nil),    // 3: kno.v1.Valuation
+	(InjectionMode)(0),   // 4: kno.v1.InjectionMode
+	(*CostVector)(nil),   // 5: kno.v1.CostVector
+	(Kind)(0),            // 6: kno.v1.Kind
 }
 var file_kno_v1_valuation_proto_depIdxs = []int32{
-	1, // 0: kno.v1.Valuation.delta_interval:type_name -> kno.v1.Interval
-	1, // 1: kno.v1.Valuation.control_interval:type_name -> kno.v1.Interval
-	3, // 2: kno.v1.Valuation.mode:type_name -> kno.v1.InjectionMode
-	4, // 3: kno.v1.Valuation.cost:type_name -> kno.v1.CostVector
-	5, // 4: kno.v1.Valuation.kind:type_name -> kno.v1.Kind
-	5, // [5:5] is the sub-list for method output_type
-	5, // [5:5] is the sub-list for method input_type
-	5, // [5:5] is the sub-list for extension type_name
-	5, // [5:5] is the sub-list for extension extendee
-	0, // [0:5] is the sub-list for field type_name
+	0, // 0: kno.v1.Interval.sidedness:type_name -> kno.v1.Sidedness
+	2, // 1: kno.v1.Valuation.delta_interval:type_name -> kno.v1.Interval
+	2, // 2: kno.v1.Valuation.control_interval:type_name -> kno.v1.Interval
+	4, // 3: kno.v1.Valuation.mode:type_name -> kno.v1.InjectionMode
+	5, // 4: kno.v1.Valuation.cost:type_name -> kno.v1.CostVector
+	6, // 5: kno.v1.Valuation.kind:type_name -> kno.v1.Kind
+	1, // 6: kno.v1.Valuation.not_measured:type_name -> kno.v1.RejectionReason
+	7, // [7:7] is the sub-list for method output_type
+	7, // [7:7] is the sub-list for method input_type
+	7, // [7:7] is the sub-list for extension type_name
+	7, // [7:7] is the sub-list for extension extendee
+	0, // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_kno_v1_valuation_proto_init() }
@@ -458,7 +646,7 @@ func file_kno_v1_valuation_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kno_v1_valuation_proto_rawDesc), len(file_kno_v1_valuation_proto_rawDesc)),
-			NumEnums:      1,
+			NumEnums:      2,
 			NumMessages:   2,
 			NumExtensions: 0,
 			NumServices:   0,
