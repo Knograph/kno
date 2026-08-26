@@ -31,7 +31,7 @@ message Interval {
   double level = 3;
 
   // How the interval was computed: "bootstrap", "t", "wilson", "tango",
-  // "agresti-min", "mover-wilson", "sign". Recorded because the method is
+  // "agresti-min", "adjusted-wald", "mover-wilson", "sign". Recorded because the method is
   // part of the claim, and because a delta whose method changed between two
   // runs did not become more precise — it was measured differently.
   string method = 4;
