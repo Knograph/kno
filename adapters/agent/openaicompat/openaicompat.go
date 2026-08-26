@@ -49,7 +49,14 @@ type Agent struct {
 	// binding is the thing that went wrong.
 	keyEnv string
 
-	system      string
+	system string
+
+	// asset is the injected Asset's content, empty on an Agent that carries
+	// none. Set only by WithContext, and only on a COPY — the un-injected
+	// receiver is the control arm of the measurement and must keep sending the
+	// prompt it sent before.
+	asset string
+
 	maxOutput   int64
 	maxPrompt   int
 	temperature *float64
@@ -84,13 +91,16 @@ type Agent struct {
 // something the adapter actually implements: declaring a capability it does not
 // would let a valuation run report a measurement mode it never used.
 //
-// ContextInject is false because this build implements core.Agent and nothing
-// else — core.ContextInjector lands with the Value stage. KnowledgeWrite is
-// false because a Chat Completions endpoint has no index to write. Stream is
-// false per docs/debt.md#35.
+// ContextInject is true for the ADAPTER, not for the individual Agent: it says
+// this adapter implements core.ContextInjector, which is what V-4c checks
+// before it routes an Asset and before it spends anything. An adapter that
+// answered per-Agent would report false on the un-injected control arm, and the
+// stage would refuse the Asset it was about to measure. KnowledgeWrite is false
+// because a Chat Completions endpoint has no index to write. Stream is false
+// per docs/debt.md#35.
 func (a *Agent) Capabilities() *core.Capabilities {
 	return &knov1.Capabilities{
-		ContextInject:  false,
+		ContextInject:  true,
 		KnowledgeWrite: false,
 		Stream:         false,
 
@@ -181,9 +191,18 @@ func (a *Agent) requestBody(c *core.Case, prompt pricing.Prompt) ([]byte, error)
 		return nil, err
 	}
 
-	msgs := make([]chatMessage, 0, len(c.GetHistory())+2)
+	msgs := make([]chatMessage, 0, len(c.GetHistory())+3)
 	if a.system != "" {
 		msgs = append(msgs, chatMessage{Role: "system", Content: a.system})
+	}
+	// Immediately after the system prompt and ahead of everything the Case
+	// varies. [system][asset] is then a byte-identical PREFIX across an Asset's
+	// whole sample, which is the shape a provider's prompt cache keys on — and
+	// costOf prices a cache read far below fresh input. Placed after the
+	// history instead, the Asset sits behind bytes that change every Case and
+	// is billed fresh every time.
+	if a.asset != "" {
+		msgs = append(msgs, chatMessage{Role: "system", Content: a.asset})
 	}
 	for _, t := range c.GetHistory() {
 		msgs = append(msgs, chatMessage{Role: roleOf(t.GetRole()), Content: t.GetContent()})

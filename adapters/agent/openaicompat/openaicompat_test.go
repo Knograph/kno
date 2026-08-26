@@ -707,8 +707,10 @@ func TestCapabilitiesClaimNothingTheAdapterDoesNotImplement(t *testing.T) {
 	a := newAgent(t, srv)
 	caps := a.Capabilities()
 
-	if caps.GetContextInject() {
-		t.Error("context_inject is declared but core.ContextInjector is not implemented")
+	if !caps.GetContextInject() {
+		t.Error("context_inject is not declared, but WithContext is implemented — " +
+			"the Value stage refuses an Asset before any spend when this is false, " +
+			"so an under-claim disables the stage rather than degrading it")
 	}
 	if caps.GetKnowledgeWrite() {
 		t.Error("knowledge_write is declared but a Chat Completions endpoint has no index")

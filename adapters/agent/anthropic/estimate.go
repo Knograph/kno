@@ -101,10 +101,21 @@ func (a *Agent) prompt(c *core.Case) pricing.Prompt {
 		History: history.String(),
 		Input:   c.GetInput(),
 
-		// Context is the injected Asset, and M2 injects nothing. Named rather
-		// than omitted so the day valuation lands, the missing term is a
-		// compile-visible field rather than an invisible under-reservation.
-		Context: "",
+		// Context is the injected Asset, and it is the term that makes the cost
+		// cap bind on the thing being measured: it is typically the LARGEST
+		// part of the prompt, so an estimate that omitted it would reserve
+		// against a Case-sized prompt while sending an Asset-sized one. Empty
+		// on an Agent that carries no Asset — which is every Agent WithContext
+		// has not copied.
+		//
+		// A separate field rather than folded into System, even though
+		// compose sends the two concatenated and the price depends only on the
+		// total: the estimate is where a forgotten term is invisible, so the
+		// term the whole product is about gets its own named slot. The only
+		// difference from what goes on the wire is the two-byte separator
+		// join() puts between the system prompt and the Asset, which the
+		// safety margin covers many times over.
+		Context: a.asset,
 	}
 }
 
@@ -130,23 +141,28 @@ func (a *Agent) WorstCase() budget.Estimate { return a.worst }
 //
 // The placeholder is never sent anywhere; only its length is read.
 func (a *Agent) computeWorstCase() budget.Estimate {
-	n := a.opts.MaxPromptBytes
-	if n <= 0 {
-		n = defaultWorstCasePromptBytes
-	}
-	if n > maxWorstCasePromptBytes {
-		// A fat-fingered ceiling must not turn a planning call into a
-		// multi-gigabyte allocation. Clamped rather than refused: WorstCase has
-		// no error return, and the clamp is far above any real context window.
-		n = maxWorstCasePromptBytes
-	}
+	n := a.promptCeiling()
 
+	// The Asset is charged ON TOP of the ceiling rather than out of it, which
+	// is now what openaicompat does too: subtracting it from the Case's
+	// allowance makes the treatment arm refuse Cases the control arm accepts,
+	// which is attrition correlated with the treatment. The adapters still
+	// differ in that openaicompat ENFORCES the ceiling per Case and this one
+	// does not — its godoc says so — which only makes charging on top more
+	// necessary here: a Case is free to consume the whole ceiling anyway, so
+	// subtracting would stop this being an upper bound. Over-stating it makes
+	// planning conservative; under-stating it is how a run quotes $0.06 for
+	// $12.00 of exposure.
+	//
 	// Through priceOf, so an explicit override reaches the figure
 	// checkCostIsKnowable reads. Without it, supplying a price for an unpriced
 	// model still left WorstCase at zero and the run was refused for having no
 	// computable cost — naming a flag the user had just passed.
-	est, err := a.priceOf(
-		pricing.Prompt{System: a.opts.System, Input: strings.Repeat("x", int(n))})
+	est, err := a.priceOf(pricing.Prompt{
+		System:  a.opts.System,
+		Context: a.asset,
+		Input:   strings.Repeat("x", int(n)),
+	})
 	if err != nil {
 		return budget.Estimate{}
 	}

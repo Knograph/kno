@@ -82,9 +82,32 @@ func (a *Agent) WorstCase() budget.Estimate {
 	if a.price == nil {
 		return budget.Estimate{}
 	}
-	// A single field is enough: the estimate reads Prompt only through its
-	// total size, and which part the bytes belong to does not change the price.
-	worst := pricing.Prompt{Input: strings.Repeat("x", a.maxPrompt)}
+	// The ceiling bounds the CASE, and the Asset is charged on top.
+	//
+	// It used to be a total the Asset spent part of, which was tighter and
+	// wrong: a Case large enough to fit under the ceiling alone but not
+	// alongside the Asset was measured by the CONTROL arm and refused by the
+	// TREATMENT arm. That is attrition correlated with the treatment — it
+	// removes exactly the long-prompt Cases, more of them for larger Assets —
+	// so the delta rises with Asset size in delta_per_cost's numerator against
+	// its own denominator. Measured at a 4096-byte ceiling with a 3000-byte
+	// Asset and a 2000-byte Case: control measured, treatment refused.
+	//
+	// Charging on top is looser, and it is the same rule anthropic already
+	// applies, so one --max-prompt-bytes now means one thing on both adapters
+	// rather than producing different consent quotes for the same Asset.
+	//
+	// Context carries the Asset rather than folding it into Input because the
+	// term has to be visible at the call site. The price is identical either
+	// way — the estimate reads Prompt only through its total size — which is
+	// exactly why an omitted term here would be invisible in the number.
+	worst := pricing.Prompt{
+		Context: a.asset,
+		// The full ceiling, not the ceiling minus the Asset: the Asset is
+		// charged on top now, so the worst Case is still a whole ceiling's
+		// worth of Case plus whatever the Asset costs.
+		Input: strings.Repeat("x", a.maxPrompt),
+	}
 	est, err := pricing.EstimateWithPrice(a.price, a.model, worst, a.maxOutput)
 	if err != nil {
 		return budget.Estimate{}
@@ -185,7 +208,10 @@ const maxPromptCeiling = 64 << 20
 // rejects is not something we can observe, so the free refusal is strictly
 // better than the paid one.
 func (a *Agent) checkPromptSize(prompt pricing.Prompt) error {
-	size := promptSize(prompt)
+	// The Asset is excluded from what the ceiling bounds. Both arms of a
+	// measurement must accept or refuse the same Cases, or the Asset silently
+	// selects which Cases it is measured on. See WorstCase.
+	size := promptSize(prompt) - len(prompt.Context)
 	if size <= a.maxPrompt {
 		return nil
 	}
@@ -206,9 +232,11 @@ func (a *Agent) checkPromptSize(prompt pricing.Prompt) error {
 // history, plus its input. A signature taking a single "input" makes the
 // forgotten term invisible in the number rather than visible at the call site.
 //
-// Context is empty in this build and will stay empty until core.ContextInjector
-// is implemented; it is named here so the term is present rather than
-// rediscovered.
+// Context carries the injected Asset, and it is the term that makes the cost
+// cap bind on the thing being measured: it is typically the LARGEST part of the
+// prompt, so an estimate that omitted it would reserve against a Case-sized
+// prompt while sending an Asset-sized one. Empty on an Agent that carries no
+// Asset, which is every Agent WithContext has not copied.
 func (a *Agent) promptOf(c *core.Case) pricing.Prompt {
 	var history strings.Builder
 	for _, t := range c.GetHistory() {
@@ -219,6 +247,7 @@ func (a *Agent) promptOf(c *core.Case) pricing.Prompt {
 	}
 	return pricing.Prompt{
 		System:  a.system,
+		Context: a.asset,
 		History: history.String(),
 		Input:   c.GetInput(),
 	}
