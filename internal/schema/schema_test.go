@@ -397,6 +397,7 @@ func TestEveryDeltaHasAnIntervalField(t *testing.T) {
 
 	pairs := []struct{ message, delta, interval string }{
 		{"kno.v1.Valuation", "delta_goal", "delta_interval"},
+		{"kno.v1.AssetValued", "delta_goal", "delta_interval"},
 		{"kno.v1.Valuation", "delta_control", "control_interval"},
 		{"kno.v1.Portfolio", "dev_estimated_gain", "dev_estimated_interval"},
 		{"kno.v1.Report", "holdout_gain", "holdout_interval"},

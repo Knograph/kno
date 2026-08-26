@@ -28,7 +28,9 @@ covenants — breaking any of them requires a major version.
   *per-comparison* error rate; with 200 Assets roughly ten null ones have intervals excluding zero
   by construction, and a consumer cannot correct for that from `level` alone).
 
-  `Interval` gains `sidedness` and `n`. A harm bound is one-sided — "this Asset costs you no more
+  `Interval` gains `sidedness` and `n_pairs`. `SIDEDNESS_UNSPECIFIED` reads as **two-sided**,
+  because every `Interval` ever written decodes as zero and they are all two-sided — a zero value
+  that condemned them would make the field unreadable on exactly the records it describes. A harm bound is one-sided — "this Asset costs you no more
   than X" is a different question from "is the effect distinguishable from zero" — and written into
   a two-sided field it is read as two-sided by `RejectionReason.NO_EFFECT`, whose shipped definition
   is "the interval crosses zero".
@@ -41,21 +43,12 @@ covenants — breaking any of them requires a major version.
   partition is drawn before routing, so whether a control set was outcome-independent is a claim
   only the seed can substantiate afterwards.
 
-  **`ScoreDomain`**, declared by a Goal rather than inferred from the scores observed. Inferring it
+  **`ScoreDomain`**, carried on `Run` and `RunStarted` and declared by a Goal — `core.Goal` gains
+  `Domain()`, so a new Goal cannot land without answering — rather than inferred from the scores
+  observed. Inferring it
   is method selection from the sample: the confidence level would hold only conditional on a branch
   that is itself a function of the data.
 
-### Fixed
-
-- **`run.proto` said Value "works over Assets" and has no concurrency; ADR-0004 said Value "also
-  executes Cases".** Both could not stand, and proto comments are the single source for the
-  published OpenAPI. Value does execute Cases — it injects an Asset and re-runs them — so ADR-0004
-  is right and the two comments are corrected. Its `CaseExecution` counts **measurements**, since
-  200 Assets over 50 Cases attempts 10,000 measurements over 50 Cases, and a denominator of 50
-  beside the spend for 10,000 calls would be two numbers in one message describing different
-  populations.
-
-### Added
 
 - **`kno baseline` can reach a real provider.** `--agent openai:<model>` (and any OpenAI-compatible
   endpoint via `--base-url`) and `--agent anthropic:<model>` now resolve to the adapters built in
@@ -696,6 +689,15 @@ covenants — breaking any of them requires a major version.
   the toolchain is as reproducible as every other tool.
 
 ### Fixed
+
+- **`run.proto` said Value "works over Assets" and has no concurrency; ADR-0004 said Value "also
+  executes Cases".** Both could not stand, and proto comments are the single source for the
+  published OpenAPI. Value does execute Cases — it injects an Asset and re-runs them — so ADR-0004
+  is right and the two comments are corrected. Its `CaseExecution` counts **measurements**, since
+  200 Assets over 50 Cases attempts 10,000 measurements over 50 Cases, and a denominator of 50
+  beside the spend for 10,000 calls would be two numbers in one message describing different
+  populations.
+
 
 - **A missing credential is refused before any request.** `openaicompat` omitted the
   `Authorization` header and let every Case collect a 401 — now bounded by run-fatal escalation,

@@ -25,7 +25,13 @@ const (
 type Sidedness int32
 
 const (
-	// Unset. An emitter that cannot say should not be emitting an Interval.
+	// Unset. Read as TWO_SIDED.
+	//
+	// Not "an emitter that cannot say should not emit": every Interval written
+	// before this field existed — baselines, Portfolios, Reports — decodes as
+	// zero, and they are all two-sided. A zero value that condemned them would
+	// make this field unreadable on exactly the records it was added to
+	// describe, and renumbering later is breaking.
 	Sidedness_SIDEDNESS_UNSPECIFIED Sidedness = 0
 	// Both ends bounded. The default for a delta.
 	Sidedness_SIDEDNESS_TWO_SIDED Sidedness = 1
@@ -81,7 +87,13 @@ func (Sidedness) EnumDescriptor() ([]byte, []int) {
 	return file_kno_v1_valuation_proto_rawDescGZIP(), []int{0}
 }
 
-// RejectionReason is why an Asset did not make the Portfolio. Every excluded
+// RejectionReason is why an Asset did not make the Portfolio, or — for the
+// three values that describe an absent measurement — why Value never measured
+// it. Two stages share the enum because they are the same question asked at
+// two depths, and splitting it would make a Rejection carrying Value's answer
+// need a second field to say which enum it held.
+//
+// Every excluded
 // Asset gets one — a rejection log with reasons is what turns "we cut your
 // data" into "here is what your data did and did not do".
 type RejectionReason int32
@@ -184,9 +196,13 @@ func (RejectionReason) EnumDescriptor() ([]byte, []int) {
 // an absent one must be impossible to mistake for a tight one.
 type Interval struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Lower bound. Meaningless when sidedness is UPPER — read `sidedness` first.
+	// Lower bound. Meaningless when sidedness is UPPER — read `sidedness` first,
+	// and write 0 rather than an infinity: protojson serializes those as the
+	// strings "-Infinity"/"Infinity", which the generated OpenAPI declares as a
+	// number.
 	Low float64 `protobuf:"fixed64,1,opt,name=low,proto3" json:"low,omitempty"`
-	// Upper bound. Meaningless when sidedness is LOWER.
+	// Upper bound. Meaningless when sidedness is LOWER. MUST be written as 0
+	// there, for the reason above.
 	High float64 `protobuf:"fixed64,2,opt,name=high,proto3" json:"high,omitempty"`
 	// Confidence level, e.g. 0.95.
 	//
@@ -208,12 +224,13 @@ type Interval struct {
 	// cross zero, and both would silently accept a bound that is unbounded on
 	// the side they are testing.
 	Sidedness Sidedness `protobuf:"varint,5,opt,name=sidedness,proto3,enum=kno.v1.Sidedness" json:"sidedness,omitempty"`
-	// How many paired observations the interval was computed from.
+	// How many PAIRS the interval was computed from — not observations, which
+	// would be twice that for a paired design.
 	//
 	// Present because "the interval is wide" and "the interval is wide AND the
 	// sample was tiny" call for different responses, and because a consumer
 	// correcting for multiple comparisons cannot do so from `level` alone.
-	N             int32 `protobuf:"varint,6,opt,name=n,proto3" json:"n,omitempty"`
+	NPairs        *int32 `protobuf:"varint,6,opt,name=n_pairs,json=nPairs,proto3,oneof" json:"n_pairs,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -283,9 +300,9 @@ func (x *Interval) GetSidedness() Sidedness {
 	return Sidedness_SIDEDNESS_UNSPECIFIED
 }
 
-func (x *Interval) GetN() int32 {
-	if x != nil {
-		return x.N
+func (x *Interval) GetNPairs() int32 {
+	if x != nil && x.NPairs != nil {
+		return *x.NPairs
 	}
 	return 0
 }
@@ -344,6 +361,16 @@ type Valuation struct {
 	// rejection log to the wrong stage.
 	//
 	// Absent means a measurement WAS made; read it before reading delta_goal.
+	//
+	// Only three values are legal here — IRRELEVANT, BUDGET_EXHAUSTED, and
+	// MEASUREMENT_FAILED — because they are the only ones that describe an
+	// ABSENT measurement. NO_EFFECT, REGRESSION, REDUNDANT, COST_DOMINATED and
+	// WRONG_MECHANISM are all conclusions drawn FROM a measurement, and writing
+	// one here would say "no measurement was made because the delta was
+	// indistinguishable from zero", which requires the measurement it denies.
+	//
+	// When this is MEASUREMENT_FAILED, `error` carries the cause; this field is
+	// authoritative on whether a delta exists.
 	NotMeasured RejectionReason `protobuf:"varint,15,opt,name=not_measured,json=notMeasured,proto3,enum=kno.v1.RejectionReason" json:"not_measured,omitempty"`
 	// How many Cases this Asset was routed to, and how many were in the dev
 	// split it was routed from.
@@ -354,9 +381,9 @@ type Valuation struct {
 	// them together on delta_per_cost anyway. These are what let a reader scale
 	// one to the other, and what make the incomparability visible instead of
 	// implied.
-	NRouted int32 `protobuf:"varint,16,opt,name=n_routed,json=nRouted,proto3" json:"n_routed,omitempty"`
+	NRouted *int32 `protobuf:"varint,16,opt,name=n_routed,json=nRouted,proto3,oneof" json:"n_routed,omitempty"`
 	// Cases in the dev split this Asset was routed from. See n_routed.
-	NDev int32 `protobuf:"varint,17,opt,name=n_dev,json=nDev,proto3" json:"n_dev,omitempty"`
+	NDev *int32 `protobuf:"varint,17,opt,name=n_dev,json=nDev,proto3,oneof" json:"n_dev,omitempty"`
 	// Set when the control arm was too small to detect the harm it is testing
 	// for.
 	//
@@ -364,22 +391,9 @@ type Valuation struct {
 	// the report's coloring rule — identically to a genuine pass. An
 	// underpowered harm test that looks like a passed one is worse than an
 	// absent one, so it is marked and the marker travels with the number.
-	ControlUnderpowered bool `protobuf:"varint,18,opt,name=control_underpowered,json=controlUnderpowered,proto3" json:"control_underpowered,omitempty"`
-	// How many Valuations this run produced, i.e. how many comparisons the
-	// intervals in it are drawn from.
-	//
-	// delta_interval controls a PER-COMPARISON error rate. With 200 Assets and a
-	// 95% level, roughly ten null Assets have intervals excluding zero by
-	// construction — and they concentrate where delta_per_cost ranks highest,
-	// because small n and small cost are the same Assets. A consumer cannot
-	// correct for that from `level` alone, so the count travels with the claim.
-	//
-	// A floor, not the number: where the recorded baseline is reused as the
-	// control, every Asset is paired against the SAME draw, so their errors are
-	// positively correlated and independent-comparison arithmetic understates.
-	NComparisons  int32 `protobuf:"varint,19,opt,name=n_comparisons,json=nComparisons,proto3" json:"n_comparisons,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	ControlUnderpowered *bool `protobuf:"varint,18,opt,name=control_underpowered,json=controlUnderpowered,proto3,oneof" json:"control_underpowered,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *Valuation) Reset() {
@@ -518,45 +532,40 @@ func (x *Valuation) GetNotMeasured() RejectionReason {
 }
 
 func (x *Valuation) GetNRouted() int32 {
-	if x != nil {
-		return x.NRouted
+	if x != nil && x.NRouted != nil {
+		return *x.NRouted
 	}
 	return 0
 }
 
 func (x *Valuation) GetNDev() int32 {
-	if x != nil {
-		return x.NDev
+	if x != nil && x.NDev != nil {
+		return *x.NDev
 	}
 	return 0
 }
 
 func (x *Valuation) GetControlUnderpowered() bool {
-	if x != nil {
-		return x.ControlUnderpowered
+	if x != nil && x.ControlUnderpowered != nil {
+		return *x.ControlUnderpowered
 	}
 	return false
-}
-
-func (x *Valuation) GetNComparisons() int32 {
-	if x != nil {
-		return x.NComparisons
-	}
-	return 0
 }
 
 var File_kno_v1_valuation_proto protoreflect.FileDescriptor
 
 const file_kno_v1_valuation_proto_rawDesc = "" +
 	"\n" +
-	"\x16kno/v1/valuation.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\"\x9d\x01\n" +
+	"\x16kno/v1/valuation.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\"\xb9\x01\n" +
 	"\bInterval\x12\x10\n" +
 	"\x03low\x18\x01 \x01(\x01R\x03low\x12\x12\n" +
 	"\x04high\x18\x02 \x01(\x01R\x04high\x12\x14\n" +
 	"\x05level\x18\x03 \x01(\x01R\x05level\x12\x16\n" +
 	"\x06method\x18\x04 \x01(\tR\x06method\x12/\n" +
-	"\tsidedness\x18\x05 \x01(\x0e2\x11.kno.v1.SidednessR\tsidedness\x12\f\n" +
-	"\x01n\x18\x06 \x01(\x05R\x01n\"\xde\x05\n" +
+	"\tsidedness\x18\x05 \x01(\x0e2\x11.kno.v1.SidednessR\tsidedness\x12\x1c\n" +
+	"\an_pairs\x18\x06 \x01(\x05H\x00R\x06nPairs\x88\x01\x01B\n" +
+	"\n" +
+	"\b_n_pairs\"\xf8\x05\n" +
 	"\tValuation\x12\x19\n" +
 	"\basset_id\x18\x01 \x01(\tR\aassetId\x12\x15\n" +
 	"\x06run_id\x18\x0e \x01(\tR\x05runId\x12\x1d\n" +
@@ -574,11 +583,13 @@ const file_kno_v1_valuation_proto_rawDesc = "" +
 	"\x0edelta_per_cost\x18\v \x01(\x01R\fdeltaPerCost\x12 \n" +
 	"\x04kind\x18\f \x01(\x0e2\f.kno.v1.KindR\x04kind\x12\x14\n" +
 	"\x05error\x18\r \x01(\tR\x05error\x12:\n" +
-	"\fnot_measured\x18\x0f \x01(\x0e2\x17.kno.v1.RejectionReasonR\vnotMeasured\x12\x19\n" +
-	"\bn_routed\x18\x10 \x01(\x05R\anRouted\x12\x13\n" +
-	"\x05n_dev\x18\x11 \x01(\x05R\x04nDev\x121\n" +
-	"\x14control_underpowered\x18\x12 \x01(\bR\x13controlUnderpowered\x12#\n" +
-	"\rn_comparisons\x18\x13 \x01(\x05R\fnComparisons*i\n" +
+	"\fnot_measured\x18\x0f \x01(\x0e2\x17.kno.v1.RejectionReasonR\vnotMeasured\x12\x1e\n" +
+	"\bn_routed\x18\x10 \x01(\x05H\x00R\anRouted\x88\x01\x01\x12\x18\n" +
+	"\x05n_dev\x18\x11 \x01(\x05H\x01R\x04nDev\x88\x01\x01\x126\n" +
+	"\x14control_underpowered\x18\x12 \x01(\bH\x02R\x13controlUnderpowered\x88\x01\x01B\v\n" +
+	"\t_n_routedB\b\n" +
+	"\x06_n_devB\x17\n" +
+	"\x15_control_underpowered*i\n" +
 	"\tSidedness\x12\x19\n" +
 	"\x15SIDEDNESS_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13SIDEDNESS_TWO_SIDED\x10\x01\x12\x13\n" +
@@ -641,6 +652,8 @@ func file_kno_v1_valuation_proto_init() {
 		return
 	}
 	file_kno_v1_common_proto_init()
+	file_kno_v1_valuation_proto_msgTypes[0].OneofWrappers = []any{}
+	file_kno_v1_valuation_proto_msgTypes[1].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

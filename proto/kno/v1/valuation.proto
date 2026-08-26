@@ -12,10 +12,14 @@ import "kno/v1/common.proto";
 // That distinction is load-bearing. No delta is reported without its interval;
 // an absent one must be impossible to mistake for a tight one.
 message Interval {
-  // Lower bound. Meaningless when sidedness is UPPER — read `sidedness` first.
+  // Lower bound. Meaningless when sidedness is UPPER — read `sidedness` first,
+  // and write 0 rather than an infinity: protojson serializes those as the
+  // strings "-Infinity"/"Infinity", which the generated OpenAPI declares as a
+  // number.
   double low = 1;
 
-  // Upper bound. Meaningless when sidedness is LOWER.
+  // Upper bound. Meaningless when sidedness is LOWER. MUST be written as 0
+  // there, for the reason above.
   double high = 2;
 
   // Confidence level, e.g. 0.95.
@@ -41,17 +45,24 @@ message Interval {
   // the side they are testing.
   Sidedness sidedness = 5;
 
-  // How many paired observations the interval was computed from.
+  // How many PAIRS the interval was computed from — not observations, which
+  // would be twice that for a paired design.
   //
   // Present because "the interval is wide" and "the interval is wide AND the
   // sample was tiny" call for different responses, and because a consumer
   // correcting for multiple comparisons cannot do so from `level` alone.
-  int32 n = 6;
+  optional int32 n_pairs = 6;
 }
 
 // Sidedness records which ends of an Interval are bounded.
 enum Sidedness {
-  // Unset. An emitter that cannot say should not be emitting an Interval.
+  // Unset. Read as TWO_SIDED.
+  //
+  // Not "an emitter that cannot say should not emit": every Interval written
+  // before this field existed — baselines, Portfolios, Reports — decodes as
+  // zero, and they are all two-sided. A zero value that condemned them would
+  // make this field unreadable on exactly the records it was added to
+  // describe, and renumbering later is breaking.
   SIDEDNESS_UNSPECIFIED = 0;
 
   // Both ends bounded. The default for a delta.
@@ -67,7 +78,13 @@ enum Sidedness {
   SIDEDNESS_LOWER = 3;
 }
 
-// RejectionReason is why an Asset did not make the Portfolio. Every excluded
+// RejectionReason is why an Asset did not make the Portfolio, or — for the
+// three values that describe an absent measurement — why Value never measured
+// it. Two stages share the enum because they are the same question asked at
+// two depths, and splitting it would make a Rejection carrying Value's answer
+// need a second field to say which enum it held.
+//
+// Every excluded
 // Asset gets one — a rejection log with reasons is what turns "we cut your
 // data" into "here is what your data did and did not do".
 enum RejectionReason {
@@ -181,6 +198,16 @@ message Valuation {
   // rejection log to the wrong stage.
   //
   // Absent means a measurement WAS made; read it before reading delta_goal.
+  //
+  // Only three values are legal here — IRRELEVANT, BUDGET_EXHAUSTED, and
+  // MEASUREMENT_FAILED — because they are the only ones that describe an
+  // ABSENT measurement. NO_EFFECT, REGRESSION, REDUNDANT, COST_DOMINATED and
+  // WRONG_MECHANISM are all conclusions drawn FROM a measurement, and writing
+  // one here would say "no measurement was made because the delta was
+  // indistinguishable from zero", which requires the measurement it denies.
+  //
+  // When this is MEASUREMENT_FAILED, `error` carries the cause; this field is
+  // authoritative on whether a delta exists.
   RejectionReason not_measured = 15;
 
   // How many Cases this Asset was routed to, and how many were in the dev
@@ -192,10 +219,10 @@ message Valuation {
   // them together on delta_per_cost anyway. These are what let a reader scale
   // one to the other, and what make the incomparability visible instead of
   // implied.
-  int32 n_routed = 16;
+  optional int32 n_routed = 16;
 
   // Cases in the dev split this Asset was routed from. See n_routed.
-  int32 n_dev = 17;
+  optional int32 n_dev = 17;
 
   // Set when the control arm was too small to detect the harm it is testing
   // for.
@@ -204,19 +231,10 @@ message Valuation {
   // the report's coloring rule — identically to a genuine pass. An
   // underpowered harm test that looks like a passed one is worse than an
   // absent one, so it is marked and the marker travels with the number.
-  bool control_underpowered = 18;
+  optional bool control_underpowered = 18;
 
-  // How many Valuations this run produced, i.e. how many comparisons the
-  // intervals in it are drawn from.
-  //
-  // delta_interval controls a PER-COMPARISON error rate. With 200 Assets and a
-  // 95% level, roughly ten null Assets have intervals excluding zero by
-  // construction — and they concentrate where delta_per_cost ranks highest,
-  // because small n and small cost are the same Assets. A consumer cannot
-  // correct for that from `level` alone, so the count travels with the claim.
-  //
-  // A floor, not the number: where the recorded baseline is reused as the
-  // control, every Asset is paired against the SAME draw, so their errors are
-  // positively correlated and independent-comparison arithmetic understates.
-  int32 n_comparisons = 19;
+// (n_comparisons lives on CaseExecution, not here: it is a run-level fact, and
+  // a Valuation is written when its Asset finishes rather than when the run
+  // does — so the count is unknowable at write time and every row would need
+  // rewriting at close.)
 }

@@ -32,7 +32,7 @@ In each case the Cases Kno measures were chosen using information from the basel
 
 **We do not attempt to detect it, and we say so on the epistemics page.**
 
-`docs/what-the-numbers-mean.md` carries the limitation beside the other "Kno cannot detect this" entries, in the form a reader can act on: *a Δ measured over Cases you selected after reading a baseline is biased upward by approximately the baseline's pass rate on that slice.*
+`docs/what-the-numbers-mean.md` carries the limitation beside the other "Kno cannot detect this" entries, in the form a reader can act on: *a Δ measured over Cases you selected after reading a baseline is biased upward by approximately the agent's per-Case success probability on those Cases — not by its recorded baseline score there, which is zero by construction.*
 
 ## Why not fix it
 
@@ -42,6 +42,10 @@ In each case the Cases Kno measures were chosen using information from the basel
 
 **Statistical correction needs a quantity we do not have.** Correcting for selection requires knowing the selection rule. The user's rule is in their head.
 
+**Always measuring a fresh control arm WOULD neutralise it — and we are choosing not to.** This is the alternative that actually exists, and it deserves the honest version rather than the omission. The user-side bias survives only because Kno reuses the recorded baseline as the control when it does not detect conditioning; if the fresh arm were unconditional, both arms would be fresh draws for every Asset, control ≈ *p*, treatment ≈ *p*, and δ ≈ 0 whatever the user conditioned on. `AssetRouted.fresh_control_arm` exists precisely because Kno has two modes.
+
+We take the conditional mode because the unconditional one costs about **+27% on DESIGN.md's worked example**, and because it buys protection only against a mistake the holdout already catches. That is a cost decision, not an impossibility, and it should be revisited if the holdout turns out to catch it late rather than reliably — a user who discovers at `validate` that a whole portfolio was selected on noise has paid for the portfolio.
+
 **The honest instrument already exists**: the holdout. Validate measures the selected portfolio against Cases nothing in the loop has touched, and that is the number a user is allowed to act on. A Value-stage Δ inflated by user-side conditioning shows up there as a gain that does not replicate — which is what the holdout is for, and why `validate` is a separate stage rather than a flag.
 
 ## Consequences
@@ -49,4 +53,5 @@ In each case the Cases Kno measures were chosen using information from the basel
 - `what-the-numbers-mean.md` gains the limitation, and the Value cookbook recipe repeats it where a user is choosing tags.
 - The winner's-curse property test in `stats/interval` covers Kno's *own* selection effects only. It cannot cover this one, and its documentation says so rather than implying broader coverage.
 - If a user reports a Value gain that Validate does not reproduce, this ADR is the first hypothesis, ahead of a bug.
+- If a fresh control arm becomes cheap — a faster model, a cached control, a provider discount — the conditional mode loses its justification and this ADR should be revisited on cost grounds alone.
 - Revisiting this requires a new capability — a record of when tags were assigned relative to a run, or a pre-registered selection rule. Neither exists, and neither is planned. If one arrives, this ADR is superseded rather than amended.

@@ -596,9 +596,17 @@ type RunStarted struct {
 	// — a streaming source must not be drained just to draw a progress bar.
 	TotalCases int32 `protobuf:"varint,5,opt,name=total_cases,json=totalCases,proto3" json:"total_cases,omitempty"`
 	// The caps this Run will execute under.
-	Budget        *Budget `protobuf:"bytes,6,opt,name=budget,proto3" json:"budget,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Budget *Budget `protobuf:"bytes,6,opt,name=budget,proto3" json:"budget,omitempty"`
+	// The set of values this Goal's Score can take.
+	//
+	// Recorded because the interval method for any delta computed against this
+	// Goal depends on it, and because a reader holding a Valuation with
+	// method "tango" cannot otherwise verify which branch produced it. DECLARED
+	// by the Goal, never inferred from the scores observed — inferring it is
+	// method selection from the sample.
+	GoalScoreDomain ScoreDomain `protobuf:"varint,7,opt,name=goal_score_domain,json=goalScoreDomain,proto3,enum=kno.v1.ScoreDomain" json:"goal_score_domain,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *RunStarted) Reset() {
@@ -673,6 +681,13 @@ func (x *RunStarted) GetBudget() *Budget {
 	return nil
 }
 
+func (x *RunStarted) GetGoalScoreDomain() ScoreDomain {
+	if x != nil {
+		return x.GoalScoreDomain
+	}
+	return ScoreDomain_SCORE_DOMAIN_UNSPECIFIED
+}
+
 // CaseScored reports one Case that produced a Score.
 type CaseScored struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -685,7 +700,15 @@ type CaseScored struct {
 	// What this Case cost, in micro-USD.
 	CostUsdMicros int64 `protobuf:"varint,4,opt,name=cost_usd_micros,json=costUsdMicros,proto3" json:"cost_usd_micros,omitempty"`
 	// Wall-clock latency of the agent call.
-	LatencyMs     int64 `protobuf:"varint,5,opt,name=latency_ms,json=latencyMs,proto3" json:"latency_ms,omitempty"`
+	LatencyMs int64 `protobuf:"varint,5,opt,name=latency_ms,json=latencyMs,proto3" json:"latency_ms,omitempty"`
+	// Which Asset was injected, when the stage injects one.
+	//
+	// EMPTY for Baseline, which measures a Case once. Value measures the same
+	// Case once per Asset, so without this a consumer sees the same case_id
+	// arrive N times with different scores and no way to tell which measurement
+	// is which — and the event stream is the spine the TUI and the API both
+	// render from.
+	AssetId       string `protobuf:"bytes,6,opt,name=asset_id,json=assetId,proto3" json:"asset_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -755,6 +778,13 @@ func (x *CaseScored) GetLatencyMs() int64 {
 	return 0
 }
 
+func (x *CaseScored) GetAssetId() string {
+	if x != nil {
+		return x.AssetId
+	}
+	return ""
+}
+
 // CaseErrored reports one Case the agent failed to answer.
 //
 // Deliberately a separate payload from CaseScored rather than a CaseScored
@@ -787,6 +817,14 @@ type CaseErrored struct {
 	// What the failed attempt still cost. Often zero when the provider rejected
 	// the call outright, but not always.
 	CostUsdMicros int64 `protobuf:"varint,4,opt,name=cost_usd_micros,json=costUsdMicros,proto3" json:"cost_usd_micros,omitempty"`
+	// Which Asset was injected, when the stage injects one.
+	//
+	// EMPTY for Baseline, which measures a Case once. Value measures the same
+	// Case once per Asset, so without this a consumer sees the same case_id
+	// arrive N times with different scores and no way to tell which measurement
+	// is which — and the event stream is the spine the TUI and the API both
+	// render from.
+	AssetId       string `protobuf:"bytes,5,opt,name=asset_id,json=assetId,proto3" json:"asset_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -849,6 +887,13 @@ func (x *CaseErrored) GetCostUsdMicros() int64 {
 	return 0
 }
 
+func (x *CaseErrored) GetAssetId() string {
+	if x != nil {
+		return x.AssetId
+	}
+	return ""
+}
+
 // StageProgress is a periodic heartbeat.
 //
 // Emitted on an interval rather than per Case, so a 1M-Case run does not
@@ -857,14 +902,20 @@ type StageProgress struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Which stage is running.
 	Stage Stage `protobuf:"varint,1,opt,name=stage,proto3,enum=kno.v1.Stage" json:"stage,omitempty"`
-	// Cases with a TERMINAL outcome so far. attempted = scored + errored; a Case
-	// still being retried is not yet counted. See CaseErrored.will_retry.
+	// Work items with a TERMINAL outcome so far. attempted = scored + errored; an
+	// item still being retried is not yet counted. See CaseErrored.will_retry.
+	//
+	// The UNIT is the stage's unit of work: Cases for Baseline, MEASUREMENTS for
+	// Value, which measures a Case once per Asset. total_cases below is in the
+	// same unit, so the ratio is a progress fraction on every stage rather than
+	// reaching 20,000% on the one that measures a Case 200 times.
 	Attempted int32 `protobuf:"varint,2,opt,name=attempted,proto3" json:"attempted,omitempty"`
 	// Of those, how many produced a Score.
 	Scored int32 `protobuf:"varint,3,opt,name=scored,proto3" json:"scored,omitempty"`
 	// Of those, how many terminally failed to answer.
 	Errored int32 `protobuf:"varint,4,opt,name=errored,proto3" json:"errored,omitempty"`
-	// Total Cases intended, matching RunStarted.total_cases. Zero when unknown.
+	// Total work items intended, in the same unit as attempted above, matching
+	// RunStarted.total_cases. Zero when unknown.
 	TotalCases int32 `protobuf:"varint,5,opt,name=total_cases,json=totalCases,proto3" json:"total_cases,omitempty"`
 	// Throughput, for the ETA a dashboard shows.
 	//
@@ -1691,13 +1742,21 @@ type AssetRouted struct {
 	AssetId string `protobuf:"bytes,1,opt,name=asset_id,json=assetId,proto3" json:"asset_id,omitempty"`
 	// Cases this Asset could plausibly affect.
 	NRouted int32 `protobuf:"varint,2,opt,name=n_routed,json=nRouted,proto3" json:"n_routed,omitempty"`
-	// Cases actually drawn from those, after --sample-rate.
+	// Cases actually drawn from those, after sampling.
 	NSampled int32 `protobuf:"varint,3,opt,name=n_sampled,json=nSampled,proto3" json:"n_sampled,omitempty"`
 	// Control Cases drawn from the reserved partition.
 	NControl int32 `protobuf:"varint,4,opt,name=n_control,json=nControl,proto3" json:"n_control,omitempty"`
 	// Set when the Asset routed to nothing and will not be measured. The
 	// interesting case is IRRELEVANT, which costs nothing and is a real answer.
 	NotMeasured RejectionReason `protobuf:"varint,5,opt,name=not_measured,json=notMeasured,proto3,enum=kno.v1.RejectionReason" json:"not_measured,omitempty"`
+	// How many times each measurement is repeated.
+	//
+	// Present because the cost of this Asset is
+	// (n_sampled x arms + n_control) x trials, and an event whose stated job is
+	// showing the shape of the work before the money is spent would understate
+	// by exactly this multiplier without it — which is the omission the Value
+	// plan records making twice.
+	Trials int32 `protobuf:"varint,7,opt,name=trials,proto3" json:"trials,omitempty"`
 	// Whether the control arm is measured fresh rather than read from the
 	// baseline.
 	//
@@ -1773,6 +1832,13 @@ func (x *AssetRouted) GetNotMeasured() RejectionReason {
 		return x.NotMeasured
 	}
 	return RejectionReason_REJECTION_REASON_UNSPECIFIED
+}
+
+func (x *AssetRouted) GetTrials() int32 {
+	if x != nil {
+		return x.Trials
+	}
+	return 0
 }
 
 func (x *AssetRouted) GetFreshControlArm() bool {
@@ -1914,7 +1980,7 @@ const file_kno_v1_event_proto_rawDesc = "" +
 	"EventError\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\tR\x04code\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12\x1b\n" +
-	"\texit_code\x18\x03 \x01(\x05R\bexitCode\"\xf9\x01\n" +
+	"\texit_code\x18\x03 \x01(\x05R\bexitCode\"\xba\x02\n" +
 	"\n" +
 	"RunStarted\x12#\n" +
 	"\x05stage\x18\x01 \x01(\x0e2\r.kno.v1.StageR\x05stage\x12&\n" +
@@ -1923,7 +1989,8 @@ const file_kno_v1_event_proto_rawDesc = "" +
 	"\x0egoal_direction\x18\x04 \x01(\x0e2\x11.kno.v1.DirectionR\rgoalDirection\x12\x1f\n" +
 	"\vtotal_cases\x18\x05 \x01(\x05R\n" +
 	"totalCases\x12&\n" +
-	"\x06budget\x18\x06 \x01(\v2\x0e.kno.v1.BudgetR\x06budget\"\x9a\x01\n" +
+	"\x06budget\x18\x06 \x01(\v2\x0e.kno.v1.BudgetR\x06budget\x12?\n" +
+	"\x11goal_score_domain\x18\a \x01(\x0e2\x13.kno.v1.ScoreDomainR\x0fgoalScoreDomain\"\xb5\x01\n" +
 	"\n" +
 	"CaseScored\x12\x17\n" +
 	"\acase_id\x18\x01 \x01(\tR\x06caseId\x12\x14\n" +
@@ -1931,13 +1998,15 @@ const file_kno_v1_event_proto_rawDesc = "" +
 	"\x06passed\x18\x03 \x01(\bR\x06passed\x12&\n" +
 	"\x0fcost_usd_micros\x18\x04 \x01(\x03R\rcostUsdMicros\x12\x1d\n" +
 	"\n" +
-	"latency_ms\x18\x05 \x01(\x03R\tlatencyMs\"\x97\x01\n" +
+	"latency_ms\x18\x05 \x01(\x03R\tlatencyMs\x12\x19\n" +
+	"\basset_id\x18\x06 \x01(\tR\aassetId\"\xb2\x01\n" +
 	"\vCaseErrored\x12\x17\n" +
 	"\acase_id\x18\x01 \x01(\tR\x06caseId\x12(\n" +
 	"\x05error\x18\x02 \x01(\v2\x12.kno.v1.EventErrorR\x05error\x12\x1d\n" +
 	"\n" +
 	"will_retry\x18\x03 \x01(\bR\twillRetry\x12&\n" +
-	"\x0fcost_usd_micros\x18\x04 \x01(\x03R\rcostUsdMicros\"\xcf\x01\n" +
+	"\x0fcost_usd_micros\x18\x04 \x01(\x03R\rcostUsdMicros\x12\x19\n" +
+	"\basset_id\x18\x05 \x01(\tR\aassetId\"\xcf\x01\n" +
 	"\rStageProgress\x12#\n" +
 	"\x05stage\x18\x01 \x01(\x0e2\r.kno.v1.StageR\x05stage\x12\x1c\n" +
 	"\tattempted\x18\x02 \x01(\x05R\tattempted\x12\x16\n" +
@@ -1996,13 +2065,14 @@ const file_kno_v1_event_proto_rawDesc = "" +
 	"\x05calls\x18\x03 \x01(\x03R\x05calls\x12,\n" +
 	"\x06reason\x18\x04 \x01(\x0e2\x14.kno.v1.OrphanReasonR\x06reason\"M\n" +
 	"\x12ConcurrencyReduced\x127\n" +
-	"\bdecision\x18\x01 \x01(\v2\x1b.kno.v1.ConcurrencyDecisionR\bdecision\"\xe5\x01\n" +
+	"\bdecision\x18\x01 \x01(\v2\x1b.kno.v1.ConcurrencyDecisionR\bdecision\"\xfd\x01\n" +
 	"\vAssetRouted\x12\x19\n" +
 	"\basset_id\x18\x01 \x01(\tR\aassetId\x12\x19\n" +
 	"\bn_routed\x18\x02 \x01(\x05R\anRouted\x12\x1b\n" +
 	"\tn_sampled\x18\x03 \x01(\x05R\bnSampled\x12\x1b\n" +
 	"\tn_control\x18\x04 \x01(\x05R\bnControl\x12:\n" +
-	"\fnot_measured\x18\x05 \x01(\x0e2\x17.kno.v1.RejectionReasonR\vnotMeasured\x12*\n" +
+	"\fnot_measured\x18\x05 \x01(\x0e2\x17.kno.v1.RejectionReasonR\vnotMeasured\x12\x16\n" +
+	"\x06trials\x18\a \x01(\x05R\x06trials\x12*\n" +
 	"\x11fresh_control_arm\x18\x06 \x01(\bR\x0ffreshControlArm\"\xa1\x02\n" +
 	"\vAssetValued\x12\x19\n" +
 	"\basset_id\x18\x01 \x01(\tR\aassetId\x12\x1d\n" +
@@ -2064,10 +2134,11 @@ var file_kno_v1_event_proto_goTypes = []any{
 	(*AgentRef)(nil),            // 19: kno.v1.AgentRef
 	(Direction)(0),              // 20: kno.v1.Direction
 	(*Budget)(nil),              // 21: kno.v1.Budget
-	(RunStatus)(0),              // 22: kno.v1.RunStatus
-	(*ConcurrencyDecision)(nil), // 23: kno.v1.ConcurrencyDecision
-	(RejectionReason)(0),        // 24: kno.v1.RejectionReason
-	(*Interval)(nil),            // 25: kno.v1.Interval
+	(ScoreDomain)(0),            // 22: kno.v1.ScoreDomain
+	(RunStatus)(0),              // 23: kno.v1.RunStatus
+	(*ConcurrencyDecision)(nil), // 24: kno.v1.ConcurrencyDecision
+	(RejectionReason)(0),        // 25: kno.v1.RejectionReason
+	(*Interval)(nil),            // 26: kno.v1.Interval
 }
 var file_kno_v1_event_proto_depIdxs = []int32{
 	4,  // 0: kno.v1.Event.run_started:type_name -> kno.v1.RunStarted
@@ -2088,21 +2159,22 @@ var file_kno_v1_event_proto_depIdxs = []int32{
 	19, // 15: kno.v1.RunStarted.agent:type_name -> kno.v1.AgentRef
 	20, // 16: kno.v1.RunStarted.goal_direction:type_name -> kno.v1.Direction
 	21, // 17: kno.v1.RunStarted.budget:type_name -> kno.v1.Budget
-	3,  // 18: kno.v1.CaseErrored.error:type_name -> kno.v1.EventError
-	18, // 19: kno.v1.StageProgress.stage:type_name -> kno.v1.Stage
-	22, // 20: kno.v1.RunFinished.status:type_name -> kno.v1.RunStatus
-	3,  // 21: kno.v1.RunFinished.error:type_name -> kno.v1.EventError
-	1,  // 22: kno.v1.RetryAttempted.reason:type_name -> kno.v1.RetryReason
-	0,  // 23: kno.v1.OrphanSpend.reason:type_name -> kno.v1.OrphanReason
-	23, // 24: kno.v1.ConcurrencyReduced.decision:type_name -> kno.v1.ConcurrencyDecision
-	24, // 25: kno.v1.AssetRouted.not_measured:type_name -> kno.v1.RejectionReason
-	25, // 26: kno.v1.AssetValued.delta_interval:type_name -> kno.v1.Interval
-	24, // 27: kno.v1.AssetValued.not_measured:type_name -> kno.v1.RejectionReason
-	28, // [28:28] is the sub-list for method output_type
-	28, // [28:28] is the sub-list for method input_type
-	28, // [28:28] is the sub-list for extension type_name
-	28, // [28:28] is the sub-list for extension extendee
-	0,  // [0:28] is the sub-list for field type_name
+	22, // 18: kno.v1.RunStarted.goal_score_domain:type_name -> kno.v1.ScoreDomain
+	3,  // 19: kno.v1.CaseErrored.error:type_name -> kno.v1.EventError
+	18, // 20: kno.v1.StageProgress.stage:type_name -> kno.v1.Stage
+	23, // 21: kno.v1.RunFinished.status:type_name -> kno.v1.RunStatus
+	3,  // 22: kno.v1.RunFinished.error:type_name -> kno.v1.EventError
+	1,  // 23: kno.v1.RetryAttempted.reason:type_name -> kno.v1.RetryReason
+	0,  // 24: kno.v1.OrphanSpend.reason:type_name -> kno.v1.OrphanReason
+	24, // 25: kno.v1.ConcurrencyReduced.decision:type_name -> kno.v1.ConcurrencyDecision
+	25, // 26: kno.v1.AssetRouted.not_measured:type_name -> kno.v1.RejectionReason
+	26, // 27: kno.v1.AssetValued.delta_interval:type_name -> kno.v1.Interval
+	25, // 28: kno.v1.AssetValued.not_measured:type_name -> kno.v1.RejectionReason
+	29, // [29:29] is the sub-list for method output_type
+	29, // [29:29] is the sub-list for method input_type
+	29, // [29:29] is the sub-list for extension type_name
+	29, // [29:29] is the sub-list for extension extendee
+	0,  // [0:29] is the sub-list for field type_name
 }
 
 func init() { file_kno_v1_event_proto_init() }

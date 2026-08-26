@@ -67,6 +67,9 @@ type (
 	// Direction is which way is better for a Goal.
 	Direction = knov1.Direction
 
+	// ScoreDomain is the set of values a Goal.Score can take. See Goal.Domain.
+	ScoreDomain = knov1.ScoreDomain
+
 	// InjectionMode records how a Valuation was measured.
 	InjectionMode = knov1.InjectionMode
 

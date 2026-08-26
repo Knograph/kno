@@ -60,4 +60,16 @@ func (g *Goal) Score(_ context.Context, c *core.Case, r *core.Response) (*core.S
 // uninterpretable.
 func (g *Goal) Direction() core.Direction { return knov1.Direction_DIRECTION_MAXIMIZE }
 
+// Domain reports that this Goal's Scores are binary.
+//
+// Exact match is a verdict: an answer either equals the expected string or it
+// does not, so Score.value is 0.0 or 1.0 and never anything between. A paired
+// difference of two such Scores lands in {-1, 0, +1} — the McNemar setting,
+// where the information is in the discordant counts and the right interval is
+// a score-based one on paired proportions. A bootstrap returns zero width on
+// this data, which reads as certainty.
+func (g *Goal) Domain() core.ScoreDomain {
+	return knov1.ScoreDomain_SCORE_DOMAIN_BINARY
+}
+
 var _ core.Goal = (*Goal)(nil)

@@ -176,6 +176,21 @@ type Goal interface {
 	// Score judges one Response against its Case.
 	Score(ctx context.Context, c *Case, r *Response) (*Score, error)
 
+	// Domain reports the set of values Score.value can take.
+	//
+	// Declared, never inferred from the scores a run happens to produce.
+	// Inferring it is method selection from the sample: a confidence level
+	// would then hold only conditional on a branch that is itself a function
+	// of the data, one extra observation could flip a measurement between
+	// branches, and across many measurements some would land in each branch by
+	// luck while a consumer compared their intervals as if commensurable.
+	//
+	// It is on the interface rather than optional so that a new Goal cannot
+	// land without answering — the interval method for every delta measured
+	// against it depends on this, and a Goal that stayed silent would get the
+	// continuous methods, which are valid but wider than they need to be.
+	Domain() ScoreDomain
+
 	// Direction reports which way is better for this Goal.
 	//
 	// Without it the sign of every delta is uninterpretable: a -0.03 is an

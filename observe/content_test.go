@@ -280,6 +280,13 @@ func (exactMatch) Direction() core.Direction {
 	return knov1.Direction_DIRECTION_MAXIMIZE
 }
 
+// Domain declares the score domain, which core.Goal requires so that a Goal
+// cannot land without saying what its Scores look like — the interval method
+// for every delta measured against it depends on the answer.
+func (exactMatch) Domain() core.ScoreDomain {
+	return knov1.ScoreDomain_SCORE_DOMAIN_BINARY
+}
+
 // TestTheRunSpanReportsAFailedRun.
 //
 // The run span is opened at the top of Baseline and closed by a defer. Marking
