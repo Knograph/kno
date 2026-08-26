@@ -1,0 +1,99 @@
+name: Changelog
+
+# A PR that changes behavior must say so in CHANGELOG.md.
+#
+# docs/debt.md#49: a branch recovered from a rebase conflict by
+# `git checkout -B branch main` and re-applying the source files it remembered
+# merged with no CHANGELOG entry, no ledger repayment, and no plan file — all of
+# which existed and had been reviewed before the rebuild. Nothing caught it:
+# `make docs` checks that links resolve, not that documentation is present, and
+# the Definition of Done is read by a human who is looking at the diff rather
+# than at what is missing from it.
+#
+# The entry names two possible checks and calls this one cheaper: it fires at
+# the PR, where the fix is one commit, rather than at the tag, where the fix is
+# an archaeology exercise. It is deliberately the weak version — presence of a
+# CHANGELOG.md diff, not the shape of the entry — because the failure mode it
+# guards against is a file nobody touched at all.
+#
+# `labeled` and `unlabeled` are in the trigger list on purpose: the escape hatch
+# is a label, and a label that does not re-run the check leaves the PR red until
+# somebody pushes an empty commit to clear it, which is how an escape hatch
+# turns into a thing people route around instead of using.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  entry:
+    name: A behavior change documents itself
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # No checkout and no actions: the question is which files the PR touches,
+      # which the API answers directly. A checkout would need the full history
+      # and a merge-base against a PR's detached merge ref to answer the same
+      # question less reliably. `gh` is preinstalled on the runner.
+      - name: CHANGELOG.md must be part of a behavior-changing PR
+        env:
+          # Never interpolate untrusted PR fields into a shell command; they
+          # arrive as environment variables and are read as data.
+          TITLE: ${{ github.event.pull_request.title }}
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # The escape hatch. It is a LABEL rather than a commit trailer or a
+          # magic string in the body, because it has to be visible on the PR to
+          # everyone reviewing it: an exemption nobody can see reads exactly
+          # like a check that did not run. CONTRIBUTING.md says when it is
+          # legitimate.
+          if printf '%s' "$LABELS" | jq -e 'index("no-changelog")' > /dev/null; then
+            echo "::notice::the no-changelog label is applied; skipping. A reviewer should agree this PR changes nothing a user would notice."
+            exit 0
+          fi
+
+          # The TITLE, not the branch name. Squash-merge makes the title the
+          # commit message, release-please parses the title, and the branch name
+          # is not on the merge commit at all. commit-lint.yml enforces the
+          # grammar; this reads the type out of it.
+          type="$(printf '%s' "$TITLE" | grep -oE '^[a-z]+' || true)"
+
+          # Fail closed. An unparseable title is not an exemption — it is a
+          # separate red check (commit-lint) and an unknown answer here, and the
+          # cost of being wrong in this direction is one label.
+          case "$type" in
+            refactor|chore|test|build)
+              echo "$type: does not change behavior a user can see; no entry required"
+              exit 0
+              ;;
+            "")
+              echo "::error::cannot read a Conventional Commit type from the PR title: $TITLE"
+              echo "Fix the title (see commit-lint.yml and CONTRIBUTING.md), or apply the no-changelog label."
+              exit 1
+              ;;
+          esac
+
+          # Fail closed here too: if the file list cannot be read, the loop over
+          # an empty list would report success on a PR nobody checked.
+          if ! files="$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename')"; then
+            echo "::error::cannot read the file list for PR #$PR — refusing to pass"
+            exit 1
+          fi
+
+          if printf '%s\n' "$files" | grep -qxF 'CHANGELOG.md'; then
+            echo "CHANGELOG.md is in the diff"
+            exit 0
+          fi
+
+          echo "::error::a '$type:' PR must add an entry under ## [Unreleased] in CHANGELOG.md"
+          echo "Only refactor:, chore:, test:, and build: are exempt. If this one genuinely changes"
+          echo "nothing a user would notice, apply the no-changelog label and say why in the PR."
+          exit 1

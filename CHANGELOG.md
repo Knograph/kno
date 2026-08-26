@@ -57,6 +57,21 @@ covenants — breaking any of them requires a major version.
   resume finishes the Asset without paying twice, and nothing downstream reads a delta over half a
   sample.
 
+- **CI requires a behavior-changing PR to document itself.** A new `Changelog` workflow reads the
+  Conventional Commit type out of the **PR title** — the string squash-merge turns into the commit
+  and release-please turns into the release notes — and fails the PR unless `CHANGELOG.md` is in
+  the diff. `refactor:`, `chore:`, `test:`, and `build:` are exempt.
+
+  The escape hatch is the **`no-changelog` label**, not a commit trailer or a phrase in the body:
+  an exemption has to be visible on the PR, or it is indistinguishable from a check that did not
+  run. Applying or removing the label re-runs the check, so using the hatch never costs an empty
+  commit — an escape hatch people work around is worse than none.
+
+  Repays [debt #49](docs/debt.md#49), which was opened when a branch rebuilt onto `main` merged
+  with its CHANGELOG entry, its ledger repayment, and its plan file all silently dropped: `make
+  docs` checks that links resolve, not that documentation is present. The entry's second half —
+  asserting a PR title still describes its diff after a rename — it calls cheaper as a reviewer
+  checklist item than as CI, so that is where it lands, in the PR template beside this check.
 
 - **`stats/interval`** — confidence intervals on paired differences, the machinery prime directive 5
   requires before any delta can be reported. Nothing calls it yet.
@@ -656,6 +671,23 @@ covenants — breaking any of them requires a major version.
   purged is not a pair with a zero in it — it is a pair that cannot be formed, and a zero there is
   indistinguishable from a real score of zero.
 
+- **The CLI test suite runs on an environment allowlist instead of a credential denylist.**
+  `cli/main_test.go` used to unset eleven named provider variables; it now names the three
+  variables its tests may see (`PATH`, `HOME`, `TMPDIR`, each with a written reason) and clears
+  everything else before the first test runs. `KNO_LIVE_TESTS=1` still leaves the environment
+  alone.
+
+  A denylist protects against the providers somebody thought of and stops protecting silently at
+  the one they did not — which is the same failure mode as the bug it was added for. It also could
+  not cover `--key-env host=VAR`, which accepts *any* variable name, so any variable a test could
+  read was a variable a test could mail to a provider.
+
+  Two tests defend the list: one asserts the surviving environment is a subset of it (set
+  membership, not a guess at what a credential looks like), and one refuses an allowlist entry
+  whose name could plausibly hold a secret — so "the test failed, so I allowlisted it" is not a
+  two-line fix for the exposure. A canary variable planted before the scrub makes the guard
+  self-verifying: delete the scrub and both tests go red. Repays
+  [debt #63](docs/debt.md#63).
 
 - **`--cost-per-call-usd` is no longer required alongside `--max-cost-usd`** for an agent that
   prices its own calls. `--agent anthropic:claude-opus-5 --max-cost-usd 5` was refused even though
@@ -824,6 +856,12 @@ covenants — breaking any of them requires a major version.
   the toolchain is as reproducible as every other tool.
 
 ### Fixed
+
+- **`KNO_LIVE_TESTS=0` opted *in* to spending money.** `openaicompat`'s live gate tested "is the
+  variable non-empty" where its two siblings test "is it exactly `1`", so the value every shell
+  writes for a false boolean ran the tests that call a real provider. Found while confirming, for
+  [debt #63](docs/debt.md#63), that the packages outside `cli` are still gated — they are, and this
+  was the one seam where the gate read the opposite of what its value said.
 
 - **`run.proto` said Value "works over Assets" and has no concurrency; ADR-0004 said Value "also
   executes Cases".** Both could not stand, and proto comments are the single source for the
