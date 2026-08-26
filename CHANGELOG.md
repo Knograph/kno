@@ -51,6 +51,22 @@ covenants — breaking any of them requires a major version.
   `HarmBound` returns a one-sided upper bound, because "did this break something" is a one-sided
   question and a two-sided interval at a small control sample spans zero for a real regression —
   rendering, under the report's coloring rule, as "no regression".
+- **`adapters/pool/jsonl`** — Assets from a JSONL file, the first `core.Pool`. Nothing calls it yet.
+
+  `id` and `content` are required; `title`, `tags`, `kind`, and an acquisition cost are optional. A
+  malformed record, a duplicate id, or an unknown field is **fatal**, not skipped — the same rule
+  the Evals adapter states and for the same reason: if one adapter skipped bad records and another
+  halted, the denominator behind every confidence interval would silently vary by adapter.
+
+  `destination` and `context_tokens` are refused as unknown fields rather than quietly ignored,
+  because the file carries what only its author knows and the adapter computes what it can measure.
+
+  `context_tokens` is bytes over a fixed divisor, deliberately **not** the pricing path's
+  `countTokens`: that reserves ~2.7x on prose against ~1.1x on base64, so two Assets of identical
+  true cost would differ ~2.4x in the ranking denominator and greedy selection would order a
+  portfolio by content type. It also takes a *model*, and an Asset's cost is read before a model is
+  chosen — a denominator that moved with the run's model would make two pools' rankings
+  incomparable. The residual bias is documented with its direction ([debt #68](docs/debt.md#68)).
 
 - **Proto for the Value stage** (additive; `buf breaking` clean). Nothing emits these yet — this is
   the wire contract the stage is built against, landed first per CLAUDE.md's coordination rule.

@@ -14,6 +14,7 @@ adapters/agent/fake 0.0
 adapters/agent/internal/transport 88.0
 adapters/agent/pricing 96.0
 adapters/evals/jsonl 92.2
+adapters/pool/jsonl 99.0
 cli 84.1
 cmd/kno 0.0
 core 96.1
