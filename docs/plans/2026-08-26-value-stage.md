@@ -243,7 +243,7 @@ Draft 1's V-4 was the entire stage in one branch. Split, with proto first per CL
 
 | PR | Scope | Depends on | Spends? |
 |---|---|---|---|
-| **V-0** | **Proto:** rejection reason on `Valuation`, Asset-scoped events, sampling seed, `n_routed`/`n_dev`; resolve §2.8 | — | No |
+| **V-0** | **Proto:** `Valuation.not_measured`/`n_routed`/`n_dev`/`control_underpowered`/`n_comparisons`; `Interval.sidedness`/`n`; `AssetRouted`/`AssetValued` events; `Run.sampling_seed`; `ScoreDomain`; §2.8 resolved; ADR-0005 | — | No |
 | **V-1** | `stats/interval` — support-dispatched interval, winner's-curse property test, **the #1 construction-time invariant** | — (`Interval.method` is a shipped `string`; V-0 amends its godoc but does not block) | No |
 | **V-2** | `adapters/pool/jsonl` | — | No |
 | **V-3** | `ContextInjector` on both adapters; Asset into `Prompt.Context`; `Capabilities.ContextInject` | V-0 | No (fixtures) |
@@ -299,7 +299,7 @@ Draft 1's V-4 was the entire stage in one branch. Split, with proto first per CL
 
 **Q2.** Defaults for `--sample-rate`, `--control-sample-rate`, and `--trials`. Q1 comes first — the treatment default follows from the method. The control default follows from the harm size worth catching (§2.4), not from the treatment default.
 
-**Q3.** *(merged with the former Q8.)* What does a Value Run write into `CaseExecution` **and into `Run`'s own `attempted`/`scored`/`errored` counts**? Those are separate fields the API serializes for every stage, and for a Value run whose rows live in `measurements` they close at zero — a Run record asserting the stage did nothing. And what does `error_rate_exceeded` mean when 0 of 0 Cases scored? Resolving §2.8.
+**Q3. RESOLVED in V-0.** Value **does** execute Cases, so it writes `CaseExecution` and records a `ConcurrencyDecision`; `run.proto`'s two claims that it "works over Assets" were wrong and are corrected, ADR-0004 was right. The counts are of **measurements**, not distinct Cases — 200 Assets over 50 Cases attempts 10,000 measurements over 50 Cases, and counting distinct Cases would put a denominator of 50 beside the spend for 10,000 calls. Per-Asset denominators live on `Valuation.n_routed`. `newModelGate` therefore reads a populated `CaseExecution` and the mid-run gate works. *(Original question: what does a Value Run write into `CaseExecution` **and into `Run`'s own `attempted`/`scored`/`errored` counts**? Those are separate fields the API serializes for every stage, and for a Value run whose rows live in `measurements` they close at zero — a Run record asserting the stage did nothing. And what does `error_rate_exceeded` mean when 0 of 0 Cases scored? Resolving §2.8.
 
 **Q4.** System block or message body for the injected Asset? Decides whether provider prompt caching hits across an Asset's whole sample, which is priced separately.
 
@@ -309,7 +309,7 @@ Draft 1's V-4 was the entire stage in one branch. Split, with proto first per CL
 
 **Q7.** `--route none` leaves no un-routed set, so the control arm silently disappears. Refuse the combination, or draw controls from the complement within the full dev split?
 
-**Q8.** ~~Merged into Q3.~~ Half of it is a mechanical fact rather than a question: `modelGate` is unexported in `package core`, so `core/value` cannot reach it either way. The half that matters is inside Q3 — **`newModelGate` reads `run.GetCaseExecution().GetResolvedModels()`, so if Q3 resolves to "a Value Run writes no `CaseExecution`", the mid-run model gate §2.1 argues is essential becomes a no-op that reports success.**
+**Q8. RESOLVED with Q3.** Half of it is a mechanical fact rather than a question: `modelGate` is unexported in `package core`, so `core/value` cannot reach it either way. The half that matters is inside Q3 — **`newModelGate` reads `run.GetCaseExecution().GetResolvedModels()`, so if Q3 resolves to "a Value Run writes no `CaseExecution`", the mid-run model gate §2.1 argues is essential becomes a no-op that reports success.**
 
 **Q10.** A Goal or an `Invoke` that errors mid-valuation: `REJECTION_REASON_MEASUREMENT_FAILED`, or a `Valuation` over a shrunken pair set? Note the direction — dropping a pair because the *treatment* arm errored removes exactly the Cases where the Asset was most harmful (long injected context → timeout), so Δ is biased **upward**, and the bias scales with Asset size, which is `delta_per_cost`'s numerator against its own denominator. §5's other two attrition rows are symmetric; this one is not.
 

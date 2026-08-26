@@ -288,12 +288,16 @@ type Run struct {
 	// Cases held back. A small holdout produces a wide interval, so this number
 	// is part of reading the final result honestly.
 	HoldoutCaseCount int32 `protobuf:"varint,15,opt,name=holdout_case_count,json=holdoutCaseCount,proto3" json:"holdout_case_count,omitempty"`
-	// Cases the Run tried to execute.
+	// Cases the Run tried to execute. For a stage that measures a Case more than
+	// once, this counts MEASUREMENTS — see CaseExecution.
 	AttemptedCaseCount int32 `protobuf:"varint,16,opt,name=attempted_case_count,json=attemptedCaseCount,proto3" json:"attempted_case_count,omitempty"`
-	// Cases that produced a Score. This is the denominator.
+	// Cases that produced a Score. This is the denominator. Counts MEASUREMENTS
+	// for a stage that measures a Case more than once — see attempted_case_count.
 	ScoredCaseCount int32 `protobuf:"varint,17,opt,name=scored_case_count,json=scoredCaseCount,proto3" json:"scored_case_count,omitempty"`
 	// Cases where the agent failed to answer. Excluded from the score, recorded
-	// here so the exclusion is visible rather than implied.
+	// here so the exclusion is visible rather than implied. Counts MEASUREMENTS
+	// on the same terms as the two above, so attempted = scored + errored holds
+	// in whichever unit the stage counts.
 	ErroredCaseCount int32 `protobuf:"varint,18,opt,name=errored_case_count,json=erroredCaseCount,proto3" json:"errored_case_count,omitempty"`
 	// Set when the holdout is too small to support a meaningful confidence
 	// interval. The Run still executes; the number is reported with the caveat
@@ -306,9 +310,11 @@ type Run struct {
 	// Facts about a Run that executed Cases. Absent for a stage that does not.
 	//
 	// Written for every Run whose stage executes Cases, with zeros where nothing
-	// ran. Absent means the stage does not execute Cases at all — Value works
-	// over Assets, Select attempts none — NOT that a Case-executing run happened
-	// to score nothing.
+	// ran. Absent means the stage does not execute Cases at all — Select
+	// attempts none — NOT that a Case-executing run happened to score nothing.
+	//
+	// Value DOES execute Cases and writes this. See the message's own comment
+	// for what its counts mean there.
 	//
 	// Presence is set by the STAGE, not derived from whether any outcome was
 	// recorded. A run whose Cases were every one refused after being charged has
@@ -350,9 +356,36 @@ type Run struct {
 	// bit means "this Run executed Cases" (ADR-0004), and concurrency is decided
 	// before any Case runs — before the Run record exists. Putting it there
 	// would make a scheduling fact share a presence bit with an execution fact.
-	Concurrency   *ConcurrencyDecision `protobuf:"bytes,25,opt,name=concurrency,proto3,oneof" json:"concurrency,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Concurrency *ConcurrencyDecision `protobuf:"bytes,25,opt,name=concurrency,proto3,oneof" json:"concurrency,omitempty"`
+	// The seed behind every random choice this Run made: which Cases were
+	// reserved as controls, and which were sampled.
+	//
+	// NOT Generation.seed, which is the provider's sampler and a different
+	// thing. Recorded because a sample nobody can reproduce is a number nobody
+	// can audit — and because the control partition is drawn BEFORE routing, so
+	// whether a control set was outcome-independent is a claim only the seed can
+	// substantiate after the fact.
+	//
+	// ABSENT for a Run that made no random choice.
+	//
+	// An OUTPUT: generated when the Run starts unless the caller supplied one,
+	// and recorded so the draw can be reproduced. It is deliberately NOT part of
+	// input_fingerprint — unlike split_seed, which is, because re-splitting
+	// changes which Cases are holdout and a resume across that is a corrupted
+	// reference. A resume under a different sampling seed is a lesser problem
+	// (two samples mixed in one Run) but still one, so the resume check compares
+	// it directly rather than through the fingerprint.
+	SamplingSeed *int64 `protobuf:"varint,26,opt,name=sampling_seed,json=samplingSeed,proto3,oneof" json:"sampling_seed,omitempty"`
+	// The set of values this Goal's Score can take.
+	//
+	// Recorded because the interval method for any delta computed against this
+	// Goal depends on it, and because a reader holding a Valuation with
+	// method "tango" cannot otherwise verify which branch produced it. DECLARED
+	// by the Goal, never inferred from the scores observed — inferring it is
+	// method selection from the sample.
+	GoalScoreDomain ScoreDomain `protobuf:"varint,27,opt,name=goal_score_domain,json=goalScoreDomain,proto3,enum=kno.v1.ScoreDomain" json:"goal_score_domain,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *Run) Reset() {
@@ -560,6 +593,20 @@ func (x *Run) GetConcurrency() *ConcurrencyDecision {
 	return nil
 }
 
+func (x *Run) GetSamplingSeed() int64 {
+	if x != nil && x.SamplingSeed != nil {
+		return *x.SamplingSeed
+	}
+	return 0
+}
+
+func (x *Run) GetGoalScoreDomain() ScoreDomain {
+	if x != nil {
+		return x.GoalScoreDomain
+	}
+	return ScoreDomain_SCORE_DOMAIN_UNSPECIFIED
+}
+
 // ConcurrencyDecision is the width a Run executed at, and why.
 //
 // Written for every Run whose stage executes Cases, reduced or not. Presence
@@ -569,8 +616,10 @@ func (x *Run) GetConcurrency() *ConcurrencyDecision {
 // one that ran at 8 byte-identical, so the record could not answer whether two
 // Runs are comparable.
 //
-// Absent for a stage that invokes no agent: Value works over Assets and has no
-// concurrency to report.
+// Absent for a stage that invokes no agent — Select attempts none.
+//
+// Value DOES have a concurrency: it injects an Asset and re-runs Cases, which
+// is agent work with a width. See docs/adr/0004.
 type ConcurrencyDecision struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// What the user asked for.
@@ -680,18 +729,39 @@ func (x *ConcurrencyDecision) GetPerCaseEstimateUsdMicros() int64 {
 // CaseExecution carries the facts that only mean something for a Run that
 // actually executed Cases.
 //
-// It exists for message presence: a stage that executes no Cases — Value works
-// over Assets, Select attempts none — would otherwise write hard zeros
-// indistinguishable from genuinely attempting nothing and scoring nothing.
-// That is docs/debt.md#26.
+// It exists for message presence: a stage that executes no Cases — Select
+// attempts none — would otherwise write hard zeros indistinguishable from
+// genuinely attempting nothing and scoring nothing. That is docs/debt.md#26.
 //
-// Its numbers are aggregated from persisted outcome rows at close, not from
-// in-memory counters. Deriving a run-level figure from what is already durable
-// is what makes it survive a crash and stay correct across a resume — the same
-// move that repays docs/debt.md#27.
+// Value DOES execute Cases and writes this message, per docs/adr/0004. Its
+// attempted/scored/errored counts are of MEASUREMENTS, not distinct Cases:
+// Value measures one Case once per Asset, so 200 Assets over 50 Cases attempts
+// 10,000 measurements over 50 Cases. Counting distinct Cases would put a
+// denominator of 50 beside the spend for 10,000 calls — two numbers in one
+// message describing different populations. Per-Asset denominators live on
+// Valuation.n_routed.
+//
+// Its numbers are aggregated from PERSISTED ROWS at close, not from in-memory
+// counters. Deriving a run-level figure from what is already durable is what
+// makes it survive a crash and stay correct across a resume — the same move
+// that repays docs/debt.md#27.
+//
+// Which rows depends on the stage, and this is load-bearing rather than
+// incidental. Baseline aggregates its outcomes, one row per Case. Value
+// measures a Case once per Asset, and the outcomes table is keyed by
+// (run_id, case_id) with an idempotent writer — so 10,000 measurements over
+// 50 Cases is not representable there, and a Value Run aggregates from its own
+// per-(asset, case) rows instead. A stage that writes no such rows cannot
+// report measurement counts, which is why the two land together.
 type CaseExecution struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Cases in the dev split — the ones this Run was allowed to read.
+	//
+	// Always DISTINCT CASES, never measurements, on every stage: it describes
+	// what was ingested rather than what was executed (ADR-0004). So a Value Run
+	// legitimately reports dev_case_count 50 beside attempted 10,000, and the
+	// two are different populations by design rather than by mistake — the
+	// per-Asset denominator is Valuation.n_routed.
 	DevCaseCount int32 `protobuf:"varint,1,opt,name=dev_case_count,json=devCaseCount,proto3" json:"dev_case_count,omitempty"`
 	// Cases held back for Validate. A small holdout produces a wide interval,
 	// so this is part of reading the final result honestly.
@@ -731,6 +801,20 @@ type CaseExecution struct {
 	// The models the provider reported as actually answering. More than one
 	// means an alias moved mid-Run.
 	ResolvedModels []string `protobuf:"bytes,10,rep,name=resolved_models,json=resolvedModels,proto3" json:"resolved_models,omitempty"`
+	// How many Valuations this Run produced -- the number of comparisons the
+	// intervals in it are drawn from.
+	//
+	// Each Valuation's interval controls a PER-COMPARISON error rate. With 200
+	// Assets at a 95% level, roughly ten null ones have intervals excluding
+	// zero by construction, and they concentrate where improvement-per-cost
+	// ranks highest because small samples and small Assets are the same
+	// Assets. A consumer cannot correct for that from the level alone.
+	//
+	// A floor rather than the number: where a recorded baseline is reused as
+	// the control, every Asset is paired against the same draw, so their
+	// errors are positively correlated and independent-comparison arithmetic
+	// understates.
+	ValuationCount *int32 `protobuf:"varint,11,opt,name=valuation_count,json=valuationCount,proto3,oneof" json:"valuation_count,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -835,11 +919,19 @@ func (x *CaseExecution) GetResolvedModels() []string {
 	return nil
 }
 
+func (x *CaseExecution) GetValuationCount() int32 {
+	if x != nil && x.ValuationCount != nil {
+		return *x.ValuationCount
+	}
+	return 0
+}
+
 var File_kno_v1_run_proto protoreflect.FileDescriptor
 
 const file_kno_v1_run_proto_rawDesc = "" +
 	"\n" +
-	"\x10kno/v1/run.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/portfolio.proto\"\x92\t\n" +
+	"\x10kno/v1/run.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/portfolio.proto\"\x8f\n" +
+	"\n" +
 	"\x03Run\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12#\n" +
 	"\x05stage\x18\x02 \x01(\x0e2\r.kno.v1.StageR\x05stage\x12\x1d\n" +
@@ -871,11 +963,14 @@ const file_kno_v1_run_proto_rawDesc = "" +
 	"generation\x18\x17 \x01(\v2\x12.kno.v1.GenerationH\x02R\n" +
 	"generation\x88\x01\x01\x122\n" +
 	"\x15pricing_table_version\x18\x18 \x01(\tR\x13pricingTableVersion\x12B\n" +
-	"\vconcurrency\x18\x19 \x01(\v2\x1b.kno.v1.ConcurrencyDecisionH\x03R\vconcurrency\x88\x01\x01B\x0e\n" +
+	"\vconcurrency\x18\x19 \x01(\v2\x1b.kno.v1.ConcurrencyDecisionH\x03R\vconcurrency\x88\x01\x01\x12(\n" +
+	"\rsampling_seed\x18\x1a \x01(\x03H\x04R\fsamplingSeed\x88\x01\x01\x12?\n" +
+	"\x11goal_score_domain\x18\x1b \x01(\x0e2\x13.kno.v1.ScoreDomainR\x0fgoalScoreDomainB\x0e\n" +
 	"\f_finished_atB\x11\n" +
 	"\x0f_case_executionB\r\n" +
 	"\v_generationB\x0e\n" +
-	"\f_concurrency\"\x87\x02\n" +
+	"\f_concurrencyB\x10\n" +
+	"\x0e_sampling_seed\"\x87\x02\n" +
 	"\x13ConcurrencyDecision\x12!\n" +
 	"\trequested\x18\x01 \x01(\x05H\x00R\trequested\x88\x01\x01\x12\x1c\n" +
 	"\teffective\x18\x02 \x01(\x05R\teffective\x121\n" +
@@ -883,7 +978,7 @@ const file_kno_v1_run_proto_rawDesc = "" +
 	"\x13headroom_usd_micros\x18\x04 \x01(\x03R\x11headroomUsdMicros\x12>\n" +
 	"\x1cper_case_estimate_usd_micros\x18\x05 \x01(\x03R\x18perCaseEstimateUsdMicrosB\f\n" +
 	"\n" +
-	"_requested\"\xef\x03\n" +
+	"_requested\"\xb1\x04\n" +
 	"\rCaseExecution\x12$\n" +
 	"\x0edev_case_count\x18\x01 \x01(\x05R\fdevCaseCount\x12,\n" +
 	"\x12holdout_case_count\x18\x02 \x01(\x05R\x10holdoutCaseCount\x120\n" +
@@ -895,7 +990,9 @@ const file_kno_v1_run_proto_rawDesc = "" +
 	"\x1ausage_estimated_case_count\x18\b \x01(\x05R\x17usageEstimatedCaseCount\x128\n" +
 	"\x18observed_provider_builds\x18\t \x03(\tR\x16observedProviderBuilds\x12'\n" +
 	"\x0fresolved_models\x18\n" +
-	" \x03(\tR\x0eresolvedModels*{\n" +
+	" \x03(\tR\x0eresolvedModels\x12,\n" +
+	"\x0fvaluation_count\x18\v \x01(\x05H\x00R\x0evaluationCount\x88\x01\x01B\x12\n" +
+	"\x10_valuation_count*{\n" +
 	"\x05Stage\x12\x15\n" +
 	"\x11STAGE_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eSTAGE_BASELINE\x10\x01\x12\x0f\n" +
@@ -941,22 +1038,24 @@ var file_kno_v1_run_proto_goTypes = []any{
 	(Direction)(0),              // 7: kno.v1.Direction
 	(*Budget)(nil),              // 8: kno.v1.Budget
 	(*Generation)(nil),          // 9: kno.v1.Generation
+	(ScoreDomain)(0),            // 10: kno.v1.ScoreDomain
 }
 var file_kno_v1_run_proto_depIdxs = []int32{
-	0, // 0: kno.v1.Run.stage:type_name -> kno.v1.Stage
-	6, // 1: kno.v1.Run.agent:type_name -> kno.v1.AgentRef
-	7, // 2: kno.v1.Run.goal_direction:type_name -> kno.v1.Direction
-	8, // 3: kno.v1.Run.budget:type_name -> kno.v1.Budget
-	1, // 4: kno.v1.Run.status:type_name -> kno.v1.RunStatus
-	5, // 5: kno.v1.Run.case_execution:type_name -> kno.v1.CaseExecution
-	9, // 6: kno.v1.Run.generation:type_name -> kno.v1.Generation
-	4, // 7: kno.v1.Run.concurrency:type_name -> kno.v1.ConcurrencyDecision
-	2, // 8: kno.v1.ConcurrencyDecision.reason:type_name -> kno.v1.ConcurrencyReason
-	9, // [9:9] is the sub-list for method output_type
-	9, // [9:9] is the sub-list for method input_type
-	9, // [9:9] is the sub-list for extension type_name
-	9, // [9:9] is the sub-list for extension extendee
-	0, // [0:9] is the sub-list for field type_name
+	0,  // 0: kno.v1.Run.stage:type_name -> kno.v1.Stage
+	6,  // 1: kno.v1.Run.agent:type_name -> kno.v1.AgentRef
+	7,  // 2: kno.v1.Run.goal_direction:type_name -> kno.v1.Direction
+	8,  // 3: kno.v1.Run.budget:type_name -> kno.v1.Budget
+	1,  // 4: kno.v1.Run.status:type_name -> kno.v1.RunStatus
+	5,  // 5: kno.v1.Run.case_execution:type_name -> kno.v1.CaseExecution
+	9,  // 6: kno.v1.Run.generation:type_name -> kno.v1.Generation
+	4,  // 7: kno.v1.Run.concurrency:type_name -> kno.v1.ConcurrencyDecision
+	10, // 8: kno.v1.Run.goal_score_domain:type_name -> kno.v1.ScoreDomain
+	2,  // 9: kno.v1.ConcurrencyDecision.reason:type_name -> kno.v1.ConcurrencyReason
+	10, // [10:10] is the sub-list for method output_type
+	10, // [10:10] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_kno_v1_run_proto_init() }
@@ -968,6 +1067,7 @@ func file_kno_v1_run_proto_init() {
 	file_kno_v1_portfolio_proto_init()
 	file_kno_v1_run_proto_msgTypes[0].OneofWrappers = []any{}
 	file_kno_v1_run_proto_msgTypes[1].OneofWrappers = []any{}
+	file_kno_v1_run_proto_msgTypes[2].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

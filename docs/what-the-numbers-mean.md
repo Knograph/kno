@@ -110,6 +110,11 @@ Stated plainly, because a tool that lists its limits is easier to trust than one
 - Whether an asset that helps today still helps after a model update.
 - Whether an asset is *correct* — only whether it moves your Goal. A confidently wrong document that happens to match your rubric will score well.
 - Anything about data you didn't put in the pool. The gaps report tells you where your pool was insufficient; it can't tell you what would have worked.
+- **Whether you chose the Cases after looking at the answers.** If you read your baseline's failures and then tagged those Cases, or wrote assets aimed at them, the Cases Kno measures were picked using information from the baseline — and a Δ measured that way is biased **upward by roughly how often your agent gets those Cases right when you re-run them** — not by its score on the recorded baseline, which on the Cases you picked is zero by construction. If your agent answers a Case correctly 70% of the time, an asset that does nothing can measure **+0.70** on the subset where it happened to fail. That figure is a ceiling: it assumes you picked exactly the failures, and real tagging is softer.
+
+  Kno guards its own version of this: when it routes to the Cases a baseline failed, it measures a fresh control arm rather than reusing the draw that did the selecting, and it reserves the control Cases at random before routing runs. It cannot guard yours, because a tag that means "billing" and a tag that means "the ones that failed" look identical from here.
+
+  This is not a reason to avoid reading your failures — that loop is the point of the tool. It is the reason `validate` exists: the holdout is untouched by any of it, so a gain that came from selection shows up there as a gain that doesn't replicate. [ADR-0005](adr/0005-value-cannot-see-user-side-conditioning.md).
 
 ## If you only remember one thing
 

@@ -54,6 +54,39 @@ enum Direction {
   DIRECTION_MINIMIZE = 2;
 }
 
+// ScoreDomain is the set of values a Goal's Score can take.
+//
+// DECLARED by the Goal, never inferred from the scores observed. Inferring it
+// is method selection from the sample: the confidence level then holds only
+// conditional on a branch that is itself a function of the data, one extra
+// observation can flip a measurement between branches and change its interval
+// discontinuously, and across many measurements some land in each branch by
+// luck — after which a consumer compares intervals computed by different
+// estimators with different coverage.
+//
+// It exists because the interval method depends on it. A paired difference of
+// binary scores is the McNemar setting, where the information lives in the
+// discordant counts and the right instruments are score-based intervals on
+// paired proportions; a difference of continuous scores is not, and those
+// instruments are undefined on it. A Goal that declares nothing is treated as
+// continuous, which is the conservative direction: the continuous methods are
+// valid on binary data and merely wider, while the reverse is invalid.
+enum ScoreDomain {
+  // Unset. Treated as CONTINUOUS_UNBOUNDED, because a method that is merely
+  // wide is safer than one that is undefined.
+  SCORE_DOMAIN_UNSPECIFIED = 0;
+
+  // Exactly 0.0 or 1.0. Pass/fail, exact match, a judge returning a verdict.
+  SCORE_DOMAIN_BINARY = 1;
+
+  // Any value in [0.0, 1.0]. A graded rubric, a similarity, a judge returning
+  // a confidence.
+  SCORE_DOMAIN_UNIT_INTERVAL = 2;
+
+  // Any real value. Latency in milliseconds, cost, a token count.
+  SCORE_DOMAIN_CONTINUOUS_UNBOUNDED = 3;
+}
+
 // Destination is where a measured Asset belongs. Assigned by mechanism
 // routing, never by the user directly — though a user may override it.
 enum Destination {

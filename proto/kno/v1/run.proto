@@ -142,14 +142,18 @@ message Run {
   // is part of reading the final result honestly.
   int32 holdout_case_count = 15;
 
-  // Cases the Run tried to execute.
+  // Cases the Run tried to execute. For a stage that measures a Case more than
+  // once, this counts MEASUREMENTS — see CaseExecution.
   int32 attempted_case_count = 16;
 
-  // Cases that produced a Score. This is the denominator.
+  // Cases that produced a Score. This is the denominator. Counts MEASUREMENTS
+  // for a stage that measures a Case more than once — see attempted_case_count.
   int32 scored_case_count = 17;
 
   // Cases where the agent failed to answer. Excluded from the score, recorded
-  // here so the exclusion is visible rather than implied.
+  // here so the exclusion is visible rather than implied. Counts MEASUREMENTS
+  // on the same terms as the two above, so attempted = scored + errored holds
+  // in whichever unit the stage counts.
   int32 errored_case_count = 18;
 
   // Set when the holdout is too small to support a meaningful confidence
@@ -165,9 +169,11 @@ message Run {
   // Facts about a Run that executed Cases. Absent for a stage that does not.
   //
   // Written for every Run whose stage executes Cases, with zeros where nothing
-  // ran. Absent means the stage does not execute Cases at all — Value works
-  // over Assets, Select attempts none — NOT that a Case-executing run happened
-  // to score nothing.
+  // ran. Absent means the stage does not execute Cases at all — Select
+  // attempts none — NOT that a Case-executing run happened to score nothing.
+  //
+  // Value DOES execute Cases and writes this. See the message's own comment
+  // for what its counts mean there.
   //
   // Presence is set by the STAGE, not derived from whether any outcome was
   // recorded. A run whose Cases were every one refused after being charged has
@@ -213,6 +219,35 @@ message Run {
   // before any Case runs — before the Run record exists. Putting it there
   // would make a scheduling fact share a presence bit with an execution fact.
   optional ConcurrencyDecision concurrency = 25;
+
+  // The seed behind every random choice this Run made: which Cases were
+  // reserved as controls, and which were sampled.
+  //
+  // NOT Generation.seed, which is the provider's sampler and a different
+  // thing. Recorded because a sample nobody can reproduce is a number nobody
+  // can audit — and because the control partition is drawn BEFORE routing, so
+  // whether a control set was outcome-independent is a claim only the seed can
+  // substantiate after the fact.
+  //
+  // ABSENT for a Run that made no random choice.
+  //
+  // An OUTPUT: generated when the Run starts unless the caller supplied one,
+  // and recorded so the draw can be reproduced. It is deliberately NOT part of
+  // input_fingerprint — unlike split_seed, which is, because re-splitting
+  // changes which Cases are holdout and a resume across that is a corrupted
+  // reference. A resume under a different sampling seed is a lesser problem
+  // (two samples mixed in one Run) but still one, so the resume check compares
+  // it directly rather than through the fingerprint.
+  optional int64 sampling_seed = 26;
+
+  // The set of values this Goal's Score can take.
+  //
+  // Recorded because the interval method for any delta computed against this
+  // Goal depends on it, and because a reader holding a Valuation with
+  // method "tango" cannot otherwise verify which branch produced it. DECLARED
+  // by the Goal, never inferred from the scores observed — inferring it is
+  // method selection from the sample.
+  ScoreDomain goal_score_domain = 27;
 }
 
 // ConcurrencyDecision is the width a Run executed at, and why.
@@ -224,8 +259,10 @@ message Run {
 // one that ran at 8 byte-identical, so the record could not answer whether two
 // Runs are comparable.
 //
-// Absent for a stage that invokes no agent: Value works over Assets and has no
-// concurrency to report.
+// Absent for a stage that invokes no agent — Select attempts none.
+//
+// Value DOES have a concurrency: it injects an Asset and re-runs Cases, which
+// is agent work with a width. See docs/adr/0004.
 message ConcurrencyDecision {
   // What the user asked for.
   //
@@ -288,17 +325,38 @@ enum ConcurrencyReason {
 // CaseExecution carries the facts that only mean something for a Run that
 // actually executed Cases.
 //
-// It exists for message presence: a stage that executes no Cases — Value works
-// over Assets, Select attempts none — would otherwise write hard zeros
-// indistinguishable from genuinely attempting nothing and scoring nothing.
-// That is docs/debt.md#26.
+// It exists for message presence: a stage that executes no Cases — Select
+// attempts none — would otherwise write hard zeros indistinguishable from
+// genuinely attempting nothing and scoring nothing. That is docs/debt.md#26.
 //
-// Its numbers are aggregated from persisted outcome rows at close, not from
-// in-memory counters. Deriving a run-level figure from what is already durable
-// is what makes it survive a crash and stay correct across a resume — the same
-// move that repays docs/debt.md#27.
+// Value DOES execute Cases and writes this message, per docs/adr/0004. Its
+// attempted/scored/errored counts are of MEASUREMENTS, not distinct Cases:
+// Value measures one Case once per Asset, so 200 Assets over 50 Cases attempts
+// 10,000 measurements over 50 Cases. Counting distinct Cases would put a
+// denominator of 50 beside the spend for 10,000 calls — two numbers in one
+// message describing different populations. Per-Asset denominators live on
+// Valuation.n_routed.
+//
+// Its numbers are aggregated from PERSISTED ROWS at close, not from in-memory
+// counters. Deriving a run-level figure from what is already durable is what
+// makes it survive a crash and stay correct across a resume — the same move
+// that repays docs/debt.md#27.
+//
+// Which rows depends on the stage, and this is load-bearing rather than
+// incidental. Baseline aggregates its outcomes, one row per Case. Value
+// measures a Case once per Asset, and the outcomes table is keyed by
+// (run_id, case_id) with an idempotent writer — so 10,000 measurements over
+// 50 Cases is not representable there, and a Value Run aggregates from its own
+// per-(asset, case) rows instead. A stage that writes no such rows cannot
+// report measurement counts, which is why the two land together.
 message CaseExecution {
   // Cases in the dev split — the ones this Run was allowed to read.
+  //
+  // Always DISTINCT CASES, never measurements, on every stage: it describes
+  // what was ingested rather than what was executed (ADR-0004). So a Value Run
+  // legitimately reports dev_case_count 50 beside attempted 10,000, and the
+  // two are different populations by design rather than by mistake — the
+  // per-Asset denominator is Valuation.n_routed.
   int32 dev_case_count = 1;
 
   // Cases held back for Validate. A small holdout produces a wide interval,
@@ -347,4 +405,19 @@ message CaseExecution {
   // The models the provider reported as actually answering. More than one
   // means an alias moved mid-Run.
   repeated string resolved_models = 10;
+
+  // How many Valuations this Run produced -- the number of comparisons the
+  // intervals in it are drawn from.
+  //
+  // Each Valuation's interval controls a PER-COMPARISON error rate. With 200
+  // Assets at a 95% level, roughly ten null ones have intervals excluding
+  // zero by construction, and they concentrate where improvement-per-cost
+  // ranks highest because small samples and small Assets are the same
+  // Assets. A consumer cannot correct for that from the level alone.
+  //
+  // A floor rather than the number: where a recorded baseline is reused as
+  // the control, every Asset is paired against the same draw, so their
+  // errors are positively correlated and independent-comparison arithmetic
+  // understates.
+  optional int32 valuation_count = 11;
 }

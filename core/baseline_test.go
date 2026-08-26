@@ -709,6 +709,13 @@ func (directionlessGoal) Direction() core.Direction {
 	return knov1.Direction_DIRECTION_UNSPECIFIED
 }
 
+// Domain declares the score domain, which core.Goal requires so that a Goal
+// cannot land without saying what its Scores look like — the interval method
+// for every delta measured against it depends on the answer.
+func (directionlessGoal) Domain() core.ScoreDomain {
+	return knov1.ScoreDomain_SCORE_DOMAIN_BINARY
+}
+
 // failingStore fails a chosen operation, so the error paths that persistence
 // failures take are exercised rather than assumed.
 type failingStore struct {
@@ -1043,6 +1050,13 @@ func (erroringGoal) Score(context.Context, *core.Case, *core.Response) (*core.Sc
 	return nil, errors.New("the judge returned malformed output")
 }
 func (erroringGoal) Direction() core.Direction { return knov1.Direction_DIRECTION_MAXIMIZE }
+
+// Domain declares the score domain, which core.Goal requires so that a Goal
+// cannot land without saying what its Scores look like — the interval method
+// for every delta measured against it depends on the answer.
+func (erroringGoal) Domain() core.ScoreDomain {
+	return knov1.ScoreDomain_SCORE_DOMAIN_BINARY
+}
 
 // TestScoreFailureAfterAPaidCallPersistsTheRealCost.
 //

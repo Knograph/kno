@@ -126,6 +126,7 @@ func TestMoneyIsAlwaysInt64MicroUSD(t *testing.T) {
 		"kno.v1.CostVector.acquisition_usd_micros",
 		"kno.v1.Response.cost_usd_micros",
 		"kno.v1.Valuation.measurement_cost_usd_micros",
+		"kno.v1.AssetValued.measurement_cost_usd_micros",
 		"kno.v1.Budget.max_cost_usd_micros",
 		"kno.v1.Report.total_cost_usd_micros",
 		"kno.v1.TuningJob.estimated_cost_usd_micros",
@@ -396,6 +397,7 @@ func TestEveryDeltaHasAnIntervalField(t *testing.T) {
 
 	pairs := []struct{ message, delta, interval string }{
 		{"kno.v1.Valuation", "delta_goal", "delta_interval"},
+		{"kno.v1.AssetValued", "delta_goal", "delta_interval"},
 		{"kno.v1.Valuation", "delta_control", "control_interval"},
 		{"kno.v1.Portfolio", "dev_estimated_gain", "dev_estimated_interval"},
 		{"kno.v1.Report", "holdout_gain", "holdout_interval"},

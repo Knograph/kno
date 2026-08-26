@@ -3,6 +3,7 @@ syntax = "proto3";
 package kno.v1;
 
 import "kno/v1/common.proto";
+import "kno/v1/valuation.proto";
 import "kno/v1/portfolio.proto";
 import "kno/v1/run.proto";
 
@@ -76,6 +77,16 @@ message Event {
 
     // Money was spent on a Case that produced no outcome.
     OrphanSpend orphan_spend = 21;
+
+    // An Asset was routed, measured, or set aside. Value's unit of work is the
+    // Asset, and every payload above is Case- or Run-scoped — so before these
+    // the stage's user-visible state had nowhere to go, which CLAUDE.md
+    // forbids ("new user-visible state = new event type, never a side
+    // channel") and which left the TUI with nothing to render.
+    AssetRouted asset_routed = 22;
+
+    // An Asset's measurement finished, with its delta and interval.
+    AssetValued asset_valued = 23;
   }
 }
 
@@ -128,6 +139,15 @@ message RunStarted {
 
   // The caps this Run will execute under.
   Budget budget = 6;
+
+  // The set of values this Goal's Score can take.
+  //
+  // Recorded because the interval method for any delta computed against this
+  // Goal depends on it, and because a reader holding a Valuation with
+  // method "tango" cannot otherwise verify which branch produced it. DECLARED
+  // by the Goal, never inferred from the scores observed — inferring it is
+  // method selection from the sample.
+  ScoreDomain goal_score_domain = 7;
 }
 
 // CaseScored reports one Case that produced a Score.
@@ -146,6 +166,15 @@ message CaseScored {
 
   // Wall-clock latency of the agent call.
   int64 latency_ms = 5;
+
+  // Which Asset was injected, when the stage injects one.
+  //
+  // EMPTY for Baseline, which measures a Case once. Value measures the same
+  // Case once per Asset, so without this a consumer sees the same case_id
+  // arrive N times with different scores and no way to tell which measurement
+  // is which — and the event stream is the spine the TUI and the API both
+  // render from.
+  string asset_id = 6;
 }
 
 // CaseErrored reports one Case the agent failed to answer.
@@ -182,6 +211,15 @@ message CaseErrored {
   // What the failed attempt still cost. Often zero when the provider rejected
   // the call outright, but not always.
   int64 cost_usd_micros = 4;
+
+  // Which Asset was injected, when the stage injects one.
+  //
+  // EMPTY for Baseline, which measures a Case once. Value measures the same
+  // Case once per Asset, so without this a consumer sees the same case_id
+  // arrive N times with different scores and no way to tell which measurement
+  // is which — and the event stream is the spine the TUI and the API both
+  // render from.
+  string asset_id = 5;
 }
 
 // StageProgress is a periodic heartbeat.
@@ -192,8 +230,13 @@ message StageProgress {
   // Which stage is running.
   Stage stage = 1;
 
-  // Cases with a TERMINAL outcome so far. attempted = scored + errored; a Case
-  // still being retried is not yet counted. See CaseErrored.will_retry.
+  // Work items with a TERMINAL outcome so far. attempted = scored + errored; an
+  // item still being retried is not yet counted. See CaseErrored.will_retry.
+  //
+  // The UNIT is the stage's unit of work: Cases for Baseline, MEASUREMENTS for
+  // Value, which measures a Case once per Asset. total_cases below is in the
+  // same unit, so the ratio is a progress fraction on every stage rather than
+  // reaching 20,000% on the one that measures a Case 200 times.
   int32 attempted = 2;
 
   // Of those, how many produced a Score.
@@ -202,7 +245,8 @@ message StageProgress {
   // Of those, how many terminally failed to answer.
   int32 errored = 4;
 
-  // Total Cases intended, matching RunStarted.total_cases. Zero when unknown.
+  // Total work items intended, in the same unit as attempted above, matching
+  // RunStarted.total_cases. Zero when unknown.
   int32 total_cases = 5;
 
   // Throughput, for the ETA a dashboard shows.
@@ -504,4 +548,75 @@ enum RetryReason {
 
   // The request timed out before a response began.
   RETRY_REASON_TIMEOUT = 4;
+}
+
+// AssetRouted reports which Cases an Asset will be measured against, and how
+// many it will actually cost.
+//
+// Emitted BEFORE any measurement, so a watcher sees the shape of the work
+// before the money is spent — and so an Asset that routes to nothing is
+// visible as a decision rather than as silence.
+message AssetRouted {
+  // Which Asset.
+  string asset_id = 1;
+
+  // Cases this Asset could plausibly affect.
+  int32 n_routed = 2;
+
+  // Cases actually drawn from those, after sampling.
+  int32 n_sampled = 3;
+
+  // Control Cases drawn from the reserved partition.
+  int32 n_control = 4;
+
+  // Set when the Asset routed to nothing and will not be measured. The
+  // interesting case is IRRELEVANT, which costs nothing and is a real answer.
+  RejectionReason not_measured = 5;
+
+  // How many times each measurement is repeated.
+  //
+  // Present because the cost of this Asset is
+  // (n_sampled x arms + n_control) x trials, and an event whose stated job is
+  // showing the shape of the work before the money is spent would understate
+  // by exactly this multiplier without it — which is the omission the Value
+  // plan records making twice.
+  int32 trials = 7;
+
+  // Whether the control arm is measured fresh rather than read from the
+  // baseline.
+  //
+  // True when routing conditioned on the baseline outcome, because reusing the
+  // draw that SELECTED a Case as that Case's control manufactures the effect
+  // being measured. Recorded per Asset because it changes both the cost and
+  // what the delta is an estimate of.
+  bool fresh_control_arm = 6;
+}
+
+// AssetValued reports a finished Valuation.
+//
+// The Valuation itself is the durable record; this is the event a dashboard
+// renders as it happens. It carries the identity and the headline numbers, not
+// a copy of the whole message — an event stream that duplicates the store is
+// two things to keep consistent.
+message AssetValued {
+  // Which Asset.
+  string asset_id = 1;
+
+  // The measured effect and its interval. Both, always: a delta without its
+  // interval is the thing prime directive 5 exists to prevent, and an event
+  // is exactly where that discipline slips.
+  double delta_goal = 2;
+
+  // The interval on delta_goal. Never omitted: a delta without its interval is
+  // the thing prime directive 5 exists to prevent.
+  Interval delta_interval = 3;
+
+  // Improvement per unit cost — the ranking metric.
+  double delta_per_cost = 4;
+
+  // What this measurement cost, in MICRO-USD.
+  int64 measurement_cost_usd_micros = 5;
+
+  // Set when the valuation could not be completed.
+  RejectionReason not_measured = 6;
 }
