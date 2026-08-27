@@ -123,13 +123,13 @@ So Kno reports **the smallest regression the run could actually have seen**, rat
 
 | Control Cases | Smallest detectable regression |
 |---|---|
-| 10 | 0.26 |
-| 20 | 0.18 |
-| 60 | 0.11 |
-| 100 | 0.08 |
-| 300 | 0.05 |
+| 10 | 0.40 |
+| 20 | 0.27 |
+| 60 | 0.15 |
+| 100 | 0.12 |
+| 300 | 0.07 |
 
-Read that as a limit, not a score. A run with 30 control Cases that reports no regression has **not** cleared an Asset that costs you 10 points — it could not have seen one. Below 20 Cases Kno also marks the run **underpowered**, but treat that flag as a floor rather than a certificate: above it a run is not "powered", it is merely not absurd.
+Read that as a limit, not a score. A run with 30 control Cases that reports no regression has **not** cleared an Asset that costs you 10 points — it could not have seen one. The flag fires below 20 Cases or whenever the honest bound sits above the harm margin, so on most real runs it is on — that is deliberate: the number travels first and the flag travels beside it. Treat the flag as a floor rather than a certificate: above it a run is not "powered", it is merely not absurd, and it is the bound — not the flag — that says what was actually detectable.
 
 This is why the reserved slice is a third of your dev split rather than a token sample, and why a bigger eval set buys you a sharper answer to "did this break something" even though it does not change what routing costs.
 

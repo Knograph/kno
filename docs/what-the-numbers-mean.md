@@ -128,6 +128,8 @@ Stated plainly, because a tool that lists its limits is easier to trust than one
 
   This is not a reason to avoid reading your failures — that loop is the point of the tool. It is the reason `validate` exists: the holdout is untouched by any of it, so a gain that came from selection shows up there as a gain that doesn't replicate. [ADR-0005](adr/0005-value-cannot-see-user-side-conditioning.md).
 
+- **The harm bound is a limit, not a score.** A Valuation reports `min_detectable_harm`: the smallest regression its control sample could have separated from zero, at the shipped confidence level, computed from the worst-case paired variance — it does not shrink because your observed variance happened to be small, and it uses the t distribution at small samples. Against a harm margin of 0.10 the honest threshold sits near 135 control Cases, so most real runs report a bound larger than the margin and carry the underpowered flag. That is information, not noise: a run reporting no regression while able to see only ±0.27 has not cleared an asset that costs 0.10, and the number says so. **A delta is reported only beside its interval** — if no interval could be formed (too few pairs, or ragged attrition), the Valuation reports `UNDERPOWERED` and no delta, never a bare number.
+
 ## If you only remember one thing
 
 **The holdout number is the one you may put in a slide.** Everything else is a measurement in service of producing it.

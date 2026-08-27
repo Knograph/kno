@@ -1,0 +1,616 @@
+package core
+
+import (
+	"context"
+	"errors"
+	"iter"
+	"math"
+	"strings"
+	"testing"
+
+	"github.com/knograph/kno/core/value"
+	knov1 "github.com/knograph/kno/gen/kno/v1"
+	"github.com/knograph/kno/stats/budget"
+	"github.com/knograph/kno/stats/interval"
+	"github.com/knograph/kno/store"
+)
+
+// fixedDirectionGoal is a Goal that only supplies what the scaffolding reads:
+// a declared direction and domain. Scoring never happens in these tests.
+type fixedDirectionGoal struct {
+	dir    knov1.Direction
+	domain knov1.ScoreDomain
+}
+
+func (fixedDirectionGoal) Score(context.Context, *Case, *Response) (*Score, error) {
+	return &knov1.Score{}, nil
+}
+
+func (g fixedDirectionGoal) Direction() Direction { return g.dir }
+
+func (g fixedDirectionGoal) Domain() ScoreDomain { return g.domain }
+
+// TestMinimizeGoalsProduceSignedDeltas pins the P0-1 fix: direction is applied
+// exactly once, in pairs, before any aggregation. Every earlier test in the
+// suite used a MAXIMIZE-shaped fixture, which is why an inverted MINIMIZE
+// delta could sit in the scaffolding unnoticed.
+func TestMinimizeGoalsProduceSignedDeltas(t *testing.T) {
+	t.Parallel()
+
+	treatment := map[string]map[int32]float64{"c1": {1: 5.0}}
+	baseline := map[string]store.CaseScore{"c1": {Value: 2.0}}
+
+	maxDeltas, _ := pairs([]string{"c1"}, treatment, nil, baseline, false, knov1.Direction_DIRECTION_MAXIMIZE)
+	if got := maxDeltas[0][0]; got != 3.0 {
+		t.Errorf("MAXIMIZE delta = %v, want +3", got)
+	}
+	minDeltas, _ := pairs([]string{"c1"}, treatment, nil, baseline, false, knov1.Direction_DIRECTION_MINIMIZE)
+	if got := minDeltas[0][0]; got != -3.0 {
+		t.Errorf("MINIMIZE delta = %v, want -3: the goal's direction is not "+
+			"decoration, and a latency goal that got slower must report a NEGATIVE delta", got)
+	}
+}
+
+// TestPairingJoinsOnTrialNumber pins the P2-14 fix. After a trial is lost on
+// one side only, positional pairing would align treatment-trial-3 with
+// control-trial-2 — a pair that never happened — and would hide the drop.
+func TestPairingJoinsOnTrialNumber(t *testing.T) {
+	t.Parallel()
+
+	// Trial 2 was lost on the treatment side only.
+	treatment := map[string]map[int32]float64{"c1": {1: 10.0, 3: 30.0}}
+	control := map[string]map[int32]float64{"c1": {1: 5.0, 2: 7.0, 3: 15.0}}
+
+	deltas, dropped := pairs([]string{"c1"}, treatment, control, nil, true, knov1.Direction_DIRECTION_MAXIMIZE)
+	if dropped != 1 {
+		t.Errorf("dropped = %d, want 1 (the unpaired trial 2)", dropped)
+	}
+	if len(deltas) != 1 || len(deltas[0]) != 2 {
+		t.Fatalf("pairs = %v, want one Case vector of two deltas", deltas)
+	}
+	// trial 1: 10-5 = 5; trial 3: 30-15 = 15. Positional pairing would have
+	// produced 10-5 and 30-7, and the second number is a draw that never
+	// happened.
+	if deltas[0][0] != 5.0 || deltas[0][1] != 15.0 {
+		t.Errorf("deltas = %v, want [5 15]", deltas[0])
+	}
+}
+
+// TestValuationOmitsDeltaWithoutInterval pins the P0-2 fix: a one-Case routed
+// slice cannot form an interval, so the Valuation reports UNDERERPOWERED and
+// omits the delta rather than shipping a bare number — the shape prime
+// directive 5 exists to ban.
+func TestValuationOmitsDeltaWithoutInterval(t *testing.T) {
+	t.Parallel()
+
+	st := openTestStore(t)
+	opts := ValueOptions{
+		RunID: "run-1",
+		Store: st,
+		Goal:  fixedDirectionGoal{dir: knov1.Direction_DIRECTION_MAXIMIZE, domain: knov1.ScoreDomain_SCORE_DOMAIN_BINARY},
+	}
+	writeMeasurement(t, st, "run-1", "a", "c1", store.ArmTreatment, 1, 0.9)
+
+	v, err := opts.valuationFor(context.Background(),
+		&Asset{Id: "a"},
+		value.AssetRouting{AssetID: "a", CaseIDs: []string{"c1"}},
+		&value.Plan{Trials: 1, EligibleCases: 1},
+		map[string]store.CaseScore{"c1": {Value: 0.5, Passed: true}},
+	)
+	if err != nil {
+		t.Fatalf("valuationFor: %v", err)
+	}
+	if v.NotMeasured != knov1.RejectionReason_REJECTION_REASON_UNDERPOWERED {
+		t.Errorf("NotMeasured = %v, want UNDERPOWERED: one pair cannot form an "+
+			"interval, and a delta without its interval must not be reported", v.NotMeasured)
+	}
+	if v.DeltaInterval != nil || v.DeltaGoal != 0 {
+		t.Errorf("DeltaGoal = %v with interval %v, want both absent", v.DeltaGoal, v.DeltaInterval)
+	}
+	if v.NPairs == nil || v.NDropped == nil {
+		t.Fatalf("n_pairs/n_dropped = %v/%v, want the attrition statement to "+
+			"travel with the underpowered marker", v.NPairs, v.NDropped)
+	}
+}
+
+// TestRaggedAttritionReportsUnderpoweredNotAShrunkenDelta pins the other half
+// of P0-2: ragged per-Case vectors (one Case measured twice, another once) are
+// refused by the interval package, and the fallback is the named reason — not
+// a delta computed over whatever survived.
+func TestRaggedAttritionReportsUnderpoweredNotAShrunkenDelta(t *testing.T) {
+	t.Parallel()
+
+	st := openTestStore(t)
+	opts := ValueOptions{
+		RunID: "run-1",
+		Store: st,
+		Goal:  fixedDirectionGoal{dir: knov1.Direction_DIRECTION_MAXIMIZE, domain: knov1.ScoreDomain_SCORE_DOMAIN_BINARY},
+	}
+	writeMeasurement(t, st, "run-1", "a", "c1", store.ArmTreatment, 1, 0.9)
+	writeMeasurement(t, st, "run-1", "a", "c2", store.ArmTreatment, 1, 0.8)
+	writeMeasurement(t, st, "run-1", "a", "c2", store.ArmTreatment, 2, 0.8)
+
+	v, err := opts.valuationFor(context.Background(),
+		&Asset{Id: "a"},
+		value.AssetRouting{AssetID: "a", CaseIDs: []string{"c1", "c2"}},
+		&value.Plan{Trials: 2, EligibleCases: 2},
+		map[string]store.CaseScore{"c1": {Value: 0.5}, "c2": {Value: 0.5}},
+	)
+	if err != nil {
+		t.Fatalf("valuationFor: %v", err)
+	}
+	if v.NotMeasured != knov1.RejectionReason_REJECTION_REASON_UNDERPOWERED {
+		t.Errorf("NotMeasured = %v, want UNDERPOWERED for a ragged pair set", v.NotMeasured)
+	}
+	if v.DeltaGoal != 0 || v.DeltaInterval != nil {
+		t.Errorf("DeltaGoal = %v, want the ragged delta suppressed", v.DeltaGoal)
+	}
+}
+
+// TestHarmBoundConsumesPerCaseMeans pins the P0-3 fix: the control interval is
+// computed over one value per Case, never over the flattened per-trial deltas.
+// Flattening inflates n by Trials, which narrows the harm bound by about
+// sqrt(Trials) in the direction that clears harmful assets.
+func TestHarmBoundConsumesPerCaseMeans(t *testing.T) {
+	t.Parallel()
+
+	st := openTestStore(t)
+	opts := ValueOptions{
+		RunID: "run-1",
+		Store: st,
+		Goal:  fixedDirectionGoal{dir: knov1.Direction_DIRECTION_MAXIMIZE, domain: knov1.ScoreDomain_SCORE_DOMAIN_BINARY},
+	}
+	// Two control Cases, three trials each, baseline recorded at 0.5.
+	for _, c := range []string{"c1", "c2"} {
+		for trial := int32(1); trial <= 3; trial++ {
+			writeMeasurement(t, st, "run-1", "a", c, store.ArmTreatment, trial, 0.9)
+		}
+	}
+
+	v, err := opts.valuationFor(context.Background(),
+		&Asset{Id: "a"},
+		value.AssetRouting{AssetID: "a", CaseIDs: []string{"c1", "c2"}},
+		&value.Plan{Trials: 3, EligibleCases: 2, ControlCaseIDs: []string{"c1", "c2"}},
+		map[string]store.CaseScore{"c1": {Value: 0.5}, "c2": {Value: 0.5}},
+	)
+	if err != nil {
+		t.Fatalf("valuationFor: %v", err)
+	}
+	// The honest computation: per-Case means [0.4, 0.4], one value per Case.
+	honest := interval.HarmBound([]float64{0.4, 0.4}, knov1.ScoreDomain_SCORE_DOMAIN_BINARY, 3, defaultLevel)
+	if honest == nil {
+		t.Fatal("the honest two-Case bound is nil; the fixture is too small")
+	}
+	if v.ControlInterval == nil {
+		t.Fatal("ControlInterval is nil; the per-Case-mean bound exists")
+	}
+	if math.Abs(v.ControlInterval.GetLow()-honest.GetLow()) > 1e-12 {
+		t.Errorf("ControlInterval low = %v, want %v (per-Case means, n = Case count). "+
+			"The flattened shape would compute over n = %d and narrow the bound",
+			v.ControlInterval.GetLow(), honest.GetLow(), 2*3)
+	}
+	if got := v.DeltaControl; math.Abs(got-0.4) > 1e-9 {
+		t.Errorf("DeltaControl = %v, want 0.4", got)
+	}
+}
+
+// TestMeasurementsForSkipsZeroRoutedAssets pins the P1-4 fix: an Asset routed
+// to nothing costs no measurements, harm test included. The opposite of this
+// test — charging it the control partition — was the 125x over-quote the
+// quote-formula fix removed.
+func TestMeasurementsForSkipsZeroRoutedAssets(t *testing.T) {
+	t.Parallel()
+
+	routing := value.AssetRouting{
+		AssetID:           "a",
+		CaseIDs:           nil,
+		NotMeasuredReason: knov1.RejectionReason_REJECTION_REASON_IRRELEVANT,
+	}
+	plan := &value.Plan{Trials: 1, ControlCaseIDs: []string{"c1", "c2", "c3"}}
+	if got := measurementsFor(routing, plan, "a"); len(got) != 0 {
+		t.Errorf("measurementsFor scheduled %d measurements for a zero-routed Asset; "+
+			"Plan.Measurements skips it and the schedule must mirror the quote", len(got))
+	}
+}
+
+// TestNDevIsTheEligiblePool pins the P1-7 fix: n_dev names the dev-split
+// population the Asset was routed from, not the control partition — writing
+// the partition there understates the population by the reserve fraction and
+// any consumer scaling by n_dev gets it wrong by that factor.
+func TestNDevIsTheEligiblePool(t *testing.T) {
+	t.Parallel()
+
+	st := openTestStore(t)
+	opts := ValueOptions{
+		RunID: "run-1",
+		Store: st,
+		Goal:  fixedDirectionGoal{dir: knov1.Direction_DIRECTION_MAXIMIZE, domain: knov1.ScoreDomain_SCORE_DOMAIN_BINARY},
+	}
+	writeMeasurement(t, st, "run-1", "a", "c1", store.ArmTreatment, 1, 0.9)
+
+	v, err := opts.valuationFor(context.Background(),
+		&Asset{Id: "a"},
+		value.AssetRouting{AssetID: "a", CaseIDs: []string{"c1"}},
+		&value.Plan{Trials: 1, EligibleCases: 50, ControlCaseIDs: make([]string, 15)},
+		map[string]store.CaseScore{"c1": {Value: 0.5}},
+	)
+	if err != nil {
+		t.Fatalf("valuationFor: %v", err)
+	}
+	if v.NDev == nil || *v.NDev != 50 {
+		t.Errorf("NDev = %v, want 50 (the eligible pool); the control partition "+
+			"holds 15 and is not the population n_dev names", v.NDev)
+	}
+}
+
+// TestBlendedBaselineIsRefusedUnlessOptedIn pins the P1-5 fix: a baseline that
+// resolved more than one model is a mix of estimators, not one estimator, and
+// pairing against it would claim a single reference that never existed. This
+// is debt #55's marker being read by the first stage that consumes a Baseline.
+func TestBlendedBaselineIsRefusedUnlessOptedIn(t *testing.T) {
+	t.Parallel()
+
+	st := openTestStore(t)
+	createBaselineRun(t, st, "base-1", []string{"model-a", "model-b"})
+	writeBaselineOutcome(t, st, "base-1", "c1", 0.8)
+
+	opts := ValueOptions{
+		RunID:         "run-1",
+		BaselineRunID: "base-1",
+		Store:         st,
+	}
+	if _, err := opts.baselineCases(context.Background()); err == nil ||
+		!strings.Contains(err.Error(), "blended") {
+		t.Errorf("baselineCases err = %v, want a blended-model refusal", err)
+	}
+	opts.UnsafeBaseline = true
+	scores, err := opts.baselineCases(context.Background())
+	if err != nil {
+		t.Fatalf("baselineCases with the opt-in: %v", err)
+	}
+	if len(scores) != 1 {
+		t.Errorf("got %d scores, want 1", len(scores))
+	}
+}
+
+// TestSingleModelBaselinePassesTheGate is the counter-case: the refusal fires
+// on the blend, not on the presence of a baseline.
+func TestSingleModelBaselinePassesTheGate(t *testing.T) {
+	t.Parallel()
+
+	st := openTestStore(t)
+	createBaselineRun(t, st, "base-1", []string{"model-a"})
+	writeBaselineOutcome(t, st, "base-1", "c1", 0.8)
+
+	opts := ValueOptions{
+		RunID:         "run-1",
+		BaselineRunID: "base-1",
+		Store:         st,
+	}
+	if _, err := opts.baselineCases(context.Background()); err != nil {
+		t.Fatalf("baselineCases over a single-model baseline: %v", err)
+	}
+}
+
+// openTestStore builds an in-memory-backed store in a temp directory.
+func openTestStore(t *testing.T) store.Store {
+	t.Helper()
+	st, err := store.NewSQLite(context.Background(), t.TempDir()+"/kno.db")
+	if err != nil {
+		t.Fatalf("opening store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	return st
+}
+
+// writeMeasurement records one scored measurement for an (Asset, Case, arm,
+// trial) key, creating the Value run row first — the measurements table
+// references runs(id), and the FK is part of the store's spend integrity.
+func writeMeasurement(t *testing.T, st store.Store, runID, assetID, caseID string, arm store.Arm, trial int32, score float64) {
+	t.Helper()
+	ensureValueRun(t, st, runID)
+	if err := st.RecordMeasurement(context.Background(), runID, &store.Measurement{
+		Key: store.MeasurementKey{AssetID: assetID, CaseID: caseID, Arm: arm, Trial: trial},
+		Score: &knov1.Score{
+			CaseId: caseID,
+			Value:  score,
+		},
+	}); err != nil {
+		t.Fatalf("recording measurement: %v", err)
+	}
+}
+
+// ensureValueRun creates the Value run row a measurements test runs under,
+// tolerating a second call for the same run ID.
+func ensureValueRun(t *testing.T, st store.Store, runID string) {
+	t.Helper()
+	run := &knov1.Run{
+		Id:            runID,
+		Stage:         knov1.Stage_STAGE_VALUE,
+		GoalName:      "accuracy",
+		GoalDirection: knov1.Direction_DIRECTION_MAXIMIZE,
+	}
+	if err := st.CreateRun(context.Background(), run); err != nil && !errors.Is(err, store.ErrRunExists) {
+		t.Fatalf("creating value run: %v", err)
+	}
+}
+
+// createBaselineRun writes a finished Baseline run with the given resolved
+// models, empty incomplete_reason, and no CaseExecution counts.
+func createBaselineRun(t *testing.T, st store.Store, runID string, models []string) {
+	t.Helper()
+	run := &knov1.Run{
+		Id:            runID,
+		Stage:         knov1.Stage_STAGE_BASELINE,
+		GoalName:      "accuracy",
+		GoalDirection: knov1.Direction_DIRECTION_MAXIMIZE,
+		CaseExecution: &knov1.CaseExecution{
+			ResolvedModels: models,
+		},
+	}
+	if err := st.CreateRun(context.Background(), run); err != nil {
+		t.Fatalf("creating baseline run: %v", err)
+	}
+}
+
+// writeBaselineOutcome records one scored outcome on a baseline run, the shape
+// CaseScores reads.
+func writeBaselineOutcome(t *testing.T, st store.Store, runID, caseID string, score float64) {
+	t.Helper()
+	if err := st.RecordOutcome(context.Background(), runID, &store.Outcome{
+		CaseID: caseID,
+		Score:  &knov1.Score{CaseId: caseID, Value: score, Passed: true},
+	}); err != nil {
+		t.Fatalf("recording baseline outcome: %v", err)
+	}
+}
+
+// stubAgent implements Agent plus ContextInjector.
+type stubAgent struct{}
+
+func (stubAgent) Invoke(context.Context, *Case) (*Response, error) { return &Response{}, nil }
+
+func (stubAgent) WithContext(*Asset) (Agent, error) { return stubAgent{}, nil }
+
+// uncapableAgent is an Agent that cannot carry an Asset. It deliberately does
+// NOT embed stubAgent: embedding would inherit WithContext and silently turn
+// the fixture into a capable one.
+type uncapableAgent struct{}
+
+func (uncapableAgent) Invoke(context.Context, *Case) (*Response, error) { return &Response{}, nil }
+
+// lyingAgent implements ContextInjector but declares context_inject false —
+// the adapter that answers anyway, which validate refuses with the sharper
+// message.
+type lyingAgent struct{ stubAgent }
+
+func (lyingAgent) Capabilities() *knov1.Capabilities { return &knov1.Capabilities{} }
+
+// stubPool supplies a fixed list of Assets.
+type stubPool struct{ assets []*Asset }
+
+func (p stubPool) Assets(_ context.Context) (iter.Seq2[*Asset, error], error) {
+	return func(yield func(*Asset, error) bool) {
+		for _, a := range p.assets {
+			if !yield(a, nil) {
+				return
+			}
+		}
+	}, nil
+}
+
+// TestValueValidatesEverythingRefusableBeforeSpend drives every refusal
+// branch: each one is free, and the alternative to each is a full-price run
+// whose output reads as a result.
+func TestValueValidatesEverythingRefusableBeforeSpend(t *testing.T) {
+	t.Parallel()
+
+	st := openTestStore(t)
+	full := ValueOptions{
+		RunID:         "run-1",
+		BaselineRunID: "base-1",
+		Agent:         stubAgent{},
+		Goal:          fixedDirectionGoal{dir: knov1.Direction_DIRECTION_MAXIMIZE, domain: knov1.ScoreDomain_SCORE_DOMAIN_BINARY},
+		Guard:         &budget.Guard{},
+		Store:         st,
+	}
+	pool := stubPool{assets: []*Asset{{Id: "a"}}}
+
+	cases := []struct {
+		name string
+		opts ValueOptions
+		want string
+	}{
+		{"no run ID", func() ValueOptions { o := full; o.RunID = ""; return o }(), "run ID"},
+		{"no baseline", func() ValueOptions { o := full; o.BaselineRunID = ""; return o }(), "baseline run"},
+		{"no agent", func() ValueOptions { o := full; o.Agent = nil; return o }(), "agent"},
+		{"no goal", func() ValueOptions { o := full; o.Goal = nil; return o }(), "goal"},
+		{"no store", func() ValueOptions { o := full; o.Store = nil; return o }(), "store"},
+		{"no guard", func() ValueOptions { o := full; o.Guard = nil; return o }(), "budget guard"},
+		{"no pool", full, "pool"},
+		{"agent cannot inject", func() ValueOptions { o := full; o.Agent = uncapableAgent{}; return o }(), "cannot carry an Asset"},
+		{"agent lies about injecting", func() ValueOptions { o := full; o.Agent = lyingAgent{}; return o }(), "context_inject false"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := tc.opts.validate(pool)
+			if tc.name == "no pool" {
+				err = tc.opts.validate(nil)
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("validate err = %v, want mention of %q", err, tc.want)
+			}
+		})
+	}
+	if err := full.validate(pool); err != nil {
+		t.Errorf("a complete option set refused: %v", err)
+	}
+}
+
+// TestBaselineCasesRefusesEverythingThatIsNotABaseline drives the stage,
+// incomplete, and empty-scores refusals.
+func TestBaselineCasesRefusesEverythingThatIsNotABaseline(t *testing.T) {
+	t.Parallel()
+
+	st := openTestStore(t)
+	opts := ValueOptions{BaselineRunID: "base-1", Store: st}
+
+	wrong, err := st.GetRun(context.Background(), "base-1")
+	_ = wrong
+	if err == nil {
+		t.Fatal("expected GetRun on a missing run to error")
+	}
+
+	// Wrong stage.
+	ensureValueRun(t, st, "base-1")
+	if _, err := opts.baselineCases(context.Background()); err == nil ||
+		!strings.Contains(err.Error(), "not a baseline") {
+		t.Errorf("err = %v, want the wrong-stage refusal", err)
+	}
+
+	// Incomplete baseline.
+	st2 := openTestStore(t)
+	inc := &knov1.Run{
+		Id: "base-2", Stage: knov1.Stage_STAGE_BASELINE, GoalName: "accuracy",
+		GoalDirection:    knov1.Direction_DIRECTION_MAXIMIZE,
+		IncompleteReason: "error_rate_exceeded",
+	}
+	if err := st2.CreateRun(context.Background(), inc); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	opts2 := ValueOptions{BaselineRunID: "base-2", Store: st2}
+	if _, err := opts2.baselineCases(context.Background()); err == nil ||
+		!strings.Contains(err.Error(), "incomplete") {
+		t.Errorf("err = %v, want the incomplete-baseline refusal", err)
+	}
+
+	// Completed baseline with no scores.
+	st3 := openTestStore(t)
+	createBaselineRun(t, st3, "base-3", []string{"model-a"})
+	opts3 := ValueOptions{BaselineRunID: "base-3", Store: st3}
+	if _, err := opts3.baselineCases(context.Background()); err == nil ||
+		!strings.Contains(err.Error(), "no scores") {
+		t.Errorf("err = %v, want the no-scores refusal", err)
+	}
+}
+
+// TestCaseRefsKeepsTheScoreOutOfTheRouter drives the unpairable counting and
+// the error path — the ONLY place a baseline score becomes a routing input,
+// and it becomes a bool.
+func TestCaseRefsKeepsTheScoreOutOfTheRouter(t *testing.T) {
+	t.Parallel()
+
+	cases := []*Case{
+		{Id: "c1"},
+		{Id: "c2"},
+		{Id: "c3"},
+	}
+	seq := func(yield func(*Case, error) bool) {
+		for _, c := range cases {
+			if !yield(c, nil) {
+				return
+			}
+		}
+	}
+	scores := map[string]store.CaseScore{
+		"c1": {Value: 0.9, Passed: true},
+		"c2": {Unrecoverable: true},
+		// c3 was never scored in the baseline.
+	}
+	refs, unpairable, err := caseRefs(seq, scores)
+	if err != nil {
+		t.Fatalf("caseRefs: %v", err)
+	}
+	if len(refs) != 1 || refs[0].ID != "c1" || refs[0].Failed {
+		t.Errorf("refs = %+v, want just c1, passed", refs)
+	}
+	if unpairable != 2 {
+		t.Errorf("unpairable = %d, want 2 (unrecoverable + never scored)", unpairable)
+	}
+
+	// A source error is fatal, not a partial list.
+	broken := func(yield func(*Case, error) bool) {
+		yield(nil, errors.New("source is gone"))
+	}
+	if _, _, err := caseRefs(broken, scores); err == nil {
+		t.Error("caseRefs over an erroring source returned no error")
+	}
+}
+
+// TestMeasurementsForMirrorsTheQuote covers the routed paths: both arms when
+// the selection conditioned on the baseline, one arm when it did not, trials
+// expansion, and the control partition.
+func TestMeasurementsForMirrorsTheQuote(t *testing.T) {
+	t.Parallel()
+
+	routing := value.AssetRouting{
+		AssetID:         "a",
+		CaseIDs:         []string{"c1", "c2"},
+		FreshControlArm: true,
+	}
+	plan := &value.Plan{Trials: 2, ControlCaseIDs: []string{"c3"}}
+	got := measurementsFor(routing, plan, "a")
+	// 2 routed Cases x 2 arms x 2 trials + 1 control Case x 1 arm x 2 trials.
+	if len(got) != 10 {
+		t.Fatalf("scheduled %d measurements, want 10", len(got))
+	}
+
+	routing.FreshControlArm = false
+	got = measurementsFor(routing, plan, "a")
+	// 2 routed x 1 arm x 2 trials + 1 control x 1 arm x 2 trials.
+	if len(got) != 6 {
+		t.Fatalf("scheduled %d measurements without a fresh control arm, want 6", len(got))
+	}
+}
+
+// TestAssertQuoteBoundsRefusesAnOverScheduledRun covers the consent check the
+// loop start wires: a schedule above the quoted number means the consent
+// prompt under-stated the run.
+func TestAssertQuoteBoundsRefusesAnOverScheduledRun(t *testing.T) {
+	t.Parallel()
+
+	plan := &value.Plan{
+		Trials:         1,
+		Routed:         []value.AssetRouting{{AssetID: "a", CaseIDs: []string{"c1", "c2"}, FreshControlArm: true}},
+		ControlCaseIDs: []string{"c3"},
+	}
+	// 2x2 + 1 = 5 quoted.
+	if err := assertQuoteBounds(5, plan); err != nil {
+		t.Errorf("a schedule matching the quote refused: %v", err)
+	}
+	if err := assertQuoteBounds(6, plan); err == nil {
+		t.Error("a schedule above the quote passed; the user consented to a " +
+			"smaller run than the one that would execute")
+	}
+}
+
+// TestValuationForZeroRoutedAssetsCarriesTheReason pins the passthrough:
+// an Asset measured against zero Cases is a result, and not_measured carries
+// why.
+func TestValuationForZeroRoutedAssetsCarriesTheReason(t *testing.T) {
+	t.Parallel()
+
+	st := openTestStore(t)
+	ensureValueRun(t, st, "run-1")
+	opts := ValueOptions{
+		RunID: "run-1",
+		Store: st,
+		Goal:  fixedDirectionGoal{dir: knov1.Direction_DIRECTION_MAXIMIZE, domain: knov1.ScoreDomain_SCORE_DOMAIN_BINARY},
+	}
+	v, err := opts.valuationFor(context.Background(),
+		&Asset{Id: "a"},
+		value.AssetRouting{AssetID: "a", NotMeasuredReason: knov1.RejectionReason_REJECTION_REASON_IRRELEVANT},
+		&value.Plan{Trials: 1, EligibleCases: 42},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("valuationFor: %v", err)
+	}
+	if v.NotMeasured != knov1.RejectionReason_REJECTION_REASON_IRRELEVANT {
+		t.Errorf("NotMeasured = %v, want IRRELEVANT carried through", v.NotMeasured)
+	}
+	if v.NDev == nil || *v.NDev != 42 {
+		t.Errorf("NDev = %v, want 42 even for a zero-routed Asset", v.NDev)
+	}
+}

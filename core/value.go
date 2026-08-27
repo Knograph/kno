@@ -61,6 +61,15 @@ type ValueOptions struct {
 	// Resume continues a run whose measurements are already partly recorded.
 	Resume bool
 
+	// UnsafeBaseline accepts a baseline whose resolved models form a blend.
+	//
+	// Off by default, and deliberately awkward to reach: pairing against a
+	// control that mixes models is not an estimator of anything, because each
+	// Case's control draw came from a different agent. The flag exists for
+	// operators who know their blend is irrelevant to the Goal — the refusal
+	// cannot read that from the record.
+	UnsafeBaseline bool
+
 	// InputFingerprint pins the inputs, so a resume cannot silently continue a
 	// different run.
 	InputFingerprint string
@@ -169,6 +178,20 @@ func (o ValueOptions) baselineCases(ctx context.Context) (map[string]store.CaseS
 				"scores cover only the Cases that happened to succeed, so a delta "+
 				"against them is measured on a slice selected by failures",
 				o.BaselineRunID, r))
+	}
+	// A blended-model baseline is refused, not averaged with. Pairing against
+	// it would compare the Asset against a control that was a different agent
+	// on different Cases — a mix of estimators, not one estimator — and the
+	// resulting "delta" would claim a single reference that never existed.
+	// This is debt #55's marker, read here: the first stage consuming a
+	// Baseline as a reference refuses what would make the reference lie.
+	if models := run.GetCaseExecution().GetResolvedModels(); len(models) > 1 && !o.UnsafeBaseline {
+		return nil, errs.ErrInvalidInput.
+			WithFix("re-run the baseline pinned to one model, or pass --unsafe-baseline if " +
+				"the blend is known not to matter for this Goal").
+			Wrap(fmt.Errorf("baseline run %s resolved %d models (%v); a delta against "+
+				"a blended control is not an estimator of anything",
+				o.BaselineRunID, len(models), models))
 	}
 
 	scores, err := o.Store.CaseScores(ctx, o.BaselineRunID)
