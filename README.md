@@ -34,9 +34,9 @@ cosign verify-blob checksums.txt \
   --certificate-identity-regexp '^https://github\.com/[Kk]nograph/kno/\.github/workflows/release\.yml@refs/tags/.+$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
-grep " kno_0.0.1_darwin_arm64.tar.gz$" checksums.txt | shasum -a 256 -c -
+grep " kno_<version>_<os>_<arch>.tar.gz$" checksums.txt | shasum -a 256 -c -
 
-gh attestation verify kno_0.0.1_darwin_arm64.tar.gz --repo knograph/kno \
+gh attestation verify kno_<version>_<os>_<arch>.tar.gz --repo Knograph/kno \
   --signer-workflow knograph/kno/.github/workflows/release.yml
 ```
 
