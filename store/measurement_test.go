@@ -271,6 +271,9 @@ func TestCaseScoresSeparatesAbsentFromUnrecoverable(t *testing.T) {
 	if err := s.RecordOutcome(ctx, "run-1", scoredOutcome("case-scored", 0.75, 10)); err != nil {
 		t.Fatalf("scored: %v", err)
 	}
+	if err := s.RecordOutcome(ctx, "run-1", scoredOutcome("case-failed", 0, 10)); err != nil {
+		t.Fatalf("failed case: %v", err)
+	}
 	if err := s.RecordOutcome(ctx, "run-1", &store.Outcome{
 		CaseID: "case-errored",
 		Err:    "timeout",
@@ -284,6 +287,15 @@ func TestCaseScoresSeparatesAbsentFromUnrecoverable(t *testing.T) {
 	mustExec(t, s, `INSERT INTO outcomes
 	    (run_id, case_id, scored, err_code, calls, cost_usd_micros, tokens)
 	  VALUES ('run-1', 'case-gone', 1, '', 1, 5, 10)`)
+	// Half a score: a value with no verdict. This build's writers set both
+	// columns in one statement and the migration backfills both together, so
+	// nothing HERE produces this row — but a row on disk is not a row this
+	// build wrote, and a missing verdict reads as `false`, which is precisely
+	// "the baseline failed this Case" and precisely what routing selects on.
+	// Unrecoverable is the honest answer; a confident false is not.
+	mustExec(t, s, `INSERT INTO outcomes
+	    (run_id, case_id, scored, err_code, calls, cost_usd_micros, tokens, score_value)
+	  VALUES ('run-1', 'case-half', 1, '', 1, 5, 10, 0.9)`)
 
 	scores, err := s.CaseScores(ctx, "run-1")
 	if err != nil {
@@ -298,7 +310,31 @@ func TestCaseScoresSeparatesAbsentFromUnrecoverable(t *testing.T) {
 		t.Fatal("a scored Case is absent from CaseScores")
 	}
 	if got.Unrecoverable || got.Value != 0.75 {
-		t.Errorf("scored Case = %+v, want {0.75 false}", got)
+		t.Errorf("scored Case = %+v, want value 0.75 and recoverable", got)
+	}
+	// The Goal's verdict, carried rather than re-derived. Routing selects on
+	// exactly this bit, and only the Goal knows where its threshold sits — a
+	// similarity Goal passes somewhere other than 1.0, and a latency Goal
+	// passes BELOW its number.
+	if !got.Passed {
+		t.Errorf("a Case the Goal passed reports Passed false (%+v); routing selects "+
+			"on this bit, so a wrong one sends every Asset at the wrong slice", got)
+	}
+	half, ok := scores["case-half"]
+	if !ok {
+		t.Fatal("a row with a value and no verdict is absent from CaseScores")
+	}
+	if !half.Unrecoverable {
+		t.Errorf("a score with no verdict = %+v, want Unrecoverable; a missing verdict "+
+			"reads as false, which is the bit routing selects on", half)
+	}
+
+	failed, ok := scores["case-failed"]
+	if !ok {
+		t.Fatal("a scored-but-failed Case is missing from CaseScores")
+	}
+	if failed.Passed || failed.Unrecoverable {
+		t.Errorf("a failed Case = %+v, want Passed false and recoverable", failed)
 	}
 
 	gone, ok := scores["case-gone"]
