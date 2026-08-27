@@ -759,6 +759,35 @@ covenants — breaking any of them requires a major version.
 
 ### Changed
 
+- **The budget-and-retry core is one implementation, not one per stage** (`core/invoke.go`). No
+  behaviour change: `BaselineOptions.invokeWithRetry` is now a wrapper that supplies Baseline's two
+  event hooks, and everything else moved verbatim.
+
+  It is extracted rather than duplicated because the Value stage needs the same "authorize, call,
+  settle, retry" and a second copy is how two stages come to disagree about money. What moved is not
+  generic plumbing — it is six separately-discovered defects held in place by their fixes: the retry
+  budget measured against a real clock rather than an injectable one (a frozen clock turned a
+  cumulative bound into a per-sleep one, 40 provider calls for one Case against a 50ms budget);
+  billing accumulated across attempts, since the guard settles each one but only the last error
+  survives the loop; settled calls counted apart from attempts, since a refused `Authorize` returns
+  before settling; a recovered panic carrying its spend out, so a Case the guard charged cannot be
+  persisted as free; saturating arithmetic matching `Guard.Settle`; and an overshoot **recorded**
+  rather than returned, because returning it discarded a paid, scoreable answer and then skipped the
+  Case forever on resume.
+
+  The hooks are handed a context that is already detached and already carries its grace, so neither
+  stage can get that wrong independently — an overshoot is emitted exactly when a budget stop has
+  cancelled the worker, and a hook using the live context would drop the one event explaining where
+  the money went.
+
+  Verified the way a no-behaviour-change refactor should be: Baseline's existing suite, plus three
+  mutations to the extracted core, each confirmed applied and each fatal —
+  `TestABilledFailureBeforeASuccessIsStillPersisted`,
+  `TestAKilledRunResumesWithTheMoneyItAlreadySpent`, `TestAPanicDoesNotTakeTheMoneyWithIt`, and
+  `TestAnEventWriteFailureDoesNotDestroyThePaidWorkItReportsOn` all fail against a broken core, so
+  the suite genuinely covers what moved.
+
+
 - **`Store.ScoreSum` returns a `ScoreSummary`** rather than `(float64, int, int, error)` — a
   public Go API break, permitted pre-1.0. It repays [debt #31](docs/debt.md#31): a scored row with
   no readable number has two possible causes, a purge before the score lived in a column of its

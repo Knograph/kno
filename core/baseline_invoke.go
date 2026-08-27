@@ -95,142 +95,72 @@ func (o BaselineOptions) workFunc(agg *aggregator) executor.WorkFunc[*Case, case
 	}
 }
 
-// invokeWithRetry returns the response, how many provider calls it took, and
-// the error.
+// invokeWithRetry invokes one Case through the shared budget-and-retry core.
 //
-// The attempt count is returned because store.Outcome.Spend is documented as
-// "including any failed attempts preceding a successful retry" and did not
-// include them: the guard settled each attempt while the store persisted one,
-// so Guard.Restore under-restored the call cap by (attempts-1) for every
-// retried Case. Harmless while only a fake agent ran; a real 429 makes it
-// routine.
+// A thin wrapper, and thin on purpose: everything it used to contain now lives
+// in invoker, so the Value stage calls the same code rather than a second copy.
+// Two stages with two implementations of "authorize, call, settle, retry" is
+// how they come to disagree about money, and every line moved was already the
+// fix for a defect measured once.
+//
+// What stays here is the only part that is genuinely Baseline's: which events
+// to emit, and the aggregator they are recorded against.
 func (o BaselineOptions) invokeWithRetry(
 	ctx context.Context,
 	c *Case,
 	agg *aggregator,
 	est budget.Estimate,
 ) (resp *Response, attempts int, billedUSDMicros, settledCallCount int64, err error) {
-	backoff := o.retryBackoff()
-	// time.Now, not o.now. The budget bounds real elapsed time, and o.now is
-	// injectable — a frozen clock (which BaselineOptions.Now's own godoc
-	// invites for stable golden tests) made "now + wait > now + budget"
-	// collapse to "wait > budget", turning a cumulative bound into a per-sleep
-	// one. Measured under a frozen clock: 40 provider calls for one Case
-	// against a 50ms budget.
-	deadline := time.Now().Add(o.retryBudget())
-	var lastErr error
+	return o.invoker(agg).withRetry(ctx, c, est)
+}
 
-	// Accumulated across attempts, because each one settles into the guard
-	// separately and only the LAST error survives the loop. With MaxAttempts 3
-	// the guard can settle three billed charges that the sink could recover at
-	// most one of — and SettledSpend is the only durable record of money
-	// spent, so the difference is headroom a resumed run spends twice.
-	var billed int64
-
-	// Calls the guard actually SETTLED, which is not the attempt count.
-	// attempts++ runs at the top of the loop, before invokeOnce, and a refused
-	// Authorize returns before settling anything — so a Case that made one
-	// real call and was refused on attempt 2 would otherwise persist Calls: 2
-	// against a guard that settled 1.
-	var settledCalls int64
-
-	// A panic must not take the money with it. The executor recovers, but it
-	// discards the value — deliberately — so an outcome built after the
-	// unwind would carry no spend, and sinkFunc would persist zero for a Case
-	// the guard had already settled. Measured before this: guard 3 calls,
-	// store 0.
-	//
-	// %T rather than %v, matching the executor: a panic value is arbitrary and
-	// may embed a prompt or a response, and this string is persisted.
-	defer func() {
-		if p := recover(); p != nil {
-			resp = nil
-			billedUSDMicros = billed
-			settledCallCount = settledCalls
-			err = fmt.Errorf("panic invoking case %s: %T", c.GetId(), p)
-		}
-	}()
-
-	for attempt := 1; attempt <= o.maxAttempts(); attempt++ {
-		attempts++
-		resp, settled, overshoot, invokeErr := o.invokeOnce(ctx, c, est, attempt)
-		// Saturating, matching Guard.Settle. A plain add wraps where the guard
-		// pins, so the store and the guard would disagree on exactly the
-		// inputs the clamp exists for — and the store is the one that outlives
-		// the process.
-		billed = saturatingAdd(billed, settled.CostUSDMicros)
-		settledCalls = saturatingAdd(settledCalls, settled.Calls)
-		if overshoot > 0 {
-			// Emitted at settle time and gated on the DELTA, so the count is
-			// bounded by concurrency rather than by Case count: once the cap
-			// binds, only reservations already in flight can overshoot.
-			//
-			// The failure is recorded, NOT returned. Returning it discarded a
-			// paid, scoreable answer — the overshoot check runs before the
-			// success check — and recorded the Case as an agent error while
-			// still writing its outcome row, so a resume skipped it forever.
-			//
-			// WithoutCancel with its own grace, because a budget stop cancels
-			// the worker context and a budget stop is exactly when an
-			// overshoot happens.
-			emitCtx, cancel := context.WithTimeout(
-				context.WithoutCancel(ctx), progressWriteGrace,
-			)
+// invoker builds the shared core with Baseline's event hooks.
+//
+// The hooks receive a context that is already detached and already carries its
+// grace, so neither stage can get that wrong independently — which matters
+// because an overshoot is emitted exactly when a budget stop has cancelled the
+// worker, and a hook that used the live context would drop the one event
+// explaining where the money went.
+func (o BaselineOptions) invoker(agg *aggregator) invoker {
+	return invoker{
+		Agent:        o.Agent,
+		AgentRef:     o.AgentRef,
+		Guard:        o.Guard,
+		MaxAttempts:  o.maxAttempts(),
+		RetryBudget:  o.retryBudget(),
+		RetryBackoff: o.retryBackoff(),
+		OnOvershoot: func(ctx context.Context, caseID string, estimated, settled, overshoot int64) {
 			agg.recordEmitFailure(o.emitSettlementOvershoot(
-				emitCtx, agg, c.GetId(), est.CostUSDMicros, settled.CostUSDMicros, overshoot,
-			))
-			cancel()
-		}
-		if invokeErr == nil {
-			return resp, attempts, billed, settledCalls, nil
-		}
-		lastErr = invokeErr
-
-		if !retryable(invokeErr) {
-			return nil, attempts, billed, settledCalls, invokeErr
-		}
-		if attempt == o.maxAttempts() {
-			break
-		}
-
-		wait := backoff
-		// A provider that says how long to wait is the authority on its own
-		// limits; our doubling is only a guess for when it does not say.
-		if after, ok := retryAfterOf(invokeErr); ok {
-			wait = after
-		}
-
-		// Both bounds, whichever binds first. Stopping here rather than after
-		// the wait means the budget is a bound on time SPENT, not on time
-		// spent plus one more sleep.
-		if time.Now().Add(wait).After(deadline) {
-			break
-		}
-
-		// BEFORE the wait, not after. The whole value of the signal is
-		// telling a watcher the run is obeying a provider's backoff rather
-		// than hung; emitted after the sleep it announces, it reports
-		// idleness only once idleness has ended.
-		// Recorded rather than returned, for the same reason: an event-store
-		// hiccup must not convert a retryable Case into a terminal error and
-		// inflate the run's error rate past ErrorRateExceeded.
-		retryCtx, cancelRetry := context.WithTimeout(
-			context.WithoutCancel(ctx), progressWriteGrace,
-		)
-		agg.recordEmitFailure(o.emitRetryAttempted(retryCtx, agg, c.GetId(), attempt,
-			retryReasonOf(invokeErr), wait, time.Until(deadline)))
-		cancelRetry()
-
-		// A ctx-aware wait. Sleeping through a cancellation would keep a
-		// stopped run alive for the length of the backoff.
-		select {
-		case <-time.After(wait):
-			backoff *= 2
-		case <-ctx.Done():
-			return nil, attempts, billed, settledCalls, ctx.Err()
-		}
+				ctx, agg, caseID, estimated, settled, overshoot))
+		},
+		OnRetry: func(ctx context.Context, caseID string, attempt int,
+			reason knov1.RetryReason, wait, remaining time.Duration,
+		) {
+			agg.recordEmitFailure(o.emitRetryAttempted(
+				ctx, agg, caseID, attempt, reason, wait, remaining))
+		},
 	}
-	return nil, attempts, billed, settledCalls, lastErr
+}
+
+// billedCostOf reports what a provider charged for a call that failed.
+//
+// An anonymous interface, the same shape retryAfterOf uses, so an adapter can
+// report a charge without core importing it — prime directive 3.
+//
+// Non-positive is discarded rather than settled. An adapter reporting a
+// negative would CREDIT the run's cap, and "the provider said nothing" is not
+// the same as "the provider said zero": the absence of a charge is not a
+// charge. Guard.Settle clamps too, but a caller that hands it nonsense and
+// relies on the clamp is describing a bug rather than a charge.
+func billedCostOf(err error) int64 {
+	var b interface{ BilledCostUSDMicros() int64 }
+	if !errors.As(err, &b) {
+		return 0
+	}
+	if v := b.BilledCostUSDMicros(); v > 0 {
+		return v
+	}
+	return 0
 }
 
 // saturatingAdd adds without wrapping. Non-positive is discarded: a charge
@@ -350,85 +280,4 @@ func retryAfterOf(err error) (time.Duration, bool) {
 		return d, d > 0
 	}
 	return 0, false
-}
-
-// invokeOnce is a single authorized attempt.
-func (o BaselineOptions) invokeOnce(
-	ctx context.Context,
-	c *Case,
-	est budget.Estimate,
-	attempt int,
-) (resp *Response, settled budget.Spend, overshoot int64, err error) {
-	// SpanKindClient, because this is the call OUT of the process — which is
-	// what makes a provider show up as a dependency edge in a trace rather
-	// than as internal work, and what makes provider latency separable from
-	// ours. Opened before Authorize so a budget refusal is visible as a call
-	// that never happened rather than as a gap.
-	ctx, span := observe.StartAgentCall(ctx, o.AgentRef.GetScheme(), attempt)
-	// Named return, so the panic path marks the span too. A recovered panic
-	// unwinds through here with err set, and without this the provider-call
-	// span ended Unset while its parent Case span was correctly marked failed
-	// — a trace showing a healthy call inside a broken Case.
-	defer func() {
-		if err != nil {
-			observe.Fail(span, codeOf(err))
-		}
-		span.End()
-	}()
-
-	res, err := o.Guard.Authorize(ctx, est)
-	if err != nil {
-		return nil, budget.Spend{}, 0, err
-	}
-	// Reached on every path: the agent erroring, the context cancelling
-	// mid-call, a panic recovered by the executor. Without it each of those
-	// leaks headroom and the guard eventually refuses work it should allow.
-	defer res.Release()
-
-	resp, invokeErr := o.Agent.Invoke(ctx, c)
-	if invokeErr != nil {
-		// The attempt consumed a call, and the provider may have CHARGED for
-		// it: a 200 carrying both an error object and a usage block is a shape
-		// several OpenAI-compatible gateways produce. M2-7 made that
-		// observable on the error; settling zero here is what made it free.
-		spend := budget.Spend{Calls: 1, CostUSDMicros: billedCostOf(invokeErr)}
-		return nil, spend, res.Settle(spend), invokeErr
-	}
-
-	// The same computation the sink persists. Two independent derivations of
-	// one Case's cost could drift, and the persisted one is what
-	// Guard.Restore reads on resume.
-	spend := spendOf(resp)
-
-	// What the call actually cost and which model answered, on the span that
-	// made it. Without these the provider-call span carried only a scheme and
-	// an attempt number, and "spans carry IDs, counts, and money" was true
-	// only of the run's three aggregates. The RESOLVED model, not the ref: a
-	// moving alias tells a reader nothing about what was measured.
-	span.SetAttributes(observe.ResolvedModel(resp.GetResolvedModel()))
-	span.SetAttributes(observe.Tokens(resp.GetPromptTokens(), resp.GetCompletionTokens())...)
-	span.SetAttributes(observe.CostUSDMicros(spend.CostUSDMicros))
-
-	return resp, spend, res.Settle(spend), nil
-}
-
-// billedCostOf reports what a provider charged for a call that failed.
-//
-// An anonymous interface, the same shape retryAfterOf uses, so an adapter can
-// report a charge without core importing it — prime directive 3.
-//
-// Non-positive is discarded rather than settled. An adapter reporting a
-// negative would CREDIT the run's cap, and "the provider said nothing" is not
-// the same as "the provider said zero": the absence of a charge is not a
-// charge. Guard.Settle clamps too, but a caller that hands it nonsense and
-// relies on the clamp is describing a bug rather than a charge.
-func billedCostOf(err error) int64 {
-	var b interface{ BilledCostUSDMicros() int64 }
-	if !errors.As(err, &b) {
-		return 0
-	}
-	if v := b.BilledCostUSDMicros(); v > 0 {
-		return v
-	}
-	return 0
 }
