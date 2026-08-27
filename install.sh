@@ -114,8 +114,7 @@ got=$(cd "$tmp" && $sumcmd "$archive" | cut -d' ' -f1)
 # a valid signature from anybody at all, which is worse than not checking.
 if command -v cosign >/dev/null 2>&1; then
 	log "Verifying cosign signature..."
-	fetch "$base/checksums.txt.sig" "$tmp/checksums.txt.sig" || die "release $version has no signature."
-	fetch "$base/checksums.txt.pem" "$tmp/checksums.txt.pem" || die "release $version has no certificate."
+	fetch "$base/checksums.txt.bundle" "$tmp/checksums.txt.bundle" || die "release $version has no signature bundle."
 	# The identity is spelled out rather than built from $REPO, and single-quoted
 	# so the shell expands none of it. `make release-identity-check` asserts this
 	# exact string is byte-identical here, in .goreleaser.yaml, in SECURITY.md
@@ -129,8 +128,8 @@ if command -v cosign >/dev/null 2>&1; then
 	# network timeout trains them to ignore the one message here that must never
 	# be ignored.
 	if cosign verify-blob "$tmp/checksums.txt" \
-		--signature "$tmp/checksums.txt.sig" \
-		--certificate "$tmp/checksums.txt.pem" \
+		--new-bundle-format \
+		--bundle "$tmp/checksums.txt.bundle" \
 		--certificate-identity-regexp '^https://github\.com/knograph/kno/\.github/workflows/release\.yml@refs/tags/.+$' \
 		--certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
 		>"$tmp/cosign.log" 2>&1

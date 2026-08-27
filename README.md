@@ -30,7 +30,7 @@ Every release ships a `checksums.txt`, a keyless [cosign](https://docs.sigstore.
 
 ```bash
 cosign verify-blob checksums.txt \
-  --certificate checksums.txt.pem --signature checksums.txt.sig \
+  --new-bundle-format --bundle checksums.txt.bundle \
   --certificate-identity-regexp '^https://github\.com/knograph/kno/\.github/workflows/release\.yml@refs/tags/.+$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
