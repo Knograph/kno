@@ -148,7 +148,7 @@ release:
     cosign verify-blob checksums.txt \
       --certificate checksums.txt.pem \
       --signature checksums.txt.sig \
-      --certificate-identity-regexp '^https://github\.com/knograph/kno/\.github/workflows/release\.yml@refs/tags/.+$' \
+      --certificate-identity-regexp '^https://github\.com/[Kk]nograph/kno/\.github/workflows/release\.yml@refs/tags/.+$' \
       --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
     # 2. Your download is really what the checksum file names. Substitute the

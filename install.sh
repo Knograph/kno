@@ -130,7 +130,7 @@ if command -v cosign >/dev/null 2>&1; then
 	if cosign verify-blob "$tmp/checksums.txt" \
 		--new-bundle-format \
 		--bundle "$tmp/checksums.txt.bundle" \
-		--certificate-identity-regexp '^https://github\.com/knograph/kno/\.github/workflows/release\.yml@refs/tags/.+$' \
+		--certificate-identity-regexp '^https://github\.com/[Kk]nograph/kno/\.github/workflows/release\.yml@refs/tags/.+$' \
 		--certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
 		>"$tmp/cosign.log" 2>&1
 	then

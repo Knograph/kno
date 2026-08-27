@@ -114,7 +114,7 @@ To verify:
 ```bash
 cosign verify-blob checksums.txt \
   --new-bundle-format --bundle checksums.txt.bundle \
-  --certificate-identity-regexp '^https://github\.com/knograph/kno/\.github/workflows/release\.yml@refs/tags/.+$' \
+  --certificate-identity-regexp '^https://github\.com/[Kk]nograph/kno/\.github/workflows/release\.yml@refs/tags/.+$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
 grep " kno_<version>_<os>_<arch>.tar.gz$" checksums.txt | shasum -a 256 -c -

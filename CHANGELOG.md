@@ -53,6 +53,10 @@ covenants — breaking any of them requires a major version.
 
 ### Fixed
 
+- **The pinned cosign identity regexp was case-sensitive** (`knograph/kno`) and never matched the
+  certificate's SAN (`Knograph/kno`, the repo owner's case) — the workflow's own documented
+  verification command would have rejected its own releases. It now accepts either case, in all
+  five places, and the first verification of a real release ran it end to end.
 - **The release sign step now uses cosign's bundle format end to end** — the legacy-format pin
   died against cosign 2.4+'s validation (`must provide --new-bundle-format or --bundle`), so the
   config writes one bundle per signature, and install.sh plus the published verification commands
