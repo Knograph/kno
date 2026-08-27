@@ -2,7 +2,9 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    # v[0-9]* rather than v*, so `vibe` and `victory` do not spin up a job
+    # holding id-token: write only for goreleaser to reject the tag late.
+    tags: ["v[0-9]*"]
   # The escape hatch, and it is not optional decoration.
   #
   # release-please pushes the tag using the default GITHUB_TOKEN, and GitHub
@@ -12,6 +14,16 @@ on:
   # is a PAT or GitHub App token on release-please (see release-please.yml and
   # docs/debt.md#74); until that secret exists, a maintainer runs this workflow
   # by hand against the tag. Select the tag under "Use workflow from".
+  #
+  # An earlier draft ALSO set `"draft": true` in release-please-config.json,
+  # believing it made a workflow-less tag visibly unfinished. It did the
+  # opposite: GitHub creates no git ref for a draft release — the ref appears
+  # when the release is published — so there was no tag push at all, this
+  # trigger could never fire, `workflow_dispatch` had no tag to select, and the
+  # RELEASE_PLEASE_TOKEN that repays #74 would not have helped, because it
+  # changes the actor on a ref push that was not happening. The draft lives in
+  # .goreleaser.yaml instead, where it hides the release until the artifacts
+  # are on it.
   workflow_dispatch:
 
 # Two tag pushes must never build the same release twice, and a release must
@@ -47,6 +59,19 @@ jobs:
       id-token: write
       attestations: write
 
+    # The one control here that an actor holding repo write cannot rewrite in
+    # the same push. A tag bypasses branch protection entirely, so without this
+    # `git tag v9.9.9 <any-sha> && git push --tags` yields a fully signed,
+    # attested release built from code no one reviewed — and both published
+    # verification commands accept it, because refs/tags/.+ is exactly what
+    # they match.
+    #
+    # Inert until a repository admin adds required reviewers to the `release`
+    # environment (Settings -> Environments -> release). Declared anyway: the
+    # protection is then one setting away rather than one PR away, and the
+    # ancestry check below is the half that works today.
+    environment: release
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -58,13 +83,29 @@ jobs:
       # branch would be signed with a certificate naming refs/heads/..., which
       # every published verification command rejects — so it would produce
       # artifacts that look official and verify as nothing. Refuse early.
-      - name: Refuse to release anything that is not a tag
+      - name: Refuse to release anything that is not a tag on main
         run: |
           set -euo pipefail
           case "${GITHUB_REF}" in
-            refs/tags/v*) echo "releasing ${GITHUB_REF_NAME}" ;;
-            *) echo "::error::${GITHUB_REF} is not a v* tag; refusing to release."; exit 1 ;;
+            refs/tags/v[0-9]*) echo "releasing ${GITHUB_REF_NAME}" ;;
+            *) echo "::error::${GITHUB_REF} is not a v[0-9]* tag; refusing to release."; exit 1 ;;
           esac
+          # Shape is not enough. Tags bypass branch protection, so a tag can
+          # point at any commit — including one that never passed review, never
+          # ran CI, and is not on main at all. CLAUDE.md's "no direct pushes to
+          # main, including by maintainers" has a hole exactly the width of
+          # `git push --tags` without this.
+          #
+          # Not a boundary against a determined actor with write access: the
+          # workflow file is read at the tag's own ref, so a tag cut from a
+          # branch that deleted this step does not run it. The `environment:`
+          # above is the control; this is the check that catches the mistake.
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" FETCH_HEAD; then
+            echo "::error::${GITHUB_SHA} is not an ancestor of main; refusing to release unreviewed code."
+            exit 1
+          fi
+          echo "${GITHUB_SHA} is on main"
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -122,7 +163,17 @@ jobs:
           notes=$(mktemp)
           # The existing body first: release-please wrote it from Conventional
           # Commits, and it may have been hand-edited for the highlights.
-          gh release view "$TAG" --json body --jq .body > "$notes"
+          #
+          # Everything from the checksum heading down is DROPPED before
+          # appending, so this is idempotent. Both this step and goreleaser's
+          # `mode: append` are read-modify-append against the current body, and
+          # a second run on the same tag — a re-run, or a dispatch racing a push
+          # — would otherwise stack a second checksum block. If the tag moved
+          # between runs the stale block sits above the current one with nothing
+          # saying which is which, and a user copying the wrong hash gets a
+          # mismatch that reads exactly like an attack.
+          gh release view "$TAG" --json body --jq .body \
+            | sed '/^### Checksums (SHA-256)$/,$d' > "$notes"
           {
             printf '\n### Checksums (SHA-256)\n\n```\n'
             cat dist/checksums.txt

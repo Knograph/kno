@@ -22,7 +22,13 @@ jobs:
       # the SemVer bump are derived, never hand-edited. Merging that PR tags the
       # release. Without this workflow, CHANGELOG.md's claim that entries are
       # "derived by release-please" would be false.
-      - uses: googleapis/release-please-action@v5
+      # SHA-pinned, not @v5. This action is about to be handed
+      # RELEASE_PLEASE_TOKEN — a credential that can push to main and create
+      # tags, which per the release workflow is the credential that mints
+      # signed releases. A mutable tag on the highest-privilege consumer in the
+      # repository is the one place docs/debt.md#14 cannot wait for its own
+      # trigger.
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json

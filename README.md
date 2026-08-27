@@ -22,7 +22,7 @@ Or take the archive yourself from [Releases](https://github.com/knograph/kno/rel
 go install github.com/knograph/kno/cmd/kno@latest
 ```
 
-A `go install` binary reports its version as `dev`, because nothing stamped it. That is the only functional difference.
+A `go install` binary reports the module version with no commit or date — `kno version v0.0.1`. A released binary reports both — `kno version v0.0.1 (a1b2c3d, 2026-08-26T…)`. The parenthetical is how you tell them apart in a bug report, and it is the only functional difference.
 
 ### Verifying a download
 

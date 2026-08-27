@@ -102,7 +102,7 @@ it did not run is worse than no gate, so they announce themselves as `PEND`.
 | `make docs` | Will regenerate OpenAPI and check godoc coverage. **Both are pending** — `godoccheck` lands with M0c and OpenAPI needs a proto service to exist. It reports what it did not run rather than passing quietly |
 | `make bench-diff` | **Currently a tripwire, not a comparison.** No benchmarks exist yet, so it passes. The moment you add the first `func Benchmark`, it fails deliberately and asks you to implement the >10% regression gate ([docs/debt.md#3](docs/debt.md)) — that is the forcing function, not a bug |
 
-Two gates run in CI but **not** inside `make check`, because both fetch or compile something that
+Three gates cover the release path but **not** inside `make check`, because both fetch or compile something that
 does not belong in a fail-fast-cheapest-first gate. Run them by hand if you touch what they cover:
 
 | Command | What it checks |

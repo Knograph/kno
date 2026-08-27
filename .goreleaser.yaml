@@ -87,9 +87,9 @@ sboms:
 # Signing checksums.txt rather than each archive is not laziness: it is what
 # makes ONE signature verification cover every artifact. A verifier checks the
 # signature on checksums.txt, then checks their download against that file.
-# Twelve separate signatures would offer the same guarantee at twelve times the
+# Six separate signatures would offer the same guarantee at six times the
 # verification cost, and would let someone verify one archive while learning
-# nothing about the other eleven.
+# nothing about the other five.
 signs:
   - id: cosign-checksum
     cmd: cosign

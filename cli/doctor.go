@@ -25,6 +25,14 @@ import (
 // risk a bill to ask what is supported.
 
 // newDoctorCmd builds the diagnostic command.
+// doctorVersion is what `doctor --json` reports.
+//
+// A named function rather than an inline field so the jq contract has something
+// to assert against — see TestDoctorReportsTheBareVersionNotTheHumanString. The
+// BARE version: `kno --version` is where the commit and date belong, and a
+// parenthetical here breaks every consumer that pins or greps this field.
+func doctorVersion() string { return identity().Version }
+
 func newDoctorCmd() *cobra.Command {
 	var jsonOut bool
 
@@ -129,7 +137,7 @@ type doctorReport struct {
 // runDoctor renders the matrix.
 func runDoctor(out io.Writer, jsonOut bool) error {
 	rep := doctorReport{
-		Version:    identity().Version,
+		Version:    doctorVersion(),
 		Adapters:   adapterFacts(),
 		Goals:      []string{"exact-match"},
 		PriceTable: pricing.Version,

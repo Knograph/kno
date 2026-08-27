@@ -1,6 +1,9 @@
 package cli
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestBuildIdentityRendersWhatItHas covers the shape `kno --version` prints.
 //
@@ -66,5 +69,40 @@ func TestIdentityNeverReportsTheToolchainPlaceholder(t *testing.T) {
 	got := identity()
 	if got.Version == "(devel)" || got.Version == "" {
 		t.Errorf("identity().Version = %q; a placeholder is worse than \"dev\"", got.Version)
+	}
+}
+
+// TestDoctorReportsTheBareVersionNotTheHumanString.
+//
+// `kno doctor --json | jq -r .version` is a documented contract: a bug report
+// quotes it, and a CI pin compares against it. Three documents state that this
+// field carries the BARE version while `kno --version` carries the human
+// string with its commit and date.
+//
+// Asserted here rather than only in the black-box CLI test, because that test
+// cannot see the difference: an unstamped test binary has no commit and no
+// date, so String() renders exactly the bare version and swapping one for the
+// other is invisible. Stamping the package variables is what makes the two
+// distinguishable, and it is the state every released binary is actually in.
+func TestDoctorReportsTheBareVersionNotTheHumanString(t *testing.T) {
+	// Not parallel: it writes the package-level build stamp.
+	saved := [3]string{version, commit, date}
+	t.Cleanup(func() { version, commit, date = saved[0], saved[1], saved[2] })
+
+	version, commit, date = "v1.2.3", "abc1234", "2026-08-26T00:00:00Z"
+
+	id := identity()
+	if id.Version != "v1.2.3" {
+		t.Fatalf("identity().Version = %q, want v1.2.3", id.Version)
+	}
+	if !strings.Contains(id.String(), "(") {
+		t.Fatalf("a stamped String() = %q carries no parenthetical, so this test "+
+			"cannot tell the two apart and proves nothing", id.String())
+	}
+
+	if got := doctorVersion(); got != id.Version {
+		t.Errorf("doctor --json would report %q, want the bare %q. This field is a "+
+			"jq contract: a parenthetical breaks every consumer that pins or greps "+
+			"it, and `kno --version` is where the commit and date belong", got, id.Version)
 	}
 }

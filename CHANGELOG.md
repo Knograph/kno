@@ -77,13 +77,13 @@ covenants — breaking any of them requires a major version.
   was *"before the first tagged release"*; with `release-please` holding a `0.0.1` PR, this is the
   last change that could land before it.
 
-  A tag now produces twelve archives (darwin/linux/windows × amd64/arm64), one `checksums.txt`, a
+  A tag now produces six archives (darwin/linux/windows × amd64/arm64), one `checksums.txt`, a
   **keyless** cosign signature over that file, an SPDX SBOM per archive, and build provenance
   attested over every artifact the checksum file names. Keyless is the point: there is no private
   key in existence, so there is none to steal or rotate, and nothing in the workflow is a secret.
 
   The signature covers `checksums.txt` rather than each archive. One verification then covers
-  everything, instead of twelve verifications that each say nothing about the other eleven.
+  everything, instead of six verifications that each say nothing about the other five.
 
   `kno --version` reports the real tag, its commit, and its build date, stamped into `cli`'s
   existing `version` variable by `-X` at link time. **`kno doctor --json` deliberately keeps
@@ -101,7 +101,9 @@ covenants — breaking any of them requires a major version.
   signed but not attested — is indistinguishable from a finished one to anyone reading the page.
 
   `make release` refuses to run outside GitHub Actions, and the local dry run passes `--snapshot`,
-  under which goreleaser cannot publish at all — so *nothing built on a laptop ships* is enforced
+  under which goreleaser cannot publish at all. The guard checks an environment variable, so it is
+  a safety catch against typing the wrong target rather than a control; the boundary is credential
+  scope, the `release` environment, and the ancestor-of-`main` check — *nothing built on a laptop ships* is backed
   rather than trusted. `make release-check` validates the config on every PR, because a tag is the
   worst possible place to learn that the config is malformed.
 
@@ -724,6 +726,17 @@ covenants — breaking any of them requires a major version.
   two-line fix for the exposure. A canary variable planted before the scrub makes the guard
   self-verifying: delete the scrub and both tests go red. Repays
   [debt #63](docs/debt.md#63).
+
+- **The release pipeline could not have released.** Two defects, each fatal on the first tag, both
+  found in Phase-3 review and both reproduced. `make release` was the only one of four release
+  targets with no goreleaser prerequisite, so the workflow — which installs cosign and syft but
+  never builds the repo's own tools — would have exited 127 with no archives, no signature and no
+  attestation. And `"draft": true` in `release-please-config.json` meant **no git tag was ever
+  created**: GitHub creates the ref when a release is published, so the tag trigger could not fire,
+  `workflow_dispatch` had no tag to select, and the `RELEASE_PLEASE_TOKEN` that repays
+  [#74](docs/debt.md#74) would not have helped, because it changes the actor on a ref push that was
+  not happening. The draft now lives in `.goreleaser.yaml`, where it hides the release until the
+  artifacts are on it.
 
 - **`--cost-per-call-usd` is no longer required alongside `--max-cost-usd`** for an agent that
   prices its own calls. `--agent anthropic:claude-opus-5 --max-cost-usd 5` was refused even though

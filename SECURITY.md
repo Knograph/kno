@@ -89,8 +89,14 @@ These are architectural commitments, so violations are vulnerabilities rather th
 
 Releases are built by GitHub Actions from a tag, by
 [`.github/workflows/release.yml`](.github/workflows/release.yml) and
-[`.goreleaser.yaml`](.goreleaser.yaml). Nothing is built on a laptop: `make release` refuses to run
-outside CI, and the only local target passes `--snapshot`, under which goreleaser cannot publish.
+[`.goreleaser.yaml`](.goreleaser.yaml). The only local target passes `--snapshot`, under which
+goreleaser cannot publish, and `make release` refuses to run outside CI.
+
+Be precise about what that last guard is, because it reads stronger than it is: it checks an
+environment variable, so it is a safety catch against a maintainer typing the wrong target, not a
+control against someone who means it. The actual boundary is credential scope — publishing requires
+a repository token — together with the `release` environment on the workflow job and the check that
+refuses to release a commit that is not an ancestor of `main`.
 
 Each release carries:
 

@@ -180,6 +180,17 @@ fmt-check: $(GOLANGCI) ## Verify formatting without writing (CI-safe)
 .PHONY: lint
 lint: $(GOLANGCI) ## golangci-lint; zero tolerance
 	@$(GOLANGCI) run
+	@$(MAKE) --no-print-directory lint-shell
+
+.PHONY: lint-shell
+lint-shell: ## shellcheck install.sh, the one artifact users pipe to a shell
+	@$(SAFE) if ! command -v shellcheck >/dev/null 2>&1; then \
+		printf '\033[33m WARN \033[0m shellcheck not installed; skipping install.sh.\n'; \
+		printf '        brew install shellcheck (CI runs it either way).\n'; \
+		exit 0; \
+	fi; \
+	shellcheck -s sh install.sh; \
+	printf '\033[32m  OK  \033[0m install.sh\n'
 
 .PHONY: lint-config
 lint-config: $(GOLANGCI) ## Validate .golangci.yml against the v2 schema
@@ -432,20 +443,35 @@ release-check: $(GORELEASER) ## Validate .goreleaser.yaml. CI runs this on every
 RELEASE_WORKFLOW := .github/workflows/release.yml
 IDENTITY_DOCS    := .goreleaser.yaml SECURITY.md README.md install.sh
 
-.PHONY: release-identity-check
-release-identity-check: ## The cosign identity in the docs names a workflow that exists
+# The published cosign identity, defined ONCE and asserted verbatim.
+#
+# The first version of this gate grepped each file for the string
+# "workflows/release", which every one of them also contains in ordinary prose
+# — so deleting every verification command from .goreleaser.yaml and
+# SECURITY.md left the gate passing, and so would changing @refs/tags/ to
+# @refs/heads/ or dropping the ^ anchor. That is docs/debt.md#70's own
+# diagnosis reproduced in a new gate, in the PR that cites it.
+#
+# Every part of this string is load-bearing. Without the ^ anchor a certificate
+# whose identity merely CONTAINS ours matches. Without @refs/tags/ a signature
+# minted from a branch verifies. Without the escaped dots, . matches anything.
+COSIGN_IDENTITY := ^https://github\.com/knograph/kno/\.github/workflows/release\.yml@refs/tags/.+$$
+
+release-identity-check: ## The published cosign identity is one string, and every copy of it matches
 	@$(SAFE) if [ ! -f $(RELEASE_WORKFLOW) ]; then \
 		printf '\033[31m FAIL \033[0m %s does not exist, but the published cosign identity names it.\n' '$(RELEASE_WORKFLOW)'; \
 		exit 1; \
 	fi; \
 	for f in $(IDENTITY_DOCS); do \
-		if ! grep -q 'workflows/release' "$$f"; then \
-			printf '\033[31m FAIL \033[0m %s no longer names %s in its cosign identity.\n' "$$f" '$(RELEASE_WORKFLOW)'; \
-			printf '        Verification instructions that name the wrong workflow verify nothing.\n'; \
+		if ! grep -qF -- '$(COSIGN_IDENTITY)' "$$f"; then \
+			printf '\033[31m FAIL \033[0m %s does not carry the published cosign identity verbatim.\n' "$$f"; \
+			printf '        want: %s\n' '$(COSIGN_IDENTITY)'; \
+			printf '        A verification command with a weakened identity verifies less than it claims,\n'; \
+			printf '        and one naming the wrong workflow verifies nothing.\n'; \
 			exit 1; \
 		fi; \
 	done; \
-	printf '\033[32m  OK  \033[0m the cosign identity names %s in all %d places\n' '$(RELEASE_WORKFLOW)' $(words $(IDENTITY_DOCS))
+	printf '\033[32m  OK  \033[0m the cosign identity is byte-identical in all %d places\n' $(words $(IDENTITY_DOCS))
 
 # The check that actually matters, and the reason it runs in CI rather than
 # living in a target someone might remember to call.
@@ -494,7 +520,7 @@ release-snapshot: $(GORELEASER) release-stamp ## Dry-run build of every platform
 # (CLAUDE.md) is enforced here rather than trusted, because the difference
 # between this target and release-snapshot is one word and a published artifact.
 .PHONY: release
-release: ## Build and publish a tagged release. Refuses to run outside CI
+release: $(GORELEASER) ## Build and publish a tagged release. Refuses to run outside CI
 	@$(SAFE) if [ -z "$${GITHUB_ACTIONS:-}" ]; then \
 		printf '\033[31m FAIL \033[0m release: refusing to publish from a developer machine.\n'; \
 		printf '        CLAUDE.md: nothing built on laptops ships. Push a tag and let\n'; \

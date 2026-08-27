@@ -72,8 +72,8 @@ esac
 version="${KNO_VERSION:-}"
 if [ -z "$version" ]; then
 	log "Resolving the latest release..."
-	# The redirect target of /releases/latest, read without jq so this script
-	# has no dependency a fresh machine might lack.
+	# The tag_name from the /releases/latest API response, parsed with sed so
+	# this script has no dependency a fresh machine might lack.
 	version=$(fetch_stdout "https://api.github.com/repos/$REPO/releases/latest" \
 		| sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)
 	[ -n "$version" ] || die "could not resolve the latest release; set KNO_VERSION."
@@ -116,13 +116,30 @@ if command -v cosign >/dev/null 2>&1; then
 	log "Verifying cosign signature..."
 	fetch "$base/checksums.txt.sig" "$tmp/checksums.txt.sig" || die "release $version has no signature."
 	fetch "$base/checksums.txt.pem" "$tmp/checksums.txt.pem" || die "release $version has no certificate."
-	cosign verify-blob "$tmp/checksums.txt" \
+	# The identity is spelled out rather than built from $REPO, and single-quoted
+	# so the shell expands none of it. `make release-identity-check` asserts this
+	# exact string is byte-identical here, in .goreleaser.yaml, in SECURITY.md
+	# and in README.md — a check that cannot work against an interpolated copy,
+	# and the drift it exists to catch is a weakened regex nobody notices.
+	#
+	# Output is captured and shown on failure rather than discarded. cosign v2
+	# verify-blob does an online Rekor lookup and a TUF root refresh, so behind
+	# a proxy or during a Sigstore incident this fails for reasons that are not
+	# an attack — and telling a user "verification FAILED, do not install" for a
+	# network timeout trains them to ignore the one message here that must never
+	# be ignored.
+	if cosign verify-blob "$tmp/checksums.txt" \
 		--signature "$tmp/checksums.txt.sig" \
 		--certificate "$tmp/checksums.txt.pem" \
-		--certificate-identity-regexp "^https://github.com/$REPO/\.github/workflows/release\.yml@refs/tags/" \
+		--certificate-identity-regexp '^https://github\.com/knograph/kno/\.github/workflows/release\.yml@refs/tags/.+$' \
 		--certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-		>/dev/null 2>&1 || die "cosign signature verification FAILED for $version. Do not install this."
-	log "Signature OK."
+		>"$tmp/cosign.log" 2>&1
+	then
+		log "Signature OK."
+	else
+		cat "$tmp/cosign.log" >&2
+		die "cosign could not verify $version — see the output above. If it names a network or transparency-log problem, retry; if it says the signature is invalid, do not install this."
+	fi
 else
 	log "cosign not found — checksum verified, signature not. See the release notes to verify by hand."
 fi
@@ -142,8 +159,18 @@ fi
 mkdir -p "$dir" || die "cannot create $dir"
 [ -w "$dir" ] || die "$dir is not writable. Set KNO_INSTALL_DIR, or re-run with sudo."
 
-mv "$tmp/kno" "$dir/kno"
-chmod 0755 "$dir/kno"
+# Staged inside the destination directory and renamed, because rename within
+# one filesystem is atomic and a cross-device `mv` is not: $tmp comes from
+# mktemp -d and $dir is usually /usr/local/bin, which on macOS and in most
+# containers is a different filesystem. There the move is copy-then-unlink, so
+# an interrupt or a full disk during an UPGRADE truncates the working install
+# and leaves a broken executable on PATH. chmod before the rename also closes
+# the window where the binary is reachable with whatever mode the tarball had.
+staged="$dir/.kno.$$"
+trap 'rm -rf "$tmp"; rm -f "$staged"' EXIT INT TERM
+cp "$tmp/kno" "$staged" || die "cannot write to $dir"
+chmod 0755 "$staged"
+mv -f "$staged" "$dir/kno" || die "cannot install into $dir"
 
 log "Installed $("$dir/kno" --version) to $dir/kno"
 
