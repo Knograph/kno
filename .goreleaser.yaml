@@ -93,19 +93,18 @@ sboms:
 signs:
   - id: cosign-checksum
     cmd: cosign
-    signature: "${artifact}.sig"
-    certificate: "${artifact}.pem"
+    # The NEW bundle format, end to end: cosign 2.4+ refuses the legacy
+    # --output-signature/--output-certificate flags ("must provide
+    # --new-bundle-format or --bundle where applicable with --signing-config")
+    # and the legacy pin it replaces died with "create bundle file: open :".
+    # One bundle file carries signature, certificate, and Rekor entry, and it
+    # is the single artifact install.sh and the published verification
+    # commands fetch.
+    signature: "${artifact}.bundle"
     args:
       - sign-blob
-      # cosign's new-bundle-format (default on in recent releases) silently
-      # ignores --output-signature/--output-certificate and demands --bundle;
-      # the empty bundle path is what made the first tag's sign step fail with
-      # "create bundle file: open : no such file or directory". The legacy
-      # format is deprecated but still honored, and it is the one install.sh
-      # and every published verification doc exercise.
-      - "--new-bundle-format=false"
-      - "--output-signature=${signature}"
-      - "--output-certificate=${certificate}"
+      - "--new-bundle-format"
+      - "--bundle=${signature}"
       - "${artifact}"
       - "--yes"
     artifacts: checksum
