@@ -342,7 +342,9 @@ type Run struct {
 	// The five flat counters above carry the same numbers and are still written.
 	//
 	// See ADR-0004. This is the presence-carrying replacement for the five flat
-	// counters above, which stay until their writer and reader migrate.
+	// counters above. Both stages write it now — Baseline since M2-11, Value
+	// since V-4c — so the flat counters remain only for readers that predate
+	// the migration and can be dropped once those are gone.
 	CaseExecution *CaseExecution `protobuf:"bytes,22,opt,name=case_execution,json=caseExecution,proto3,oneof" json:"case_execution,omitempty"`
 	// The decoding configuration this Run executed under.
 	//
