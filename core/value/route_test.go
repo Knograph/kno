@@ -11,6 +11,7 @@ import (
 
 	"github.com/knograph/kno/core/value"
 	knov1 "github.com/knograph/kno/gen/kno/v1"
+	"github.com/knograph/kno/stats/interval"
 )
 
 // devCases builds n Cases, failing every failEvery-th one, tagged in a cycle.
@@ -615,6 +616,14 @@ func TestTwoAssetsDrawIndependentSamples(t *testing.T) {
 // coloring rule renders that as "no regression". An underpowered harm test that
 // looks like a passed one is worse than no test, so the marker travels with the
 // number.
+//
+// The flag fires when the sample is below the MinControlSample floor OR when
+// the honest bound cannot separate HarmMargin from zero. The consequence is
+// stated rather than hidden: against epsilon=0.10 the honest threshold sits
+// near m=135, so the flag fires on nearly every real run. That is the design —
+// the number is always reported and the flag is information, not an alarm —
+// and the Q2 review's rejection was of a bool that REPLACED the number, not of
+// a flag that travels beside it.
 func TestAnUnderpoweredHarmTestSaysSo(t *testing.T) {
 	t.Parallel()
 
@@ -624,19 +633,36 @@ func TestAnUnderpoweredHarmTestSaysSo(t *testing.T) {
 		t.Fatalf("Route: %v", err)
 	}
 	if !small.ControlUnderpowered {
-		t.Errorf("a %d-Case control sample is not marked underpowered; below about "+
-			"%d paired observations a real regression and a clean result are "+
+		t.Errorf("a %d-Case control sample is not marked underpowered; below %d "+
+			"paired observations a real regression and a clean result are "+
 			"indistinguishable", len(small.ControlCaseIDs), value.MinControlSample)
 	}
 
-	big, err := value.Route(devCases(400, 3, "refunds"),
+	// 400 dev Cases reserve ~120 controls; the honest bound there is ~0.106,
+	// still above HarmMargin=0.10, so the flag fires — barely — on the honest
+	// bound alone even though the sample clears the floor.
+	mid, err := value.Route(devCases(400, 3, "refunds"),
+		[]value.AssetRef{{ID: "a", Tags: []string{"refunds"}}}, value.Options{Seed: 1})
+	if err != nil {
+		t.Fatalf("Route: %v", err)
+	}
+	if !mid.ControlUnderpowered {
+		t.Errorf("a %d-Case control sample clears the floor but its honest bound "+
+			"(%.4f) is above HarmMargin, so the flag must fire on the bound; the "+
+			"number is what the reader acts on",
+			len(mid.ControlCaseIDs), mid.MinDetectableHarm)
+	}
+
+	// 2000 dev Cases reserve ~600 controls; the bound is ~0.047, well inside
+	// HarmMargin, and the floor is cleared, so nothing fires.
+	big, err := value.Route(devCases(2000, 3, "refunds"),
 		[]value.AssetRef{{ID: "a", Tags: []string{"refunds"}}}, value.Options{Seed: 1})
 	if err != nil {
 		t.Fatalf("Route: %v", err)
 	}
 	if big.ControlUnderpowered {
-		t.Errorf("a %d-Case control sample is marked underpowered; the marker would "+
-			"then be on every run and mean nothing", len(big.ControlCaseIDs))
+		t.Errorf("a %d-Case control sample with honest bound %.4f inside HarmMargin "+
+			"is marked underpowered", len(big.ControlCaseIDs), big.MinDetectableHarm)
 	}
 }
 
@@ -780,31 +806,47 @@ func TestASmallEvalSetKeepsBothSides(t *testing.T) {
 //
 // The underpowered flag answers "is this absurd", which a reader turns into
 // "is this safe". MinDetectableHarm answers the question they were asking. At
-// the 20-Case threshold the bound is 0.184 — nearly twice HarmMargin — so a
-// run just above the flag has NOT cleared an Asset that costs 0.10, and the
-// number says so where the bool did not.
+// the 20-Case threshold the honest bound is 1.729 x sqrt(0.5)/sqrt(20) = 0.261
+// — more than twice HarmMargin — so a run just above the floor has NOT cleared
+// an Asset that costs 0.10, and the number says so where the bool does not.
+//
+// The arithmetic is pinned against external constants, not against the code's
+// own formula: the earlier version of this test asserted the code matched
+// itself while the code used the VARIANCE bound 0.5 where the sd bound
+// sqrt(0.5) belongs, understating every reported minimum by ~sqrt(2).
 func TestTheReportedBoundIsTheOneTheRunCanActuallySee(t *testing.T) {
 	t.Parallel()
 
+	const (
+		z   = 1.645 // one-sided 95% beyond df=30
+		sd  = 0.7071067811865476
+		t20 = 1.729 // one-sided 95% at df=19
+	)
+	// dev=67 reserves floor(0.3 x 67) = 20 controls; dev=200 reserves 60.
+	plan20, err := value.Route(devCases(67, 3), []value.AssetRef{{ID: "a"}}, value.Options{Seed: 1})
+	if err != nil {
+		t.Fatalf("Route: %v", err)
+	}
+	if m := len(plan20.ControlCaseIDs); m != 20 {
+		t.Fatalf("fixture reserved %d controls, want 20", m)
+	}
+	if got := plan20.MinDetectableHarm; math.Abs(got-t20*sd/math.Sqrt(20)) > 1e-6 {
+		t.Errorf("MinDetectableHarm over 20 Cases = %v, want %v", got, t20*sd/math.Sqrt(20))
+	}
+	plan60, err := value.Route(devCases(200, 3), []value.AssetRef{{ID: "a"}}, value.Options{Seed: 1})
+	if err != nil {
+		t.Fatalf("Route: %v", err)
+	}
+	if got := plan60.MinDetectableHarm; math.Abs(got-z*sd/math.Sqrt(60)) > 1e-6 {
+		t.Errorf("MinDetectableHarm over 60 Cases = %v, want %v", got, z*sd/math.Sqrt(60))
+	}
+
+	// The bound must shrink as the sample grows, or it is not a bound.
 	plan, err := value.Route(devCases(400, 3), []value.AssetRef{{ID: "a"}},
 		value.Options{Seed: 1})
 	if err != nil {
 		t.Fatalf("Route: %v", err)
 	}
-	m := len(plan.ControlCaseIDs)
-	if m < value.MinControlSample {
-		t.Fatalf("the fixture reserved %d Cases, below the threshold", m)
-	}
-	if plan.ControlUnderpowered {
-		t.Fatal("the fixture is marked underpowered")
-	}
-
-	want := 1.645 * 0.5 / math.Sqrt(float64(m))
-	if math.Abs(plan.MinDetectableHarm-want) > 1e-9 {
-		t.Errorf("MinDetectableHarm = %v over %d Cases, want %v",
-			plan.MinDetectableHarm, m, want)
-	}
-	// The bound must shrink as the sample grows, or it is not a bound.
 	small, err := value.Route(devCases(100, 3), []value.AssetRef{{ID: "a"}},
 		value.Options{Seed: 1})
 	if err != nil {
@@ -813,7 +855,45 @@ func TestTheReportedBoundIsTheOneTheRunCanActuallySee(t *testing.T) {
 	if small.MinDetectableHarm <= plan.MinDetectableHarm {
 		t.Errorf("a smaller control sample reports a TIGHTER bound (%v over %d vs %v "+
 			"over %d)", small.MinDetectableHarm, len(small.ControlCaseIDs),
-			plan.MinDetectableHarm, m)
+			plan.MinDetectableHarm, len(plan.ControlCaseIDs))
+	}
+}
+
+// TestTheReportedBoundCoversTheWorstCase simulates the worst-case paired
+// binary process — differences split evenly between -1 and +1, which is the
+// variance maximum the sd bound is derived from — and asserts the harm
+// bound's empirical coverage: under the null the lower bound must sit at or
+// below the true mean at least 95% of the time. If the reported arithmetic
+// under-stated the bound (the variance/sd slip), this test fails at the small
+// m where the t correction matters.
+func TestTheReportedBoundCoversTheWorstCase(t *testing.T) {
+	t.Parallel()
+
+	for _, m := range []int{10, 20, 60} {
+		m := m
+		t.Run(fmt.Sprintf("m=%d", m), func(t *testing.T) {
+			t.Parallel()
+			rng := rand.New(rand.NewPCG(uint64(m), uint64(m)))
+			const reps = 20000
+			covered := 0
+			for range reps {
+				deltas := make([]float64, m)
+				for i := range deltas {
+					if rng.IntN(2) == 0 {
+						deltas[i] = -1
+					} else {
+						deltas[i] = 1
+					}
+				}
+				iv := interval.HarmBound(deltas, knov1.ScoreDomain_SCORE_DOMAIN_BINARY, 1, 0.95)
+				if iv.GetLow() <= 0 {
+					covered++
+				}
+			}
+			if rate := float64(covered) / reps; rate < 0.94 {
+				t.Errorf("empirical coverage %.4f at m=%d, want >= 0.95", rate, m)
+			}
+		})
 	}
 }
 

@@ -9,4 +9,4 @@ Task-shaped recipes. Each one is a thing you might actually want to do, start to
 | [Gate a deploy on Kno in CI](ci-gate.md) | Exit codes, `--json`, and what to fail the build on |
 | [Delete stored conversation content](retention.md) | What Kno keeps, what `kno purge` removes, and why it keeps the rest |
 
-More arrive with the stages that need them: curating a fine-tuning set, deciding RAG versus tune, bringing your own judge, and writing a pool plugin.
+More arrive with the stages that need them: selecting a Portfolio under budget, validating on the holdout, curating a fine-tuning set, bringing your own judge, and writing a pool plugin.

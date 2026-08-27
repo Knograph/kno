@@ -1069,3 +1069,27 @@ func TestAfterRecordDoesNotDiscardResultsAlreadyInFlight(t *testing.T) {
 		t.Errorf("Recorded() = %d, want at least 11 (case-000..010)", stats.Recorded())
 	}
 }
+
+// TestResultModelAbstractsTheOutcome: the mid-run model gate reads which
+// model answered through Result.Model(), without knowing the stage's outcome
+// type — a nil value, a non-carrier, and a carrier each behave.
+func TestResultModelAbstractsTheOutcome(t *testing.T) {
+	t.Parallel()
+
+	if got := (executor.Result[*knov1.Case, modelStub]{Value: nil}).Model(); got != "" {
+		t.Errorf("a nil value reported %q", got)
+	}
+	if got := (executor.Result[*knov1.Case, plainStub]{Value: &plainStub{}}).Model(); got != "" {
+		t.Errorf("a non-carrier value reported %q", got)
+	}
+	got := (executor.Result[*knov1.Case, modelStub]{Value: &modelStub{model: "m1"}}).Model()
+	if got != "m1" {
+		t.Errorf("Model() = %q, want m1", got)
+	}
+}
+
+type modelStub struct{ model string }
+
+func (m *modelStub) Model() string { return m.model }
+
+type plainStub struct{}

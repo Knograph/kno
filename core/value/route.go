@@ -85,24 +85,44 @@ const (
 // observations, which is the smallest regression a run of that size can
 // separate from zero.
 //
-// The worst-case paired-binary standard deviation is 0.5 — differences live in
-// {-1, 0, +1}, and the variance is maximised when the discordant pairs split
-// evenly — so this is a bound rather than an estimate, and it does not need the
-// data. Reporting an optimistic figure computed from the observed variance
-// would make the number smaller exactly on the runs where it mattered most.
+// The worst-case paired-binary standard deviation is sqrt(0.5) — differences
+// live in {-1, 0, +1}, and the variance 2p(1-p) is maximised at 0.5 when the
+// discordant pairs split evenly — so this is a bound rather than an estimate,
+// and it does not need the data. Reporting an optimistic figure computed from
+// the observed variance would make the number smaller exactly on the runs
+// where it mattered most.
 //
-// z at 95% one-sided is 1.645.
+// The t quantile replaces z for small m: at m=20 the one-sided 95% t value is
+// 1.729 against z's 1.645, and quoting z there under-states a bound the user
+// is about to act on.
 func minDetectableHarm(m int) float64 {
 	if m < 1 {
 		// No control sample: nothing is detectable, and the caller must not
 		// read a small number here as a tight bound.
 		return 0
 	}
-	const (
-		z     = 1.645
-		sdMax = 0.5
-	)
+	z := 1.645 // z at 95% one-sided, used beyond df=30 where t reaches it.
+	// The table is indexed by degrees of freedom 1..31, stored 0-based, so
+	// df=1 (m=2) reads index 0.
+	if df := m - 1; df >= 1 && df <= len(t95OneSided) {
+		z = t95OneSided[df-1]
+	}
+	// sdMax is the STANDARD DEVIATION bound, sqrt(0.5) ~ 0.707, not the
+	// variance bound 0.5 — the earlier slip that understated every reported
+	// minimum by ~sqrt(2).
+	const sdMax = 0.7071067811865476 // math.Sqrt(0.5)
 	return z * sdMax / math.Sqrt(float64(m))
+}
+
+// t95OneSided is the one-sided 95% Student-t critical value by degrees of
+// freedom, df 0..30. df = m-1 for a sample of m pairs. Kept as a table rather
+// than a dependency: these are the small-m values where t differs from z
+// enough to matter, and the bound is reported, not refined.
+var t95OneSided = [...]float64{
+	6.314, 2.920, 2.353, 2.132, 2.015, 1.943, 1.895, 1.860, 1.833, 1.812,
+	1.796, 1.782, 1.771, 1.761, 1.753, 1.746, 1.740, 1.734, 1.729, 1.725,
+	1.721, 1.717, 1.714, 1.711, 1.708, 1.706, 1.703, 1.701, 1.699, 1.697,
+	1.695,
 }
 
 // String renders a Mode for events and error messages.
@@ -186,8 +206,9 @@ const (
 	// and is the point: the control question is "did this break something",
 	// answered as a one-sided bound on harm, and an underpowered harm test
 	// looks exactly like a passed one. At M=10 paired binary observations the
-	// bound is roughly +/-0.3, so a true -0.10 regression reads as no
-	// regression. The rate is set so a default-sized run clears MinSample with
+	// two-sided bound is roughly +/-0.44 (1.96 x sqrt(0.5)/sqrt(10)), so a
+	// true -0.10 regression reads as no regression. The rate is set so a
+	// default-sized run clears MinSample with
 	// room, and the underpowered marker fires rather than being avoided by
 	// hope.
 	DefaultControlSampleRate = 1.0
@@ -223,13 +244,13 @@ const HarmMargin = 0.10
 // observations, so counting them would inflate this exactly the way flattening
 // trials inflates an interval.
 //
-// This threshold is honest about being weak. At 20 paired binary Cases against
-// a 70%-pass agent the two-sided half-width is about 0.28 — essentially the
-// width that makes a real regression and a clean result indistinguishable — and
-// a one-sided test has roughly 18% power against a true -0.10. Detecting
-// HarmMargin reliably needs several hundred Cases, which is more than most dev
-// splits hold, so raising the constant would mark nearly every run underpowered
-// and the marker would stop carrying information.
+// This threshold is honest about being weak. At 20 paired binary Cases the
+// one-sided half-width is about 0.26 (1.729 x sqrt(0.5)/sqrt(20)) — larger
+// than HarmMargin itself, so a run at this floor cannot clear anything at the
+// margin it claims to care about. Detecting HarmMargin reliably needs roughly
+// 135 Cases, which is more than most dev splits hold, so raising the constant
+// would mark nearly every run underpowered and the marker would stop carrying
+// information.
 //
 // The flag is therefore a floor, not a licence: above it a run is not "powered",
 // it is merely not absurd. Plan.MinDetectableHarm is the number a reader should
@@ -268,6 +289,13 @@ type Plan struct {
 
 	// Routed is one entry per Asset, in the order the Assets were supplied.
 	Routed []AssetRouting
+
+	// EligibleCases is the dev-split population every Asset was routed from —
+	// the Cases left after the reservation and after dropping the unpairable.
+	// This is Valuation.n_dev, which names that pool and not the control
+	// partition: consumers scaling a delta by n_dev to estimate pool-wide
+	// benefit would otherwise understate it by the reserve fraction.
+	EligibleCases int
 
 	// ControlCaseIDs are the reserved-partition Cases the harm test measures,
 	// the same set for every Asset. Their control side is the recorded
@@ -382,9 +410,15 @@ func Route(cases []CaseRef, assets []AssetRef, opts Options) (*Plan, error) {
 	// with Asset IDs, and an Asset named "control" would otherwise draw from
 	// the identical PCG stream. Harmless while the candidate lists differ, and
 	// a silent correlation the day they do not.
+	plan.EligibleCases = len(eligible)
 	plan.ControlCaseIDs = sampleIDs(reserved, opts.ControlSampleRate, opts.MinSample, opts.Seed, "\x00control")
-	plan.ControlUnderpowered = len(plan.ControlCaseIDs) < MinControlSample
 	plan.MinDetectableHarm = minDetectableHarm(len(plan.ControlCaseIDs))
+	// The flag is the floor OR the honest bound: below MinControlSample the
+	// sample cannot see HarmMargin at all, and above it the bound itself says
+	// whether the run could separate it from zero — which is the number a
+	// reader should act on either way.
+	plan.ControlUnderpowered = len(plan.ControlCaseIDs) < MinControlSample ||
+		plan.MinDetectableHarm > HarmMargin
 
 	clusters, mode := cluster(eligible)
 	if opts.DisableRouting {

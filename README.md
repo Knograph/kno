@@ -115,7 +115,7 @@ A CI gate branches on these, so they're a contract rather than an afterthought.
 | Stage | What it does | State |
 |---|---|---|
 | **Baseline** | Run the agent over the dev Cases, score against the Goal, persist every result | **Shipped** |
-| **Value** | Route each Asset to the slices it could affect, inject, re-run against controls, record Δ with an interval | Next |
+| **Value** | Route each Asset to the slices it could affect, inject, re-run against controls, record Δ with an interval | **Shipped** |
 | **Select** | Build a Portfolio under budget, with a rejection log | Planned |
 | **Validate** | Measure the Portfolio as a set against the untouched holdout | Planned |
 | **Export** | Training set, report, and the gaps nothing in your pool could fix | Planned |

@@ -380,6 +380,63 @@ func (InjectionMode) EnumDescriptor() ([]byte, []int) {
 	return file_kno_v1_common_proto_rawDescGZIP(), []int{4}
 }
 
+// Arm names which side of a paired measurement a row belongs to. Value runs
+// an injected treatment arm against a control arm over the same Cases, and
+// every measurement, event, and cost record must say which arm it came from —
+// otherwise the API cannot attribute retries or overshoot to the Asset that
+// caused them.
+type Arm int32
+
+const (
+	// Unset.
+	Arm_ARM_UNSPECIFIED Arm = 0
+	// The agent with the Asset's context injected.
+	Arm_ARM_TREATMENT Arm = 1
+	// The agent as-is, over untouched slices.
+	Arm_ARM_CONTROL Arm = 2
+)
+
+// Enum value maps for Arm.
+var (
+	Arm_name = map[int32]string{
+		0: "ARM_UNSPECIFIED",
+		1: "ARM_TREATMENT",
+		2: "ARM_CONTROL",
+	}
+	Arm_value = map[string]int32{
+		"ARM_UNSPECIFIED": 0,
+		"ARM_TREATMENT":   1,
+		"ARM_CONTROL":     2,
+	}
+)
+
+func (x Arm) Enum() *Arm {
+	p := new(Arm)
+	*p = x
+	return p
+}
+
+func (x Arm) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (Arm) Descriptor() protoreflect.EnumDescriptor {
+	return file_kno_v1_common_proto_enumTypes[5].Descriptor()
+}
+
+func (Arm) Type() protoreflect.EnumType {
+	return &file_kno_v1_common_proto_enumTypes[5]
+}
+
+func (x Arm) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use Arm.Descriptor instead.
+func (Arm) EnumDescriptor() ([]byte, []int) {
+	return file_kno_v1_common_proto_rawDescGZIP(), []int{5}
+}
+
 // CostVector is what carrying an Asset costs. Every Asset has one, because the
 // ranking metric is Δgoal per unit cost, not raw Δgoal — a mediocre 200-token
 // Asset can and should out-rank a strong 8,000-token one.
@@ -1040,7 +1097,11 @@ const file_kno_v1_common_proto_rawDesc = "" +
 	"\x16INJECTION_MODE_CONTEXT\x10\x01\x12\x1c\n" +
 	"\x18INJECTION_MODE_KNOWLEDGE\x10\x02\x12!\n" +
 	"\x1dINJECTION_MODE_PROXY_FINETUNE\x10\x03\x12\x1b\n" +
-	"\x17INJECTION_MODE_FINETUNE\x10\x04B|\n" +
+	"\x17INJECTION_MODE_FINETUNE\x10\x04*>\n" +
+	"\x03Arm\x12\x13\n" +
+	"\x0fARM_UNSPECIFIED\x10\x00\x12\x11\n" +
+	"\rARM_TREATMENT\x10\x01\x12\x0f\n" +
+	"\vARM_CONTROL\x10\x02B|\n" +
 	"\n" +
 	"com.kno.v1B\vCommonProtoP\x01Z(github.com/knograph/kno/gen/kno/v1;knov1\xa2\x02\x03KXX\xaa\x02\x06Kno.V1\xca\x02\x06Kno\\V1\xe2\x02\x12Kno\\V1\\GPBMetadata\xea\x02\aKno::V1b\x06proto3"
 
@@ -1056,7 +1117,7 @@ func file_kno_v1_common_proto_rawDescGZIP() []byte {
 	return file_kno_v1_common_proto_rawDescData
 }
 
-var file_kno_v1_common_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
+var file_kno_v1_common_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
 var file_kno_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_kno_v1_common_proto_goTypes = []any{
 	(Kind)(0),            // 0: kno.v1.Kind
@@ -1064,12 +1125,13 @@ var file_kno_v1_common_proto_goTypes = []any{
 	(ScoreDomain)(0),     // 2: kno.v1.ScoreDomain
 	(Destination)(0),     // 3: kno.v1.Destination
 	(InjectionMode)(0),   // 4: kno.v1.InjectionMode
-	(*CostVector)(nil),   // 5: kno.v1.CostVector
-	(*Provenance)(nil),   // 6: kno.v1.Provenance
-	(*Capabilities)(nil), // 7: kno.v1.Capabilities
-	(*Price)(nil),        // 8: kno.v1.Price
-	(*Generation)(nil),   // 9: kno.v1.Generation
-	(*AgentRef)(nil),     // 10: kno.v1.AgentRef
+	(Arm)(0),             // 5: kno.v1.Arm
+	(*CostVector)(nil),   // 6: kno.v1.CostVector
+	(*Provenance)(nil),   // 7: kno.v1.Provenance
+	(*Capabilities)(nil), // 8: kno.v1.Capabilities
+	(*Price)(nil),        // 9: kno.v1.Price
+	(*Generation)(nil),   // 10: kno.v1.Generation
+	(*AgentRef)(nil),     // 11: kno.v1.AgentRef
 }
 var file_kno_v1_common_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for method output_type
@@ -1091,7 +1153,7 @@ func file_kno_v1_common_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kno_v1_common_proto_rawDesc), len(file_kno_v1_common_proto_rawDesc)),
-			NumEnums:      5,
+			NumEnums:      6,
 			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   0,

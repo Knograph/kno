@@ -79,8 +79,8 @@ enum Sidedness {
 }
 
 // RejectionReason is why an Asset did not make the Portfolio, or — for the
-// three values that describe an absent measurement — why Value never measured
-// it. Two stages share the enum because they are the same question asked at
+// four values that describe an absent or unmeasurable measurement — why Value
+// never measured it or could not form an interval around it. Two stages share the enum because they are the same question asked at
 // two depths, and splitting it would make a Rejection carrying Value's answer
 // need a second field to say which enum it held.
 //
@@ -129,6 +129,15 @@ enum RejectionReason {
   // log dishonest in the direction that matters most: telling a user their
   // data is worthless when the truth is that Kno failed to measure it.
   REJECTION_REASON_MEASUREMENT_FAILED = 8;
+
+  // Measurements were made but no interval could be formed around them, so no
+  // delta is reported. Two causes: the sample was too small to form an
+  // interval (fewer than two pairs, a one-Case routed or control slice), or
+  // per-Case trial attrition left ragged vectors that no legitimate interval
+  // method accepts. It is a statement about the sample, not about the Asset —
+  // reporting a bare delta under it is the thing prime directive 5 exists to
+  // prevent, and it must never degrade into NO_EFFECT.
+  REJECTION_REASON_UNDERPOWERED = 9;
 }
 
 // Valuation is an Asset's measured record: what it did, how sure we are, what
@@ -148,8 +157,9 @@ message Valuation {
   // relative to the Goal's own direction.
   double delta_goal = 2;
 
-  // Confidence interval on delta_goal. ABSENT means not computed — never
-  // report delta_goal without checking this field is present.
+  // Confidence interval on delta_goal. ABSENT means not computed, which
+  // happens exactly when not_measured is set — never report delta_goal
+  // without checking this field is present.
   Interval delta_interval = 3;
 
   // Change in the Goal on untouched CONTROL slices. This is the regression
@@ -157,7 +167,8 @@ message Valuation {
   // net loss, and only measuring the target slice would hide that.
   double delta_control = 4;
 
-  // Confidence interval on delta_control.
+  // Confidence interval on delta_control. ABSENT means not computed;
+  // delta_control is omitted whenever this is absent.
   Interval control_interval = 5;
 
   // How this was measured. CONTEXT results are an upper bound, not a
@@ -199,12 +210,15 @@ message Valuation {
   //
   // Absent means a measurement WAS made; read it before reading delta_goal.
   //
-  // Only three values are legal here — IRRELEVANT, BUDGET_EXHAUSTED, and
-  // MEASUREMENT_FAILED — because they are the only ones that describe an
-  // ABSENT measurement. NO_EFFECT, REGRESSION, REDUNDANT, COST_DOMINATED and
-  // WRONG_MECHANISM are all conclusions drawn FROM a measurement, and writing
-  // one here would say "no measurement was made because the delta was
-  // indistinguishable from zero", which requires the measurement it denies.
+  // Only four values are legal here — IRRELEVANT, BUDGET_EXHAUSTED,
+  // MEASUREMENT_FAILED, and UNDERPOWERED — because they are the only ones
+  // that describe an ABSENT or UNMEASURABLE measurement. NO_EFFECT,
+  // REGRESSION, REDUNDANT, COST_DOMINATED and WRONG_MECHANISM are all
+  // conclusions drawn FROM a measurement, and writing one here would say "no
+  // measurement was made because the delta was indistinguishable from zero",
+  // which requires the measurement it denies. UNDERPOWERED is the boundary
+  // case: measurements exist, but no interval could be formed, so delta_goal
+  // and delta_control are omitted alongside it.
   //
   // When this is MEASUREMENT_FAILED, `error` carries the cause; this field is
   // authoritative on whether a delta exists.
@@ -232,6 +246,17 @@ message Valuation {
   // underpowered harm test that looks like a passed one is worse than an
   // absent one, so it is marked and the marker travels with the number.
   optional bool control_underpowered = 18;
+
+  // How many pairs the delta was computed over. n_pairs vs n_routed is the
+  // attrition statement: every Case that routed but did not pair is a dropped
+  // measurement, and the drop direction is biased (Cases where the Asset was
+  // most harmful are exactly the ones most likely to error). A Valuation that
+  // hides the shrinkage reports a mean over "whatever survived" as if it were
+  // the routed mean.
+  optional int32 n_pairs = 19;
+
+  // How many pairs were dropped before the delta was computed. See n_pairs.
+  optional int32 n_dropped = 20;
 
 // (n_comparisons lives on CaseExecution, not here: it is a run-level fact, and
   // a Valuation is written when its Asset finishes rather than when the run

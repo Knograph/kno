@@ -36,6 +36,11 @@ type Agent struct {
 	// attempted records which Cases have been seen, so ThrottleFirstAttempt is
 	// per Case rather than per global call.
 	attempted sync.Map
+
+	// injected counts how many measurements ran with each Asset in context,
+	// so a Value test can assert the treatment arm carried the Asset and the
+	// control arm did not — which is the entire measurement.
+	injected sync.Map
 }
 
 // Options configures the fake.
@@ -91,6 +96,11 @@ type Options struct {
 
 	// ResolvedModelThen is what the alias re-points TO.
 	ResolvedModelThen string
+
+	// Inject enables WithContext and declares ContextInject in Capabilities,
+	// so a Value-stage test can run the real measurement path rather than a
+	// synthesized one.
+	Inject bool
 }
 
 // New returns a fake Agent.
@@ -177,16 +187,49 @@ func (a *Agent) resolvedModel() string {
 
 // Capabilities reports what this adapter supports.
 //
-// The fake declares no injection capability. It answers Cases; it has no
-// context to inject into and no knowledge index to write, and claiming
-// otherwise would let a valuation run report a measurement mode it never used.
+// The fake declares context injection: WithContext records which Asset is
+// carried and delegates the call, which is what lets a Value run exercise the
+// real measurement path — treatment arm carrying the Asset, control arm not —
+// against an agent that costs nothing. There is no knowledge index to write,
+// and claiming one would let a valuation run report a mode it never used.
 func (a *Agent) Capabilities() *core.Capabilities {
 	return &knov1.Capabilities{
-		ContextInject:  false,
+		ContextInject:  true,
 		KnowledgeWrite: false,
 		Stream:         false,
 		TokenCounts:    true,
 	}
+}
+
+// WithContext wraps the agent so the Asset travels with every Invoke, which is
+// what makes the treatment arm the treatment arm.
+func (a *Agent) WithContext(asset *core.Asset) (core.Agent, error) {
+	return &contextAgent{inner: a, asset: asset}, nil
+}
+
+// contextAgent is the injected wrapper: it records the injection and
+// delegates the call.
+type contextAgent struct {
+	inner *Agent
+	asset *core.Asset
+}
+
+func (c *contextAgent) Invoke(ctx context.Context, cs *core.Case) (*core.Response, error) {
+	n, _ := c.inner.injected.LoadOrStore(c.asset.GetId(), new(atomic.Int64))
+	n.(*atomic.Int64).Add(1)
+	return c.inner.Invoke(ctx, cs)
+}
+
+func (c *contextAgent) Capabilities() *core.Capabilities {
+	return c.inner.Capabilities()
+}
+
+// Injected returns how many measurements ran with the named Asset in context.
+func (a *Agent) Injected(assetID string) int64 {
+	if n, ok := a.injected.Load(assetID); ok {
+		return n.(*atomic.Int64).Load()
+	}
+	return 0
 }
 
 // Spends reports whether this agent can cost the user money.

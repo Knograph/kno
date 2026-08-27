@@ -12,6 +12,7 @@ import (
 	knov1 "github.com/knograph/kno/gen/kno/v1"
 	"github.com/knograph/kno/observe"
 	"github.com/knograph/kno/stats/budget"
+	"github.com/knograph/kno/store"
 )
 
 // Calling the agent for one Case, and deciding what a failure means: whether
@@ -129,15 +130,15 @@ func (o BaselineOptions) invoker(agg *aggregator) invoker {
 		MaxAttempts:  o.maxAttempts(),
 		RetryBudget:  o.retryBudget(),
 		RetryBackoff: o.retryBackoff(),
-		OnOvershoot: func(ctx context.Context, caseID string, estimated, settled, overshoot int64) {
+		OnOvershoot: func(ctx context.Context, key store.MeasurementKey, estimated, settled, overshoot int64) {
 			agg.recordEmitFailure(o.emitSettlementOvershoot(
-				ctx, agg, caseID, estimated, settled, overshoot))
+				ctx, agg, key, estimated, settled, overshoot))
 		},
-		OnRetry: func(ctx context.Context, caseID string, attempt int,
+		OnRetry: func(ctx context.Context, key store.MeasurementKey, attempt int,
 			reason knov1.RetryReason, wait, remaining time.Duration,
 		) {
 			agg.recordEmitFailure(o.emitRetryAttempted(
-				ctx, agg, caseID, attempt, reason, wait, remaining))
+				ctx, agg, key, attempt, reason, wait, remaining))
 		},
 	}
 }

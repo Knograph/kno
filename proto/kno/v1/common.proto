@@ -150,6 +150,22 @@ enum InjectionMode {
   INJECTION_MODE_FINETUNE = 4;
 }
 
+// Arm names which side of a paired measurement a row belongs to. Value runs
+// an injected treatment arm against a control arm over the same Cases, and
+// every measurement, event, and cost record must say which arm it came from —
+// otherwise the API cannot attribute retries or overshoot to the Asset that
+// caused them.
+enum Arm {
+  // Unset.
+  ARM_UNSPECIFIED = 0;
+
+  // The agent with the Asset's context injected.
+  ARM_TREATMENT = 1;
+
+  // The agent as-is, over untouched slices.
+  ARM_CONTROL = 2;
+}
+
 // CostVector is what carrying an Asset costs. Every Asset has one, because the
 // ranking metric is Δgoal per unit cost, not raw Δgoal — a mediocre 200-token
 // Asset can and should out-rank a strong 8,000-token one.

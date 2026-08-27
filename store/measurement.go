@@ -115,6 +115,16 @@ type CaseScore struct {
 	// Value is the recorded score. Meaningless when Unrecoverable is set.
 	Value float64
 
+	// Passed is the Goal's own verdict on this Case.
+	//
+	// Carried alongside Value rather than derived from it, because only the
+	// Goal knows where its threshold is: an exact-match Goal passes at 1.0, a
+	// similarity Goal somewhere else, and a latency Goal passes BELOW its
+	// number. Re-deriving a verdict here would put a second copy of that
+	// judgement outside the Goal, and the copy that drifted would be the one
+	// deciding which Cases a run routes to.
+	Passed bool
+
 	// Unrecoverable means the Case scored but its number is no longer readable
 	// — purged before the score column existed, or written by a binary that
 	// predates the column. See ScoreSummary for why those two are counted
@@ -251,6 +261,26 @@ func (s *SQLite) RecordMeasurement(ctx context.Context, runID string, m *Measure
 	return nil
 }
 
+// MeasurementCounts aggregates a run's measurements for CaseExecution:
+// attempted, scored, and errored, read from what is DURABLE rather than from
+// in-memory counters, so a resumed run's close reports the WHOLE run — the
+// first process's paid rows included — instead of only the tail this process
+// happened to execute.
+func (s *SQLite) MeasurementCounts(ctx context.Context, runID string) (attempted, scored, errored int32, err error) {
+	db, err := s.conn()
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	row := db.QueryRowContext(ctx,
+		`SELECT COUNT(*), COUNT(*) FILTER (WHERE scored = 1),
+		        COUNT(*) FILTER (WHERE err_code != '')
+		   FROM measurements WHERE run_id = ?`, runID)
+	if err := row.Scan(&attempted, &scored, &errored); err != nil {
+		return 0, 0, 0, fmt.Errorf("counting measurements for %s: %w", runID, err)
+	}
+	return attempted, scored, errored, nil
+}
+
 // CompletedMeasurements returns the key of every measurement already recorded.
 //
 // What a Value resume consults, for the same reason CompletedCases exists for
@@ -306,7 +336,8 @@ func (s *SQLite) CaseScores(ctx context.Context, runID string) (map[string]CaseS
 		return nil, err
 	}
 	rows, err := db.QueryContext(ctx,
-		`SELECT case_id, score_value FROM outcomes WHERE run_id = ? AND scored = 1`, runID)
+		`SELECT case_id, score_value, score_passed
+		 FROM outcomes WHERE run_id = ? AND scored = 1`, runID)
 	if err != nil {
 		return nil, fmt.Errorf("reading case scores for %s: %w", runID, err)
 	}
@@ -314,12 +345,25 @@ func (s *SQLite) CaseScores(ctx context.Context, runID string) (map[string]CaseS
 
 	scores := make(map[string]CaseScore)
 	for rows.Next() {
-		var id string
-		var v sql.NullFloat64
-		if err := rows.Scan(&id, &v); err != nil {
+		var (
+			id     string
+			v      sql.NullFloat64
+			passed sql.NullBool
+		)
+		if err := rows.Scan(&id, &v, &passed); err != nil {
 			return nil, fmt.Errorf("scanning a case score for %s: %w", runID, err)
 		}
-		scores[id] = CaseScore{Value: v.Float64, Unrecoverable: !v.Valid}
+		scores[id] = CaseScore{
+			Value:  v.Float64,
+			Passed: passed.Bool,
+			// NULL in either column: the row scored and its number is gone.
+			// score_passed is written in the same statement as score_value, so
+			// they are absent together, but the flag is checked rather than
+			// assumed — a Passed read out of a NULL is a silent false, and
+			// false is "the baseline failed this", which is what routing
+			// selects ON.
+			Unrecoverable: !v.Valid || !passed.Valid,
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("reading case scores for %s: %w", runID, err)

@@ -271,6 +271,9 @@ func TestCaseScoresSeparatesAbsentFromUnrecoverable(t *testing.T) {
 	if err := s.RecordOutcome(ctx, "run-1", scoredOutcome("case-scored", 0.75, 10)); err != nil {
 		t.Fatalf("scored: %v", err)
 	}
+	if err := s.RecordOutcome(ctx, "run-1", scoredOutcome("case-failed", 0, 10)); err != nil {
+		t.Fatalf("failed case: %v", err)
+	}
 	if err := s.RecordOutcome(ctx, "run-1", &store.Outcome{
 		CaseID: "case-errored",
 		Err:    "timeout",
@@ -284,6 +287,15 @@ func TestCaseScoresSeparatesAbsentFromUnrecoverable(t *testing.T) {
 	mustExec(t, s, `INSERT INTO outcomes
 	    (run_id, case_id, scored, err_code, calls, cost_usd_micros, tokens)
 	  VALUES ('run-1', 'case-gone', 1, '', 1, 5, 10)`)
+	// Half a score: a value with no verdict. This build's writers set both
+	// columns in one statement and the migration backfills both together, so
+	// nothing HERE produces this row — but a row on disk is not a row this
+	// build wrote, and a missing verdict reads as `false`, which is precisely
+	// "the baseline failed this Case" and precisely what routing selects on.
+	// Unrecoverable is the honest answer; a confident false is not.
+	mustExec(t, s, `INSERT INTO outcomes
+	    (run_id, case_id, scored, err_code, calls, cost_usd_micros, tokens, score_value)
+	  VALUES ('run-1', 'case-half', 1, '', 1, 5, 10, 0.9)`)
 
 	scores, err := s.CaseScores(ctx, "run-1")
 	if err != nil {
@@ -298,7 +310,31 @@ func TestCaseScoresSeparatesAbsentFromUnrecoverable(t *testing.T) {
 		t.Fatal("a scored Case is absent from CaseScores")
 	}
 	if got.Unrecoverable || got.Value != 0.75 {
-		t.Errorf("scored Case = %+v, want {0.75 false}", got)
+		t.Errorf("scored Case = %+v, want value 0.75 and recoverable", got)
+	}
+	// The Goal's verdict, carried rather than re-derived. Routing selects on
+	// exactly this bit, and only the Goal knows where its threshold sits — a
+	// similarity Goal passes somewhere other than 1.0, and a latency Goal
+	// passes BELOW its number.
+	if !got.Passed {
+		t.Errorf("a Case the Goal passed reports Passed false (%+v); routing selects "+
+			"on this bit, so a wrong one sends every Asset at the wrong slice", got)
+	}
+	half, ok := scores["case-half"]
+	if !ok {
+		t.Fatal("a row with a value and no verdict is absent from CaseScores")
+	}
+	if !half.Unrecoverable {
+		t.Errorf("a score with no verdict = %+v, want Unrecoverable; a missing verdict "+
+			"reads as false, which is the bit routing selects on", half)
+	}
+
+	failed, ok := scores["case-failed"]
+	if !ok {
+		t.Fatal("a scored-but-failed Case is missing from CaseScores")
+	}
+	if failed.Passed || failed.Unrecoverable {
+		t.Errorf("a failed Case = %+v, want Passed false and recoverable", failed)
 	}
 
 	gone, ok := scores["case-gone"]
@@ -738,5 +774,64 @@ func TestNewReadersFailClosedAfterClose(t *testing.T) {
 	}
 	if _, err := s.Valuations(ctx, "run-1"); err == nil {
 		t.Error("Valuations succeeded on a closed store")
+	}
+}
+
+// TestMeasurementCountsAggregatesFromDurableRows: attempted/scored/errored
+// come from the measurements table, done-markers counted as errored — the
+// shape Value's close reads to describe the WHOLE run across a resume.
+func TestMeasurementCountsAggregatesFromDurableRows(t *testing.T) {
+	t.Parallel()
+
+	st := openMeasurementStore(t)
+	createMeasurementRun(t, st, "run-1")
+	writeMeasurementRow(t, st, "run-1", "a", "c1", store.ArmTreatment, 1, 0.9)
+	writeMeasurementRow(t, st, "run-1", "a", "c2", store.ArmTreatment, 1, 0.8)
+	// A done-marker: budget-refused, no score.
+	if err := st.RecordMeasurement(context.Background(), "run-1", &store.Measurement{
+		Key: store.MeasurementKey{AssetID: "a", CaseID: "c3", Arm: store.ArmTreatment, Trial: 1},
+		Err: "BUDGET_EXCEEDED",
+	}); err != nil {
+		t.Fatalf("recording done-marker: %v", err)
+	}
+
+	attempted, scored, errored, err := st.MeasurementCounts(context.Background(), "run-1")
+	if err != nil {
+		t.Fatalf("MeasurementCounts: %v", err)
+	}
+	if attempted != 3 || scored != 2 || errored != 1 {
+		t.Errorf("counts = %d/%d/%d, want 3/2/1 (done-marker counted as errored)",
+			attempted, scored, errored)
+	}
+}
+
+// openMeasurementStore builds a store and a Value run row for the
+// measurements FK.
+func openMeasurementStore(t *testing.T) *store.SQLite {
+	t.Helper()
+	st, err := store.NewSQLite(context.Background(), t.TempDir()+"/kno.db")
+	if err != nil {
+		t.Fatalf("opening store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	return st
+}
+
+func createMeasurementRun(t *testing.T, st *store.SQLite, runID string) {
+	t.Helper()
+	if err := st.CreateRun(context.Background(), &knov1.Run{
+		Id: runID, Stage: knov1.Stage_STAGE_VALUE,
+	}); err != nil {
+		t.Fatalf("creating run: %v", err)
+	}
+}
+
+func writeMeasurementRow(t *testing.T, st *store.SQLite, runID, assetID, caseID string, arm store.Arm, trial int32, score float64) {
+	t.Helper()
+	if err := st.RecordMeasurement(context.Background(), runID, &store.Measurement{
+		Key:   store.MeasurementKey{AssetID: assetID, CaseID: caseID, Arm: arm, Trial: trial},
+		Score: &knov1.Score{CaseId: caseID, Value: score},
+	}); err != nil {
+		t.Fatalf("recording measurement: %v", err)
 	}
 }
