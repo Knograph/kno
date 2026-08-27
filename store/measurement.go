@@ -64,7 +64,8 @@ type MeasurementKey struct {
 
 	// Trial numbers repeated measurements of the same (Asset, Case, Arm) from
 	// 1. Repeats exist to average out sampling noise, so collapsing them would
-	// discard the variance reduction they were bought for.
+	// discard the variance reduction they were bought for. Zero is refused: a
+	// key normalized on write is a key the writer cannot look up on resume.
 	Trial int32
 }
 
@@ -76,8 +77,9 @@ type MeasurementKey struct {
 // measurement to RecordOutcome, where the (run_id, case_id) key would discard
 // every measurement after the first.
 type Measurement struct {
-	// Key identifies the measurement. Every field is required except Trial,
-	// which defaults to 1.
+	// Key identifies the measurement. Every field is required, Trial included:
+	// it is numbered from 1 and a zero is refused rather than normalized, so
+	// the key a caller writes is the key CompletedMeasurements hands back.
 	Key MeasurementKey
 
 	// Response is what the agent returned. Nil when the call failed before
@@ -139,15 +141,15 @@ type ScoreSummary struct {
 	// before the score lived in a column of its own.
 	Purged int
 
-	// UnknownProvenance is Cases that scored with no readable number and no
-	// evidence of a purge, because the row was written by a binary that
-	// predates the writer-version marker.
+	// UnknownProvenance is Cases that scored with no readable number while
+	// their Score blob is still present — what a binary predating the score
+	// column leaves behind when it writes into an already-migrated database.
+	// Nothing re-runs the backfill, so the number is never lifted out.
 	//
 	// Counted apart from Purged because conflating them attributes a
 	// mixed-binary bug to a deletion the user performed — see docs/debt.md#31,
-	// which is what this field repays. The distinction is only makeable for
-	// rows written from schema version 3 onward; older rows are exactly the
-	// ones this count reports.
+	// which is what this field repays. See SQLite.ScoreSum for why the blob and
+	// not a writer-version marker is what separates them.
 	UnknownProvenance int
 }
 
@@ -164,6 +166,13 @@ func (s ScoreSummary) Unrecoverable() int { return s.Purged + s.UnknownProvenanc
 // Idempotent on the full MeasurementKey via INSERT OR IGNORE, so a resumed run
 // re-attempting a measurement that in fact completed keeps the first result
 // rather than replacing it.
+//
+// Spend is clamped at zero per dimension, the same clamp RecordOrphanSpend
+// applies: a negative charge subtracts inside SettledSpend's SUM before
+// anything in Go can refuse it, handing a resumed run's guard free headroom.
+// docs/debt.md#48 reached this conclusion for Reservation.Settle, and every
+// money writer here is a place a future caller would otherwise have to
+// remember.
 func (s *SQLite) RecordMeasurement(ctx context.Context, runID string, m *Measurement) error {
 	db, err := s.conn()
 	if err != nil {
@@ -177,9 +186,18 @@ func (s *SQLite) RecordMeasurement(ctx context.Context, runID string, m *Measure
 			"the arm is part of the key, so an unset one would file the control "+
 			"arm on top of the treatment arm", m.Key.CaseID, m.Key.AssetID, m.Key.Arm)
 	}
-	trial := m.Key.Trial
-	if trial <= 0 {
-		trial = 1
+	if m.Key.Trial < 1 {
+		// Refused, not defaulted to 1. Normalizing here writes a key the caller
+		// never held, and CompletedMeasurements returns the STORED key — so a
+		// resume looking for what it wrote would miss it, pay the provider
+		// again, and then have the second row dropped by INSERT OR IGNORE along
+		// with its spend. The run pays twice and SettledSpend never sees the
+		// second payment, so a third process reseeds the guard below what was
+		// actually spent. Same reasoning as the arm guard above.
+		return fmt.Errorf("store: measurement of case %s for asset %s has trial %d; "+
+			"trials are numbered from 1 and the number is part of the key, so a "+
+			"zero would be stored as a key the caller cannot look up again",
+			m.Key.CaseID, m.Key.AssetID, m.Key.Trial)
 	}
 	// Same guard as RecordOutcome, checked on the two fields directly rather
 	// than through Scored(), which already returns false when Err is set and
@@ -218,17 +236,17 @@ func (s *SQLite) RecordMeasurement(ctx context.Context, runID string, m *Measure
 		   (run_id, asset_id, case_id, arm, trial, scored, err_code,
 		    response_proto, score_proto, calls, cost_usd_micros, tokens,
 		    score_value, score_passed, refused, truncated, usage_estimated,
-		    provider_build_id, resolved_model, writer_schema_version)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		runID, m.Key.AssetID, m.Key.CaseID, int32(m.Key.Arm), trial, scored, m.Err,
+		    provider_build_id, resolved_model)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, MAX(0, ?), MAX(0, ?), MAX(0, ?), ?, ?, ?, ?, ?, ?, ?)`,
+		runID, m.Key.AssetID, m.Key.CaseID, int32(m.Key.Arm), m.Key.Trial, scored, m.Err,
 		responseBlob, scoreBlob,
 		m.Spend.Calls, m.Spend.CostUSDMicros, m.Spend.Tokens,
 		scoreValue, scorePassed,
 		boolToInt(r.GetRefused()), boolToInt(truncated), boolToInt(r.GetUsageEstimated()),
-		r.GetProviderBuildId(), r.GetResolvedModel(), schemaVersion)
+		r.GetProviderBuildId(), r.GetResolvedModel())
 	if err != nil {
 		return fmt.Errorf("recording measurement %s/%s (%s, trial %d): %w",
-			m.Key.AssetID, m.Key.CaseID, m.Key.Arm, trial, err)
+			m.Key.AssetID, m.Key.CaseID, m.Key.Arm, m.Key.Trial, err)
 	}
 	return nil
 }
@@ -307,6 +325,81 @@ func (s *SQLite) CaseScores(ctx context.Context, runID string) (map[string]CaseS
 		return nil, fmt.Errorf("reading case scores for %s: %w", runID, err)
 	}
 	return scores, nil
+}
+
+// RecordedMeasurement is one measurement read back: its key and what it scored.
+//
+// The score, not the Response. A Valuation is recomputed from numbers, and
+// `kno purge` nulls the blobs — so a resume that needed the blob would find a
+// purged run unresumable, which is the trade docs/cookbook/retention.md
+// promises it is not.
+type RecordedMeasurement struct {
+	// Key identifies the measurement.
+	Key MeasurementKey
+
+	// Score is what the Goal returned. Meaningless when Unrecoverable or when
+	// Err is set.
+	Score float64
+
+	// Unrecoverable means this measurement scored and its number is gone. Same
+	// three-state discipline as CaseScore, and for the same reason: pairing
+	// against a zero that stands in for a missing number manufactures a delta.
+	Unrecoverable bool
+
+	// Err is the terminal failure's code, empty when the measurement scored.
+	Err string
+}
+
+// Measurements returns everything recorded for one Asset in a run.
+//
+// What makes WriteValuation's contract implementable. A run stopped by its cost
+// cap part-way through an Asset leaves paid measurements and no Valuation, and
+// the resume must recompute that Valuation over BOTH processes' measurements —
+// so it has to read back what the first process scored. Without this it could
+// only recompute over its own half, which is the delta-over-half-a-sample that
+// leaving the Valuation unwritten exists to prevent, or re-pay to recover the
+// numbers, which is the double-spend the table exists to prevent.
+//
+// Ordered by the full key, so a recomputation is reproducible and a golden test
+// over it is not flaky.
+func (s *SQLite) Measurements(ctx context.Context, runID, assetID string) ([]RecordedMeasurement, error) {
+	db, err := s.conn()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx,
+		`SELECT case_id, arm, trial, score_value, score_proto, scored, err_code
+		 FROM measurements WHERE run_id = ? AND asset_id = ?
+		 ORDER BY case_id, arm, trial`, runID, assetID)
+	if err != nil {
+		return nil, fmt.Errorf("reading measurements for %s/%s: %w", runID, assetID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []RecordedMeasurement
+	for rows.Next() {
+		var (
+			rec   RecordedMeasurement
+			arm   int32
+			value sql.NullFloat64
+			blob  []byte
+			score int
+		)
+		if err := rows.Scan(&rec.Key.CaseID, &arm, &rec.Key.Trial,
+			&value, &blob, &score, &rec.Err); err != nil {
+			return nil, fmt.Errorf("scanning a measurement for %s/%s: %w", runID, assetID, err)
+		}
+		rec.Key.AssetID, rec.Key.Arm = assetID, Arm(arm)
+		rec.Score = value.Float64
+		// Scored with no number left: the same state CaseScore reports, and it
+		// must not read as a score of zero.
+		rec.Unrecoverable = score == 1 && !value.Valid
+		out = append(out, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("reading measurements for %s/%s: %w", runID, assetID, err)
+	}
+	return out, nil
 }
 
 // WriteValuation records one Asset's finished Valuation.

@@ -102,6 +102,16 @@ type Store interface {
 	// the resulting zero would manufacture a delta.
 	CaseScores(ctx context.Context, runID string) (map[string]CaseScore, error)
 
+	// Measurements returns everything recorded for one Asset in a run: each
+	// measurement's key, what it scored, and whether that number survives.
+	//
+	// What makes the Valuation contract implementable across a resume. A run
+	// stopped mid-Asset must recompute that Asset's Valuation over BOTH
+	// processes' measurements; without this reader it could only recompute over
+	// its own half — a delta over half a sample — or re-pay to recover the
+	// numbers.
+	Measurements(ctx context.Context, runID, assetID string) ([]RecordedMeasurement, error)
+
 	// WriteValuation records one Asset's finished Valuation, written only once
 	// every measurement behind it is durable.
 	//

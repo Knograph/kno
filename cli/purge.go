@@ -101,7 +101,12 @@ func runPurge(ctx context.Context, out io.Writer, f purgeFlags) error {
 		// Irreversible and not a spend, so it gets its own confirmation rather
 		// than reusing the budget guard's.
 		_, err := fmt.Fprintf(out,
-			"\nPurge would remove agent output and judge rationales from %d outcome(s) "+
+			// "recorded row(s)", not "outcome(s)". The count spans outcomes and
+			// measurements, and for a Value run it is entirely measurements —
+			// so the old noun told a user "44 outcome(s)" about a run with no
+			// outcomes at all, on the one prompt whose job is stating what is
+			// about to be destroyed.
+			"\nPurge would remove agent output and judge rationales from %d recorded row(s) "+
 				"in run %s (%s, %s).\n"+
 				"Scores, costs, and completion records are kept, so the run stays resumable.\n"+
 				"This cannot be undone. Re-run with --yes to proceed.\n",
@@ -124,7 +129,7 @@ func runPurge(ctx context.Context, out io.Writer, f purgeFlags) error {
 	}
 
 	if _, err := fmt.Fprintf(out,
-		"\nPurged %d outcome(s) for run %s.\nThe run is still resumable: %s\n",
+		"\nPurged %d recorded row(s) for run %s.\nThe run is still resumable: %s\n",
 		purged, run.GetId(), "completion records, costs, and scores were kept."); err != nil {
 		return fmt.Errorf("writing report: %w", err)
 	}

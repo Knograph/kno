@@ -20,6 +20,12 @@ covenants — breaking any of them requires a major version.
 
 - **The store can hold a Value run** (`schemaVersion` 3). Nothing writes to it yet.
 
+  `kno purge` now says **"recorded row(s)"** rather than "outcome(s)", and clears both tables in
+  one transaction. The count always spanned both; for a Value run it is entirely measurements, so
+  the old noun reported outcomes about a run that has none. Two separate statements also let the
+  second fail after the first destroyed content, returning an error with no count — telling a user
+  nothing was removed, after removal.
+
   A `measurements` table keyed `(run_id, asset_id, case_id, arm, trial)`, because `outcomes` is
   keyed `(run_id, case_id)` and `RecordOutcome` is `INSERT OR IGNORE`. Value measures the same
   Case against many Assets in one run, so 200 Assets over 50 Cases would have written 50 rows and
@@ -637,9 +643,13 @@ covenants — breaking any of them requires a major version.
   public Go API break, permitted pre-1.0. It repays [debt #31](docs/debt.md#31): a scored row with
   no readable number has two possible causes, a purge before the score lived in a column of its
   own, or a binary that predated the column, and reporting both as a purge sends a user looking
-  for a deletion nobody performed. `writer_schema_version` on both tables distinguishes them from
-  schema version 3 onward; rows predating the marker are reported as being of unknown provenance
-  rather than assigned to whichever cause reads better.
+  for a deletion nobody performed.
+
+  The discriminator is the **Score blob**. `score_proto IS NULL` means a purge took it before the
+  number had a column of its own to survive in — the migration that added `score_value` backfills
+  it out of the blob, and a purged row is the one row the backfill cannot reach. A surviving blob
+  with no `score_value` is what a binary predating the column leaves behind in an already-migrated
+  database, since nothing re-runs the backfill.
 
   `CaseScores` returns `map[string]CaseScore`, not `map[string]float64`, for the neighbouring
   reason: absent must mean *never scored*, because a pair built against a Case whose number was

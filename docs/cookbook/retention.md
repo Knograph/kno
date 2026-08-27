@@ -31,7 +31,7 @@ kno purge --run-id 20260821T091515-ffc3097d49da --yes
 ```
 
 ```
-Purged 44 outcome(s) for run 20260821T091515-ffc3097d49da.
+Purged 44 recorded row(s) for run 20260821T091515-ffc3097d49da.
 The run is still resumable: completion records, costs, and scores were kept.
 ```
 
@@ -101,7 +101,9 @@ Kno records a Case two ways, and purge covers both.
 
 A **Baseline** run records one *outcome* per Case. A **Value** run records one *measurement* per Case per Asset per arm — the same Case measured many times, because that is what comparing Assets means — and those live in their own table with their own key. A measurement's response holds exactly the same end-user conversation content an outcome's does.
 
-Purge clears the content columns of both, and the count it prints before asking spans both. That is worth stating rather than assuming: a purge that cleared only outcomes would print "this would remove content from 44 rows", remove less than that, and report success over content still on disk — which is worse than failing, because you would act on the report.
+Purge clears the content columns of both, in one transaction, and the count it prints before asking spans both. That is why it says **recorded row(s)** rather than "outcome(s)": for a Value run the number is entirely measurements, and the old wording reported outcomes about a run that has none.
+
+Both halves matter. A purge that cleared only outcomes would print a count larger than what it removed and report success over content still on disk — which is worse than failing, because you would act on the report. And clearing them in two separate statements would let the second fail after the first destroyed content, returning an error with no count: told nothing was removed, after removal.
 
 ## In a scheduled job
 

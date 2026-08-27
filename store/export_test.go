@@ -69,17 +69,17 @@ func (s *SQLite) RawBlobs(ctx context.Context, runID, caseID string) (resp, scor
 
 // ExecForTest runs one statement directly against the database.
 //
-// Exported for tests only, and used for exactly one thing: writing a row as an
-// OLDER binary would have left it. docs/debt.md#31 is about rows this build did
-// not write, so a test that produced them through this package's own writer
-// would be testing the wrong binary — the writer stamps the current schema
-// version on everything it inserts, which is the whole mechanism under test.
-func (s *SQLite) ExecForTest(ctx context.Context, stmt string) error {
+// Exported for tests only, for states this package's own writers cannot
+// produce: a row as an older binary left it, or a table removed out from under
+// a statement. docs/debt.md#31 is about rows this build did not write, so a
+// test that produced them through this package's writer would be testing the
+// wrong binary.
+func (s *SQLite) ExecForTest(ctx context.Context, stmt string, args ...any) error {
 	db, err := s.conn()
 	if err != nil {
 		return err
 	}
-	_, err = db.ExecContext(ctx, stmt)
+	_, err = db.ExecContext(ctx, stmt, args...)
 	return err
 }
 

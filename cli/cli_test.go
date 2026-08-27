@@ -516,7 +516,7 @@ func TestPurgeRequiresConfirmation(t *testing.T) {
 	if !strings.Contains(stderr, "fix:") {
 		t.Errorf("no fix line:\n%s", stderr)
 	}
-	if !strings.Contains(out, "outcome(s)") {
+	if !strings.Contains(out, "recorded row(s)") {
 		t.Errorf("the prompt does not say how much it would remove, so it is not "+
 			"a dry run:\n%s", out)
 	}
