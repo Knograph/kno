@@ -72,6 +72,44 @@ covenants — breaking any of them requires a major version.
   docs` checks that links resolve, not that documentation is present. The entry's second half —
   asserting a PR title still describes its diff after a rename — it calls cheaper as a reviewer
   checklist item than as CI, so that is where it lands, in the PR template beside this check.
+- **The release pipeline** — goreleaser, cosign, syft, SLSA provenance, an install script, and a
+  `Makefile` target that cannot publish. Repays [`docs/debt.md#13`](docs/debt.md#13), whose trigger
+  was *"before the first tagged release"*; with `release-please` holding a `0.0.1` PR, this is the
+  last change that could land before it.
+
+  A tag now produces six archives (darwin/linux/windows × amd64/arm64), one `checksums.txt`, a
+  **keyless** cosign signature over that file, an SPDX SBOM per archive, and build provenance
+  attested over every artifact the checksum file names. Keyless is the point: there is no private
+  key in existence, so there is none to steal or rotate, and nothing in the workflow is a secret.
+
+  The signature covers `checksums.txt` rather than each archive. One verification then covers
+  everything, instead of six verifications that each say nothing about the other five.
+
+  `kno --version` reports the real tag, its commit, and its build date, stamped into `cli`'s
+  existing `version` variable by `-X` at link time. **`kno doctor --json` deliberately keeps
+  reporting the bare version**: that field is a jq contract, and appending a commit hash to a value
+  consumers parse as a version is a breaking change wearing a cosmetic disguise.
+
+  A `go install` binary is no longer stuck at `dev` either: the identity falls back to the module
+  and VCS metadata the toolchain already embeds, so it reports its module version, or its revision
+  with `-dirty` when the tree was not clean. `doctor --json` exists to be pasted into a bug report,
+  and a version field reading `dev` for every non-release install is a support burden dressed up as
+  a contract.
+
+  The release is created as a **draft** and published only after the provenance is attested. Every
+  failure boundary in a release leaves something public behind, and an empty release — or one
+  signed but not attested — is indistinguishable from a finished one to anyone reading the page.
+
+  `make release` refuses to run outside GitHub Actions, and the local dry run passes `--snapshot`,
+  under which goreleaser cannot publish at all. The guard checks an environment variable, so it is
+  a safety catch against typing the wrong target rather than a control; the boundary is credential
+  scope, the `release` environment, and the ancestor-of-`main` check — *nothing built on a laptop ships* is backed
+  rather than trusted. `make release-check` validates the config on every PR, because a tag is the
+  worst possible place to learn that the config is malformed.
+
+  The Homebrew formula is written and **disabled**: no tap repository exists yet, and an enabled
+  block pointing at a missing repository would fail the release after the artifacts were built and
+  signed ([`docs/debt.md#73`](docs/debt.md#73)).
 
 - **`stats/interval`** — confidence intervals on paired differences, the machinery prime directive 5
   requires before any delta can be reported. Nothing calls it yet.
@@ -688,6 +726,17 @@ covenants — breaking any of them requires a major version.
   two-line fix for the exposure. A canary variable planted before the scrub makes the guard
   self-verifying: delete the scrub and both tests go red. Repays
   [debt #63](docs/debt.md#63).
+
+- **The release pipeline could not have released.** Two defects, each fatal on the first tag, both
+  found in Phase-3 review and both reproduced. `make release` was the only one of four release
+  targets with no goreleaser prerequisite, so the workflow — which installs cosign and syft but
+  never builds the repo's own tools — would have exited 127 with no archives, no signature and no
+  attestation. And `"draft": true` in `release-please-config.json` meant **no git tag was ever
+  created**: GitHub creates the ref when a release is published, so the tag trigger could not fire,
+  `workflow_dispatch` had no tag to select, and the `RELEASE_PLEASE_TOKEN` that repays
+  [#74](docs/debt.md#74) would not have helped, because it changes the actor on a ref push that was
+  not happening. The draft now lives in `.goreleaser.yaml`, where it hides the release until the
+  artifacts are on it.
 
 - **`--cost-per-call-usd` is no longer required alongside `--max-cost-usd`** for an agent that
   prices its own calls. `--agent anthropic:claude-opus-5 --max-cost-usd 5` was refused even though

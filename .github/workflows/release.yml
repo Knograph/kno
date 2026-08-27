@@ -1,0 +1,183 @@
+name: Release
+
+on:
+  push:
+    # v[0-9]* rather than v*, so `vibe` and `victory` do not spin up a job
+    # holding id-token: write only for goreleaser to reject the tag late.
+    tags: ["v[0-9]*"]
+  # The escape hatch, and it is not optional decoration.
+  #
+  # release-please pushes the tag using the default GITHUB_TOKEN, and GitHub
+  # does not create workflow runs from events triggered by that token. So a tag
+  # pushed by the release bot starts NOTHING here — no run, no failure, no
+  # notification, just a release page with no artifacts on it. The durable fix
+  # is a PAT or GitHub App token on release-please (see release-please.yml and
+  # docs/debt.md#74); until that secret exists, a maintainer runs this workflow
+  # by hand against the tag. Select the tag under "Use workflow from".
+  #
+  # An earlier draft ALSO set `"draft": true` in release-please-config.json,
+  # believing it made a workflow-less tag visibly unfinished. It did the
+  # opposite: GitHub creates no git ref for a draft release — the ref appears
+  # when the release is published — so there was no tag push at all, this
+  # trigger could never fire, `workflow_dispatch` had no tag to select, and the
+  # RELEASE_PLEASE_TOKEN that repays #74 would not have helped, because it
+  # changes the actor on a ref push that was not happening. The draft lives in
+  # .goreleaser.yaml instead, where it hides the release until the artifacts
+  # are on it.
+  workflow_dispatch:
+
+# Two tag pushes must never build the same release twice, and a release must
+# never be cancelled halfway: cancel-in-progress is deliberately absent, because
+# an interrupted run can leave a release holding signed artifacts for only some
+# of the six platforms.
+concurrency:
+  group: release-${{ github.ref }}
+
+jobs:
+  release:
+    name: build, sign, attest
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    # Scoped to this job rather than to the workflow. Workflow-level permissions
+    # are inherited by every job added later, and `id-token: write` is not a
+    # permission to hand out by default: it mints an identity that can sign
+    # artifacts as this repository, permanently, into a public transparency log.
+    #
+    #   contents: write      — create the release and upload assets
+    #   id-token: write      — mint the OIDC token cosign exchanges for a Fulcio
+    #                          certificate. This is what "keyless" means: no
+    #                          private key exists, so there is no key material
+    #                          to leak, and nothing in this file is a secret.
+    #   attestations: write  — record the SLSA build provenance
+    #
+    # Notably absent: packages: (no registry), pull-requests: (nothing is
+    # opened), and any provider credential at all. This workflow spends no money
+    # and talks to no LLM API, so there is nothing here for a log line to leak.
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+
+    # The one control here that an actor holding repo write cannot rewrite in
+    # the same push. A tag bypasses branch protection entirely, so without this
+    # `git tag v9.9.9 <any-sha> && git push --tags` yields a fully signed,
+    # attested release built from code no one reviewed — and both published
+    # verification commands accept it, because refs/tags/.+ is exactly what
+    # they match.
+    #
+    # Inert until a repository admin adds required reviewers to the `release`
+    # environment (Settings -> Environments -> release). Declared anyway: the
+    # protection is then one setting away rather than one PR away, and the
+    # ancestry check below is the half that works today.
+    environment: release
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # goreleaser derives the version and the changelog range from tags, so
+          # a shallow clone makes it report the wrong version — or refuse.
+          fetch-depth: 0
+
+      # workflow_dispatch can be pointed at a branch. A "release" built from a
+      # branch would be signed with a certificate naming refs/heads/..., which
+      # every published verification command rejects — so it would produce
+      # artifacts that look official and verify as nothing. Refuse early.
+      - name: Refuse to release anything that is not a tag on main
+        run: |
+          set -euo pipefail
+          case "${GITHUB_REF}" in
+            refs/tags/v[0-9]*) echo "releasing ${GITHUB_REF_NAME}" ;;
+            *) echo "::error::${GITHUB_REF} is not a v[0-9]* tag; refusing to release."; exit 1 ;;
+          esac
+          # Shape is not enough. Tags bypass branch protection, so a tag can
+          # point at any commit — including one that never passed review, never
+          # ran CI, and is not on main at all. CLAUDE.md's "no direct pushes to
+          # main, including by maintainers" has a hole exactly the width of
+          # `git push --tags` without this.
+          #
+          # Not a boundary against a determined actor with write access: the
+          # workflow file is read at the tag's own ref, so a tag cut from a
+          # branch that deleted this step does not run it. The `environment:`
+          # above is the control; this is the check that catches the mistake.
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" FETCH_HEAD; then
+            echo "::error::${GITHUB_SHA} is not an ancestor of main; refusing to release unreviewed code."
+            exit 1
+          fi
+          echo "${GITHUB_SHA} is on main"
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
+            tools/goreleaser/go.sum
+
+      # cosign signs checksums.txt keylessly against the OIDC token this job's
+      # id-token permission mints.
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      # syft produces the per-archive SPDX SBOMs that .goreleaser.yaml's `sboms`
+      # block invokes. goreleaser shells out to it by name, so it must be on
+      # PATH before `make release` runs, not after.
+      - uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+
+      # One target, one goreleaser byte-pinned by tools/goreleaser/go.sum — the
+      # same one `make release-check` validated on every PR that touched the
+      # config. The target itself refuses to run outside GitHub Actions, so this
+      # is the only path in the repository that can publish.
+      - name: Build, sign and publish
+        env:
+          # The only secret in this workflow, and it is the one GitHub issues
+          # for this run. Passed through the environment, never onto a command
+          # line, where `ps` and the job log would both see it.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: make release
+
+      # SLSA build provenance over every artifact named in the checksum file.
+      #
+      # subject-checksums rather than a glob of dist/ on purpose: it makes the
+      # attested set and the released set the same set by construction. A glob
+      # can drift from what was actually published — attesting an artifact that
+      # never shipped, or worse, shipping one that was never attested.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: dist/checksums.txt
+
+      # The release is a draft until here. This step appends the checksums to
+      # the notes — CLAUDE.md § Security asks for "checksums in release notes",
+      # and a link to an attached file is not that — and then makes it public.
+      #
+      # Publishing LAST is the point: every earlier failure leaves a draft
+      # nobody can mistake for a finished release, rather than a public page
+      # with half its artifacts.
+      - name: Publish the release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          notes=$(mktemp)
+          # The existing body first: release-please wrote it from Conventional
+          # Commits, and it may have been hand-edited for the highlights.
+          #
+          # Everything from the checksum heading down is DROPPED before
+          # appending, so this is idempotent. Both this step and goreleaser's
+          # `mode: append` are read-modify-append against the current body, and
+          # a second run on the same tag — a re-run, or a dispatch racing a push
+          # — would otherwise stack a second checksum block. If the tag moved
+          # between runs the stale block sits above the current one with nothing
+          # saying which is which, and a user copying the wrong hash gets a
+          # mismatch that reads exactly like an attack.
+          gh release view "$TAG" --json body --jq .body \
+            | sed '/^### Checksums (SHA-256)$/,$d' > "$notes"
+          {
+            printf '\n### Checksums (SHA-256)\n\n```\n'
+            cat dist/checksums.txt
+            printf '```\n'
+          } >> "$notes"
+          gh release edit "$TAG" --notes-file "$notes" --draft=false
+          echo "published $TAG"

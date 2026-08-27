@@ -338,10 +338,27 @@ func TestDoctorPrintsTheMatrixWithoutSpendingOrReadingACredential(t *testing.T) 
 	if err != nil {
 		t.Fatalf("decoding: %v\n%s", err, jsonOut)
 	}
-	for _, k := range []string{"adapters", "goals", "price_table", "priced_models"} {
+	for _, k := range []string{"adapters", "goals", "price_table", "priced_models", "version"} {
 		if _, ok := rep[k]; !ok {
 			t.Errorf("--json is missing %q", k)
 		}
+	}
+
+	// version is a jq contract — `kno doctor --json | jq -r .version` is what a
+	// bug report and a CI pin both read — and three documents now lean on it
+	// carrying the BARE version rather than the human string. Nothing asserted
+	// that, so swapping it for identity().String() would have shipped green.
+	version, _ := rep["version"].(string)
+	if version == "" {
+		t.Error("--json reports an empty version; a bug report cannot say which build")
+	}
+	if version == "(devel)" {
+		t.Errorf("--json reports %q, Go's placeholder rather than a version", version)
+	}
+	if strings.ContainsAny(version, "( ") {
+		t.Errorf("--json version = %q; this field is the bare version, not the human "+
+			"string with its commit and date — `jq -r .version` is a documented "+
+			"contract and a parenthetical breaks every consumer of it", version)
 	}
 }
 

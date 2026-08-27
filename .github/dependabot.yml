@@ -26,6 +26,24 @@ updates:
       build-tools:
         patterns: ["*"]
 
+  # The release tool, in its own module so its ~500-package graph cannot bump
+  # the dependencies of the lint gate. Its binary runs in the one job holding
+  # id-token: write, which is the strongest reason in this repo to keep a
+  # dependency graph current.
+  #
+  # Not grouped: a single grouped bump of this graph is unreviewable, and the
+  # things worth reading — cosign, sigstore, go-git — are exactly what a group
+  # would bury. Note the ceiling in tools/goreleaser/go.mod: goreleaser v2.14+
+  # needs Go 1.26, so a major bump PR will fail until the toolchain moves.
+  - package-ecosystem: gomod
+    directory: "/tools/goreleaser"
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "build"
+      include: scope
+    labels: ["dependencies", "tooling", "release"]
+
   - package-ecosystem: github-actions
     directory: "/"
     schedule: { interval: weekly, day: monday }

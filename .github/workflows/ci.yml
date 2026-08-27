@@ -120,3 +120,40 @@ jobs:
           jq -e . release-please-config.json > /dev/null
           jq -e . .release-please-manifest.json > /dev/null
           echo "release-please config OK"
+
+  # The release config decides what a tag produces, and a tag is the worst
+  # possible place to discover it is malformed: by then the release PR is merged
+  # and the tag exists. So it is validated on every PR instead.
+  #
+  # `make release-check` is schema validation. `make release-stamp` is the one
+  # that matters: it BUILDS a binary and reads its --version back, because an
+  # -X path naming the wrong package or variable fails silently and ships a
+  # release that reports "dev" forever. Schema validation cannot see that.
+  #
+  # A separate job rather than a step inside `make check`: goreleaser is a
+  # ~500-package compile on a cold cache, which does not belong in a gate whose
+  # design is fail-fast-cheapest-first. The cost is that a green local
+  # `make check` no longer implies green CI for changes to these files —
+  # recorded as docs/debt.md#72. The release-please-config job sets the
+  # precedent for validating outside `make check`.
+  #
+  # Actions here are pinned to commit SHAs (docs/debt.md#14). The rest of this
+  # file is still on mutable tags; new code does not add to that pile.
+  release-config:
+    name: release config builds and stamps
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          # tools/goreleaser/go.sum is what makes the goreleaser compile
+          # cacheable across runs. Without it the cache key never mentions the
+          # module that dominates this job's build time.
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
+            tools/goreleaser/go.sum
+      - run: make release-check
+      - run: make release-stamp
