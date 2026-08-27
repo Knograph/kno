@@ -117,7 +117,21 @@ And **before routing runs at all**, Kno sets aside a random slice of your dev Ca
 
 The reserved slice answers a different question from the routed one: not "did this help", but **"did this break something else"**. An Asset that fixes its own slice and quietly damages another is the failure mode worth paying to catch.
 
-That question is one-sided — you care about harm, not about symmetric uncertainty — and it needs enough Cases to answer. Below about 20 control measurements the bound is wide enough that a real 10% regression and a clean result look identical, and the interval crosses zero either way. Kno marks that run **underpowered** rather than letting it read as "no regression found", because an untested claim that looks like a passed one is worse than no test.
+That question is one-sided — you care about harm, not about symmetric uncertainty — and it needs enough Cases to answer. Small samples answer it badly, and badly in the direction that reads as good news: the interval crosses zero, and "no regression found" is what a wide interval looks like.
+
+So Kno reports **the smallest regression the run could actually have seen**, rather than only a pass/fail badge. Roughly:
+
+| Control Cases | Smallest detectable regression |
+|---|---|
+| 10 | 0.26 |
+| 20 | 0.18 |
+| 60 | 0.11 |
+| 100 | 0.08 |
+| 300 | 0.05 |
+
+Read that as a limit, not a score. A run with 30 control Cases that reports no regression has **not** cleared an Asset that costs you 10 points — it could not have seen one. Below 20 Cases Kno also marks the run **underpowered**, but treat that flag as a floor rather than a certificate: above it a run is not "powered", it is merely not absurd.
+
+This is why the reserved slice is a third of your dev split rather than a token sample, and why a bigger eval set buys you a sharper answer to "did this break something" even though it does not change what routing costs.
 
 **`--route none`** switches routing off: every Asset is measured against a sample of everything. It does not remove the regression check — the reserved slice is drawn before routing and does not depend on it — and it drops the fresh control arm, because a random sample was never conditioned on your baseline's outcomes in the first place.
 

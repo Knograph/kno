@@ -2,6 +2,7 @@ package value
 
 import (
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"slices"
 	"sort"
@@ -69,15 +70,40 @@ const (
 	// every Asset as irrelevant and appears to do nothing.
 	ModeAllFailed
 
-	// ModeAllDev means no selection was made on the baseline outcome: either
-	// the baseline failed nothing in the routing-eligible partition, so there
-	// is no failure signal to route on, or the caller switched routing off.
-	// Every Asset is measured against a sample of every eligible Case.
+	// ModeAllDev means every Asset is measured against a sample of every
+	// eligible Case. Reached two ways, and they are NOT equivalent for the
+	// purpose that matters: the caller switched routing off, which is
+	// outcome-blind, or the baseline failed nothing in the eligible partition
+	// — which is a fact about the outcomes, discovered by reading them.
 	//
-	// It is the one mode whose selection is outcome-INDEPENDENT, which is why
-	// it is also the one mode that needs no fresh control arm.
+	// Only the first may pair against the recorded baseline. See the
+	// FreshControlArm assignment in Route.
 	ModeAllDev
 )
+
+// minDetectableHarm is the half-width of a one-sided bound over m paired
+// observations, which is the smallest regression a run of that size can
+// separate from zero.
+//
+// The worst-case paired-binary standard deviation is 0.5 — differences live in
+// {-1, 0, +1}, and the variance is maximised when the discordant pairs split
+// evenly — so this is a bound rather than an estimate, and it does not need the
+// data. Reporting an optimistic figure computed from the observed variance
+// would make the number smaller exactly on the runs where it mattered most.
+//
+// z at 95% one-sided is 1.645.
+func minDetectableHarm(m int) float64 {
+	if m < 1 {
+		// No control sample: nothing is detectable, and the caller must not
+		// read a small number here as a tight bound.
+		return 0
+	}
+	const (
+		z     = 1.645
+		sdMax = 0.5
+	)
+	return z * sdMax / math.Sqrt(float64(m))
+}
 
 // String renders a Mode for events and error messages.
 func (m Mode) String() string {
@@ -181,12 +207,33 @@ const (
 	DefaultMinSample = 5
 )
 
-// MinControlSample is the number of control measurements below which a harm
-// bound is marked underpowered.
+// HarmMargin is the regression this stage is calibrated to catch: epsilon, the
+// harm size worth acting on.
 //
-// Below this the one-sided bound is wide enough that a real regression and a
-// clean result are indistinguishable, and Valuation.control_underpowered exists
-// so that shows up as "untested" rather than "safe".
+// Named rather than left implicit, because every other number here derives from
+// it. A control sample is "enough" only relative to a margin, and a design that
+// picks a sample size first and describes its power afterwards has chosen the
+// convenience number and written the justification backwards.
+const HarmMargin = 0.10
+
+// MinControlSample is the control-Case count below which a harm bound is
+// marked underpowered.
+//
+// CASES, not measurements. Repeat trials of one Case are not independent
+// observations, so counting them would inflate this exactly the way flattening
+// trials inflates an interval.
+//
+// This threshold is honest about being weak. At 20 paired binary Cases against
+// a 70%-pass agent the two-sided half-width is about 0.28 — essentially the
+// width that makes a real regression and a clean result indistinguishable — and
+// a one-sided test has roughly 18% power against a true -0.10. Detecting
+// HarmMargin reliably needs several hundred Cases, which is more than most dev
+// splits hold, so raising the constant would mark nearly every run underpowered
+// and the marker would stop carrying information.
+//
+// The flag is therefore a floor, not a licence: above it a run is not "powered",
+// it is merely not absurd. Plan.MinDetectableHarm is the number a reader should
+// actually use, and it is reported rather than summarised into a bool.
 const MinControlSample = 20
 
 // AssetRouting is one Asset's routing decision, made before any spend.
@@ -228,9 +275,23 @@ type Plan struct {
 	// happened before routing.
 	ControlCaseIDs []string
 
-	// ControlUnderpowered reports whether the harm test is too small to
-	// distinguish a real regression from a clean result.
+	// ControlUnderpowered reports whether the harm test is below
+	// MinControlSample. A floor, not a certificate — see MinDetectableHarm.
 	ControlUnderpowered bool
+
+	// MinDetectableHarm is the smallest regression this run's control sample
+	// could distinguish from zero, at the shipped confidence level.
+	//
+	// The honest form of the underpowered marker. A bool answers "is this
+	// absurd", which a reader turns into "is this safe"; this answers the
+	// question they were actually asking — "how big would the damage have to be
+	// before this run noticed". A run reporting no regression with a minimum
+	// detectable harm of 0.28 has not cleared an Asset that costs 0.10.
+	//
+	// Zero when the control sample is empty, which means the harm test is
+	// ABSENT rather than wide: nothing was measured, so no harm size is
+	// detectable at all and ControlUnderpowered is set.
+	MinDetectableHarm float64
 
 	// Trials is how many times each measurement is repeated.
 	Trials int32
@@ -253,6 +314,21 @@ func (p *Plan) Measurements() int64 {
 	var total int64
 	for i := range p.Routed {
 		n := int64(len(p.Routed[i].CaseIDs))
+		if n == 0 {
+			// Routed to nothing: no treatment arm, and no harm test either.
+			// There is nothing to test for harm — the Asset is never put in
+			// front of the agent at all.
+			//
+			// Charging it the full control arm made the cheapest answer the
+			// stage gives away the most expensive line in the quote. On the
+			// pool this package's own docs describe — 200 Assets, 199 matching
+			// no cluster — it quoted 12,036 measurements for 96 of actual work,
+			// and DESIGN.md budgets ~30% of Assets routing to zero, so this is
+			// the designed-for case rather than a corner. A user shown the
+			// dollar figure derived from a 125x over-quote aborts a run they
+			// should have approved.
+			continue
+		}
 		if p.Routed[i].FreshControlArm {
 			n *= 2
 		}
@@ -288,6 +364,9 @@ func Route(cases []CaseRef, assets []AssetRef, opts Options) (*Plan, error) {
 	if err := checkDuplicateCases(cases); err != nil {
 		return nil, err
 	}
+	if err := checkDuplicateAssets(assets); err != nil {
+		return nil, err
+	}
 	opts = opts.withDefaults()
 
 	// The partition is drawn FIRST, from a shuffle that has seen no outcome,
@@ -299,8 +378,13 @@ func Route(cases []CaseRef, assets []AssetRef, opts Options) (*Plan, error) {
 		Trials: opts.Trials,
 		Seed:   opts.Seed,
 	}
-	plan.ControlCaseIDs = sampleIDs(reserved, opts.ControlSampleRate, opts.MinSample, opts.Seed, "control")
+	// "\x00control" rather than "control": the label namespace is shared
+	// with Asset IDs, and an Asset named "control" would otherwise draw from
+	// the identical PCG stream. Harmless while the candidate lists differ, and
+	// a silent correlation the day they do not.
+	plan.ControlCaseIDs = sampleIDs(reserved, opts.ControlSampleRate, opts.MinSample, opts.Seed, "\x00control")
 	plan.ControlUnderpowered = len(plan.ControlCaseIDs) < MinControlSample
+	plan.MinDetectableHarm = minDetectableHarm(len(plan.ControlCaseIDs))
 
 	clusters, mode := cluster(eligible)
 	if opts.DisableRouting {
@@ -314,8 +398,25 @@ func Route(cases []CaseRef, assets []AssetRef, opts Options) (*Plan, error) {
 		candidates := candidatesFor(a, eligible, clusters, mode)
 		r := AssetRouting{
 			AssetID: a.ID,
-			// Every mode but ModeAllDev selected on the baseline outcome.
-			FreshControlArm: mode != ModeAllDev,
+			// DisableRouting is the ONLY outcome-blind path, so it is the only
+			// one that may pair against the recorded baseline.
+			//
+			// `mode != ModeAllDev` looks equivalent and is not, which is worth
+			// the sentence because the difference is a sign error on every null
+			// Asset. ModeAllDev is reached two ways. --route none is genuinely
+			// blind: nothing looked at an outcome. But "nothing failed" is
+			// chosen by cluster() READING Failed over the eligible set — the
+			// branch IS the conditioning. Conditional on entering it every
+			// recorded score on the candidates is a pass, so a null Asset's
+			// fresh draw averages p against a recorded 1 and measures p-1.
+			//
+			// That is the +0.70 this package exists to prevent, mirrored: a
+			// systematic REGRESSION on Assets that do nothing, aimed at exactly
+			// the small eval sets the stage advertises itself to. At 30 dev
+			// Cases against a 95%-pass agent the branch is entered about a
+			// third of the time and every Asset reports about -0.05 with a
+			// tight interval.
+			FreshControlArm: !opts.DisableRouting,
 		}
 		if len(candidates) == 0 {
 			r.NotMeasuredReason = knov1.RejectionReason_REJECTION_REASON_IRRELEVANT
@@ -373,6 +474,31 @@ func checkDuplicateCases(cases []CaseRef) error {
 	return nil
 }
 
+// checkDuplicateAssets refuses a repeated or empty Asset ID.
+//
+// The same argument as checkDuplicateCases, one level up. Two Assets sharing an
+// ID are quoted twice, draw byte-identical samples because the per-draw stream
+// is keyed by the ID, and produce two Valuations that cannot be paired back to
+// an Asset — so a portfolio would rank a thing it cannot name.
+func checkDuplicateAssets(assets []AssetRef) error {
+	seen := make(map[string]struct{}, len(assets))
+	for _, a := range assets {
+		if a.ID == "" {
+			return errs.ErrInvalidInput.
+				WithFix("give every Asset an id in the pool file").
+				Wrap(fmt.Errorf("an Asset has no ID, so no Valuation could name it"))
+		}
+		if _, dup := seen[a.ID]; dup {
+			return errs.ErrInvalidInput.
+				WithFix("make every Asset id unique in the pool file").
+				Wrap(fmt.Errorf("asset %s appears twice; both copies would be measured, "+
+					"quoted, and ranked as if they were different Assets", a.ID))
+		}
+		seen[a.ID] = struct{}{}
+	}
+	return nil
+}
+
 // reserve splits the Cases into a routing-eligible set and a reserved set, at
 // random, before any outcome is consulted.
 //
@@ -389,7 +515,9 @@ func reserve(cases []CaseRef, opts Options) (eligible, reserved []CaseRef) {
 	// the selection it claims to.
 	sort.Slice(order, func(i, j int) bool { return order[i].ID < order[j].ID })
 
-	//nolint:gosec // sampling, not cryptography; reproducibility is the requirement
+	//nolint:gosec // G404: sampling, not cryptography. Reproducibility from a
+	// recorded seed is the requirement, and a CSPRNG cannot provide it. See
+	// docs/debt.md#75 for the stability caveat on this generator.
 	rng := rand.New(rand.NewPCG(uint64(opts.Seed), uint64(opts.Seed)+0x9e3779b9))
 	rng.Shuffle(len(order), func(i, j int) { order[i], order[j] = order[j], order[i] })
 
@@ -533,10 +661,15 @@ func sampleIDs(candidates []CaseRef, rate float64, minSample int, seed int64, la
 		return ids
 	}
 
-	//nolint:gosec // sampling, not cryptography; reproducibility is the requirement
+	//nolint:gosec // G404: sampling, not cryptography. Reproducibility from a
+	// recorded seed is the requirement, and a CSPRNG cannot provide it. See
+	// docs/debt.md#75 for the stability caveat on this generator.
 	rng := rand.New(rand.NewPCG(uint64(seed), hashLabel(label)))
 	rng.Shuffle(len(ids), func(i, j int) { ids[i], ids[j] = ids[j], ids[i] })
-	out := ids[:n]
+	// Clipped: without it the returned slice keeps the full shuffle's capacity,
+	// so a caller's append writes into the discarded tail rather than
+	// allocating — handing them Cases that were deliberately not sampled.
+	out := slices.Clip(ids[:n])
 	slices.Sort(out)
 	return out
 }

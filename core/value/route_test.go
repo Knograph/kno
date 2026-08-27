@@ -144,77 +144,200 @@ func TestTheReservedPartitionIsOutcomeIndependent(t *testing.T) {
 
 // TestPairingAgainstTheSelectingDrawManufacturesTheEffect.
 //
-// The regression-to-the-mean canary §6 requires, and the reason the fresh
-// control arm exists. Ground truth here is an Asset that does NOTHING: the
-// treatment draw is the same Bernoulli(p) as the control draw.
+// The regression-to-the-mean canary §6 requires, driven THROUGH Route. An
+// earlier version of this test hardcoded `recorded = 0.0` and compared two
+// Bernoulli draws, which asserted two properties of math/rand and nothing about
+// this package — no mutation to route.go could fail it, which is the debt-#70
+// pattern wearing the name of the test the plan asked for.
 //
-// Paired against a FRESH draw on the same Cases, delta is ~0 whatever the
-// selection was. Paired against the RECORDED draw that selected those Cases —
-// every one of which the baseline failed, so every recorded score is 0 by
-// construction — delta is ~p.
-//
-// Note the direction of the arithmetic, which is easy to state backwards: the
-// bias is the agent's success probability ON THAT SLICE, not that slice's
-// recorded baseline score, which is zero by construction.
+// Ground truth here is an Asset that does NOTHING: its treatment draw is the
+// same Bernoulli(p) as the control draw. The question is what the two available
+// controls measure on the Cases ROUTING ACTUALLY CHOSE.
 func TestPairingAgainstTheSelectingDrawManufacturesTheEffect(t *testing.T) {
 	t.Parallel()
 
 	const (
 		p     = 0.7
-		draws = 20000
+		nDev  = 400
+		runs  = 60
+		level = 0.03
 	)
-	// Seeded rather than random: the assertion is about the arithmetic, and a
-	// canary that fails one run in fifty is a canary people delete.
-	rng := rand.New(rand.NewPCG(1, 2))
 
-	var freshDelta, recordedDelta float64
-	for range draws {
+	var freshTotal, recordedTotal, samples float64
+	for seed := range int64(runs) {
+		// Seeded per iteration so a failure reproduces exactly.
+		rng := rand.New(rand.NewPCG(uint64(seed), 99))
 		bern := func() float64 {
 			if rng.Float64() < p {
 				return 1
 			}
 			return 0
 		}
-		// A Case the baseline failed: its RECORDED score is 0.
-		const recorded = 0.0
-		treatment := bern()
-		control := bern() // the fresh arm: an independent draw of the same null
 
-		freshDelta += treatment - control
-		recordedDelta += treatment - recorded
-	}
-	freshDelta /= draws
-	recordedDelta /= draws
+		// A baseline with real per-Case draws, and the router sees only the
+		// pass/fail bit — exactly what it is given in production.
+		cases := make([]value.CaseRef, nDev)
+		recorded := make(map[string]float64, nDev)
+		for i := range nDev {
+			id := fmt.Sprintf("case-%04d", i)
+			score := bern()
+			recorded[id] = score
+			cases[i] = value.CaseRef{ID: id, Failed: score == 0}
+		}
 
-	if math.Abs(freshDelta) > 0.02 {
-		t.Errorf("a fresh control arm gives delta %.4f for an Asset that does nothing, "+
-			"want ~0", freshDelta)
-	}
-	if math.Abs(recordedDelta-p) > 0.02 {
-		t.Errorf("pairing against the recorded draw gives delta %.4f, want ~%.2f — the "+
-			"canary is what pins why FreshControlArm exists; if this stops holding, the "+
-			"reason for doubling the cost of the routed arm has gone with it",
-			recordedDelta, p)
+		plan, err := value.Route(cases, []value.AssetRef{{ID: "null-asset"}}, value.Options{Seed: seed})
+		if err != nil {
+			t.Fatalf("Route: %v", err)
+		}
+		routed := plan.Routed[0].CaseIDs
+		if len(routed) == 0 {
+			t.Fatal("the fixture routed nothing")
+		}
+
+		for _, id := range routed {
+			treatment := bern() // the null Asset: an independent draw of the same thing
+			freshTotal += treatment - bern()
+			recordedTotal += treatment - recorded[id]
+			samples++
+		}
 	}
 
-	// And the router asks for the fresh arm exactly when the selection
-	// conditioned on the outcome.
-	cases := devCases(60, 3, "refunds", "billing")
-	for _, tc := range []struct {
+	fresh, stale := freshTotal/samples, recordedTotal/samples
+	if math.Abs(fresh) > level {
+		t.Errorf("a FRESH control arm measures %.4f for an Asset that does nothing, "+
+			"want ~0", fresh)
+	}
+	if math.Abs(stale-p) > level {
+		t.Errorf("pairing against the recorded draw that SELECTED these Cases measures "+
+			"%.4f, want ~%.2f. This is why FreshControlArm exists; if it stops "+
+			"holding, the reason for doubling the routed arm's cost has gone with it",
+			stale, p)
+	}
+}
+
+// TestEveryOutcomeConditionedSelectionGetsAFreshControlArm.
+//
+// The predicate that decides whether an Asset costs one measurement per Case or
+// two, and getting it wrong is a sign error on every null Asset — in whichever
+// direction the branch happens to condition.
+//
+// ModeAllDev is reached two ways and they are NOT equivalent. `--route none` is
+// genuinely blind. "Nothing failed" is a fact about the outcomes, DISCOVERED BY
+// READING THEM: conditional on that branch every recorded score on the
+// candidates is a pass, so a null Asset's fresh draw averages p against a
+// recorded 1 and measures p-1 — the mirror image of the +0.70 above, aimed at
+// inert Assets, on exactly the small eval sets this stage advertises to.
+func TestEveryOutcomeConditionedSelectionGetsAFreshControlArm(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
 		name  string
 		cases []value.CaseRef
-		want  bool
+		opts  value.Options
+		mode  value.Mode
+		fresh bool
 	}{
-		{"routing selected on failure", cases, true},
-		{"nothing failed, so nothing was selected on", devCases(60, 0, "refunds"), false},
+		{
+			name:  "tag overlap selects the failures its tags match",
+			cases: devCases(60, 3, "refunds", "billing"),
+			mode:  value.ModeTagOverlap,
+			fresh: true,
+		},
+		{
+			// The modal eval file, and the mode with no assertion at all before
+			// this test existed.
+			name:  "no tags anywhere still selects the failures",
+			cases: devCases(60, 3),
+			mode:  value.ModeAllFailed,
+			fresh: true,
+		},
+		{
+			name:  "nothing failed is itself a fact about the outcomes",
+			cases: devCases(60, 0, "refunds"),
+			mode:  value.ModeAllDev,
+			fresh: true,
+		},
+		{
+			name:  "routing off reads no outcome at all",
+			cases: devCases(60, 3, "refunds"),
+			opts:  value.Options{DisableRouting: true},
+			mode:  value.ModeAllDev,
+			fresh: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			opts := tc.opts
+			opts.Seed = 7
+			plan, err := value.Route(tc.cases,
+				[]value.AssetRef{{ID: "a", Tags: []string{"refunds"}}}, opts)
+			if err != nil {
+				t.Fatalf("Route: %v", err)
+			}
+			if plan.Mode != tc.mode {
+				t.Fatalf("mode = %s, want %s", plan.Mode, tc.mode)
+			}
+			if got := plan.Routed[0].FreshControlArm; got != tc.fresh {
+				t.Errorf("FreshControlArm = %v, want %v. Pairing an outcome-conditioned "+
+					"selection against the recorded baseline manufactures a delta with "+
+					"the sign of whatever the branch selected on", got, tc.fresh)
+			}
+		})
+	}
+}
+
+// TestRoutingSelectsFailuresWhereItClaimsTo.
+//
+// ModeTagOverlap and ModeAllFailed both promise to route to the Cases the
+// baseline FAILED — that promise is what makes the stage affordable, and it is
+// what FreshControlArm is priced against. Nothing asserted it, so a router that
+// quietly returned every eligible Case in either mode passed the whole suite
+// while roughly tripling the run's cost.
+func TestRoutingSelectsFailuresWhereItClaimsTo(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name       string
+		cases      []value.CaseRef
+		wantFailed bool
+	}{
+		{"tag overlap", devCases(120, 3, "refunds"), true},
+		{"no tags anywhere", devCases(120, 3), true},
+		{"nothing to route on", devCases(120, 0, "refunds"), false},
 	} {
-		plan, err := value.Route(tc.cases, []value.AssetRef{{ID: "a", Tags: []string{"refunds"}}}, value.Options{Seed: 7})
-		if err != nil {
-			t.Fatalf("%s: %v", tc.name, err)
-		}
-		if got := plan.Routed[0].FreshControlArm; got != tc.want {
-			t.Errorf("%s: FreshControlArm = %v, want %v", tc.name, got, tc.want)
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			plan, err := value.Route(tc.cases,
+				[]value.AssetRef{{ID: "a", Tags: []string{"refunds"}}}, value.Options{Seed: 2})
+			if err != nil {
+				t.Fatalf("Route: %v", err)
+			}
+			failed := make(map[string]bool, len(tc.cases))
+			for _, c := range tc.cases {
+				failed[c.ID] = c.Failed
+			}
+			routed := plan.Routed[0].CaseIDs
+			if len(routed) == 0 {
+				t.Fatal("routed nothing")
+			}
+			var passing int
+			for _, id := range routed {
+				if !failed[id] {
+					passing++
+				}
+			}
+			if tc.wantFailed && passing > 0 {
+				t.Errorf("%d of %d routed Cases are ones the baseline PASSED; this mode "+
+					"claims to route to failures, and measuring the rest is money spent "+
+					"where there was nothing to improve", passing, len(routed))
+			}
+			if !tc.wantFailed && passing == 0 {
+				t.Error("every routed Case failed in a mode where nothing failed")
+			}
+		})
 	}
 }
 
@@ -514,6 +637,183 @@ func TestAnUnderpoweredHarmTestSaysSo(t *testing.T) {
 	if big.ControlUnderpowered {
 		t.Errorf("a %d-Case control sample is marked underpowered; the marker would "+
 			"then be on every run and mean nothing", len(big.ControlCaseIDs))
+	}
+}
+
+// TestAnAssetRoutedToNothingIsNotChargedForAHarmTest.
+//
+// An Asset that matches no cluster is never put in front of the agent, so there
+// is nothing to test it for harm. Charging it the full control arm made the
+// cheapest answer the stage gives away the most expensive line in the quote:
+// on the pool the docs describe — 200 Assets, 199 matching nothing — it quoted
+// 12,036 measurements for 96 of real work. DESIGN.md budgets ~30% of Assets
+// routing to zero, so this is the designed-for case, and a user shown the
+// dollar figure derived from a 125x over-quote aborts a run they should have
+// approved.
+func TestAnAssetRoutedToNothingIsNotChargedForAHarmTest(t *testing.T) {
+	t.Parallel()
+
+	cases := devCases(200, 2, "refunds", "billing")
+	assets := []value.AssetRef{{ID: "matches", Tags: []string{"refunds"}}}
+	for i := range 199 {
+		assets = append(assets, value.AssetRef{
+			ID: fmt.Sprintf("misses-%03d", i), Tags: []string{"astronomy"},
+		})
+	}
+
+	plan, err := value.Route(cases, assets, value.Options{Seed: 3, Trials: 1})
+	if err != nil {
+		t.Fatalf("Route: %v", err)
+	}
+
+	var measured int
+	for _, r := range plan.Routed {
+		if len(r.CaseIDs) > 0 {
+			measured++
+		}
+	}
+	if measured != 1 {
+		t.Fatalf("%d Assets routed to something, want 1", measured)
+	}
+
+	// The one measured Asset: its treatment arm doubled for the fresh control,
+	// plus the harm test. Nothing else.
+	only := plan.Routed[0]
+	want := int64(len(only.CaseIDs)*2 + len(plan.ControlCaseIDs))
+	if got := plan.Measurements(); got != want {
+		t.Errorf("quote = %d measurements, want %d. The 199 Assets that route to "+
+			"nothing are never sent to the agent, so a quote that charges each of "+
+			"them a full harm test prices the answer the stage gives away for free",
+			got, want)
+	}
+}
+
+// TestTheDefaultsAreTheDocumentedOnes.
+//
+// Each of these is derived in its godoc and each was silently mutable: the
+// suite stayed green with ControlReserve at 0.06, which guts the harm test's
+// power, and with MinSample at 1, the floor whose whole stated purpose is that
+// a small eval set must not produce a one-Case measurement.
+func TestTheDefaultsAreTheDocumentedOnes(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		got  float64
+		want float64
+	}{
+		{"sample rate", value.DefaultSampleRate, 0.8},
+		{"control sample rate", value.DefaultControlSampleRate, 1.0},
+		{"control reserve", value.DefaultControlReserve, 0.3},
+		{"min sample", float64(value.DefaultMinSample), 5},
+		{"min control sample", float64(value.MinControlSample), 20},
+		{"harm margin", value.HarmMargin, 0.10},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("%s = %v, want %v; the derivation in its godoc is the "+
+				"justification for this number and moving one without the other "+
+				"leaves the reasoning describing a value that is not shipping",
+				tc.name, tc.got, tc.want)
+		}
+	}
+
+	// And they are actually applied when the caller supplies nothing.
+	plan, err := value.Route(devCases(200, 2, "refunds"),
+		[]value.AssetRef{{ID: "a", Tags: []string{"refunds"}}}, value.Options{Seed: 1})
+	if err != nil {
+		t.Fatalf("Route: %v", err)
+	}
+	if want := int(200 * value.DefaultControlReserve); len(plan.ControlCaseIDs) != want {
+		t.Errorf("reserved %d of 200 Cases, want %d", len(plan.ControlCaseIDs), want)
+	}
+	if plan.Trials != 1 {
+		t.Errorf("trials = %d, want 1; a default of 3 silently triples every run",
+			plan.Trials)
+	}
+}
+
+// TestASmallEvalSetKeepsBothSides.
+//
+// Nobody tests at n=2, and n=2 is where the reservation's floor earns its
+// keep: without it the reserved side is empty and the harm test disappears
+// entirely on the smallest runs, which is where a user is most likely to be
+// trying the tool out.
+//
+// n=1 is the honest exception — there is no way to have both sides — and it is
+// asserted rather than left to chance, because a harm test that is ABSENT must
+// not read the same as one that is merely small.
+func TestASmallEvalSetKeepsBothSides(t *testing.T) {
+	t.Parallel()
+
+	for _, n := range []int{1, 2, 3, 5, 10} {
+		plan, err := value.Route(devCases(n, 2), []value.AssetRef{{ID: "a"}},
+			value.Options{Seed: 1, Trials: 1})
+		if err != nil {
+			t.Fatalf("n=%d: %v", n, err)
+		}
+		control, routed := len(plan.ControlCaseIDs), len(plan.Routed[0].CaseIDs)
+
+		if n == 1 {
+			if control != 0 {
+				t.Errorf("n=1 reserved %d Cases; there is only one and it cannot be "+
+					"on both sides", control)
+			}
+			if plan.MinDetectableHarm != 0 {
+				t.Errorf("n=1 reports a detectable harm of %v for a harm test that "+
+					"does not exist; a small number here reads as a tight bound",
+					plan.MinDetectableHarm)
+			}
+		} else if control < 1 {
+			t.Errorf("n=%d reserved nothing, so the harm test disappeared on exactly "+
+				"the run size where a user is trying the tool out", n)
+		}
+		if routed < 1 {
+			t.Errorf("n=%d routed nothing", n)
+		}
+		if !plan.ControlUnderpowered {
+			t.Errorf("n=%d is not marked underpowered with %d control Cases", n, control)
+		}
+	}
+}
+
+// TestTheReportedBoundIsTheOneTheRunCanActuallySee.
+//
+// The underpowered flag answers "is this absurd", which a reader turns into
+// "is this safe". MinDetectableHarm answers the question they were asking. At
+// the 20-Case threshold the bound is 0.184 — nearly twice HarmMargin — so a
+// run just above the flag has NOT cleared an Asset that costs 0.10, and the
+// number says so where the bool did not.
+func TestTheReportedBoundIsTheOneTheRunCanActuallySee(t *testing.T) {
+	t.Parallel()
+
+	plan, err := value.Route(devCases(400, 3), []value.AssetRef{{ID: "a"}},
+		value.Options{Seed: 1})
+	if err != nil {
+		t.Fatalf("Route: %v", err)
+	}
+	m := len(plan.ControlCaseIDs)
+	if m < value.MinControlSample {
+		t.Fatalf("the fixture reserved %d Cases, below the threshold", m)
+	}
+	if plan.ControlUnderpowered {
+		t.Fatal("the fixture is marked underpowered")
+	}
+
+	want := 1.645 * 0.5 / math.Sqrt(float64(m))
+	if math.Abs(plan.MinDetectableHarm-want) > 1e-9 {
+		t.Errorf("MinDetectableHarm = %v over %d Cases, want %v",
+			plan.MinDetectableHarm, m, want)
+	}
+	// The bound must shrink as the sample grows, or it is not a bound.
+	small, err := value.Route(devCases(100, 3), []value.AssetRef{{ID: "a"}},
+		value.Options{Seed: 1})
+	if err != nil {
+		t.Fatalf("Route: %v", err)
+	}
+	if small.MinDetectableHarm <= plan.MinDetectableHarm {
+		t.Errorf("a smaller control sample reports a TIGHTER bound (%v over %d vs %v "+
+			"over %d)", small.MinDetectableHarm, len(small.ControlCaseIDs),
+			plan.MinDetectableHarm, m)
 	}
 }
 

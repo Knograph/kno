@@ -44,8 +44,15 @@ covenants — breaking any of them requires a major version.
 
   The router's entire view of a Case is an ID, its tags, and a `Failed` bool: no Store, no Score. A
   reflection test fails if a field carrying a score value is ever added, because the routing path
-  and the delta path sharing a source is what manufactures the effect. Below 20 control
-  measurements a run is marked **underpowered** rather than reading as "no regression found".
+  and the delta path sharing a source is what manufactures the effect.
+
+  The harm test reports **the smallest regression it could have detected** — 0.18 at 20 control
+  Cases, 0.11 at 60 — rather than only a pass/fail badge. A bare `underpowered` bool answers "is
+  this absurd", which a reader turns into "is this safe"; a run reporting no regression with a
+  detectable bound of 0.18 has not cleared an Asset that costs 0.10. The bool remains as a floor
+  below 20 **Cases** (not measurements: repeat trials of one Case are not independent observations,
+  and counting them would inflate the threshold the same way flattening trials inflates an
+  interval).
 
 - **The store can hold a Value run** (`schemaVersion` 3). Nothing writes to it yet.
 
