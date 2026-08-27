@@ -31,7 +31,7 @@ Every release ships a `checksums.txt`, a keyless [cosign](https://docs.sigstore.
 ```bash
 cosign verify-blob checksums.txt \
   --new-bundle-format --bundle checksums.txt.bundle \
-  --certificate-identity-regexp '^https://github\.com/knograph/kno/\.github/workflows/release\.yml@refs/tags/.+$' \
+  --certificate-identity-regexp '^https://github\.com/[Kk]nograph/kno/\.github/workflows/release\.yml@refs/tags/.+$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
 grep " kno_0.0.1_darwin_arm64.tar.gz$" checksums.txt | shasum -a 256 -c -
