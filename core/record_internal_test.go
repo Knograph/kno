@@ -67,3 +67,28 @@ func TestNothingIsAppendedAfterRunFinished(t *testing.T) {
 		t.Errorf("next sequence is %d, want 2 — the refused append consumed one", got)
 	}
 }
+
+// TestBaselineWiresEveryInvokerHook.
+//
+// The extracted budget-and-retry core takes its event emission as nil-able
+// hooks, and a nil hook silently emits nothing. That is right for a stage with
+// no such event and wrong as a way to discover that a stage forgot one — the
+// two events in question are the ones that explain where money went, and their
+// absence looks identical to a run that had nothing to report.
+//
+// Nil-safety stays (a panic on a money path is worse), so the enforcement is a
+// test per stage. This is Baseline's. See docs/debt.md#77.
+func TestBaselineWiresEveryInvokerHook(t *testing.T) {
+	t.Parallel()
+
+	iv := BaselineOptions{}.invoker(&aggregator{})
+	if iv.OnOvershoot == nil {
+		t.Error("Baseline wires no OnOvershoot hook, so a settlement overshoot — " +
+			"money spent past its reservation — would go unreported and look " +
+			"identical to a run that never overshot")
+	}
+	if iv.OnRetry == nil {
+		t.Error("Baseline wires no OnRetry hook, so a run obeying a provider's " +
+			"backoff would be indistinguishable from a hung one")
+	}
+}
