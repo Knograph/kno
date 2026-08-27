@@ -18,6 +18,35 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
+- **`core/value`** — which Cases measure which Asset, and what that will cost, decided before any
+  money is spent. Nothing calls it yet.
+
+  Routing clusters the dev Cases the baseline failed by tag and measures an Asset against the
+  clusters its own tags overlap. Three fallbacks, because the common case is that nobody tagged
+  anything: an **Asset** with no tags is measured against a sample of every failed Case (unlabelled
+  is not irrelevant); when **no Case** carries a tag — the default state of a real eval file — there
+  are no clusters to overlap and every Asset is measured against a sample of the failed Cases; and
+  when nothing failed there is no failure signal to route on at all. The mode is fixed for the run
+  **before the consent quote**, so the number a user approves is the number that path costs.
+
+  **A slice of the dev split is reserved at random before routing runs**, and the harm test is drawn
+  from it. Routing to the Cases a baseline failed and then comparing against those same recorded
+  failures reuses one draw twice — every recorded score on that slice is zero by construction, so an
+  Asset that does nothing measures **+0.70** at a 70%-pass agent, with a tight interval. On routed
+  Cases the control arm is therefore measured **fresh**; on the reserved slice the recorded baseline
+  is a valid control because the reservation saw no outcome, so it costs one measurement per Case
+  instead of two.
+
+  `--route none` (`Options.DisableRouting`) switches routing off without touching the reserved
+  slice, so the flag a user reaches for when they distrust their tags cannot silently remove the
+  regression check — and it drops the fresh control arm, because a random sample was never
+  conditioned on the baseline's outcomes.
+
+  The router's entire view of a Case is an ID, its tags, and a `Failed` bool: no Store, no Score. A
+  reflection test fails if a field carrying a score value is ever added, because the routing path
+  and the delta path sharing a source is what manufactures the effect. Below 20 control
+  measurements a run is marked **underpowered** rather than reading as "no regression found".
+
 - **The store can hold a Value run** (`schemaVersion` 3). Nothing writes to it yet.
 
   `kno purge` now says **"recorded row(s)"** rather than "outcome(s)", and clears both tables in
