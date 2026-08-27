@@ -25,6 +25,18 @@ covenants — breaking any of them requires a major version.
      At release time the hand-written heading is renamed from [Unreleased] to
      the version. See docs/debt.md#76 for why that is still a manual step. -->
 
+## [0.0.2](https://github.com/Knograph/kno/compare/v0.0.1...v0.0.2) (2026-08-27)
+
+
+### Features
+
+* ship the Value stage — routing, paired measurement, kno value ([#66](https://github.com/Knograph/kno/issues/66)) ([1d96ce9](https://github.com/Knograph/kno/commit/1d96ce9f82b3abe9d9bb12fe72861fca8c26c342))
+
+
+### Bug Fixes
+
+* cosign legacy sign format, store coverage determinism ([#68](https://github.com/Knograph/kno/issues/68)) ([62f7174](https://github.com/Knograph/kno/commit/62f7174a8dce19bf1916fae5364241a89a2dd9cb))
+
 ## [Unreleased]
 
 ### Features
