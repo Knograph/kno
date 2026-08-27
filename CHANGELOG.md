@@ -41,6 +41,14 @@ covenants — breaking any of them requires a major version.
 
 ### Fixed
 
+- **The first tag's release build failed at signing** — cosign's new-bundle-format silently
+  ignores the `--output-signature`/`--output-certificate` flags and demands `--bundle`, so the
+  sign step died with `create bundle file: open : no such file or directory`. The sign config now
+  pins `--new-bundle-format=false`, the legacy format every published verification command
+  exercises.
+- **The store package's coverage gate flapped** on the migration re-check branch, which only
+  executes when a concurrent open loses the lock race. It is now driven deterministically, and
+  the store baseline moved to the lowest stable cross-platform reading.
 - The Value stage's estimator was adversarially reviewed before it ever ran: Goal direction is
   applied exactly once (a MINIMIZE goal that got slower now reports a negative delta), deltas ship
   only beside their intervals, and the harm bound consumes per-Case means rather than the flattened
