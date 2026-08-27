@@ -53,6 +53,10 @@ covenants — breaking any of them requires a major version.
 
 ### Fixed
 
+- **The release sign step now uses cosign's bundle format end to end** — the legacy-format pin
+  died against cosign 2.4+'s validation (`must provide --new-bundle-format or --bundle`), so the
+  config writes one bundle per signature, and install.sh plus the published verification commands
+  verify with `--new-bundle-format --bundle`.
 - **The first tag's release build failed at signing** — cosign's new-bundle-format silently
   ignores the `--output-signature`/`--output-certificate` flags and demands `--bundle`, so the
   sign step died with `create bundle file: open : no such file or directory`. The sign config now
