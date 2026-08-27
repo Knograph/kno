@@ -7,7 +7,8 @@
 <!-- These are checked by a HUMAN reviewer, not by CI — nothing in our workflows reads
      the PR body. Strike through with a reason if genuinely N/A; do not tick a box you
      have not actually done. What CI does enforce mechanically: `make check`, the DCO
-     sign-off, and a Conventional Commit PR title. -->
+     sign-off, a Conventional Commit PR title, and — unless the title's type is
+     `refactor:`, `chore:`, `test:`, or `build:` — that the diff touches CHANGELOG.md. -->
 
 - [ ] **Plan linked** — `docs/plans/YYYY-MM-DD-<slug>.md` (required for >~50 LOC or any
       schema/interface change)
@@ -15,7 +16,12 @@
       findings fixed or explicitly accepted below
 - [ ] `make check` green locally
 - [ ] Docs updated — godoc, CLI help, OpenAPI, and the mental-model / cookbook page if user-visible
-- [ ] CHANGELOG entry under `Unreleased`
+- [ ] CHANGELOG entry under `Unreleased` — CI requires the file in the diff unless the title's type
+      is `refactor:`/`chore:`/`test:`/`build:` or the **`no-changelog`** label is applied. The label
+      is the visible escape hatch; say why in the PR when you use it
+- [ ] **The PR title still describes the diff.** Squash-merge takes the title and release-please
+      publishes it, so a type or flag renamed during review is renamed in the title too — a stale
+      title ships release notes naming a symbol that does not exist ([docs/debt.md#49](../docs/debt.md))
 - [ ] vhs tape re-recorded if CLI output changed
 - [ ] Every bug fix ships with the test that would have caught it
 - [ ] All commits signed off (`git commit -s`)

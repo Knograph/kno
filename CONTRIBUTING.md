@@ -124,16 +124,27 @@ an existing dependency can't, its license, and its maintenance signal.
   `VerifyTestMain`, not a per-test helper. goleak takes a process-global census, so a parallel
   sibling's goroutines are indistinguishable from a leak — once per package is the only form that
   is not flaky, and a flaky gate gets deleted rather than fixed. See `docs/debt.md#18`.
-- **A test must never be able to spend somebody's money.** Any package whose tests can construct a
-  provider adapter unsets every provider credential in a `TestMain` unless `KNO_LIVE_TESTS=1`. That
-  now means `cli` as well as the adapter packages.
+- **A test must never be able to spend somebody's money.** `cli`, whose tests drive the real
+  command with real flags, runs with an **allowlist** environment: `cli/main_test.go` names the
+  handful of variables its tests may see and clears everything else before the first test runs,
+  unless `KNO_LIVE_TESTS=1`. Adding to that list is a reviewed act — a test refuses any name that
+  could hold a credential, and every entry carries a written reason.
 
-  This is not hygiene, it is prime directive 4. The CLI tests drive the real command with real
-  flags, and one of them passed `--agent openai:gpt-4.1` while asserting it was refused for having
-  no adapter — true until the adapters were wired. On any machine exporting `OPENAI_API_KEY`, that
-  subtest then resolved the key and made live calls: measured at 8.7 seconds, on a case its author
-  believed never touched the network. Live tests are opt-in and never run in PR CI; a package that
-  acquires the *ability* to make one by accident needs the guard whether or not it has one.
+  This is not hygiene, it is prime directive 4. One CLI test passed `--agent openai:gpt-4.1` while
+  asserting it was refused for having no adapter — true until the adapters were wired. On any
+  machine exporting `OPENAI_API_KEY`, that subtest then resolved the key and made live calls:
+  measured at 8.7 seconds, on a case its author believed never touched the network.
+
+  The first fix was a denylist of eleven provider variables, which protected the suite against the
+  providers somebody had thought of and silently stopped protecting it at the twelfth
+  ([docs/debt.md#63](docs/debt.md)). An allowlist has no twelfth.
+
+  The adapter packages get the same property structurally rather than by scrubbing: every non-live
+  Agent in them is pinned to an `httptest` server, and the two that build against a real default
+  host set the credential variable to `""` themselves and assert the refusal. Anything that does
+  call a real provider lives behind **both** the `integration` build tag and `KNO_LIVE_TESTS=1` —
+  exactly `1`, not merely "set", because a shell writes `0` for a false boolean and a switch that
+  reads `0` as *on* is not a switch. Live tests never run in PR CI.
 - **Flaky tests are quarantined within 24 hours** with an issue, then fixed or deleted within a
   week. Retries are never the fix.
 
@@ -164,7 +175,19 @@ an existing dependency can't, its license, and its maintenance signal.
   [DCO](https://developercertificate.org/), not a CLA — lower friction, sufficient for Apache-2.0.
 - Branches: `feat/<slug>`, `fix/<slug>`, `docs/<slug>`, and short-lived (under ~3 days of work —
   split bigger efforts behind the plan).
-- PRs are squash-merged; **the PR title becomes the commit message**, so write it as one.
+- PRs are squash-merged; **the PR title becomes the commit message**, so write it as one. Keep it
+  true to the diff: if review renames a type the title names, rename it in the title too.
+  release-please derives the published release notes from the title, so a stale one publishes a
+  symbol that does not exist.
+- **A PR that changes behavior must touch `CHANGELOG.md`.** CI reads the Conventional Commit type
+  out of the PR title and requires an entry unless the type is `refactor:`, `chore:`, `test:`, or
+  `build:`. A PR that genuinely changes nothing a user would notice takes the **`no-changelog`**
+  label — visible on the PR, so an exemption is something a reviewer can see and argue with rather
+  than something that happened quietly. Applying or removing the label re-runs the check.
+
+  This exists because a branch rebuilt onto `main` once merged with its CHANGELOG entry, its ledger
+  repayment, and its plan file all silently dropped ([docs/debt.md#49](docs/debt.md)). `make docs`
+  checks that links resolve, not that documentation is present.
 
 **Definition of Done:** plan linked · both adversarial reviews recorded · `make check` green · docs
 updated (godoc, CLI help, OpenAPI, and the mental-model or cookbook page if user-visible) ·

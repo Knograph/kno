@@ -51,11 +51,19 @@ const (
 	envBaseURL = "KNO_LIVE_BASE_URL"
 )
 
-// requireLive skips unless the live switch is set.
+// requireLive skips unless the live switch is set to exactly "1".
+//
+// "1", not "not empty". This gate used to test `== ""`, so KNO_LIVE_TESTS=0 —
+// which every reader would take for "off", and which a shell writes when it
+// exports a false boolean — opted IN and spent money. Every sibling gate in the
+// repo (cli/main_test.go, anthropic/record_test.go) tests `!= "1"`, and a switch
+// that means the opposite of what its value says in one place out of three is
+// the shape of docs/debt.md#63: a guard that keeps passing while it stops
+// guarding.
 func requireLive(t *testing.T) {
 	t.Helper()
-	if os.Getenv(envLiveTests) == "" {
-		t.Skipf("%s is not set; this test calls a real provider and spends real money",
+	if os.Getenv(envLiveTests) != "1" {
+		t.Skipf("%s is not 1; this test calls a real provider and spends real money",
 			envLiveTests)
 	}
 }
