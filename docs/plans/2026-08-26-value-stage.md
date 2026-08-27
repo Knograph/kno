@@ -250,6 +250,16 @@ Draft 1's V-4 was the entire stage in one branch. Split, with proto first per CL
 | **V-4a** | Store: `schemaVersion` 3, `measurements` table, `Valuation` writer, `CaseScores`, **`SettledSpend` over both sources, `CompletedMeasurements`**, purge coverage | V-0 | No |
 | **V-4b** | `core/value` failure-cluster routing + sampling, **router constructor takes no `Store`**, no spend | V-0, V-2 | No |
 | **V-4c** | The measurement loop: inject, pair, budget, resume, events | all above | **Yes** |
+
+**V-4c's loop shape, decided at implementation and recorded here rather than in a second plan.** `executor.Run` is generic over `I proto.Message`, and a measurement — (Asset, Case, arm, trial) — is not a proto message. Three ways out:
+
+- **Add a proto work-item message.** Rejected: `kno.v1` is the wire contract and a scheduling type is not a domain type. ADR-0001 makes proto messages the domain types precisely so the wire and the model cannot drift; putting an engine-internal item there inverts it.
+- **Generalize the executor** to `I any` plus a `Clone` option. Rejected for this PR: it changes a shipped package that every stage depends on, and the `proto.Message` bound exists to make the borrow rule (debt #8) unforgeable at the call site. Handing that guarantee to a caller-supplied closure is a real loss for a problem the third option solves for free.
+- **Iterate Asset → arm → trial, running the executor over that arm's Case list with `I = *Case`.** Taken. No proto change, no executor change, and it puts the concurrency boundary exactly where the durability boundary already is: a `Valuation` is written when one Asset's measurements are all in, so an Asset is the natural unit.
+
+**Accepted cost:** concurrency is bounded *within* an arm, so an Asset routed to five Cases under-uses an eight-worker pool. Real, and cheaper than either alternative at this stage. Ledger entry with a trigger, not a silent carryover.
+
+The `Valuation` is computed from `Store.Measurements` — what is DURABLY recorded — rather than from in-memory results, which is the pattern `6bb14a8` established for `CaseExecution` and what makes a resumed Asset's recomputation span both processes.
 | **V-5** | `kno value`, report, docs | V-4c | Yes |
 
 **V-1 does not start before this review lands**, which draft 1 proposed — its interval method is decided by §2.2, which is a review finding.
