@@ -72,6 +72,42 @@ covenants — breaking any of them requires a major version.
   docs` checks that links resolve, not that documentation is present. The entry's second half —
   asserting a PR title still describes its diff after a rename — it calls cheaper as a reviewer
   checklist item than as CI, so that is where it lands, in the PR template beside this check.
+- **The release pipeline** — goreleaser, cosign, syft, SLSA provenance, an install script, and a
+  `Makefile` target that cannot publish. Repays [`docs/debt.md#13`](docs/debt.md#13), whose trigger
+  was *"before the first tagged release"*; with `release-please` holding a `0.0.1` PR, this is the
+  last change that could land before it.
+
+  A tag now produces twelve archives (darwin/linux/windows × amd64/arm64), one `checksums.txt`, a
+  **keyless** cosign signature over that file, an SPDX SBOM per archive, and build provenance
+  attested over every artifact the checksum file names. Keyless is the point: there is no private
+  key in existence, so there is none to steal or rotate, and nothing in the workflow is a secret.
+
+  The signature covers `checksums.txt` rather than each archive. One verification then covers
+  everything, instead of twelve verifications that each say nothing about the other eleven.
+
+  `kno --version` reports the real tag, its commit, and its build date, stamped into `cli`'s
+  existing `version` variable by `-X` at link time. **`kno doctor --json` deliberately keeps
+  reporting the bare version**: that field is a jq contract, and appending a commit hash to a value
+  consumers parse as a version is a breaking change wearing a cosmetic disguise.
+
+  A `go install` binary is no longer stuck at `dev` either: the identity falls back to the module
+  and VCS metadata the toolchain already embeds, so it reports its module version, or its revision
+  with `-dirty` when the tree was not clean. `doctor --json` exists to be pasted into a bug report,
+  and a version field reading `dev` for every non-release install is a support burden dressed up as
+  a contract.
+
+  The release is created as a **draft** and published only after the provenance is attested. Every
+  failure boundary in a release leaves something public behind, and an empty release — or one
+  signed but not attested — is indistinguishable from a finished one to anyone reading the page.
+
+  `make release` refuses to run outside GitHub Actions, and the local dry run passes `--snapshot`,
+  under which goreleaser cannot publish at all — so *nothing built on a laptop ships* is enforced
+  rather than trusted. `make release-check` validates the config on every PR, because a tag is the
+  worst possible place to learn that the config is malformed.
+
+  The Homebrew formula is written and **disabled**: no tap repository exists yet, and an enabled
+  block pointing at a missing repository would fail the release after the artifacts were built and
+  signed ([`docs/debt.md#73`](docs/debt.md#73)).
 
 - **`stats/interval`** — confidence intervals on paired differences, the machinery prime directive 5
   requires before any delta can be reported. Nothing calls it yet.

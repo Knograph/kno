@@ -1,0 +1,197 @@
+# goreleaser — how a `kno` binary becomes something you can trust.
+#
+# Repays docs/debt.md#13. Nothing here runs on a laptop: the only local target
+# is `make release-snapshot`, which passes --snapshot, under which goreleaser
+# refuses to publish anything at all. The one place a real release can happen
+# is .github/workflows/release.yml, on a tag push.
+#
+# Validate changes with `make release-check` — CI runs it on every PR, so a
+# broken config is caught months before the tag that would have used it.
+#
+# See docs/plans/2026-08-26-release-pipeline.md.
+
+version: 2
+project_name: kno
+
+before:
+  hooks:
+    # `go mod verify` is not ceremony here: it checks the module cache against
+    # go.sum before anything is compiled, so a poisoned cache on the runner
+    # fails the release rather than being baked into six binaries.
+    - go mod download
+    - go mod verify
+
+builds:
+  - id: kno
+    main: ./cmd/kno
+    binary: kno
+    env:
+      # The SQLite driver is modernc.org/sqlite, which is pure Go. That is what
+      # makes six cross-compiled targets possible from one linux runner — a cgo
+      # driver would need a cross toolchain per platform, or six runners. Swap
+      # the driver and this line stops being true; check here first.
+      - CGO_ENABLED=0
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
+    flags:
+      # Strip the build machine's absolute paths out of the binary. They are
+      # both a reproducibility problem and a small information leak.
+      - -trimpath
+    ldflags:
+      - -s -w
+      # These three name the symbols in cli/root.go. The linker addresses them
+      # by package path and name, so unexported is fine — but a typo in either
+      # half fails SILENTLY: the build succeeds and the binary reports "dev"
+      # forever. `make release-snapshot` exists to catch exactly that, by
+      # running the built binary and reading its --version back.
+      - -X github.com/knograph/kno/cli.version={{ .Version }}
+      - -X github.com/knograph/kno/cli.commit={{ .FullCommit }}
+      - -X github.com/knograph/kno/cli.date={{ .CommitDate }}
+    # Timestamp from the commit, not from the clock, so two builds of the same
+    # tag produce byte-identical archives.
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: kno
+    ids: [kno]
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: "kno_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - NOTICE
+      - README.md
+      - SECURITY.md
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+# One SPDX document per archive, uploaded beside it. syft is installed by the
+# release workflow; `goreleaser check` does not need it, which is why the PR
+# gate stays cheap.
+sboms:
+  - id: archive
+    artifacts: archive
+
+# Keyless cosign, over the checksum file only.
+#
+# COSIGN_EXPERIMENTAL is obsolete and deliberately absent — keyless is the
+# default in current cosign, and setting a removed variable would look like a
+# working incantation while doing nothing. `--yes` is the non-interactive
+# consent to the transparency-log entry; without it the release job hangs on a
+# prompt no one is there to answer.
+#
+# Signing checksums.txt rather than each archive is not laziness: it is what
+# makes ONE signature verification cover every artifact. A verifier checks the
+# signature on checksums.txt, then checks their download against that file.
+# Twelve separate signatures would offer the same guarantee at twelve times the
+# verification cost, and would let someone verify one archive while learning
+# nothing about the other eleven.
+signs:
+  - id: cosign-checksum
+    cmd: cosign
+    signature: "${artifact}.sig"
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--output-signature=${signature}"
+      - "--output-certificate=${certificate}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+    output: true
+
+# release-please owns the changelog and the release notes: they are derived
+# from Conventional Commits, and CHANGELOG.md says so. goreleaser generating a
+# second set from the same commits would either duplicate them or overwrite the
+# hand-edited highlights, so it generates none and appends to what is there.
+changelog:
+  disable: true
+
+release:
+  # Published as a DRAFT and flipped public by the workflow only after the
+  # artifacts are uploaded AND the provenance is attested.
+  #
+  # Every failure boundary in a release leaves something public behind, and the
+  # states are not equally bad: an empty release, or one signed but not
+  # attested, is worse than no release at all, because it is indistinguishable
+  # from a complete one to anybody reading the page. A draft is invisible until
+  # the whole sequence has succeeded.
+  draft: true
+  # A retried release must not fail on the assets the first attempt already
+  # uploaded. Without this, a transient failure halfway through the upload is
+  # unrecoverable except by hand.
+  replace_existing_artifacts: true
+  mode: append
+  prerelease: auto
+  footer: |
+    ---
+
+    ## Verifying this release
+
+    Every artifact below is covered by `checksums.txt`, and `checksums.txt` is
+    signed with [cosign](https://docs.sigstore.dev/) keyless — there is no
+    private key, so there is none to steal. Each archive also ships an SPDX
+    SBOM, and the whole set carries SLSA build provenance.
+
+    ```bash
+    # 1. The checksum file is really ours, and really came from this workflow.
+    cosign verify-blob checksums.txt \
+      --certificate checksums.txt.pem \
+      --signature checksums.txt.sig \
+      --certificate-identity-regexp '^https://github\.com/knograph/kno/\.github/workflows/release\.yml@refs/tags/.+$' \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+    # 2. Your download is really what the checksum file names. Substitute the
+    #    archive you actually downloaded. Written this way because macOS has no
+    #    sha256sum, and its shasum does not understand --ignore-missing.
+    grep " kno_{{ .Version }}_darwin_arm64.tar.gz$" checksums.txt | shasum -a 256 -c -
+
+    # 3. It was built by GitHub Actions from this repository, not on a laptop.
+    gh attestation verify kno_{{ .Version }}_linux_amd64.tar.gz \
+      --repo knograph/kno \
+      --signer-workflow knograph/kno/.github/workflows/release.yml
+    ```
+
+    Both identity flags are load-bearing. Without `--certificate-identity-regexp`,
+    `verify-blob` accepts a valid signature from anybody at all; without
+    `--signer-workflow`, `attestation verify` accepts an attestation from any
+    workflow in the repository. Anchored, they say *this file built this binary*.
+
+    Built with `-trimpath`, and timestamped from the commit rather than the
+    clock, so these archives are byte-reproducible — by anyone using the Go
+    toolchain pinned in this tag's `go.mod`. A different toolchain produces a
+    different binary; that is a property of Go, not of this pipeline.
+
+# The Homebrew tap CLAUDE.md calls for.
+#
+# DISABLED, and it must stay disabled until a `knograph/homebrew-tap`
+# repository actually exists and this workflow's token can push to it. An
+# enabled block pointing at a missing repository fails the release at the
+# publish step — AFTER the binaries are built, signed and attested, which is
+# the most expensive possible place to discover a typo. Uncomment in the same
+# PR that creates the tap, not before. Tracked as docs/debt.md#73.
+#
+# Commented-out YAML is invisible to `goreleaser check`, so this block has never
+# been parsed by anything. The PR that enables it is the first run of
+# `make release-check` that covers it — expect to fix it there, not here.
+#
+# brews:
+#   - name: kno
+#     ids: [kno]
+#     repository:
+#       owner: knograph
+#       name: homebrew-tap
+#       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+#     directory: Formula
+#     homepage: https://github.com/knograph/kno
+#     description: Measure which of your data earns its place in an LLM agent
+#     license: Apache-2.0
+#     test: |
+#       system "#{bin}/kno", "--version"
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"

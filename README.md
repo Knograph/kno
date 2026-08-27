@@ -8,11 +8,43 @@ Single Go binary. No infra. Works with any OpenAI-compatible endpoint, Anthropic
 
 > **Status: early.** Of the five stages, only `baseline` runs today. The default agent is a local fake that costs nothing, so you can see the whole loop work before pointing it at something that bills you. See [Status](#status) for what exists.
 
-## Quickstart
+## Install
+
+```bash
+curl -sSfL https://raw.githubusercontent.com/knograph/kno/main/install.sh | sh
+```
+
+The script picks the right build for your platform, **verifies the SHA-256 checksum**, verifies the cosign signature if you have `cosign` installed, and drops the binary on your PATH. It is short and worth reading before you pipe it anywhere.
+
+Or take the archive yourself from [Releases](https://github.com/knograph/kno/releases) — macOS, Linux and Windows, amd64 and arm64. Or build from source:
 
 ```bash
 go install github.com/knograph/kno/cmd/kno@latest
 ```
+
+A `go install` binary reports its version as `dev`, because nothing stamped it. That is the only functional difference.
+
+### Verifying a download
+
+Every release ships a `checksums.txt`, a keyless [cosign](https://docs.sigstore.dev/) signature over it, an SPDX SBOM per archive, and SLSA build provenance. There is no private signing key — so there is none to steal.
+
+```bash
+cosign verify-blob checksums.txt \
+  --certificate checksums.txt.pem --signature checksums.txt.sig \
+  --certificate-identity-regexp '^https://github\.com/knograph/kno/\.github/workflows/release\.yml@refs/tags/.+$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+grep " kno_0.0.1_darwin_arm64.tar.gz$" checksums.txt | shasum -a 256 -c -
+
+gh attestation verify kno_0.0.1_darwin_arm64.tar.gz --repo knograph/kno \
+  --signer-workflow knograph/kno/.github/workflows/release.yml
+```
+
+Both identity flags are the part that matters. Without `--certificate-identity-regexp`, `verify-blob` accepts a valid signature from anyone; without `--signer-workflow`, `attestation verify` accepts an attestation from any workflow in the repository. The checksum line is written with `grep`+`shasum` rather than `sha256sum --ignore-missing` because macOS ships neither.
+
+Homebrew is coming: the formula is written and the tap repository is not created yet ([docs/debt.md#73](docs/debt.md#73)).
+
+## Quickstart
 
 Write some Cases — one scoreable interaction per line, each with a stable `id`:
 

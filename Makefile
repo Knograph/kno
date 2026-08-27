@@ -394,11 +394,122 @@ docs: ## Regenerate OpenAPI, check godoc coverage, verify links
 	if [ "$$broken" -ne 0 ]; then exit 1; fi; \
 	printf '\033[32m  OK  \033[0m %d internal doc links resolve\n' "$$checked"
 
+## ─── Release ────────────────────────────────────────────────────────────────
+
+# goreleaser lives in its OWN module, tools/goreleaser, byte-pinned by its own
+# committed go.sum and installed into ./bin by the same idiom as every other
+# tool. It is not in tools/go.mod: its ~500-package graph MVS-bumps grpc,
+# genproto, yaml and x/time underneath golangci-lint and buf, and a release
+# tool must not be able to change what the lint gate compiles. See that
+# module's own doc comment for why byte-pinning matters more here than
+# anywhere else in the repo.
+#
+# The tag workflow calls `make release`, so the goreleaser that validates a
+# config on a PR is the same goreleaser that builds the tag. There is no
+# second version input anywhere to drift from this one.
+GORELEASER_MOD := $(CURDIR)/tools/goreleaser
+GORELEASER     := $(BIN)/goreleaser
+
+$(GORELEASER): $(GORELEASER_MOD)/go.mod $(GORELEASER_MOD)/go.sum
+	@mkdir -p $(BIN)
+	@GOBIN=$(BIN) go -C $(GORELEASER_MOD) install tool
+	@printf '\033[32m  OK  \033[0m goreleaser installed to ./bin\n'
+
+.PHONY: release-check
+release-check: $(GORELEASER) ## Validate .goreleaser.yaml. CI runs this on every PR
+	@$(GORELEASER) check
+	@$(MAKE) --no-print-directory release-identity-check
+	@printf '\033[32m  OK  \033[0m .goreleaser.yaml is valid\n'
+
+# The cosign certificate identity is the ONLY root of trust in this pipeline: a
+# verify-blob without it confirms that somebody signed the file, which is a
+# guarantee an attacker can also produce. It is quoted in four hand-maintained
+# places — the release notes footer, SECURITY.md, README.md and install.sh —
+# and every one of them names a workflow FILE. Rename or move that file and all
+# four keep looking authoritative while verifying nothing.
+#
+# So: the file must exist, and every copy must name it.
+RELEASE_WORKFLOW := .github/workflows/release.yml
+IDENTITY_DOCS    := .goreleaser.yaml SECURITY.md README.md install.sh
+
+.PHONY: release-identity-check
+release-identity-check: ## The cosign identity in the docs names a workflow that exists
+	@$(SAFE) if [ ! -f $(RELEASE_WORKFLOW) ]; then \
+		printf '\033[31m FAIL \033[0m %s does not exist, but the published cosign identity names it.\n' '$(RELEASE_WORKFLOW)'; \
+		exit 1; \
+	fi; \
+	for f in $(IDENTITY_DOCS); do \
+		if ! grep -q 'workflows/release' "$$f"; then \
+			printf '\033[31m FAIL \033[0m %s no longer names %s in its cosign identity.\n' "$$f" '$(RELEASE_WORKFLOW)'; \
+			printf '        Verification instructions that name the wrong workflow verify nothing.\n'; \
+			exit 1; \
+		fi; \
+	done; \
+	printf '\033[32m  OK  \033[0m the cosign identity names %s in all %d places\n' '$(RELEASE_WORKFLOW)' $(words $(IDENTITY_DOCS))
+
+# The check that actually matters, and the reason it runs in CI rather than
+# living in a target someone might remember to call.
+#
+# `goreleaser check` is schema validation: it cannot see a wrong `main:` path, a
+# wrong -X symbol, or a binary that never gets built. An -X path naming the
+# wrong package or variable fails SILENTLY — the build succeeds and every
+# released binary reports its version as "dev" forever. The only way to catch
+# that is to build one and read its --version back.
+#
+# --single-target builds for this host only, so it costs seconds.
+.PHONY: release-stamp
+release-stamp: $(GORELEASER) ## Build one binary and prove the version stamp reaches it
+	@$(GORELEASER) build --snapshot --clean --single-target
+	@$(SAFE) hostdir=$$(find dist -maxdepth 1 -type d -name "kno_$$(go env GOOS)_$$(go env GOARCH)*" | head -1); \
+	if [ -z "$$hostdir" ]; then \
+		printf '\033[31m FAIL \033[0m release-stamp: dist/ has no build for this host.\n'; \
+		exit 1; \
+	fi; \
+	stamped=$$("$$hostdir/kno" --version); \
+	case "$$stamped" in \
+		*" dev"*|*" dev "*) \
+			printf '\033[31m FAIL \033[0m release-stamp: binary reports "%s".\n' "$$stamped"; \
+			printf '        The -X path in .goreleaser.yaml does not name cli/root.go'"'"'s variable.\n'; \
+			printf '        This failure is otherwise SILENT: the build succeeds and every\n'; \
+			printf '        released binary reports its version as "dev" forever.\n'; \
+			exit 1 ;; \
+	esac; \
+	printf '\033[32m  OK  \033[0m the version stamp reaches the binary: %s\n' "$$stamped"
+
+# The local dry run: all six platforms. It CANNOT publish — --snapshot disables
+# every publisher unconditionally, so this is safe on a machine that happens to
+# have a GITHUB_TOKEN exported.
+#
+# Signing and SBOM generation are skipped because neither can work here: keyless
+# cosign needs an OIDC identity only the workflow has, and syft is installed by
+# that workflow. --snapshot also skips goreleaser's own validation of the tag
+# and the working tree, so a green run here is not evidence that a real release
+# would start — only that six platforms compile.
+.PHONY: release-snapshot
+release-snapshot: $(GORELEASER) release-stamp ## Dry-run build of every platform. Cannot publish anything
+	@$(GORELEASER) release --snapshot --clean --skip=sign,sbom
+	@printf '\033[32m  OK  \033[0m six platforms built into dist/\n'
+
+# The real thing. CI-only by construction: `nothing built on laptops ships`
+# (CLAUDE.md) is enforced here rather than trusted, because the difference
+# between this target and release-snapshot is one word and a published artifact.
+.PHONY: release
+release: ## Build and publish a tagged release. Refuses to run outside CI
+	@$(SAFE) if [ -z "$${GITHUB_ACTIONS:-}" ]; then \
+		printf '\033[31m FAIL \033[0m release: refusing to publish from a developer machine.\n'; \
+		printf '        CLAUDE.md: nothing built on laptops ships. Push a tag and let\n'; \
+		printf '        .github/workflows/release.yml build it, so the artifacts carry\n'; \
+		printf '        provenance that says where they came from.\n'; \
+		printf '        For a local dry run: make release-snapshot (it cannot publish).\n'; \
+		exit 1; \
+	fi
+	@$(GORELEASER) release --clean
+
 ## ─── Meta ───────────────────────────────────────────────────────────────────
 
 .PHONY: clean
 clean: ## Remove build and coverage artifacts
-	@rm -rf $(BIN) $(COVERAGE) coverage.html
+	@rm -rf $(BIN) $(COVERAGE) coverage.html dist
 
 .PHONY: help
 help: ## List targets

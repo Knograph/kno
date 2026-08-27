@@ -102,6 +102,15 @@ it did not run is worse than no gate, so they announce themselves as `PEND`.
 | `make docs` | Will regenerate OpenAPI and check godoc coverage. **Both are pending** — `godoccheck` lands with M0c and OpenAPI needs a proto service to exist. It reports what it did not run rather than passing quietly |
 | `make bench-diff` | **Currently a tripwire, not a comparison.** No benchmarks exist yet, so it passes. The moment you add the first `func Benchmark`, it fails deliberately and asks you to implement the >10% regression gate ([docs/debt.md#3](docs/debt.md)) — that is the forcing function, not a bug |
 
+Two gates run in CI but **not** inside `make check`, because both fetch or compile something that
+does not belong in a fail-fast-cheapest-first gate. Run them by hand if you touch what they cover:
+
+| Command | What it checks |
+|---|---|
+| `make release-check` | `goreleaser check` over `.goreleaser.yaml`, plus a guard that the cosign identity published in four documents still names a workflow that exists ([docs/debt.md#72](docs/debt.md)) |
+| `make release-stamp` | Builds one binary and reads its `--version` back. Schema validation cannot see an `-X` path that names the wrong symbol; that failure is silent and ships a release reporting `dev` forever |
+| `make release-snapshot` | All six platforms, locally. Cannot publish: `--snapshot` disables every publisher unconditionally |
+
 **New dependencies need justification in the PR body:** what it does, why the standard library or
 an existing dependency can't, its license, and its maintenance signal.
 

@@ -6,6 +6,8 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"runtime/debug"
+	"strings"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -13,8 +15,95 @@ import (
 	"github.com/knograph/kno/core/errs"
 )
 
-// version is stamped at build time by goreleaser. "dev" when built by hand.
-var version = "dev"
+// version, commit and date are stamped at build time by goreleaser, via
+// -X ldflags naming these symbols (see .goreleaser.yaml). A hand-built binary
+// leaves them at their defaults and says "dev", which is the honest answer:
+// nothing about it is reproducible from a tag.
+//
+// The linker addresses a symbol by its package path and name, not by Go
+// visibility, so these stay unexported. Nothing outside this package should be
+// able to read a build stamp as if it were API.
+var (
+	version = "dev"
+	commit  = ""
+	date    = ""
+)
+
+// buildIdentity is what a binary knows about its own origin.
+type buildIdentity struct {
+	// Version is the release tag, or "dev" for a build that came from neither
+	// a release nor a module download.
+	Version string
+	// Commit is the revision it was built from, suffixed "-dirty" when the
+	// working tree had uncommitted changes.
+	Commit string
+	// Date is the commit timestamp, not the build time — two builds of one
+	// commit should not disagree about when it happened.
+	Date string
+}
+
+// identity resolves the build stamp, preferring the ldflags a release sets and
+// falling back to the module and VCS metadata the Go toolchain embeds.
+//
+// The fallback is the whole point. Most installs will be `go install`, which
+// sets no ldflags — without this they would report "dev" forever, including in
+// `kno doctor --json`, which exists to be pasted into a bug report. A version
+// field that says "dev" for every non-release install is a support burden
+// dressed up as a contract.
+func identity() buildIdentity {
+	id := buildIdentity{Version: version, Commit: commit, Date: date}
+
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return id
+	}
+
+	// "(devel)" is what the toolchain reports for a local build. It is not a
+	// version, and printing it would be a downgrade from "dev".
+	if id.Version == "dev" && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		id.Version = info.Main.Version
+	}
+
+	dirty := false
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			if id.Commit == "" {
+				id.Commit = s.Value
+			}
+		case "vcs.time":
+			if id.Date == "" {
+				id.Date = s.Value
+			}
+		case "vcs.modified":
+			dirty = s.Value == "true"
+		}
+	}
+	if dirty && id.Commit != "" {
+		id.Commit += "-dirty"
+	}
+	return id
+}
+
+// String renders the identity for `kno --version`.
+//
+// `kno doctor --json` deliberately reports only the Version field. That field
+// is a jq contract aimed at a person's pipeline (ADR-0001), and appending a
+// commit hash to a value consumers parse as a version is a breaking change
+// wearing a cosmetic disguise.
+func (b buildIdentity) String() string {
+	detail := make([]string, 0, 2)
+	if b.Commit != "" {
+		detail = append(detail, b.Commit)
+	}
+	if b.Date != "" {
+		detail = append(detail, b.Date)
+	}
+	if len(detail) == 0 {
+		return b.Version
+	}
+	return b.Version + " (" + strings.Join(detail, ", ") + ")"
+}
 
 // NewRootCmd builds the kno command tree.
 func NewRootCmd() *cobra.Command {
@@ -27,7 +116,7 @@ cost, and where each belongs.
 
 The loop is: baseline, value, select, validate, export. Today only baseline
 runs; the rest arrive milestone by milestone.`,
-		Version:      version,
+		Version:      identity().String(),
 		SilenceUsage: true,
 		// The top level renders errors in the CLI's grammar. Cobra printing
 		// its own too would show the same failure twice, in two shapes.

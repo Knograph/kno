@@ -129,7 +129,7 @@ type doctorReport struct {
 // runDoctor renders the matrix.
 func runDoctor(out io.Writer, jsonOut bool) error {
 	rep := doctorReport{
-		Version:    version,
+		Version:    identity().Version,
 		Adapters:   adapterFacts(),
 		Goals:      []string{"exact-match"},
 		PriceTable: pricing.Version,

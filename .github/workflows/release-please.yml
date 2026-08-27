@@ -26,3 +26,14 @@ jobs:
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+          # Merging the release PR pushes the tag that release.yml waits for —
+          # but GitHub does not create workflow runs from events triggered by
+          # the default GITHUB_TOKEN. Tagged with that token, the release
+          # workflow starts NOTHING: no run, no failure, no notification.
+          #
+          # RELEASE_PLEASE_TOKEN is a PAT or GitHub App token with contents:
+          # write. When it exists, the tag push carries a non-Actions identity
+          # and release.yml fires on its own. When it does not, this falls back
+          # to the default token and a maintainer must dispatch release.yml by
+          # hand against the tag. Tracked as docs/debt.md#74.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
