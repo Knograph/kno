@@ -29,6 +29,15 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
+- **release-please signs off its own commits**, so the DCO gate applies to the release PR like any
+  other. It is not an exemption: a release commit contains no authored code — it is a generated
+  CHANGELOG section and a manifest bump, both derived from commits that were each already signed off
+  — so the certification the DCO asks for is satisfied by the commits it summarizes, and recording
+  that with a trailer is more honest than carving out a second `if` in the check beside dependabot's.
+
+  Found by the gate itself while cutting 0.0.1: the release PR sat red on `sign-off`, and it was the
+  last thing between the tree and the tag.
+
 - **A completed run no longer points at a command that does not exist.** `kno baseline` closed with
   *"Next: `kno value` …"*, and `kno value` is the next stage rather than a command in this release —
   so the last line of a first successful run named something the binary rejects with `unknown

@@ -43,3 +43,19 @@ jobs:
           # to the default token and a maintainer must dispatch release.yml by
           # hand against the tag. Tracked as docs/debt.md#74.
           token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+          # The DCO gate applies to every commit, including this action's.
+          #
+          # Not an exemption, which is what dco.yml grants dependabot and which
+          # is defensible there only because a dependency bump contains no
+          # authored code. A release commit contains none either — it is a
+          # CHANGELOG section and a manifest bump, both DERIVED from commits
+          # that were each already signed off — so the certification the DCO
+          # asks for is genuinely satisfied by the commits it summarizes, and
+          # recording that with a trailer is more honest than carving out
+          # another `if` in the check.
+          #
+          # With RELEASE_PLEASE_TOKEN present the commit is authored by the
+          # token's owner rather than by github-actions[bot], and dco.yml
+          # matches the trailer against the author — so this value has to be
+          # that identity, not a bot's.
+          signoff: "DeVaris Brown <devaris@devaris.com>"
