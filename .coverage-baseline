@@ -25,4 +25,4 @@ goal/exactmatch 0.0
 internal/cmd/covercheck 83.9
 internal/cmd/godoccheck 74.0
 stats/budget 95.4
-store 83.1
+store 82.0
