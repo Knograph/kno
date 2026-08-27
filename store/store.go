@@ -66,13 +66,63 @@ type Store interface {
 	// confirmation prompt can state what it would remove rather than assert it.
 	PurgeableCount(ctx context.Context, runID string) (int, error)
 
-	// ScoreSum returns the sum of recorded scores, how many Cases contributed
-	// one, and how many scored but can no longer contribute — their number
-	// having been purged before it was stored in a column.
+	// ScoreSum returns what a run's recorded scores add up to, and what could
+	// not be added up.
 	//
-	// The third value exists so a caller can refuse to report an aggregate
-	// rather than report one biased toward zero.
-	ScoreSum(ctx context.Context, runID string) (sum float64, counted, unrecoverable int, err error)
+	// The counts of what could not be added up exist so a caller can refuse to
+	// report an aggregate rather than report one biased toward zero, and they
+	// are separate because "the user purged this" and "an older binary wrote
+	// this" are different diagnoses. See ScoreSummary.
+	ScoreSum(ctx context.Context, runID string) (ScoreSummary, error)
+
+	// RecordMeasurement durably records one Case measured once, for one Asset,
+	// in one arm — the Value stage's analogue of RecordOutcome, and subject to
+	// the same atomicity contract: the recorded row IS the done-marker.
+	//
+	// A separate method and a separate table because outcomes is keyed
+	// (run_id, case_id) and Value measures one Case against many Assets. Given
+	// that key, all but the first measurement of a Case would be silently
+	// discarded after being paid for.
+	RecordMeasurement(ctx context.Context, runID string, m *Measurement) error
+
+	// CompletedMeasurements returns the key of every measurement already
+	// recorded, which is what a Value resume consults.
+	//
+	// It must be this rather than CompletedCases: that method reads outcomes,
+	// which is empty for every Value run, so a resume driven by it would find
+	// nothing done and re-pay for the entire run.
+	CompletedMeasurements(ctx context.Context, runID string) (map[MeasurementKey]struct{}, error)
+
+	// CaseScores returns the recorded score of every Case in a run that
+	// produced one, distinguishing "no score" from "scored, number gone".
+	//
+	// Value pairs a fresh measurement against the BASELINE's recorded score, so
+	// this is called with a baseline run's ID. A map[string]float64 would
+	// collapse an unrecoverable score into an absent one, and pairing against
+	// the resulting zero would manufacture a delta.
+	CaseScores(ctx context.Context, runID string) (map[string]CaseScore, error)
+
+	// Measurements returns everything recorded for one Asset in a run: each
+	// measurement's key, what it scored, and whether that number survives.
+	//
+	// What makes the Valuation contract implementable across a resume. A run
+	// stopped mid-Asset must recompute that Asset's Valuation over BOTH
+	// processes' measurements; without this reader it could only recompute over
+	// its own half — a delta over half a sample — or re-pay to recover the
+	// numbers.
+	Measurements(ctx context.Context, runID, assetID string) ([]RecordedMeasurement, error)
+
+	// WriteValuation records one Asset's finished Valuation, written only once
+	// every measurement behind it is durable.
+	//
+	// A run stopped by its cost cap part-way through an Asset therefore leaves
+	// the paid measurements and no Valuation: resume finishes the Asset without
+	// paying twice, and nothing downstream can read a delta over half a sample.
+	WriteValuation(ctx context.Context, runID string, v *knov1.Valuation) error
+
+	// Valuations returns every Valuation recorded for a run, ordered by Asset
+	// ID.
+	Valuations(ctx context.Context, runID string) ([]*knov1.Valuation, error)
 
 	// CompletedCases returns the IDs of every Case with a terminal outcome.
 	//

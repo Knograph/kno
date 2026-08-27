@@ -66,3 +66,36 @@ func (s *SQLite) RawBlobs(ctx context.Context, runID, caseID string) (resp, scor
 		runID, caseID).Scan(&resp, &score)
 	return resp, score, err
 }
+
+// ExecForTest runs one statement directly against the database.
+//
+// Exported for tests only, for states this package's own writers cannot
+// produce: a row as an older binary left it, or a table removed out from under
+// a statement. docs/debt.md#31 is about rows this build did not write, so a
+// test that produced them through this package's writer would be testing the
+// wrong binary.
+func (s *SQLite) ExecForTest(ctx context.Context, stmt string, args ...any) error {
+	db, err := s.conn()
+	if err != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx, stmt, args...)
+	return err
+}
+
+// MeasurementBlobs reads the raw trace columns for one measurement.
+//
+// Exported for tests only, for the same reason RawBlobs is: a purge's reported
+// row count is identical whether it cleared the right column, the wrong one, or
+// none, so the assertion that content is gone must read the column.
+func (s *SQLite) MeasurementBlobs(ctx context.Context, runID, assetID, caseID string) (resp, score []byte, err error) {
+	db, err := s.conn()
+	if err != nil {
+		return nil, nil, err
+	}
+	err = db.QueryRowContext(ctx,
+		`SELECT response_proto, score_proto FROM measurements
+		 WHERE run_id = ? AND asset_id = ? AND case_id = ?`,
+		runID, assetID, caseID).Scan(&resp, &score)
+	return resp, score, err
+}

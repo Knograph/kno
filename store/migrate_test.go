@@ -157,7 +157,8 @@ func TestMigrationBackfillsScoresFromBlobs(t *testing.T) {
 	}
 	defer func() { _ = s.Close() }()
 
-	sum, counted, unrecoverable, err := s.ScoreSum(ctx, "run-1")
+	got, err := s.ScoreSum(ctx, "run-1")
+	sum, counted, unrecoverable := got.Sum, got.Counted, got.Unrecoverable()
 	if err != nil {
 		t.Fatalf("ScoreSum: %v", err)
 	}
@@ -189,7 +190,8 @@ func TestScorePurgedBeforeUpgradeIsUnrecoverableNotZero(t *testing.T) {
 	}
 	defer func() { _ = s.Close() }()
 
-	sum, counted, unrecoverable, err := s.ScoreSum(ctx, "run-1")
+	got, err := s.ScoreSum(ctx, "run-1")
+	sum, counted, unrecoverable := got.Sum, got.Counted, got.Unrecoverable()
 	if err != nil {
 		t.Fatalf("ScoreSum: %v", err)
 	}
@@ -227,8 +229,8 @@ func TestMigrationIsIdempotent(t *testing.T) {
 	}
 	defer func() { _ = s.Close() }()
 
-	if _, counted, _, err := s.ScoreSum(ctx, "run-1"); err != nil || counted != 2 {
-		t.Errorf("counted = %d (err %v), want 2; repeated opens changed the data", counted, err)
+	if got, err := s.ScoreSum(ctx, "run-1"); err != nil || got.Counted != 2 {
+		t.Errorf("counted = %d (err %v), want 2; repeated opens changed the data", got.Counted, err)
 	}
 }
 
@@ -298,7 +300,8 @@ func TestRecordedOutcomeCarriesProviderObservations(t *testing.T) {
 	}
 
 	// The score survives the purge because it is a column, not a blob field.
-	sum, counted, unrecoverable, err := s.ScoreSum(ctx, "run-1")
+	got, err := s.ScoreSum(ctx, "run-1")
+	sum, counted, unrecoverable := got.Sum, got.Counted, got.Unrecoverable()
 	if err != nil {
 		t.Fatalf("ScoreSum: %v", err)
 	}
@@ -389,7 +392,8 @@ func snapshot(ctx context.Context, t *testing.T, s *store.SQLite, runID string) 
 	if err != nil {
 		t.Fatalf("SettledSpend: %v", err)
 	}
-	sum, counted, unrecoverable, err := s.ScoreSum(ctx, runID)
+	got, err := s.ScoreSum(ctx, runID)
+	sum, counted, unrecoverable := got.Sum, got.Counted, got.Unrecoverable()
 	if err != nil {
 		t.Fatalf("ScoreSum: %v", err)
 	}
@@ -456,7 +460,7 @@ func TestPurgeAndScoreSumFailClosedAfterClose(t *testing.T) {
 	if _, err := s.Purge(ctx, "run-1"); err == nil {
 		t.Error("Purge succeeded on a closed store")
 	}
-	if _, _, _, err := s.ScoreSum(ctx, "run-1"); err == nil {
+	if _, err := s.ScoreSum(ctx, "run-1"); err == nil {
 		t.Error("ScoreSum succeeded on a closed store")
 	}
 }
@@ -493,7 +497,8 @@ func TestBackfillSkipsUnparseableScores(t *testing.T) {
 	}
 	defer func() { _ = s.Close() }()
 
-	_, counted, unrecoverable, err := s.ScoreSum(ctx, "run-1")
+	got, err := s.ScoreSum(ctx, "run-1")
+	counted, unrecoverable := got.Counted, got.Unrecoverable()
 	if err != nil {
 		t.Fatalf("ScoreSum: %v", err)
 	}
@@ -773,8 +778,8 @@ func TestMigrationSkipsAStepAnotherProcessAlreadyApplied(t *testing.T) {
 		t.Fatalf("second open against an already-migrated database: %v", err)
 	}
 
-	if _, counted, _, err := second.ScoreSum(ctx, "run-1"); err != nil || counted != 2 {
-		t.Errorf("counted = %d (err %v), want 2", counted, err)
+	if got, err := second.ScoreSum(ctx, "run-1"); err != nil || got.Counted != 2 {
+		t.Errorf("counted = %d (err %v), want 2", got.Counted, err)
 	}
 	if err := second.Close(); err != nil {
 		t.Fatalf("closing second: %v", err)

@@ -22,7 +22,7 @@ import (
 //
 // Version 0 is the M1 schema. Every later version is a numbered step in
 // migrations below.
-const schemaVersion = 2
+const schemaVersion = 3
 
 // schema is the version-0 base, applied on open. It is idempotent.
 //
@@ -310,6 +310,61 @@ var migrations = []migration{{
 		`ALTER TABLE runs ADD COLUMN orphan_cost_usd_micros INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE runs ADD COLUMN orphan_calls INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE runs ADD COLUMN orphan_tokens INTEGER NOT NULL DEFAULT 0`,
+	},
+}, {
+	to: 3,
+	// M2-V4a. The Value stage measures the SAME Case against many Assets in
+	// one run, which the outcomes table structurally cannot hold: it is
+	// PRIMARY KEY (run_id, case_id) and RecordOutcome is INSERT OR IGNORE, so
+	// 200 Assets over 50 Cases would write 50 rows and silently discard the
+	// other 9,950 — every one of them paid for — while CompletedCases reported
+	// the whole run finished.
+	//
+	// The key carries the arm and the trial as well as the Asset. Both are
+	// measurements of the same Case that cost separate money: the control arm
+	// is measured FRESH whenever routing may have conditioned on the baseline
+	// (docs/adr/0005), and trials are repeats bought to reduce variance. A key
+	// missing either reproduces the same silent-discard bug one level down.
+	//
+	// No writer-version column. An earlier draft added one to repay
+	// docs/debt.md#31 and it was reviewed out: a v3 writer sets score_value on
+	// every scored row and Purge never touches that column, so "scored, no
+	// number, written by this build" is unreachable and the marker would have
+	// discriminated nothing. What actually separates the two causes is the
+	// BLOB — see ScoreSum.
+	stmts: []string{
+		`CREATE TABLE IF NOT EXISTS measurements (
+		    run_id           TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+		    asset_id         TEXT NOT NULL,
+		    case_id          TEXT NOT NULL,
+		    arm              INTEGER NOT NULL,
+		    trial            INTEGER NOT NULL DEFAULT 1,
+		    scored           INTEGER NOT NULL,
+		    err_code         TEXT NOT NULL DEFAULT '',
+		    response_proto   BLOB,
+		    score_proto      BLOB,
+		    calls            INTEGER NOT NULL DEFAULT 0,
+		    cost_usd_micros  INTEGER NOT NULL DEFAULT 0,
+		    tokens           INTEGER NOT NULL DEFAULT 0,
+		    score_value      REAL,
+		    score_passed     INTEGER,
+		    refused          INTEGER NOT NULL DEFAULT 0,
+		    truncated        INTEGER NOT NULL DEFAULT 0,
+		    usage_estimated  INTEGER NOT NULL DEFAULT 0,
+		    provider_build_id TEXT NOT NULL DEFAULT '',
+		    resolved_model   TEXT NOT NULL DEFAULT '',
+		    PRIMARY KEY (run_id, asset_id, case_id, arm, trial)
+		)`,
+		// One Valuation per Asset, written only once every measurement behind
+		// it is recorded. A run stopped mid-Asset leaves paid measurements and
+		// no Valuation, so nothing downstream reads a delta over half a sample
+		// and the resume re-pays nothing.
+		`CREATE TABLE IF NOT EXISTS valuations (
+		    run_id    TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+		    asset_id  TEXT NOT NULL,
+		    proto     BLOB NOT NULL,
+		    PRIMARY KEY (run_id, asset_id)
+		)`,
 	},
 }}
 
@@ -614,6 +669,13 @@ func (s *SQLite) RecordOutcome(ctx context.Context, runID string, out *Outcome) 
 	r := out.Response
 	truncated := r.GetStopReason() == knov1.StopReason_STOP_REASON_LENGTH
 
+	// MAX(0, ?) on the three money columns, the same clamp RecordOrphanSpend
+	// applies and for the reason its comment gives: this is the choke point,
+	// and a negative charge subtracts inside SettledSpend's SUM before anything
+	// in Go can refuse it — handing the resumed run's guard free headroom.
+	// Clamped here rather than trusted from the caller, because every future
+	// caller would otherwise have to remember. See docs/debt.md#48.
+	//
 	// INSERT OR IGNORE, not INSERT OR REPLACE. A Case that already has an
 	// outcome keeps the one it has: the money for it is already spent and
 	// already counted, and overwriting would let a resumed run's second
@@ -624,7 +686,7 @@ func (s *SQLite) RecordOutcome(ctx context.Context, runID string, out *Outcome) 
 		    calls, cost_usd_micros, tokens,
 		    score_value, score_passed, refused, truncated, usage_estimated,
 		    provider_build_id, resolved_model)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, MAX(0, ?), MAX(0, ?), MAX(0, ?), ?, ?, ?, ?, ?, ?, ?)`,
 		runID, out.CaseID, scored, out.Err, responseBlob, scoreBlob,
 		out.Spend.Calls, out.Spend.CostUSDMicros, out.Spend.Tokens,
 		scoreValue, scorePassed,
@@ -672,11 +734,25 @@ func (s *SQLite) OutcomeCounts(ctx context.Context, runID string) (scored, error
 		return 0, 0, err
 	}
 
-	// COALESCE for the same reason SettledSpend needs it: a run with no
-	// outcomes yet must read as zero rather than failing the scan.
+	// Both tables, and this one was nearly missed: the plan names
+	// CompletedCases, OutcomeCounts, and ScoreSum together as the three readers
+	// a Value run reads empty, and the first pass fixed two of them.
+	//
+	// Leaving it blind is not a reporting gap either. core/baseline seeds a
+	// resumed run's aggregate from this AND from ScoreSum on the same path, so
+	// once the two queries span different tables the numerator covers the whole
+	// run while the denominator covers only the tail — which is verbatim the
+	// defect seedCounts exists to repay, reintroduced one table over.
+	//
+	// COALESCE for the same reason SettledSpend needs it: a run with neither
+	// must read as zero rather than failing the scan.
 	err = db.QueryRowContext(ctx,
 		`SELECT COALESCE(SUM(scored), 0), COALESCE(SUM(1 - scored), 0)
-		 FROM outcomes WHERE run_id = ?`, runID).Scan(&scored, &errored)
+		 FROM (
+		     SELECT scored FROM outcomes WHERE run_id = ?
+		     UNION ALL
+		     SELECT scored FROM measurements WHERE run_id = ?
+		 )`, runID, runID).Scan(&scored, &errored)
 	if err != nil {
 		return 0, 0, fmt.Errorf("counting outcomes for %s: %w", runID, err)
 	}
@@ -691,17 +767,24 @@ func (s *SQLite) SettledSpend(ctx context.Context, runID string) (budget.Spend, 
 	}
 
 	var spend budget.Spend
-	// Both sources, in one statement. Money the guard settled for a Case that
-	// never produced an outcome lives on the run — see migration 2 — and a
-	// resume that read only the outcomes would get it back as headroom and
-	// spend it again.
+	// ALL THREE sources, in one statement. Money the guard settled for a Case
+	// that never produced an outcome lives on the run — see migration 2 — and
+	// a Value run's spend lives in measurements, where the outcomes table has
+	// no row at all.
+	//
+	// Omitting measurements here is a double-spend, not a reporting gap: this
+	// method is the only durable record of money spent, so a Value run killed
+	// after $8 of a $10 cap would reseed the guard at zero and authorize
+	// another $10. An equality test on this method cannot catch that — before
+	// the measurements term existed the assertion was 0 == 0 — which is why
+	// the resume test counts provider calls across both processes instead.
 	//
 	// COALESCE because SUM over zero rows is NULL, and a fresh run legitimately
 	// has none — that must read as zero spent, not as a scan error.
 	err = db.QueryRowContext(ctx,
-		`SELECT COALESCE(o.calls, 0)  + r.orphan_calls,
-		        COALESCE(o.cost, 0)   + r.orphan_cost_usd_micros,
-		        COALESCE(o.tokens, 0) + r.orphan_tokens
+		`SELECT COALESCE(o.calls, 0)  + COALESCE(m.calls, 0)  + r.orphan_calls,
+		        COALESCE(o.cost, 0)   + COALESCE(m.cost, 0)   + r.orphan_cost_usd_micros,
+		        COALESCE(o.tokens, 0) + COALESCE(m.tokens, 0) + r.orphan_tokens
 		 FROM runs r
 		 LEFT JOIN (
 		     SELECT run_id,
@@ -710,7 +793,14 @@ func (s *SQLite) SettledSpend(ctx context.Context, runID string) (budget.Spend, 
 		            SUM(tokens) AS tokens
 		     FROM outcomes WHERE run_id = ?
 		 ) o ON o.run_id = r.id
-		 WHERE r.id = ?`, runID, runID).
+		 LEFT JOIN (
+		     SELECT run_id,
+		            SUM(calls) AS calls,
+		            SUM(cost_usd_micros) AS cost,
+		            SUM(tokens) AS tokens
+		     FROM measurements WHERE run_id = ?
+		 ) m ON m.run_id = r.id
+		 WHERE r.id = ?`, runID, runID, runID).
 		Scan(&spend.Calls, &spend.CostUSDMicros, &spend.Tokens)
 	if errors.Is(err, sql.ErrNoRows) {
 		// No run row yet. A fresh run has spent nothing, which is what the
@@ -737,7 +827,18 @@ func (s *SQLite) CaseObservations(ctx context.Context, runID string) (Observatio
 	}
 
 	var obs Observations
-	// COALESCE because SUM over zero rows is NULL, and a Run with no outcomes
+	// UNION ALL over both tables, so one reader serves both stages. A Baseline
+	// run has no measurements and a Value run has no outcomes, so the union is
+	// the sum of one table and zero rows in either direction — and a stage
+	// added later cannot acquire a blind spot by forgetting to teach this
+	// method about its table.
+	//
+	// The counts are of MEASUREMENTS for a Value run, not of distinct Cases:
+	// 200 Assets over 50 Cases attempts 10,000 measurements, and reporting 50
+	// here would put a denominator of 50 beside the spend for 10,000 calls.
+	// Per-Asset denominators live on Valuation.n_routed.
+	//
+	// COALESCE because SUM over zero rows is NULL, and a Run with neither
 	// legitimately has none — that reads as zero, not as a scan error.
 	err = db.QueryRowContext(ctx,
 		`SELECT COUNT(*),
@@ -746,7 +847,13 @@ func (s *SQLite) CaseObservations(ctx context.Context, runID string) (Observatio
 		        COALESCE(SUM(refused), 0),
 		        COALESCE(SUM(truncated), 0),
 		        COALESCE(SUM(usage_estimated), 0)
-		 FROM outcomes WHERE run_id = ?`, runID).
+		 FROM (
+		     SELECT scored, refused, truncated, usage_estimated
+		     FROM outcomes WHERE run_id = ?
+		     UNION ALL
+		     SELECT scored, refused, truncated, usage_estimated
+		     FROM measurements WHERE run_id = ?
+		 )`, runID, runID).
 		Scan(&obs.Attempted, &obs.Scored, &obs.Errored,
 			&obs.Refused, &obs.Truncated, &obs.UsageEstimated)
 	if err != nil {
@@ -779,11 +886,21 @@ func (s *SQLite) distinctNonEmpty(ctx context.Context, runID, column string) ([]
 	if err != nil {
 		return nil, err
 	}
+	// Both tables. The mid-run model gate compares a response's model against
+	// this set, so a Value run whose rows live only in measurements would hand
+	// the gate an empty set and it would report success against nothing —
+	// which is the shape docs/debt.md#42 records the gate having had once
+	// already, and the reason its trigger demanded an end-to-end test.
+	//
 	//nolint:gosec // the column is a compile-time literal, never caller input
 	q := fmt.Sprintf(
-		`SELECT DISTINCT %s FROM outcomes WHERE run_id = ? AND %s != '' ORDER BY %s`,
-		column, column, column)
-	rows, err := db.QueryContext(ctx, q, runID)
+		`SELECT DISTINCT %s FROM (
+		     SELECT %s FROM outcomes WHERE run_id = ?
+		     UNION ALL
+		     SELECT %s FROM measurements WHERE run_id = ?
+		 ) WHERE %s != '' ORDER BY %s`,
+		column, column, column, column, column)
+	rows, err := db.QueryContext(ctx, q, runID, runID)
 	if err != nil {
 		return nil, fmt.Errorf("reading %s for %s: %w", column, runID, err)
 	}
@@ -962,16 +1079,56 @@ func (s *SQLite) Purge(ctx context.Context, runID string) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	res, err := db.ExecContext(ctx,
-		`UPDATE outcomes SET response_proto = NULL, score_proto = NULL
-		 WHERE run_id = ? AND (response_proto IS NOT NULL OR score_proto IS NOT NULL)`,
-		runID)
+	// Both tables. A measurement's response holds exactly the same end-user
+	// conversation content an outcome's does, so a purge that cleared only
+	// outcomes would report "purged 44 rows" over content still on disk — the
+	// same class of bug as the secure_delete gap docs/cookbook/retention.md
+	// records having been fixed once, and worse for being reported as success.
+	// Both tables in ONE transaction. A measurement's response holds exactly
+	// the same end-user conversation content an outcome's does, so a purge that
+	// cleared only outcomes would report "purged 44 rows" over content still on
+	// disk — the same class as the secure_delete gap
+	// docs/cookbook/retention.md records having been fixed once, and worse for
+	// being reported as success.
+	//
+	// The transaction is what stops the halfway state: two independent
+	// statements let the first succeed, the second fail, and the caller return
+	// an error with no count — telling a user nothing was removed after content
+	// was irreversibly removed, on the one command whose whole job is saying
+	// what it removed.
+	n, err := func() (n int64, err error) {
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return 0, fmt.Errorf("opening the purge transaction for %s: %w", runID, err)
+		}
+		defer func() {
+			if err != nil {
+				_ = tx.Rollback()
+			}
+		}()
+		for _, table := range []string{"outcomes", "measurements"} {
+			//nolint:gosec // both table names are compile-time literals
+			q := fmt.Sprintf(
+				`UPDATE %s SET response_proto = NULL, score_proto = NULL
+				 WHERE run_id = ? AND (response_proto IS NOT NULL OR score_proto IS NOT NULL)`,
+				table)
+			res, execErr := tx.ExecContext(ctx, q, runID)
+			if execErr != nil {
+				return 0, fmt.Errorf("purging traces from %s for %s: %w", table, runID, execErr)
+			}
+			affected, rowsErr := res.RowsAffected()
+			if rowsErr != nil {
+				return 0, fmt.Errorf("counting purged %s rows for %s: %w", table, runID, rowsErr)
+			}
+			n += affected
+		}
+		if err = tx.Commit(); err != nil {
+			return 0, fmt.Errorf("committing the purge for %s: %w", runID, err)
+		}
+		return n, nil
+	}()
 	if err != nil {
-		return 0, fmt.Errorf("purging traces for %s: %w", runID, err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("counting purged rows for %s: %w", runID, err)
+		return 0, err
 	}
 
 	// Clearing the column is not deleting the data, and this is the one
@@ -995,29 +1152,62 @@ func (s *SQLite) Purge(ctx context.Context, runID string) (int64, error) {
 	return n, nil
 }
 
-// ScoreSum reports the sum of recorded scores for a run, and how many Cases
-// scored but can no longer contribute a number.
+// ScoreSum reports what a run's recorded scores add up to, and what could not
+// be added up.
 //
-// Two counts rather than one because they must not be conflated. A Case whose
-// score_value is NULL while scored = 1 was purged before the column existed:
-// its number is gone. Summing it as zero would drag the mean toward zero and
-// present the result as the run's actual aggregate — which is worse than
-// reporting nothing, and is why the caller is handed `unrecoverable` rather
-// than a single pre-mixed average.
-func (s *SQLite) ScoreSum(ctx context.Context, runID string) (sum float64, counted, unrecoverable int, err error) {
+// Three counts rather than one because they license different statements, and
+// because two of them used to be the same number. A scored row with a NULL
+// score_value has two possible causes, and reporting both as a purge sends a
+// user looking for a deletion nobody performed — docs/debt.md#31.
+//
+// The discriminator is the BLOB, not a writer-version marker, and getting that
+// wrong is worth recording because the first attempt did. `Purge` clears
+// score_proto and never touches score_value, and every build since the column
+// existed writes score_value on every scored row — so "scored, no number,
+// written by a recent build" is unreachable, and a marker keyed on the writer's
+// version would have separated nothing while reporting the genuine case, which
+// carries no marker, as the one with no evidence. Verified against this
+// repository's own M1 fixture: a real pre-column purge landed in the wrong
+// bucket and the right one was provably always zero.
+//
+// What actually holds:
+//
+//   - score_proto IS NULL — the blob is gone, so a purge took it before the
+//     number had a column of its own to survive in. The migration that added
+//     score_value backfills it out of the blob, and a purged row is exactly the
+//     row the backfill could not reach.
+//   - score_proto IS NOT NULL — the blob is present and the number was never
+//     lifted out of it, which is what a binary predating the column leaves
+//     behind when it writes into a database a newer build has already
+//     migrated. Nothing re-runs the backfill, so the row stays that way.
+//
+// Spans both outcomes and measurements, so a Value run's scores are not
+// silently absent from its own aggregate.
+func (s *SQLite) ScoreSum(ctx context.Context, runID string) (ScoreSummary, error) {
 	db, err := s.conn()
 	if err != nil {
-		return 0, 0, 0, err
+		return ScoreSummary{}, err
 	}
+	var sum ScoreSummary
 	err = db.QueryRowContext(ctx,
 		`SELECT COALESCE(SUM(score_value), 0),
 		        COALESCE(SUM(score_value IS NOT NULL), 0),
-		        COALESCE(SUM(scored = 1 AND score_value IS NULL), 0)
-		 FROM outcomes WHERE run_id = ?`, runID).Scan(&sum, &counted, &unrecoverable)
+		        COALESCE(SUM(scored = 1 AND score_value IS NULL
+		                     AND score_proto IS NULL), 0),
+		        COALESCE(SUM(scored = 1 AND score_value IS NULL
+		                     AND score_proto IS NOT NULL), 0)
+		 FROM (
+		     SELECT scored, score_value, score_proto
+		     FROM outcomes WHERE run_id = ?
+		     UNION ALL
+		     SELECT scored, score_value, score_proto
+		     FROM measurements WHERE run_id = ?
+		 )`, runID, runID).
+		Scan(&sum.Sum, &sum.Counted, &sum.Purged, &sum.UnknownProvenance)
 	if err != nil {
-		return 0, 0, 0, fmt.Errorf("summing scores for %s: %w", runID, err)
+		return ScoreSummary{}, fmt.Errorf("summing scores for %s: %w", runID, err)
 	}
-	return sum, counted, unrecoverable, nil
+	return sum, nil
 }
 
 // PurgeableCount reports how many outcomes still hold trace content.
@@ -1030,13 +1220,19 @@ func (s *SQLite) PurgeableCount(ctx context.Context, runID string) (int, error) 
 	if err != nil {
 		return 0, err
 	}
+	// Both tables, matching Purge exactly. A denominator that omitted
+	// measurements would understate what the user is agreeing to remove, on the
+	// one prompt in the product whose whole job is to state that number before
+	// something irreversible happens.
 	var n int
 	err = db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM outcomes
-		 WHERE run_id = ? AND (response_proto IS NOT NULL OR score_proto IS NOT NULL)`,
-		runID).Scan(&n)
+		`SELECT (SELECT COUNT(*) FROM outcomes
+		         WHERE run_id = ? AND (response_proto IS NOT NULL OR score_proto IS NOT NULL))
+		      + (SELECT COUNT(*) FROM measurements
+		         WHERE run_id = ? AND (response_proto IS NOT NULL OR score_proto IS NOT NULL))`,
+		runID, runID).Scan(&n)
 	if err != nil {
-		return 0, fmt.Errorf("counting purgeable outcomes for %s: %w", runID, err)
+		return 0, fmt.Errorf("counting purgeable rows for %s: %w", runID, err)
 	}
 	return n, nil
 }
