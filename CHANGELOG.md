@@ -770,7 +770,25 @@ covenants — breaking any of them requires a major version.
 
 ### Changed
 
-- **The budget-and-retry core is one implementation, not one per stage** (`core/invoke.go`). No
+- **The budget-and-retry core is one implementation, not one per stage** (`core/invoke.go`).
+
+  Reviewed after merging rather than before, because a branching mistake carried it onto `main`
+  inside a commit titled `docs:` (7a2d94f) — so 0.0.1's generated release notes file it under
+  Documentation. That is the second instance of [#49](docs/debt.md#49)'s title-describes-the-diff
+  half, whose own trigger text argued it was cheaper as a checklist item than as CI; two instances
+  is the argument for CI. The review was done line by line against the pre-extraction file and
+  confirmed behaviour-preserving: `invokeOnce` is byte-identical modulo its receiver, every
+  difference in the retry loop is a comment rewrap or the hook indirection, both detached contexts
+  are unchanged, emit-before-wait ordering holds, all six error-classification helpers moved
+  verbatim, the panic path still formats `%T` rather than `%v`, and the three hoisted getters are
+  pure functions of value-receiver fields so hoisting them out of the loop cannot change what they
+  return.
+
+  It found one thing, recorded as [#77](docs/debt.md#77): a stage that forgets to wire an event hook
+  is silent about it, and the two hooks in question are the ones that explain where money went.
+  Unreachable in this release — Baseline wires both — and nil-safety is kept deliberately, since a
+  panic on a money path is worse than a missing event. `TestBaselineWiresEveryInvokerHook` is the
+  enforcement, verified failing with a hook removed. No
   behaviour change: `BaselineOptions.invokeWithRetry` is now a wrapper that supplies Baseline's two
   event hooks, and everything else moved verbatim.
 
