@@ -430,6 +430,21 @@ $(GORELEASER): $(GORELEASER_MOD)/go.mod $(GORELEASER_MOD)/go.sum
 release-check: $(GORELEASER) ## Validate .goreleaser.yaml. CI runs this on every PR
 	@$(GORELEASER) check
 	@$(MAKE) --no-print-directory release-identity-check
+
+.PHONY: ledger-check
+ledger-check: ## A ledger trigger naming the release being cut must carry a disposition
+	@$(SAFE) v="$${VERSION:-$${GITHUB_REF_NAME:-}}"; \
+	if [ -z "$$v" ]; then \
+		printf '\033[31m FAIL \033[0m ledger-check needs the version being released.\n'; \
+		printf '        make ledger-check VERSION=v0.0.1\n'; \
+		printf '        Deliberately not defaulted to .release-please-manifest.json: that\n'; \
+		printf '        holds the LAST released version, so checking against it asks\n'; \
+		printf '        whether a release already cut is clear, which nothing names and\n'; \
+		printf '        which therefore always passes. A gate that cannot fail occupies\n'; \
+		printf '        the slot where a real one would go --- see docs/debt.md#70.\n'; \
+		exit 1; \
+	fi; \
+	python3 scripts/ledger-check.py "$$v"
 	@printf '\033[32m  OK  \033[0m .goreleaser.yaml is valid\n'
 
 # The cosign certificate identity is the ONLY root of trust in this pipeline: a
@@ -542,3 +557,18 @@ help: ## List targets
 	@grep -hE '^[a-z0-9_-]+:.*?## ' $(MAKEFILE_LIST) 2>/dev/null | sort \
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-26s\033[0m %s\n", $$1, $$2}' \
 		|| true
+
+.PHONY: tape
+tape: ## Re-record the README quickstart GIF. Requires vhs
+	@$(SAFE) if ! command -v vhs >/dev/null 2>&1; then \
+		printf '\033[31m FAIL \033[0m vhs is not installed: brew install vhs\n'; \
+		printf '        The DoD asks for a re-recorded tape when CLI output changes.\n'; \
+		exit 1; \
+	fi; \
+	if ! command -v kno >/dev/null 2>&1; then \
+		printf '\033[31m FAIL \033[0m kno is not on PATH; the tape records the real binary.\n'; \
+		printf '        go build -o "$$(go env GOPATH)/bin/kno" ./cmd/kno\n'; \
+		exit 1; \
+	fi; \
+	vhs tapes/quickstart.tape; \
+	printf '\033[32m  OK  \033[0m docs/quickstart.gif re-recorded\n'

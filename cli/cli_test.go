@@ -78,7 +78,7 @@ Baseline RUNID
 
   warning: the holdout has only 6 cases, too few for a meaningful confidence interval at validate
 
-Next: ` + "`kno value`" + ` to measure which of your assets earn their place.
+Scores and traces are recorded. ` + "`kno purge`" + ` removes trace content when you no longer need it.
 `
 	if got := normalize(stdout); got != want {
 		t.Errorf("output drifted.\ngot:\n%s\nwant:\n%s", got, want)

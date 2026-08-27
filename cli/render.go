@@ -290,7 +290,13 @@ func nextStep(status knov1.RunStatus) string {
 	case knov1.RunStatus_RUN_STATUS_FAILED:
 		return "The run failed. Fix the error above, then re-run."
 	default:
-		return "Next: `kno value` to measure which of your assets earn their place."
+		// Names a command that EXISTS. `kno value` is the next stage and is not
+		// in this release, and a completed run whose closing line points at a
+		// command the binary rejects with "unknown command" is the last thing a
+		// first run should print. The line changes when the stage ships, not
+		// before — a next step is a promise about this binary, not about the
+		// roadmap.
+		return "Scores and traces are recorded. `kno purge` removes trace content when you no longer need it."
 	}
 }
 
