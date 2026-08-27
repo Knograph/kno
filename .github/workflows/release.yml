@@ -197,3 +197,14 @@ jobs:
           } >> "$notes"
           gh release edit "$TAG" --notes-file "$notes" --draft=false
           echo "published $TAG"
+
+      - name: Fold the hand-written changelog heading
+        # Debt #76's manual step, automated: the hand-written [Unreleased]
+        # heading is renamed to the release it shipped in, via a PR that
+        # auto-merges when green — never a direct push to main. Idempotent:
+        # a re-tag finds the heading already folded and exits.
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+        run: |
+          ./scripts/fold-changelog.sh "$GITHUB_REF_NAME"
