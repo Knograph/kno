@@ -386,6 +386,14 @@ type lyingAgent struct{ stubAgent }
 
 func (lyingAgent) Capabilities() *knov1.Capabilities { return &knov1.Capabilities{} }
 
+// emptyEvals yields no Cases — enough for validate, which only needs the
+// seal to exist.
+type emptyEvals struct{}
+
+func (emptyEvals) Cases(context.Context) (iter.Seq2[*Case, error], error) {
+	return func(func(*Case, error) bool) {}, nil
+}
+
 // stubPool supplies a fixed list of Assets.
 type stubPool struct{ assets []*Asset }
 
@@ -413,6 +421,7 @@ func TestValueValidatesEverythingRefusableBeforeSpend(t *testing.T) {
 		Goal:          fixedDirectionGoal{dir: knov1.Direction_DIRECTION_MAXIMIZE, domain: knov1.ScoreDomain_SCORE_DOMAIN_BINARY},
 		Guard:         &budget.Guard{},
 		Store:         st,
+		Evals:         Seal(&emptyEvals{}),
 	}
 	pool := stubPool{assets: []*Asset{{Id: "a"}}}
 
@@ -612,5 +621,24 @@ func TestValuationForZeroRoutedAssetsCarriesTheReason(t *testing.T) {
 	}
 	if v.NDev == nil || *v.NDev != 42 {
 		t.Errorf("NDev = %v, want 42 even for a zero-routed Asset", v.NDev)
+	}
+}
+
+// TestValueWiresEveryInvokerHook is debt #77's trigger discharging: Value is
+// the second invoker caller, and a stage that forgets a hook is silent about
+// it. Both hooks must be non-nil or the money events the quote denominates go
+// unreported.
+func TestValueWiresEveryInvokerHook(t *testing.T) {
+	t.Parallel()
+
+	iv := ValueOptions{}.invoker(store.MeasurementKey{AssetID: "a", Trial: 1}, store.ArmTreatment, stubAgent{}, &valueEmitter{})
+	if iv.OnOvershoot == nil {
+		t.Error("Value wires no OnOvershoot hook, so a settlement overshoot — " +
+			"money spent past its reservation — would go unreported and look " +
+			"identical to a run that never overshot")
+	}
+	if iv.OnRetry == nil {
+		t.Error("Value wires no OnRetry hook, so a run obeying a provider's " +
+			"backoff would be indistinguishable from a hung one")
 	}
 }

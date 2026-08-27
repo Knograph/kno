@@ -8,6 +8,7 @@ import (
 	knov1 "github.com/knograph/kno/gen/kno/v1"
 	"github.com/knograph/kno/observe"
 	"github.com/knograph/kno/stats/budget"
+	"github.com/knograph/kno/store"
 )
 
 // invoker is the budget-and-retry core: authorize, call, settle, retry.
@@ -51,18 +52,36 @@ type invoker struct {
 	RetryBudget  time.Duration
 	RetryBackoff time.Duration
 
+	// Key is the measurement-key template the hooks receive: withRetry fills
+	// CaseID from the Case it is invoking and leaves the rest as set. Baseline
+	// leaves it zero; Value sets AssetID, Arm and Trial so the money events
+	// are attributable to the measurement that caused them.
+	Key store.MeasurementKey
+
 	// OnOvershoot reports that settlement exceeded its reservation. The context
 	// handed over is already detached from cancellation and carries its own
 	// grace, because an overshoot happens exactly when a budget stop has
 	// cancelled the worker. Nil is allowed and means "do not report".
-	OnOvershoot func(ctx context.Context, caseID string, estimated, settled, overshoot int64)
+	//
+	// key identifies the measurement the overshoot belongs to: the Case alone
+	// for Baseline, the full (Asset, Case, arm, trial) for Value — which is
+	// what makes a retry or an overshoot attributable to the Asset that caused
+	// it rather than to a Case both arms share.
+	OnOvershoot func(ctx context.Context, key store.MeasurementKey, estimated, settled, overshoot int64)
 
 	// OnRetry reports an attempt about to wait. Called BEFORE the wait: the
 	// whole value of the signal is telling a watcher the run is obeying a
 	// provider's backoff rather than hung, and emitted afterwards it announces
 	// idleness only once idleness has ended. Same detached context. Nil is
 	// allowed.
-	OnRetry func(ctx context.Context, caseID string, attempt int, reason knov1.RetryReason, wait, remaining time.Duration)
+	OnRetry func(ctx context.Context, key store.MeasurementKey, attempt int, reason knov1.RetryReason, wait, remaining time.Duration)
+}
+
+// keyFor fills the Case side of the measurement-key template.
+func (iv invoker) keyFor(c *Case) store.MeasurementKey {
+	key := iv.Key
+	key.CaseID = c.GetId()
+	return key
 }
 
 // withRetry invokes one Case, retrying what is retryable within both bounds.
@@ -138,7 +157,7 @@ func (iv invoker) withRetry(
 			emitCtx, cancel := context.WithTimeout(
 				context.WithoutCancel(ctx), progressWriteGrace,
 			)
-			iv.OnOvershoot(emitCtx, c.GetId(), est.CostUSDMicros, settled.CostUSDMicros, overshoot)
+			iv.OnOvershoot(emitCtx, iv.keyFor(c), est.CostUSDMicros, settled.CostUSDMicros, overshoot)
 			cancel()
 		}
 		if invokeErr == nil {
@@ -175,7 +194,7 @@ func (iv invoker) withRetry(
 			retryCtx, cancelRetry := context.WithTimeout(
 				context.WithoutCancel(ctx), progressWriteGrace,
 			)
-			iv.OnRetry(retryCtx, c.GetId(), attempt,
+			iv.OnRetry(retryCtx, iv.keyFor(c), attempt,
 				retryReasonOf(invokeErr), wait, time.Until(deadline))
 			cancelRetry()
 		}

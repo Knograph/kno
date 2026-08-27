@@ -626,14 +626,14 @@ func (o BaselineOptions) progressTicker(
 func (o BaselineOptions) emitSettlementOvershoot(
 	ctx context.Context,
 	agg *aggregator,
-	caseID string,
+	key store.MeasurementKey,
 	reserved, settled, delta int64,
 ) error {
 	return o.appendEventFunc(ctx, agg, func() *knov1.Event {
 		return &knov1.Event{
 			Payload: &knov1.Event_SettlementOvershoot{
 				SettlementOvershoot: &knov1.SettlementOvershoot{
-					CaseId:                       caseID,
+					CaseId:                       key.CaseID,
 					ReservedUsdMicros:            reserved,
 					SettledUsdMicros:             settled,
 					CumulativeOvershootUsdMicros: o.Guard.Overshoot(),
@@ -652,14 +652,14 @@ func (o BaselineOptions) emitSettlementOvershoot(
 func (o BaselineOptions) emitRetryAttempted(
 	ctx context.Context,
 	agg *aggregator,
-	caseID string,
+	key store.MeasurementKey,
 	ordinal int,
 	reason knov1.RetryReason,
 	wait, budgetLeft time.Duration,
 ) error {
 	return o.appendEvent(ctx, agg, &knov1.Event{
 		Payload: &knov1.Event_RetryAttempted{RetryAttempted: &knov1.RetryAttempted{
-			CaseId:                 caseID,
+			CaseId:                 key.CaseID,
 			AttemptOrdinal:         int32(ordinal), //nolint:gosec // bounded by maxAttempts
 			Reason:                 reason,
 			BackoffMs:              wait.Milliseconds(),

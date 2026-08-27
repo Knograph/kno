@@ -48,6 +48,15 @@ type ValueOptions struct {
 	// Guard authorizes every measurement before it is made.
 	Guard *budget.Guard
 
+	// Evals is the SEALED dev split: SealedEvals never yields a non-dev Case,
+	// which is the holdout canary's enforcement rather than a scan. The stage
+	// reads Cases only through it.
+	Evals *SealedEvals
+
+	// EstCostPerCallUSDMicros is the fallback estimate for agents that do not
+	// implement Estimator, exactly as Baseline uses it.
+	EstCostPerCallUSDMicros int64
+
 	// Store is where measurements and Valuations become durable.
 	Store store.Store
 
@@ -94,6 +103,10 @@ type ValueResult struct {
 	// Plan is the routing decision every number here was produced under.
 	// Recorded so a reader can re-derive the selection from its seed.
 	Plan *value.Plan
+
+	// Status is how the run ended: COMPLETED, or BUDGET_STOPPED /
+	// INTERRUPTED with the truncated portfolio marked in the Valuations.
+	Status knov1.RunStatus
 }
 
 // errNoInjection is returned when the agent cannot carry an Asset.
@@ -120,6 +133,8 @@ func (o ValueOptions) validate(pool Pool) error {
 		return errs.ErrInvalidInput.Wrap(errors.New("value: a store is required"))
 	case o.Guard == nil:
 		return errs.ErrInvalidInput.Wrap(errors.New("value: a budget guard is required"))
+	case o.Evals == nil:
+		return errs.ErrInvalidInput.Wrap(errors.New("value: a sealed evals source is required"))
 	case pool == nil:
 		return errs.ErrInvalidInput.
 			WithFix("point --pool at a file of Assets").
