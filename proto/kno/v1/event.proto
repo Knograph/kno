@@ -392,6 +392,18 @@ message RetryAttempted {
   // against a call cap, and a pure attempt bound gives a 1.5-second window
   // against provider rate limits measured in minutes.
   int64 retry_budget_remaining_ms = 5;
+
+  // The measurement this retry belonged to, for Value runs. Empty on Baseline
+  // runs, whose spend key is the Case alone. Together these three fields make
+  // a retry attributable to one (Asset, arm, trial) — the unit the quote is
+  // denominated in — instead of to a Case that both arms share.
+  optional string asset_id = 6;
+
+  // Which arm retried.
+  optional Arm arm = 7;
+
+  // Which trial of that (Asset, arm) retried.
+  optional int32 trial = 8;
 }
 
 // RateLimitWaiting reports that the run is deliberately idle.
@@ -447,6 +459,15 @@ message SettlementOvershoot {
   // inflates the total, which is why the engine carries the figure it already
   // computes rather than leaving a consumer to derive a wrong one.
   int64 delta_usd_micros = 5;
+
+  // The measurement this settlement belonged to. See RetryAttempted.asset_id.
+  optional string asset_id = 6;
+
+  // Which arm overshot.
+  optional Arm arm = 7;
+
+  // Which trial overshot.
+  optional int32 trial = 8;
 }
 
 // OrphanSpend reports money spent on a Case that produced no outcome.
@@ -476,6 +497,15 @@ message OrphanSpend {
 
   // Why the Case never produced an outcome.
   OrphanReason reason = 4;
+
+  // The measurement this spend belonged to. See RetryAttempted.asset_id.
+  optional string asset_id = 5;
+
+  // Which arm accumulated the orphaned spend.
+  optional Arm arm = 6;
+
+  // Which trial accumulated it.
+  optional int32 trial = 7;
 }
 
 // OrphanReason names why a Case was abandoned after being charged.
@@ -602,13 +632,14 @@ message AssetValued {
   // Which Asset.
   string asset_id = 1;
 
-  // The measured effect and its interval. Both, always: a delta without its
-  // interval is the thing prime directive 5 exists to prevent, and an event
-  // is exactly where that discipline slips.
+  // The measured effect and its interval. Both when measured: a delta without
+  // its interval is the thing prime directive 5 exists to prevent, and an
+  // event is exactly where that discipline slips.
   double delta_goal = 2;
 
-  // The interval on delta_goal. Never omitted: a delta without its interval is
-  // the thing prime directive 5 exists to prevent.
+  // The interval on delta_goal. Omitted exactly when not_measured is set: a
+  // delta without its interval is the thing prime directive 5 exists to
+  // prevent.
   Interval delta_interval = 3;
 
   // Improvement per unit cost — the ranking metric.
@@ -619,4 +650,12 @@ message AssetValued {
 
   // Set when the valuation could not be completed.
   RejectionReason not_measured = 6;
+
+  // How many pairs the delta was computed over, and how many were dropped.
+  // Mirrors the same fields on Valuation; an event stream must not be a
+  // second thing to keep consistent, but the headline numbers travel together.
+  int32 n_pairs = 7;
+
+  // See n_pairs.
+  int32 n_dropped = 8;
 }

@@ -88,8 +88,8 @@ func (Sidedness) EnumDescriptor() ([]byte, []int) {
 }
 
 // RejectionReason is why an Asset did not make the Portfolio, or — for the
-// three values that describe an absent measurement — why Value never measured
-// it. Two stages share the enum because they are the same question asked at
+// four values that describe an absent or unmeasurable measurement — why Value
+// never measured it or could not form an interval around it. Two stages share the enum because they are the same question asked at
 // two depths, and splitting it would make a Rejection carrying Value's answer
 // need a second field to say which enum it held.
 //
@@ -132,6 +132,14 @@ const (
 	// log dishonest in the direction that matters most: telling a user their
 	// data is worthless when the truth is that Kno failed to measure it.
 	RejectionReason_REJECTION_REASON_MEASUREMENT_FAILED RejectionReason = 8
+	// Measurements were made but no interval could be formed around them, so no
+	// delta is reported. Two causes: the sample was too small to form an
+	// interval (fewer than two pairs, a one-Case routed or control slice), or
+	// per-Case trial attrition left ragged vectors that no legitimate interval
+	// method accepts. It is a statement about the sample, not about the Asset —
+	// reporting a bare delta under it is the thing prime directive 5 exists to
+	// prevent, and it must never degrade into NO_EFFECT.
+	RejectionReason_REJECTION_REASON_UNDERPOWERED RejectionReason = 9
 )
 
 // Enum value maps for RejectionReason.
@@ -146,6 +154,7 @@ var (
 		6: "REJECTION_REASON_IRRELEVANT",
 		7: "REJECTION_REASON_BUDGET_EXHAUSTED",
 		8: "REJECTION_REASON_MEASUREMENT_FAILED",
+		9: "REJECTION_REASON_UNDERPOWERED",
 	}
 	RejectionReason_value = map[string]int32{
 		"REJECTION_REASON_UNSPECIFIED":        0,
@@ -157,6 +166,7 @@ var (
 		"REJECTION_REASON_IRRELEVANT":         6,
 		"REJECTION_REASON_BUDGET_EXHAUSTED":   7,
 		"REJECTION_REASON_MEASUREMENT_FAILED": 8,
+		"REJECTION_REASON_UNDERPOWERED":       9,
 	}
 )
 
@@ -322,14 +332,16 @@ type Valuation struct {
 	// Change in the Goal on the slices this Asset was routed to. Sign is
 	// relative to the Goal's own direction.
 	DeltaGoal float64 `protobuf:"fixed64,2,opt,name=delta_goal,json=deltaGoal,proto3" json:"delta_goal,omitempty"`
-	// Confidence interval on delta_goal. ABSENT means not computed — never
-	// report delta_goal without checking this field is present.
+	// Confidence interval on delta_goal. ABSENT means not computed, which
+	// happens exactly when not_measured is set — never report delta_goal
+	// without checking this field is present.
 	DeltaInterval *Interval `protobuf:"bytes,3,opt,name=delta_interval,json=deltaInterval,proto3" json:"delta_interval,omitempty"`
 	// Change in the Goal on untouched CONTROL slices. This is the regression
 	// signal: an Asset that helps its target slice while hurting controls is a
 	// net loss, and only measuring the target slice would hide that.
 	DeltaControl float64 `protobuf:"fixed64,4,opt,name=delta_control,json=deltaControl,proto3" json:"delta_control,omitempty"`
-	// Confidence interval on delta_control.
+	// Confidence interval on delta_control. ABSENT means not computed;
+	// delta_control is omitted whenever this is absent.
 	ControlInterval *Interval `protobuf:"bytes,5,opt,name=control_interval,json=controlInterval,proto3" json:"control_interval,omitempty"`
 	// How this was measured. CONTEXT results are an upper bound, not a
 	// deployment prediction, and must be reported as such.
@@ -362,12 +374,15 @@ type Valuation struct {
 	//
 	// Absent means a measurement WAS made; read it before reading delta_goal.
 	//
-	// Only three values are legal here — IRRELEVANT, BUDGET_EXHAUSTED, and
-	// MEASUREMENT_FAILED — because they are the only ones that describe an
-	// ABSENT measurement. NO_EFFECT, REGRESSION, REDUNDANT, COST_DOMINATED and
-	// WRONG_MECHANISM are all conclusions drawn FROM a measurement, and writing
-	// one here would say "no measurement was made because the delta was
-	// indistinguishable from zero", which requires the measurement it denies.
+	// Only four values are legal here — IRRELEVANT, BUDGET_EXHAUSTED,
+	// MEASUREMENT_FAILED, and UNDERPOWERED — because they are the only ones
+	// that describe an ABSENT or UNMEASURABLE measurement. NO_EFFECT,
+	// REGRESSION, REDUNDANT, COST_DOMINATED and WRONG_MECHANISM are all
+	// conclusions drawn FROM a measurement, and writing one here would say "no
+	// measurement was made because the delta was indistinguishable from zero",
+	// which requires the measurement it denies. UNDERPOWERED is the boundary
+	// case: measurements exist, but no interval could be formed, so delta_goal
+	// and delta_control are omitted alongside it.
 	//
 	// When this is MEASUREMENT_FAILED, `error` carries the cause; this field is
 	// authoritative on whether a delta exists.
@@ -392,8 +407,17 @@ type Valuation struct {
 	// underpowered harm test that looks like a passed one is worse than an
 	// absent one, so it is marked and the marker travels with the number.
 	ControlUnderpowered *bool `protobuf:"varint,18,opt,name=control_underpowered,json=controlUnderpowered,proto3,oneof" json:"control_underpowered,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// How many pairs the delta was computed over. n_pairs vs n_routed is the
+	// attrition statement: every Case that routed but did not pair is a dropped
+	// measurement, and the drop direction is biased (Cases where the Asset was
+	// most harmful are exactly the ones most likely to error). A Valuation that
+	// hides the shrinkage reports a mean over "whatever survived" as if it were
+	// the routed mean.
+	NPairs *int32 `protobuf:"varint,19,opt,name=n_pairs,json=nPairs,proto3,oneof" json:"n_pairs,omitempty"`
+	// How many pairs were dropped before the delta was computed. See n_pairs.
+	NDropped      *int32 `protobuf:"varint,20,opt,name=n_dropped,json=nDropped,proto3,oneof" json:"n_dropped,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Valuation) Reset() {
@@ -552,6 +576,20 @@ func (x *Valuation) GetControlUnderpowered() bool {
 	return false
 }
 
+func (x *Valuation) GetNPairs() int32 {
+	if x != nil && x.NPairs != nil {
+		return *x.NPairs
+	}
+	return 0
+}
+
+func (x *Valuation) GetNDropped() int32 {
+	if x != nil && x.NDropped != nil {
+		return *x.NDropped
+	}
+	return 0
+}
+
 var File_kno_v1_valuation_proto protoreflect.FileDescriptor
 
 const file_kno_v1_valuation_proto_rawDesc = "" +
@@ -565,7 +603,7 @@ const file_kno_v1_valuation_proto_rawDesc = "" +
 	"\tsidedness\x18\x05 \x01(\x0e2\x11.kno.v1.SidednessR\tsidedness\x12\x1c\n" +
 	"\an_pairs\x18\x06 \x01(\x05H\x00R\x06nPairs\x88\x01\x01B\n" +
 	"\n" +
-	"\b_n_pairs\"\xf8\x05\n" +
+	"\b_n_pairs\"\xd2\x06\n" +
 	"\tValuation\x12\x19\n" +
 	"\basset_id\x18\x01 \x01(\tR\aassetId\x12\x15\n" +
 	"\x06run_id\x18\x0e \x01(\tR\x05runId\x12\x1d\n" +
@@ -586,15 +624,21 @@ const file_kno_v1_valuation_proto_rawDesc = "" +
 	"\fnot_measured\x18\x0f \x01(\x0e2\x17.kno.v1.RejectionReasonR\vnotMeasured\x12\x1e\n" +
 	"\bn_routed\x18\x10 \x01(\x05H\x00R\anRouted\x88\x01\x01\x12\x18\n" +
 	"\x05n_dev\x18\x11 \x01(\x05H\x01R\x04nDev\x88\x01\x01\x126\n" +
-	"\x14control_underpowered\x18\x12 \x01(\bH\x02R\x13controlUnderpowered\x88\x01\x01B\v\n" +
+	"\x14control_underpowered\x18\x12 \x01(\bH\x02R\x13controlUnderpowered\x88\x01\x01\x12\x1c\n" +
+	"\an_pairs\x18\x13 \x01(\x05H\x03R\x06nPairs\x88\x01\x01\x12 \n" +
+	"\tn_dropped\x18\x14 \x01(\x05H\x04R\bnDropped\x88\x01\x01B\v\n" +
 	"\t_n_routedB\b\n" +
 	"\x06_n_devB\x17\n" +
-	"\x15_control_underpowered*i\n" +
+	"\x15_control_underpoweredB\n" +
+	"\n" +
+	"\b_n_pairsB\f\n" +
+	"\n" +
+	"_n_dropped*i\n" +
 	"\tSidedness\x12\x19\n" +
 	"\x15SIDEDNESS_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13SIDEDNESS_TWO_SIDED\x10\x01\x12\x13\n" +
 	"\x0fSIDEDNESS_UPPER\x10\x02\x12\x13\n" +
-	"\x0fSIDEDNESS_LOWER\x10\x03*\xd0\x02\n" +
+	"\x0fSIDEDNESS_LOWER\x10\x03*\xf3\x02\n" +
 	"\x0fRejectionReason\x12 \n" +
 	"\x1cREJECTION_REASON_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aREJECTION_REASON_NO_EFFECT\x10\x01\x12\x1f\n" +
@@ -604,7 +648,8 @@ const file_kno_v1_valuation_proto_rawDesc = "" +
 	" REJECTION_REASON_WRONG_MECHANISM\x10\x05\x12\x1f\n" +
 	"\x1bREJECTION_REASON_IRRELEVANT\x10\x06\x12%\n" +
 	"!REJECTION_REASON_BUDGET_EXHAUSTED\x10\a\x12'\n" +
-	"#REJECTION_REASON_MEASUREMENT_FAILED\x10\bB\x7f\n" +
+	"#REJECTION_REASON_MEASUREMENT_FAILED\x10\b\x12!\n" +
+	"\x1dREJECTION_REASON_UNDERPOWERED\x10\tB\x7f\n" +
 	"\n" +
 	"com.kno.v1B\x0eValuationProtoP\x01Z(github.com/knograph/kno/gen/kno/v1;knov1\xa2\x02\x03KXX\xaa\x02\x06Kno.V1\xca\x02\x06Kno\\V1\xe2\x02\x12Kno\\V1\\GPBMetadata\xea\x02\aKno::V1b\x06proto3"
 

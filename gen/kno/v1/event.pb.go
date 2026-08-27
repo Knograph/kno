@@ -1341,8 +1341,17 @@ type RetryAttempted struct {
 	// against a call cap, and a pure attempt bound gives a 1.5-second window
 	// against provider rate limits measured in minutes.
 	RetryBudgetRemainingMs int64 `protobuf:"varint,5,opt,name=retry_budget_remaining_ms,json=retryBudgetRemainingMs,proto3" json:"retry_budget_remaining_ms,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// The measurement this retry belonged to, for Value runs. Empty on Baseline
+	// runs, whose spend key is the Case alone. Together these three fields make
+	// a retry attributable to one (Asset, arm, trial) — the unit the quote is
+	// denominated in — instead of to a Case that both arms share.
+	AssetId *string `protobuf:"bytes,6,opt,name=asset_id,json=assetId,proto3,oneof" json:"asset_id,omitempty"`
+	// Which arm retried.
+	Arm *Arm `protobuf:"varint,7,opt,name=arm,proto3,enum=kno.v1.Arm,oneof" json:"arm,omitempty"`
+	// Which trial of that (Asset, arm) retried.
+	Trial         *int32 `protobuf:"varint,8,opt,name=trial,proto3,oneof" json:"trial,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RetryAttempted) Reset() {
@@ -1406,6 +1415,27 @@ func (x *RetryAttempted) GetBackoffMs() int64 {
 func (x *RetryAttempted) GetRetryBudgetRemainingMs() int64 {
 	if x != nil {
 		return x.RetryBudgetRemainingMs
+	}
+	return 0
+}
+
+func (x *RetryAttempted) GetAssetId() string {
+	if x != nil && x.AssetId != nil {
+		return *x.AssetId
+	}
+	return ""
+}
+
+func (x *RetryAttempted) GetArm() Arm {
+	if x != nil && x.Arm != nil {
+		return *x.Arm
+	}
+	return Arm_ARM_UNSPECIFIED
+}
+
+func (x *RetryAttempted) GetTrial() int32 {
+	if x != nil && x.Trial != nil {
+		return *x.Trial
 	}
 	return 0
 }
@@ -1512,8 +1542,14 @@ type SettlementOvershoot struct {
 	// inflates the total, which is why the engine carries the figure it already
 	// computes rather than leaving a consumer to derive a wrong one.
 	DeltaUsdMicros int64 `protobuf:"varint,5,opt,name=delta_usd_micros,json=deltaUsdMicros,proto3" json:"delta_usd_micros,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// The measurement this settlement belonged to. See RetryAttempted.asset_id.
+	AssetId *string `protobuf:"bytes,6,opt,name=asset_id,json=assetId,proto3,oneof" json:"asset_id,omitempty"`
+	// Which arm overshot.
+	Arm *Arm `protobuf:"varint,7,opt,name=arm,proto3,enum=kno.v1.Arm,oneof" json:"arm,omitempty"`
+	// Which trial overshot.
+	Trial         *int32 `protobuf:"varint,8,opt,name=trial,proto3,oneof" json:"trial,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SettlementOvershoot) Reset() {
@@ -1581,6 +1617,27 @@ func (x *SettlementOvershoot) GetDeltaUsdMicros() int64 {
 	return 0
 }
 
+func (x *SettlementOvershoot) GetAssetId() string {
+	if x != nil && x.AssetId != nil {
+		return *x.AssetId
+	}
+	return ""
+}
+
+func (x *SettlementOvershoot) GetArm() Arm {
+	if x != nil && x.Arm != nil {
+		return *x.Arm
+	}
+	return Arm_ARM_UNSPECIFIED
+}
+
+func (x *SettlementOvershoot) GetTrial() int32 {
+	if x != nil && x.Trial != nil {
+		return *x.Trial
+	}
+	return 0
+}
+
 // OrphanSpend reports money spent on a Case that produced no outcome.
 //
 // A Case whose earlier attempts were charged and which was then refused by the
@@ -1605,7 +1662,13 @@ type OrphanSpend struct {
 	// How many provider calls the guard settled for it.
 	Calls int64 `protobuf:"varint,3,opt,name=calls,proto3" json:"calls,omitempty"`
 	// Why the Case never produced an outcome.
-	Reason        OrphanReason `protobuf:"varint,4,opt,name=reason,proto3,enum=kno.v1.OrphanReason" json:"reason,omitempty"`
+	Reason OrphanReason `protobuf:"varint,4,opt,name=reason,proto3,enum=kno.v1.OrphanReason" json:"reason,omitempty"`
+	// The measurement this spend belonged to. See RetryAttempted.asset_id.
+	AssetId *string `protobuf:"bytes,5,opt,name=asset_id,json=assetId,proto3,oneof" json:"asset_id,omitempty"`
+	// Which arm accumulated the orphaned spend.
+	Arm *Arm `protobuf:"varint,6,opt,name=arm,proto3,enum=kno.v1.Arm,oneof" json:"arm,omitempty"`
+	// Which trial accumulated it.
+	Trial         *int32 `protobuf:"varint,7,opt,name=trial,proto3,oneof" json:"trial,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1666,6 +1729,27 @@ func (x *OrphanSpend) GetReason() OrphanReason {
 		return x.Reason
 	}
 	return OrphanReason_ORPHAN_REASON_UNSPECIFIED
+}
+
+func (x *OrphanSpend) GetAssetId() string {
+	if x != nil && x.AssetId != nil {
+		return *x.AssetId
+	}
+	return ""
+}
+
+func (x *OrphanSpend) GetArm() Arm {
+	if x != nil && x.Arm != nil {
+		return *x.Arm
+	}
+	return Arm_ARM_UNSPECIFIED
+}
+
+func (x *OrphanSpend) GetTrial() int32 {
+	if x != nil && x.Trial != nil {
+		return *x.Trial
+	}
+	return 0
 }
 
 // ConcurrencyReduced reports that the engine narrowed the run's concurrency.
@@ -1858,19 +1942,26 @@ type AssetValued struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Which Asset.
 	AssetId string `protobuf:"bytes,1,opt,name=asset_id,json=assetId,proto3" json:"asset_id,omitempty"`
-	// The measured effect and its interval. Both, always: a delta without its
-	// interval is the thing prime directive 5 exists to prevent, and an event
-	// is exactly where that discipline slips.
+	// The measured effect and its interval. Both when measured: a delta without
+	// its interval is the thing prime directive 5 exists to prevent, and an
+	// event is exactly where that discipline slips.
 	DeltaGoal float64 `protobuf:"fixed64,2,opt,name=delta_goal,json=deltaGoal,proto3" json:"delta_goal,omitempty"`
-	// The interval on delta_goal. Never omitted: a delta without its interval is
-	// the thing prime directive 5 exists to prevent.
+	// The interval on delta_goal. Omitted exactly when not_measured is set: a
+	// delta without its interval is the thing prime directive 5 exists to
+	// prevent.
 	DeltaInterval *Interval `protobuf:"bytes,3,opt,name=delta_interval,json=deltaInterval,proto3" json:"delta_interval,omitempty"`
 	// Improvement per unit cost — the ranking metric.
 	DeltaPerCost float64 `protobuf:"fixed64,4,opt,name=delta_per_cost,json=deltaPerCost,proto3" json:"delta_per_cost,omitempty"`
 	// What this measurement cost, in MICRO-USD.
 	MeasurementCostUsdMicros int64 `protobuf:"varint,5,opt,name=measurement_cost_usd_micros,json=measurementCostUsdMicros,proto3" json:"measurement_cost_usd_micros,omitempty"`
 	// Set when the valuation could not be completed.
-	NotMeasured   RejectionReason `protobuf:"varint,6,opt,name=not_measured,json=notMeasured,proto3,enum=kno.v1.RejectionReason" json:"not_measured,omitempty"`
+	NotMeasured RejectionReason `protobuf:"varint,6,opt,name=not_measured,json=notMeasured,proto3,enum=kno.v1.RejectionReason" json:"not_measured,omitempty"`
+	// How many pairs the delta was computed over, and how many were dropped.
+	// Mirrors the same fields on Valuation; an event stream must not be a
+	// second thing to keep consistent, but the headline numbers travel together.
+	NPairs int32 `protobuf:"varint,7,opt,name=n_pairs,json=nPairs,proto3" json:"n_pairs,omitempty"`
+	// See n_pairs.
+	NDropped      int32 `protobuf:"varint,8,opt,name=n_dropped,json=nDropped,proto3" json:"n_dropped,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1945,6 +2036,20 @@ func (x *AssetValued) GetNotMeasured() RejectionReason {
 		return x.NotMeasured
 	}
 	return RejectionReason_REJECTION_REASON_UNSPECIFIED
+}
+
+func (x *AssetValued) GetNPairs() int32 {
+	if x != nil {
+		return x.NPairs
+	}
+	return 0
+}
+
+func (x *AssetValued) GetNDropped() int32 {
+	if x != nil {
+		return x.NDropped
+	}
+	return 0
 }
 
 var File_kno_v1_event_proto protoreflect.FileDescriptor
@@ -2041,29 +2146,47 @@ const file_kno_v1_event_proto_rawDesc = "" +
 	"\vtotal_cases\x18\x03 \x01(\x05R\n" +
 	"totalCases\x127\n" +
 	"\x18restored_cost_usd_micros\x18\x04 \x01(\x03R\x15restoredCostUsdMicros\x12%\n" +
-	"\x0erestored_calls\x18\x05 \x01(\x03R\rrestoredCalls\"\xd9\x01\n" +
+	"\x0erestored_calls\x18\x05 \x01(\x03R\rrestoredCalls\"\xd7\x02\n" +
 	"\x0eRetryAttempted\x12\x17\n" +
 	"\acase_id\x18\x01 \x01(\tR\x06caseId\x12'\n" +
 	"\x0fattempt_ordinal\x18\x02 \x01(\x05R\x0eattemptOrdinal\x12+\n" +
 	"\x06reason\x18\x03 \x01(\x0e2\x13.kno.v1.RetryReasonR\x06reason\x12\x1d\n" +
 	"\n" +
 	"backoff_ms\x18\x04 \x01(\x03R\tbackoffMs\x129\n" +
-	"\x19retry_budget_remaining_ms\x18\x05 \x01(\x03R\x16retryBudgetRemainingMs\"n\n" +
+	"\x19retry_budget_remaining_ms\x18\x05 \x01(\x03R\x16retryBudgetRemainingMs\x12\x1e\n" +
+	"\basset_id\x18\x06 \x01(\tH\x00R\aassetId\x88\x01\x01\x12\"\n" +
+	"\x03arm\x18\a \x01(\x0e2\v.kno.v1.ArmH\x01R\x03arm\x88\x01\x01\x12\x19\n" +
+	"\x05trial\x18\b \x01(\x05H\x02R\x05trial\x88\x01\x01B\v\n" +
+	"\t_asset_idB\x06\n" +
+	"\x04_armB\b\n" +
+	"\x06_trial\"n\n" +
 	"\x10RateLimitWaiting\x12\x17\n" +
 	"\await_ms\x18\x01 \x01(\x03R\x06waitMs\x12-\n" +
 	"\x12provider_requested\x18\x02 \x01(\bR\x11providerRequested\x12\x12\n" +
-	"\x04host\x18\x03 \x01(\tR\x04host\"\xfd\x01\n" +
+	"\x04host\x18\x03 \x01(\tR\x04host\"\xfb\x02\n" +
 	"\x13SettlementOvershoot\x12\x17\n" +
 	"\acase_id\x18\x01 \x01(\tR\x06caseId\x12.\n" +
 	"\x13reserved_usd_micros\x18\x02 \x01(\x03R\x11reservedUsdMicros\x12,\n" +
 	"\x12settled_usd_micros\x18\x03 \x01(\x03R\x10settledUsdMicros\x12E\n" +
 	"\x1fcumulative_overshoot_usd_micros\x18\x04 \x01(\x03R\x1ccumulativeOvershootUsdMicros\x12(\n" +
-	"\x10delta_usd_micros\x18\x05 \x01(\x03R\x0edeltaUsdMicros\"\x92\x01\n" +
+	"\x10delta_usd_micros\x18\x05 \x01(\x03R\x0edeltaUsdMicros\x12\x1e\n" +
+	"\basset_id\x18\x06 \x01(\tH\x00R\aassetId\x88\x01\x01\x12\"\n" +
+	"\x03arm\x18\a \x01(\x0e2\v.kno.v1.ArmH\x01R\x03arm\x88\x01\x01\x12\x19\n" +
+	"\x05trial\x18\b \x01(\x05H\x02R\x05trial\x88\x01\x01B\v\n" +
+	"\t_asset_idB\x06\n" +
+	"\x04_armB\b\n" +
+	"\x06_trial\"\x90\x02\n" +
 	"\vOrphanSpend\x12\x17\n" +
 	"\acase_id\x18\x01 \x01(\tR\x06caseId\x12&\n" +
 	"\x0fcost_usd_micros\x18\x02 \x01(\x03R\rcostUsdMicros\x12\x14\n" +
 	"\x05calls\x18\x03 \x01(\x03R\x05calls\x12,\n" +
-	"\x06reason\x18\x04 \x01(\x0e2\x14.kno.v1.OrphanReasonR\x06reason\"M\n" +
+	"\x06reason\x18\x04 \x01(\x0e2\x14.kno.v1.OrphanReasonR\x06reason\x12\x1e\n" +
+	"\basset_id\x18\x05 \x01(\tH\x00R\aassetId\x88\x01\x01\x12\"\n" +
+	"\x03arm\x18\x06 \x01(\x0e2\v.kno.v1.ArmH\x01R\x03arm\x88\x01\x01\x12\x19\n" +
+	"\x05trial\x18\a \x01(\x05H\x02R\x05trial\x88\x01\x01B\v\n" +
+	"\t_asset_idB\x06\n" +
+	"\x04_armB\b\n" +
+	"\x06_trial\"M\n" +
 	"\x12ConcurrencyReduced\x127\n" +
 	"\bdecision\x18\x01 \x01(\v2\x1b.kno.v1.ConcurrencyDecisionR\bdecision\"\xfd\x01\n" +
 	"\vAssetRouted\x12\x19\n" +
@@ -2073,7 +2196,7 @@ const file_kno_v1_event_proto_rawDesc = "" +
 	"\tn_control\x18\x04 \x01(\x05R\bnControl\x12:\n" +
 	"\fnot_measured\x18\x05 \x01(\x0e2\x17.kno.v1.RejectionReasonR\vnotMeasured\x12\x16\n" +
 	"\x06trials\x18\a \x01(\x05R\x06trials\x12*\n" +
-	"\x11fresh_control_arm\x18\x06 \x01(\bR\x0ffreshControlArm\"\xa1\x02\n" +
+	"\x11fresh_control_arm\x18\x06 \x01(\bR\x0ffreshControlArm\"\xd7\x02\n" +
 	"\vAssetValued\x12\x19\n" +
 	"\basset_id\x18\x01 \x01(\tR\aassetId\x12\x1d\n" +
 	"\n" +
@@ -2081,7 +2204,9 @@ const file_kno_v1_event_proto_rawDesc = "" +
 	"\x0edelta_interval\x18\x03 \x01(\v2\x10.kno.v1.IntervalR\rdeltaInterval\x12$\n" +
 	"\x0edelta_per_cost\x18\x04 \x01(\x01R\fdeltaPerCost\x12=\n" +
 	"\x1bmeasurement_cost_usd_micros\x18\x05 \x01(\x03R\x18measurementCostUsdMicros\x12:\n" +
-	"\fnot_measured\x18\x06 \x01(\x0e2\x17.kno.v1.RejectionReasonR\vnotMeasured*\x8a\x01\n" +
+	"\fnot_measured\x18\x06 \x01(\x0e2\x17.kno.v1.RejectionReasonR\vnotMeasured\x12\x17\n" +
+	"\an_pairs\x18\a \x01(\x05R\x06nPairs\x12\x1b\n" +
+	"\tn_dropped\x18\b \x01(\x05R\bnDropped*\x8a\x01\n" +
 	"\fOrphanReason\x12\x1d\n" +
 	"\x19ORPHAN_REASON_UNSPECIFIED\x10\x00\x12!\n" +
 	"\x1dORPHAN_REASON_BUDGET_EXCEEDED\x10\x01\x12\x1b\n" +
@@ -2136,9 +2261,10 @@ var file_kno_v1_event_proto_goTypes = []any{
 	(*Budget)(nil),              // 21: kno.v1.Budget
 	(ScoreDomain)(0),            // 22: kno.v1.ScoreDomain
 	(RunStatus)(0),              // 23: kno.v1.RunStatus
-	(*ConcurrencyDecision)(nil), // 24: kno.v1.ConcurrencyDecision
-	(RejectionReason)(0),        // 25: kno.v1.RejectionReason
-	(*Interval)(nil),            // 26: kno.v1.Interval
+	(Arm)(0),                    // 24: kno.v1.Arm
+	(*ConcurrencyDecision)(nil), // 25: kno.v1.ConcurrencyDecision
+	(RejectionReason)(0),        // 26: kno.v1.RejectionReason
+	(*Interval)(nil),            // 27: kno.v1.Interval
 }
 var file_kno_v1_event_proto_depIdxs = []int32{
 	4,  // 0: kno.v1.Event.run_started:type_name -> kno.v1.RunStarted
@@ -2165,16 +2291,19 @@ var file_kno_v1_event_proto_depIdxs = []int32{
 	23, // 21: kno.v1.RunFinished.status:type_name -> kno.v1.RunStatus
 	3,  // 22: kno.v1.RunFinished.error:type_name -> kno.v1.EventError
 	1,  // 23: kno.v1.RetryAttempted.reason:type_name -> kno.v1.RetryReason
-	0,  // 24: kno.v1.OrphanSpend.reason:type_name -> kno.v1.OrphanReason
-	24, // 25: kno.v1.ConcurrencyReduced.decision:type_name -> kno.v1.ConcurrencyDecision
-	25, // 26: kno.v1.AssetRouted.not_measured:type_name -> kno.v1.RejectionReason
-	26, // 27: kno.v1.AssetValued.delta_interval:type_name -> kno.v1.Interval
-	25, // 28: kno.v1.AssetValued.not_measured:type_name -> kno.v1.RejectionReason
-	29, // [29:29] is the sub-list for method output_type
-	29, // [29:29] is the sub-list for method input_type
-	29, // [29:29] is the sub-list for extension type_name
-	29, // [29:29] is the sub-list for extension extendee
-	0,  // [0:29] is the sub-list for field type_name
+	24, // 24: kno.v1.RetryAttempted.arm:type_name -> kno.v1.Arm
+	24, // 25: kno.v1.SettlementOvershoot.arm:type_name -> kno.v1.Arm
+	0,  // 26: kno.v1.OrphanSpend.reason:type_name -> kno.v1.OrphanReason
+	24, // 27: kno.v1.OrphanSpend.arm:type_name -> kno.v1.Arm
+	25, // 28: kno.v1.ConcurrencyReduced.decision:type_name -> kno.v1.ConcurrencyDecision
+	26, // 29: kno.v1.AssetRouted.not_measured:type_name -> kno.v1.RejectionReason
+	27, // 30: kno.v1.AssetValued.delta_interval:type_name -> kno.v1.Interval
+	26, // 31: kno.v1.AssetValued.not_measured:type_name -> kno.v1.RejectionReason
+	32, // [32:32] is the sub-list for method output_type
+	32, // [32:32] is the sub-list for method input_type
+	32, // [32:32] is the sub-list for extension type_name
+	32, // [32:32] is the sub-list for extension extendee
+	0,  // [0:32] is the sub-list for field type_name
 }
 
 func init() { file_kno_v1_event_proto_init() }
@@ -2204,6 +2333,9 @@ func file_kno_v1_event_proto_init() {
 	}
 	file_kno_v1_event_proto_msgTypes[6].OneofWrappers = []any{}
 	file_kno_v1_event_proto_msgTypes[7].OneofWrappers = []any{}
+	file_kno_v1_event_proto_msgTypes[9].OneofWrappers = []any{}
+	file_kno_v1_event_proto_msgTypes[11].OneofWrappers = []any{}
+	file_kno_v1_event_proto_msgTypes[12].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

@@ -268,6 +268,18 @@ type Run struct {
 	// requires what failed, why, and the fix; a single opaque hash can only
 	// deliver the first.
 	EvalContentHash string `protobuf:"bytes,21,opt,name=eval_content_hash,json=evalContentHash,proto3" json:"eval_content_hash,omitempty"`
+	// Number of trials each Case was scheduled for, when the stage runs
+	// repeated measurements. Recorded so a resume's fingerprint and the report
+	// can state the configuration honestly; baselines recorded before this
+	// field existed have it unset, and unset means "trials unknown", never a
+	// refusal.
+	Trials *int32 `protobuf:"varint,28,opt,name=trials,proto3,oneof" json:"trials,omitempty"`
+	// The serialized value.Plan a Value run executed under, recorded at close.
+	// A resume consumes this instead of re-running routing — re-running with a
+	// drifted ControlReserve, seed, or Asset set would produce measurements the
+	// recorded rows cannot pair against, and comparing the requested
+	// configuration against this is the fingerprint check.
+	ValuePlan []byte `protobuf:"bytes,29,opt,name=value_plan,json=valuePlan,proto3" json:"value_plan,omitempty"`
 	// Optional salt for the dev/holdout split. Empty by default, and empty is
 	// the right default: the split is keyed on Case ID alone so that adding
 	// Cases never moves the ones already there. Changing this deliberately
@@ -500,6 +512,20 @@ func (x *Run) GetEvalContentHash() string {
 		return x.EvalContentHash
 	}
 	return ""
+}
+
+func (x *Run) GetTrials() int32 {
+	if x != nil && x.Trials != nil {
+		return *x.Trials
+	}
+	return 0
+}
+
+func (x *Run) GetValuePlan() []byte {
+	if x != nil {
+		return x.ValuePlan
+	}
+	return nil
 }
 
 func (x *Run) GetSplitSeed() string {
@@ -930,7 +956,7 @@ var File_kno_v1_run_proto protoreflect.FileDescriptor
 
 const file_kno_v1_run_proto_rawDesc = "" +
 	"\n" +
-	"\x10kno/v1/run.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/portfolio.proto\"\x8f\n" +
+	"\x10kno/v1/run.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/portfolio.proto\"\xd6\n" +
 	"\n" +
 	"\x03Run\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12#\n" +
@@ -947,7 +973,10 @@ const file_kno_v1_run_proto_rawDesc = "" +
 	"\x11incomplete_reason\x18\n" +
 	" \x01(\tR\x10incompleteReason\x12+\n" +
 	"\x11input_fingerprint\x18\v \x01(\tR\x10inputFingerprint\x12*\n" +
-	"\x11eval_content_hash\x18\x15 \x01(\tR\x0fevalContentHash\x12\x1d\n" +
+	"\x11eval_content_hash\x18\x15 \x01(\tR\x0fevalContentHash\x12\x1b\n" +
+	"\x06trials\x18\x1c \x01(\x05H\x01R\x06trials\x88\x01\x01\x12\x1d\n" +
+	"\n" +
+	"value_plan\x18\x1d \x01(\fR\tvaluePlan\x12\x1d\n" +
 	"\n" +
 	"split_seed\x18\f \x01(\tR\tsplitSeed\x12!\n" +
 	"\fholdout_frac\x18\r \x01(\x01R\vholdoutFrac\x12$\n" +
@@ -958,15 +987,16 @@ const file_kno_v1_run_proto_rawDesc = "" +
 	"\x12errored_case_count\x18\x12 \x01(\x05R\x10erroredCaseCount\x121\n" +
 	"\x14holdout_underpowered\x18\x13 \x01(\bR\x13holdoutUnderpowered\x12.\n" +
 	"\x13error_rate_exceeded\x18\x14 \x01(\bR\x11errorRateExceeded\x12A\n" +
-	"\x0ecase_execution\x18\x16 \x01(\v2\x15.kno.v1.CaseExecutionH\x01R\rcaseExecution\x88\x01\x01\x127\n" +
+	"\x0ecase_execution\x18\x16 \x01(\v2\x15.kno.v1.CaseExecutionH\x02R\rcaseExecution\x88\x01\x01\x127\n" +
 	"\n" +
-	"generation\x18\x17 \x01(\v2\x12.kno.v1.GenerationH\x02R\n" +
+	"generation\x18\x17 \x01(\v2\x12.kno.v1.GenerationH\x03R\n" +
 	"generation\x88\x01\x01\x122\n" +
 	"\x15pricing_table_version\x18\x18 \x01(\tR\x13pricingTableVersion\x12B\n" +
-	"\vconcurrency\x18\x19 \x01(\v2\x1b.kno.v1.ConcurrencyDecisionH\x03R\vconcurrency\x88\x01\x01\x12(\n" +
-	"\rsampling_seed\x18\x1a \x01(\x03H\x04R\fsamplingSeed\x88\x01\x01\x12?\n" +
+	"\vconcurrency\x18\x19 \x01(\v2\x1b.kno.v1.ConcurrencyDecisionH\x04R\vconcurrency\x88\x01\x01\x12(\n" +
+	"\rsampling_seed\x18\x1a \x01(\x03H\x05R\fsamplingSeed\x88\x01\x01\x12?\n" +
 	"\x11goal_score_domain\x18\x1b \x01(\x0e2\x13.kno.v1.ScoreDomainR\x0fgoalScoreDomainB\x0e\n" +
-	"\f_finished_atB\x11\n" +
+	"\f_finished_atB\t\n" +
+	"\a_trialsB\x11\n" +
 	"\x0f_case_executionB\r\n" +
 	"\v_generationB\x0e\n" +
 	"\f_concurrencyB\x10\n" +
