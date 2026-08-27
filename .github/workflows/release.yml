@@ -72,6 +72,13 @@ jobs:
     # ancestry check below is the half that works today.
     environment: release
 
+    # The token that lets goreleaser push the updated formula to the tap
+    # repository. A fine-grained PAT scoped to Knograph/homebrew-tap with
+    # contents: write only — it can touch nothing else, and the release is
+    # the only place it is ever referenced.
+    env:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

@@ -25,6 +25,13 @@ covenants — breaking any of them requires a major version.
      At release time the hand-written heading is renamed from [Unreleased] to
      the version. See docs/debt.md#76 for why that is still a manual step. -->
 
+## [Unreleased]
+
+### Features
+
+- **The Homebrew tap is live.** `brew tap knograph/tap && brew install kno` installs a
+  SHA-256-pinned, release-built binary; goreleaser updates the formula on every release.
+
 ## [0.0.2](https://github.com/Knograph/kno/compare/v0.0.1...v0.0.2) (2026-08-27)
 
 

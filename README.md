@@ -42,7 +42,14 @@ gh attestation verify kno_<version>_<os>_<arch>.tar.gz --repo Knograph/kno \
 
 Both identity flags are the part that matters. Without `--certificate-identity-regexp`, `verify-blob` accepts a valid signature from anyone; without `--signer-workflow`, `attestation verify` accepts an attestation from any workflow in the repository. The checksum line is written with `grep`+`shasum` rather than `sha256sum --ignore-missing` because macOS ships neither.
 
-Homebrew is coming: the formula is written and the tap repository is not created yet ([docs/debt.md#73](docs/debt.md#73)).
+Homebrew:
+
+```sh
+brew tap knograph/tap
+brew install kno
+```
+
+The formula pins each platform archive's SHA-256 and is updated automatically by goreleaser on every release.
 
 ## Quickstart
 
