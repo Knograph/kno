@@ -25,6 +25,86 @@ covenants — breaking any of them requires a major version.
      At release time the hand-written heading is renamed from [Unreleased] to
      the version. See docs/debt.md#76 for why that is still a manual step. -->
 
+## 0.0.1 (2026-08-27)
+
+
+### ⚠ BREAKING CHANGES
+
+* **proto:** none at the wire level -- every change is additive and buf breaking passes. Flagged because AgentRef gains a documented grammar (@base-url) that adapters and the CLI must parse consistently from M2-4 onward.
+
+### Features
+
+* **adapters:** carry an Asset in the prompt, for context-injection measurement ([#56](https://github.com/Knograph/kno/issues/56)) ([a392923](https://github.com/Knograph/kno/commit/a392923a6267841e1a98b06492acf05b60f65429))
+* **adapters:** read Assets from a JSONL pool ([#55](https://github.com/Knograph/kno/issues/55)) ([db90e92](https://github.com/Knograph/kno/commit/db90e92ed0d1a712c3a62a84edff57cabbb4f5c0))
+* **agentref:** M2-4 — the agent-ref grammar, with the repo's first fuzz target ([#31](https://github.com/Knograph/kno/issues/31)) ([5fcaacf](https://github.com/Knograph/kno/commit/5fcaacfa06b8424ad1cde6d07ca8520c2a9a51d7))
+* **anthropic:** the Messages API adapter ([#37](https://github.com/Knograph/kno/issues/37)) ([e05810b](https://github.com/Knograph/kno/commit/e05810bb0a9c5bc1fd249347d9fd20015c7081c7))
+* **build:** enforce coverage floors and godoc coverage ([#9](https://github.com/Knograph/kno/issues/9)) ([bf924d2](https://github.com/Knograph/kno/commit/bf924d2e72de1b5edf1ca2d9685f29d0c8f11f69))
+* **cli:** kno baseline, the first user-facing command ([#22](https://github.com/Knograph/kno/issues/22)) ([8911c0a](https://github.com/Knograph/kno/commit/8911c0a5158cbf9686ad21cb2422c255b4cd9735))
+* **cli:** reach a real provider, and refuse to spend a number nobody can state ([#50](https://github.com/Knograph/kno/issues/50)) ([fabefca](https://github.com/Knograph/kno/commit/fabefca788ee42d1f2deeb36e7f8bbfeae42cb7d))
+* **core:** emit the concurrency decision and a progress heartbeat ([#42](https://github.com/Knograph/kno/issues/42)) ([1673d41](https://github.com/Knograph/kno/commit/1673d41460b71acf0cb779af2688cc2977526296))
+* **core:** end a run on a failure that cannot change within it ([#49](https://github.com/Knograph/kno/issues/49)) ([78268c0](https://github.com/Knograph/kno/commit/78268c0599cd40882de7f27acfc5159d25f066c5))
+* **core:** M2-2 — per-Case cost estimation and an observable cap breach ([#29](https://github.com/Knograph/kno/issues/29)) ([4c69810](https://github.com/Knograph/kno/commit/4c69810b9c61b2713436ae95097334e266076274))
+* **core:** M2-6 — the spend path a real provider call takes ([#33](https://github.com/Knograph/kno/issues/33)) ([a7b9112](https://github.com/Knograph/kno/commit/a7b91123877c88e119aad36e3af3b73b8950d2dd))
+* **core:** route Assets to Cases, and reserve the controls before routing runs ([#60](https://github.com/Knograph/kno/issues/60)) ([6226d11](https://github.com/Knograph/kno/commit/6226d117dc6a198adc7fc8daf3f10806d05b3f1f))
+* **core:** the Baseline stage, running end to end ([#21](https://github.com/Knograph/kno/issues/21)) ([9fca190](https://github.com/Knograph/kno/commit/9fca1907dbf1b3353a91e2a6a7b9a2eff79382b0))
+* **core:** the event spine — sequence discipline and RunResumed ([#40](https://github.com/Knograph/kno/issues/40)) ([c27ea03](https://github.com/Knograph/kno/commit/c27ea0301215bf67ab5f48f304f082b0ec7d12f0))
+* **core:** the Ring-0 contracts, error grammar, and iterator conformance harness ([#10](https://github.com/Knograph/kno/issues/10)) ([4893379](https://github.com/Knograph/kno/commit/4893379128dc8f5e5e82af5960e2191fff58874e))
+* **core:** the spend path, whole ([#43](https://github.com/Knograph/kno/issues/43)) ([fbdaf46](https://github.com/Knograph/kno/commit/fbdaf469aba1b5f4131f71c926e7458a968f629f))
+* **core:** write CaseExecution from what is durably recorded ([#46](https://github.com/Knograph/kno/issues/46)) ([6bb14a8](https://github.com/Knograph/kno/commit/6bb14a8bda39e7f88426e90ef911513843f0d062))
+* **evals:** JSONL adapter, deterministic split, and the holdout seal ([#19](https://github.com/Knograph/kno/issues/19)) ([1560ce3](https://github.com/Knograph/kno/commit/1560ce32a2b258777af383397ceb9dd7e6420863))
+* **executor:** bounded worker pool with a written shutdown protocol ([#20](https://github.com/Knograph/kno/issues/20)) ([f9b62d2](https://github.com/Knograph/kno/commit/f9b62d2f117e7740cc2ca4a6a8925f54796d95b4))
+* **observe:** trace every run, Case, and provider call without carrying content ([#51](https://github.com/Knograph/kno/issues/51)) ([13171e4](https://github.com/Knograph/kno/commit/13171e4df675ca2a0c5021bcdd87d12abc356cc1))
+* **openaicompat:** the first provider adapter ([#36](https://github.com/Knograph/kno/issues/36)) ([d0bf7f1](https://github.com/Knograph/kno/commit/d0bf7f15bd3d7ab5e0b8c15a3778952528d60bfb))
+* **proto:** add Goal Direction so the sign of every reported number is interpretable ([#8](https://github.com/Knograph/kno/issues/8)) ([e5d4b98](https://github.com/Knograph/kno/commit/e5d4b98780dfbd9159757cbd16161e1a846f2a65))
+* **proto:** ConcurrencyReduced and Run.scheduling ([#41](https://github.com/Knograph/kno/issues/41)) ([b5f49e4](https://github.com/Knograph/kno/commit/b5f49e434ab08d73e5a580cb72989f4b01c43c03))
+* **proto:** M2-0 — the schema for real provider adapters ([#25](https://github.com/Knograph/kno/issues/25)) ([35f77a7](https://github.com/Knograph/kno/commit/35f77a7b834e7c8bf6fccb66352f66721b84ddc8))
+* **proto:** report an overshoot's contribution, name a billed retry, and attribute orphaned spend ([#45](https://github.com/Knograph/kno/issues/45)) ([042eefd](https://github.com/Knograph/kno/commit/042eefdfc31631f0bdcc387879c663d5ac0fc631))
+* **proto:** Run and the event spine ([#17](https://github.com/Knograph/kno/issues/17)) ([0db0990](https://github.com/Knograph/kno/commit/0db0990469cda84bd755b701ff8f9fef767f16b1))
+* **proto:** the kno.v1 contract — Ring-0 schema and generated types (M0b) ([#2](https://github.com/Knograph/kno/issues/2)) ([8361e2a](https://github.com/Knograph/kno/commit/8361e2a4b69fffcbad25f9550f3c3b5470d3c2e5))
+* **proto:** the wire contract for the Value stage ([#53](https://github.com/Knograph/kno/issues/53)) ([02e8809](https://github.com/Knograph/kno/commit/02e8809c6e1f75afafbfa037cb61a994c8442a1b))
+* **stats:** confidence intervals on paired differences ([#54](https://github.com/Knograph/kno/issues/54)) ([938202b](https://github.com/Knograph/kno/commit/938202bdfc8f5309e2c4a74c2d99aa7b53512e77))
+* **stats:** the budget guard ([#14](https://github.com/Knograph/kno/issues/14)) ([2f0562e](https://github.com/Knograph/kno/commit/2f0562e2f534a4596416340c7815dd4c2d83f377))
+* **store:** hold a Value run, and stop the readers double-spending on it ([#57](https://github.com/Knograph/kno/issues/57)) ([52fed2d](https://github.com/Knograph/kno/commit/52fed2db8583793286b62094e49aa072609698a2))
+* **store:** M2-1 — schema migration, outcome columns, and kno purge ([#27](https://github.com/Knograph/kno/issues/27)) ([68fdfaa](https://github.com/Knograph/kno/commit/68fdfaab5ada57da37f421572a966dab4333f59a))
+* **store:** SQLite persistence for runs, outcomes, and events ([#18](https://github.com/Knograph/kno/issues/18)) ([da0b95b](https://github.com/Knograph/kno/commit/da0b95b3ee5392ff6130916d1d6939f8e196a642))
+* **transport:** M2-3 — the shared HTTP layer and its security boundary ([#30](https://github.com/Knograph/kno/issues/30)) ([eda666e](https://github.com/Knograph/kno/commit/eda666ed4eefff84558fa5272fa77de0b370fcea))
+
+
+### Bug Fixes
+
+* **build:** guard record-fixtures against unmetered live spend ([#23](https://github.com/Knograph/kno/issues/23)) ([976a42b](https://github.com/Knograph/kno/commit/976a42bc8dd7e4a0f547849c83f5f693be1736f1))
+* **build:** make gate recipes enforce failure without relying on .SHELLFLAGS ([#7](https://github.com/Knograph/kno/issues/7)) ([199ea63](https://github.com/Knograph/kno/commit/199ea63d8b3f50924d92a8543d18f7066c6f31eb))
+* **ci:** make the coverage baseline the floor across platforms ([#26](https://github.com/Knograph/kno/issues/26)) ([b029d55](https://github.com/Knograph/kno/commit/b029d55948d7e180bdaa893ab70dba19220b6589))
+* **ci:** one toolchain, a correct cache key, and actions off Node 20 ([#11](https://github.com/Knograph/kno/issues/11)) ([c9fa189](https://github.com/Knograph/kno/commit/c9fa1898e0ff2d0de1946e48fbe595cbc38654ae))
+* **core:** quote a resumed run against the money it has left ([#39](https://github.com/Knograph/kno/issues/39)) ([ecd8b68](https://github.com/Knograph/kno/commit/ecd8b682b0e8d164a87a397e26ebfa7e03266d9f))
+* **executor:** bound the drain after cancellation, not the run ([#47](https://github.com/Knograph/kno/issues/47)) ([e63628f](https://github.com/Knograph/kno/commit/e63628f72c0f44252215975d3bf53910062dc9a1))
+* **pricing:** refuse a variant suffix rather than pricing it as its base ([#35](https://github.com/Knograph/kno/issues/35)) ([0d49f0d](https://github.com/Knograph/kno/commit/0d49f0d7e7e08b6776277b5f7dfc119fde563274))
+* report a resumed run's mean over the whole run ([#34](https://github.com/Knograph/kno/issues/34)) ([8a30dbe](https://github.com/Knograph/kno/commit/8a30dbe2fee27930249fd1a349ffaf764b600a26))
+* **stats:** restore budget state on resume ([#16](https://github.com/Knograph/kno/issues/16)) ([1cc8ffc](https://github.com/Knograph/kno/commit/1cc8ffc2a1f0e30a745f9a6694b9a4d9759c3844))
+* **store:** make spend durable when a Case never produces an outcome ([#44](https://github.com/Knograph/kno/issues/44)) ([937294f](https://github.com/Knograph/kno/commit/937294fb71df0349445de94f11286a56766d5708))
+* **store:** two kno processes opening one database could fail to start ([#28](https://github.com/Knograph/kno/issues/28)) ([acdc9b1](https://github.com/Knograph/kno/commit/acdc9b146ac7dbf21c35ab072f32e2c4fd6bb074))
+
+
+### Refactoring
+
+* **core:** split baseline.go along its seams ([#38](https://github.com/Knograph/kno/issues/38)) ([2a149ca](https://github.com/Knograph/kno/commit/2a149ca78372b6116ed8c78ec4f9943909a6cd10))
+
+
+### Documentation
+
+* initial repo scaffold with design and operating manual ([b5ea55c](https://github.com/Knograph/kno/commit/b5ea55c861f97d274d90e6cd1d151436fa699906))
+* plan M2-11, the PR that makes the adapters reachable ([#48](https://github.com/Knograph/kno/issues/48)) ([b7984f2](https://github.com/Knograph/kno/commit/b7984f21415a5aa96b943ec221ee60c884b93459))
+* plan the Value stage ([#52](https://github.com/Knograph/kno/issues/52)) ([3ced7e0](https://github.com/Knograph/kno/commit/3ced7e04243ac516a93c592bfef3b47b00ccbdc3))
+* **plan:** M1 Baseline plan, amended after Phase-1 review ([#15](https://github.com/Knograph/kno/issues/15)) ([c854f0a](https://github.com/Knograph/kno/commit/c854f0aaf0bb1591c8fc1f091be1a0c0d4300771))
+* **plans:** M2 — the first real provider adapter ([#24](https://github.com/Knograph/kno/issues/24)) ([9bdc951](https://github.com/Knograph/kno/commit/9bdc95120b39f3da604bff55c4dee928bab18d31))
+* stop the 0.0.1 changelog shipping under an Unreleased heading ([#63](https://github.com/Knograph/kno/issues/63)) ([7a2d94f](https://github.com/Knograph/kno/commit/7a2d94fd7e7d7958a5c1a5ae4976e845f7b5d63d))
+
+
+### Build & Dependencies
+
+* repository foundation — gates, governance, and process machinery (M0a) ([#1](https://github.com/Knograph/kno/issues/1)) ([fb55946](https://github.com/Knograph/kno/commit/fb559461eac9481fe0be4242e31eb1b6f6e97a53))
+* sign, attest and publish what a tag produces ([#59](https://github.com/Knograph/kno/issues/59)) ([7b4971a](https://github.com/Knograph/kno/commit/7b4971aca34c808b2a30ab3a50fb088fc4736ad2))
+
 ## 0.0.1 — in detail
 
 ### Added
