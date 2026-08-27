@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -172,5 +174,38 @@ func TestMigrateRefusesWhenTheVersionCannotBeRead(t *testing.T) {
 	if err := migrate(ctx, db); err == nil {
 		t.Error("migrate proceeded without being able to read user_version; " +
 			"assuming version 0 would re-apply every step against real data")
+	}
+}
+
+// TestApplyMigrationSkipsWhatAnotherProcessAlreadyApplied drives the
+// inside-the-lock re-check deterministically. The concurrent-open test hits
+// this branch only when a loser exists, which scheduling under -race and
+// -shuffle does not guarantee — and a flapping branch is a flapping coverage
+// gate. Called directly, an already-migrated database always takes it.
+func TestApplyMigrationSkipsWhatAnotherProcessAlreadyApplied(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "kno.db")+"?"+pragmas)
+	if err != nil {
+		t.Fatalf("opening database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	// The same order NewSQLite follows: schema first, then migrate — the
+	// migrations alter tables the schema creates.
+	if err := retryOnBusy(ctx, func() error { return applySchema(ctx, db) }); err != nil {
+		t.Fatalf("applying schema: %v", err)
+	}
+	if err := migrate(ctx, db); err != nil {
+		t.Fatalf("initial migrate: %v", err)
+	}
+	// migrations[0] has already been applied by migrate above; the re-check
+	// must skip it and release the lock with an empty commit.
+	if err := applyMigration(ctx, db, migrations[0]); err != nil {
+		t.Fatalf("re-applying migration 0: %v", err)
+	}
+	if got, err := userVersion(ctx, db); err != nil || got != schemaVersion {
+		t.Errorf("user_version = %d (err %v), want %d", got, err, schemaVersion)
 	}
 }

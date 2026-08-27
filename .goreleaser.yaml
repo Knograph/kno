@@ -97,6 +97,13 @@ signs:
     certificate: "${artifact}.pem"
     args:
       - sign-blob
+      # cosign's new-bundle-format (default on in recent releases) silently
+      # ignores --output-signature/--output-certificate and demands --bundle;
+      # the empty bundle path is what made the first tag's sign step fail with
+      # "create bundle file: open : no such file or directory". The legacy
+      # format is deprecated but still honored, and it is the one install.sh
+      # and every published verification doc exercise.
+      - "--new-bundle-format=false"
       - "--output-signature=${signature}"
       - "--output-certificate=${certificate}"
       - "${artifact}"
