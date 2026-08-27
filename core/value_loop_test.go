@@ -5,6 +5,7 @@ import (
 	"errors"
 	"iter"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/knograph/kno/adapters/agent/fake"
@@ -459,5 +460,159 @@ func TestResumeRefusesADriftedPlan(t *testing.T) {
 	}
 	if !errors.Is(err, errs.ErrInvalidInput) {
 		t.Errorf("err = %v, want ErrInvalidInput", err)
+	}
+}
+
+// captureStore records every event appended, so the money events can be
+// asserted against the real run.
+type captureStore struct {
+	store.Store
+	events []*knov1.Event
+}
+
+func (c *captureStore) AppendEvent(_ context.Context, ev *knov1.Event) error {
+	c.events = append(c.events, ev)
+	return c.Store.AppendEvent(context.Background(), ev)
+}
+
+// TestValueMoneyEventsCarryTheMeasurementKey drives a retry and an overshoot
+// through the real run and asserts both events carry the (Asset, arm, trial)
+// key — the P1-8 contract, without which the API cannot attribute spend to
+// the Asset that caused it.
+func TestValueMoneyEventsCarryTheMeasurementKey(t *testing.T) {
+	t.Parallel()
+
+	h := newValueHarness(t, fake.Options{
+		CostPerCallUSDMicros: 1000,
+		ThrottleFirstAttempt: true,
+	})
+	captured := &captureStore{Store: h.store}
+	h.opts.Store = captured
+	// A cap that binds while four measurements are in flight, so at least one
+	// settlement overshoots its reservation.
+	h.guard = budget.New(budget.Limits{MaxCostUSDMicros: 2000, MaxLLMCalls: 1000}, nil, 0)
+	h.opts.Guard = h.guard
+
+	src := valueCases(t, h, 30)
+	writeBaselineFor(t, h, src.cases)
+
+	if _, err := h.opts.Value(context.Background(), poolOf("a1")); err != nil {
+		t.Fatalf("Value: %v", err)
+	}
+
+	var retries, overshoots int
+	for _, ev := range captured.events {
+		switch p := ev.GetPayload().(type) {
+		case *knov1.Event_RetryAttempted:
+			retries++
+			r := p.RetryAttempted
+			if r.GetAssetId() != "a1" ||
+				r.GetArm() == knov1.Arm_ARM_UNSPECIFIED || r.GetTrial() < 1 {
+				t.Errorf("RetryAttempted carries %q/%v/%d, want the (Asset, arm, trial) key",
+					r.GetAssetId(), r.GetArm(), r.GetTrial())
+			}
+		case *knov1.Event_SettlementOvershoot:
+			overshoots++
+			r := p.SettlementOvershoot
+			if r.GetAssetId() != "a1" {
+				t.Errorf("SettlementOvershoot carries asset %q, want a1", r.GetAssetId())
+			}
+		}
+	}
+	if retries == 0 {
+		t.Error("the throttled fixture produced no RetryAttempted events")
+	}
+	if overshoots == 0 {
+		t.Error("the binding cap produced no SettlementOvershoot events")
+	}
+}
+
+// TestValueResumeRefusesFingerprintMismatch: the fingerprint pins the inputs,
+// and a resume under different inputs must refuse before any spend.
+func TestValueResumeRefusesFingerprintMismatch(t *testing.T) {
+	t.Parallel()
+
+	h := newValueHarness(t, fake.Options{})
+	src := valueCases(t, h, 30)
+	writeBaselineFor(t, h, src.cases)
+	if _, err := h.opts.Value(context.Background(), poolOf("a1")); err != nil {
+		t.Fatalf("Value: %v", err)
+	}
+
+	h.opts.Resume = true
+	h.opts.InputFingerprint = "fp-changed"
+	before := h.agent.Calls()
+	_, err := h.opts.Value(context.Background(), poolOf("a1"))
+	if err == nil {
+		t.Fatal("a resume with a changed fingerprint was accepted")
+	}
+	if got := h.agent.Calls() - before; got != 0 {
+		t.Errorf("the refused resume made %d provider calls", got)
+	}
+}
+
+// TestValueResumeRefusesACorruptPlan: a recorded plan that cannot be decoded
+// is refused, not guessed at.
+func TestValueResumeRefusesACorruptPlan(t *testing.T) {
+	t.Parallel()
+
+	h := newValueHarness(t, fake.Options{})
+	src := valueCases(t, h, 30)
+	writeBaselineFor(t, h, src.cases)
+	if _, err := h.opts.Value(context.Background(), poolOf("a1")); err != nil {
+		t.Fatalf("Value: %v", err)
+	}
+
+	run, err := h.store.GetRun(context.Background(), "run-1")
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	run.ValuePlan = []byte{0xde, 0xad}
+	if err := h.store.FinishRun(context.Background(), run); err != nil {
+		t.Fatalf("FinishRun: %v", err)
+	}
+
+	h.opts.Resume = true
+	if _, err := h.opts.Value(context.Background(), poolOf("a1")); err == nil ||
+		!strings.Contains(err.Error(), "cannot be decoded") {
+		t.Errorf("err = %v, want the corrupt-plan refusal", err)
+	}
+}
+
+// lyingInjector builds a treatment wrapper whose Capabilities declare
+// context_inject false — the adapter that answers anyway — so the P2-11
+// wrapper check can be driven through a real run.
+type lyingInjector struct{ *fake.Agent }
+
+func (l *lyingInjector) WithContext(*core.Asset) (core.Agent, error) {
+	return &lyingWrapper{inner: l.Agent}, nil
+}
+
+type lyingWrapper struct{ inner core.Agent }
+
+func (l *lyingWrapper) Invoke(ctx context.Context, c *core.Case) (*core.Response, error) {
+	return l.inner.Invoke(ctx, c)
+}
+
+func (*lyingWrapper) Capabilities() *core.Capabilities { return &knov1.Capabilities{} }
+
+// TestValueRefusesAWrapperThatLiesAboutInjection: the capability check runs
+// on the WRAPPER — the agent that actually runs — not the receiver. The
+// receiver passes validate; the wrapper must not.
+func TestValueRefusesAWrapperThatLiesAboutInjection(t *testing.T) {
+	t.Parallel()
+
+	h := newValueHarness(t, fake.Options{})
+	h.opts.Agent = &lyingInjector{Agent: h.agent}
+	src := valueCases(t, h, 30)
+	writeBaselineFor(t, h, src.cases)
+
+	before := h.agent.Calls()
+	_, err := h.opts.Value(context.Background(), poolOf("a1"))
+	if err == nil || !strings.Contains(err.Error(), "context_inject false") {
+		t.Fatalf("err = %v, want the wrapper capability refusal", err)
+	}
+	if got := h.agent.Calls() - before; got != 0 {
+		t.Errorf("the refusal came after %d provider calls; it must be free", got)
 	}
 }

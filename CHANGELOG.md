@@ -25,6 +25,27 @@ covenants — breaking any of them requires a major version.
      At release time the hand-written heading is renamed from [Unreleased] to
      the version. See docs/debt.md#76 for why that is still a manual step. -->
 
+## [Unreleased]
+
+### Features
+
+- **`kno value` ships the Value stage.** Each Asset in a pool is routed to the Cases it could
+  plausibly affect, injected into the agent's context for the treatment arm, re-measured without it
+  for the control, and reported as a delta with its confidence interval — or a named reason why no
+  number exists. The harm test over the reserved control slice reports the smallest regression the
+  sample could have seen rather than a boolean, and the underpowered flag travels beside it.
+- **Money is attributable to the Asset that caused it.** Retry and settlement-overshoot events carry
+  the (Asset, arm, trial) measurement key, so the API can answer "what did asset X cost in retries".
+- **Resume never re-pays.** Measurements are checkpointed as they complete — budget refusals
+  included — and a resumed run consumes the recorded routing plan, refusing a drifted configuration.
+
+### Fixed
+
+- The Value stage's estimator was adversarially reviewed before it ever ran: Goal direction is
+  applied exactly once (a MINIMIZE goal that got slower now reports a negative delta), deltas ship
+  only beside their intervals, and the harm bound consumes per-Case means rather than the flattened
+  per-trial shape that narrowed it by sqrt(trials) in the direction that clears harmful assets.
+
 ## 0.0.1 (2026-08-27)
 
 

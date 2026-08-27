@@ -195,8 +195,15 @@ func (o ValueOptions) Value(ctx context.Context, pool Pool) (*ValueResult, error
 		status = knov1.RunStatus_RUN_STATUS_COMPLETED
 	}
 	result.Status = status
-	if err := o.finishRun(ctx, em, run, status, plan, counts); err != nil {
-		return nil, err
+	// The result comes back even when the close fails: the run it describes
+	// is resumable, and discarding it with the error is how a paid run gets
+	// thrown away because its last event did not write. The close itself runs
+	// detached, so the cancellation that stopped the run cannot also cancel
+	// the record of how it stopped.
+	closeCtx, cancelClose := context.WithTimeout(context.WithoutCancel(ctx), progressWriteGrace)
+	defer cancelClose()
+	if err := o.finishRun(closeCtx, em, run, status, plan, counts); err != nil {
+		return result, err
 	}
 	if f := em.emitFailure.Load(); f != nil {
 		return result, fmt.Errorf("an event write failed mid-run: %w", *f)
@@ -364,7 +371,10 @@ func (o ValueOptions) measureAsset(
 			return fmt.Errorf("writing the Valuation for %s: %w", routing.AssetID, err)
 		}
 		result.Valuations = append(result.Valuations, v)
-		return o.emitAssetValued(ctx, em, v)
+		emitCtx, cancelEmit := detached(ctx)
+		em.recordEmitFailure(o.emitAssetValued(emitCtx, em, v))
+		cancelEmit()
+		return nil
 	}
 
 	if err := o.emitAssetRouted(ctx, em, routing, plan); err != nil {
@@ -430,15 +440,24 @@ func (o ValueOptions) measureAsset(
 		// and presenting the partial set as a Valuation would rank "whatever got
 		// measured first" as the answer. The durable rows stay — a resume
 		// continues from them — and the Valuation says why it is absent.
+		//
+		// Written under a DETACHED context: the cancellation that caused the
+		// stop must not also cancel the record of the stop, or a Ctrl-C run
+		// leaves no explanation of where it ended.
+		closeCtx, cancelClose := context.WithTimeout(context.WithoutCancel(ctx), progressWriteGrace)
+		defer cancelClose()
 		v := &Valuation{
 			AssetId:     asset.GetId(),
 			NotMeasured: knov1.RejectionReason_REJECTION_REASON_BUDGET_EXHAUSTED,
 		}
-		if err := o.Store.WriteValuation(ctx, o.RunID, v); err != nil {
+		if err := o.Store.WriteValuation(closeCtx, o.RunID, v); err != nil {
 			return fmt.Errorf("writing the truncated Valuation for %s: %w", routing.AssetID, err)
 		}
 		result.Valuations = append(result.Valuations, v)
-		return o.emitAssetValued(ctx, em, v)
+		emitCtx, cancelEmit := detached(ctx)
+		em.recordEmitFailure(o.emitAssetValued(emitCtx, em, v))
+		cancelEmit()
+		return nil
 	}
 
 	v, err := o.valuationFor(ctx, asset, routing, plan, baseline)
@@ -449,7 +468,20 @@ func (o ValueOptions) measureAsset(
 		return fmt.Errorf("writing the Valuation for %s: %w", routing.AssetID, err)
 	}
 	result.Valuations = append(result.Valuations, v)
-	return o.emitAssetValued(ctx, em, v)
+	emitCtx, cancelEmit := detached(ctx)
+	em.recordEmitFailure(o.emitAssetValued(emitCtx, em, v))
+	cancelEmit()
+	return nil
+}
+
+// detached gives a post-spend emitter the same grace the invoker hooks get:
+// a cancelled run must not also cancel the record of what it paid for. The
+// grace timer is the only bound — there is no early cancel, because the whole
+// point is that the parent's cancellation must not reach this write.
+func detached(ctx context.Context) (context.Context, context.CancelFunc) {
+	// The caller defers the cancel AFTER the emit, so the parent's cancellation
+	// cannot reach the write and the grace timer does not outlive the call.
+	return context.WithTimeout(context.WithoutCancel(ctx), progressWriteGrace)
 }
 
 // measureArm runs one (arm, trial) at a time over the arm's Case list, one

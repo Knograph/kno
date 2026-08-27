@@ -642,3 +642,919 @@ func TestValueWiresEveryInvokerHook(t *testing.T) {
 			"backoff would be indistinguishable from a hung one")
 	}
 }
+
+// pricingAgent is an Agent plus Estimator whose estimate is settable, so the
+// unpriceable refusals can be driven through the real path.
+type pricingAgent struct {
+	stubAgent
+	estimate budget.Estimate
+	estErr   error
+}
+
+func (p pricingAgent) Estimate(context.Context, *Case) (budget.Estimate, error) {
+	return p.estimate, p.estErr
+}
+
+func (pricingAgent) WorstCase() budget.Estimate { return budget.Estimate{Calls: 1} }
+
+// WithContext keeps the Estimator on the treatment arm: the embedded
+// stubAgent's own WithContext would strip the pricing behavior, and the
+// unpriceable path must be exercised through the wrapper that actually runs.
+func (p pricingAgent) WithContext(*Asset) (Agent, error) {
+	return pricingAgent{estimate: p.estimate, estErr: p.estErr}, nil
+}
+
+var _ Estimator = pricingAgent{}
+
+// TestEqualPlansNamesItsTerms drives every field the resume consent compares.
+func TestEqualPlansNamesItsTerms(t *testing.T) {
+	t.Parallel()
+
+	base := func() *value.Plan {
+		return &value.Plan{
+			Mode:           value.ModeAllDev,
+			Trials:         1,
+			Seed:           7,
+			EligibleCases:  30,
+			ControlCaseIDs: []string{"c1", "c2"},
+			Routed: []value.AssetRouting{{
+				AssetID: "a1", CaseIDs: []string{"c3"}, FreshControlArm: true,
+			}},
+		}
+	}
+	if !equalPlans(base(), base()) {
+		t.Fatal("a plan must equal itself")
+	}
+	cases := []struct {
+		name   string
+		mutate func(*value.Plan)
+	}{
+		{"mode", func(p *value.Plan) { p.Mode = value.ModeTagOverlap }},
+		{"trials", func(p *value.Plan) { p.Trials = 3 }},
+		{"seed", func(p *value.Plan) { p.Seed = 99 }},
+		{"eligible", func(p *value.Plan) { p.EligibleCases = 40 }},
+		{"control cases", func(p *value.Plan) { p.ControlCaseIDs = []string{"c9"} }},
+		{"routed count", func(p *value.Plan) { p.Routed = append(p.Routed, value.AssetRouting{AssetID: "a2"}) }},
+		{"routed asset", func(p *value.Plan) { p.Routed[0].AssetID = "a9" }},
+		{"routed fresh", func(p *value.Plan) { p.Routed[0].FreshControlArm = false }},
+		{"routed reason", func(p *value.Plan) {
+			p.Routed[0].NotMeasuredReason = knov1.RejectionReason_REJECTION_REASON_IRRELEVANT
+		}},
+		{"routed cases", func(p *value.Plan) { p.Routed[0].CaseIDs = []string{"c8"} }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			b := base()
+			tc.mutate(b)
+			if equalPlans(base(), b) {
+				t.Errorf("equalPlans passed despite a change to %s; the resume "+
+					"consent check would continue under a drifted plan", tc.name)
+			}
+		})
+	}
+}
+
+// TestEstimateRefusesWhatACapCannotEnforce: a dollar cap plus an agent that
+// cannot price the call is refused before any spend, the same rule Baseline
+// enforces.
+func TestEstimateRefusesWhatACapCannotEnforce(t *testing.T) {
+	t.Parallel()
+
+	guard := budget.New(budget.Limits{MaxCostUSDMicros: 1000}, nil, 0)
+	opts := ValueOptions{
+		Guard: guard,
+		RunID: "run-1",
+		Evals: Seal(&emptyEvals{}),
+		Store: openTestStore(t),
+	}
+	c := &Case{Id: "c1"}
+
+	// An estimate error under a cap is fatal.
+	bad := pricingAgent{estErr: errors.New("no price row")}
+	if _, err := opts.estimate(context.Background(), bad, c); err == nil {
+		t.Error("an unpriceable Case under a dollar cap was accepted")
+	}
+
+	// A zero estimate under a cap is fatal.
+	zero := pricingAgent{estimate: budget.Estimate{Calls: 1}}
+	if _, err := opts.estimate(context.Background(), zero, c); err == nil {
+		t.Error("a zero estimate under a dollar cap was accepted; the cap " +
+			"would be discovered at settlement instead of before spend")
+	}
+
+	// Without a cap, an unpriceable agent falls back to the flat estimate.
+	if est, err := (&ValueOptions{
+		Guard:                   budget.New(budget.Limits{}, nil, 0),
+		EstCostPerCallUSDMicros: 42,
+	}).estimate(context.Background(), bad, c); err != nil || est.CostUSDMicros != 42 {
+		t.Errorf("uncapped fallback = %v, %v; want 42, nil", est, err)
+	}
+}
+
+// failingValueStore fails one chosen store operation, so the loop's error
+// paths are exercised rather than assumed.
+type failingValueStore struct {
+	store.Store
+	failAppend    bool
+	failCreate    bool
+	failFinish    bool
+	failGetRun    bool
+	failMeasure   bool
+	failRecord    bool
+	failCompleted bool
+	failValuation bool
+}
+
+var errValueStore = errors.New("value store is unavailable")
+
+func (f *failingValueStore) AppendEvent(ctx context.Context, ev *knov1.Event) error {
+	if f.failAppend {
+		return errValueStore
+	}
+	return f.Store.AppendEvent(ctx, ev)
+}
+
+func (f *failingValueStore) CreateRun(ctx context.Context, r *knov1.Run) error {
+	if f.failCreate {
+		return errValueStore
+	}
+	return f.Store.CreateRun(ctx, r)
+}
+
+func (f *failingValueStore) FinishRun(ctx context.Context, r *knov1.Run) error {
+	if f.failFinish {
+		return errValueStore
+	}
+	return f.Store.FinishRun(ctx, r)
+}
+
+func (f *failingValueStore) GetRun(ctx context.Context, id string) (*knov1.Run, error) {
+	if f.failGetRun {
+		return nil, errValueStore
+	}
+	return f.Store.GetRun(ctx, id)
+}
+
+func (f *failingValueStore) Measurements(ctx context.Context, runID, assetID string) ([]store.RecordedMeasurement, error) {
+	if f.failMeasure {
+		return nil, errValueStore
+	}
+	return f.Store.Measurements(ctx, runID, assetID)
+}
+
+func (f *failingValueStore) RecordMeasurement(ctx context.Context, runID string, m *store.Measurement) error {
+	if f.failRecord {
+		return errValueStore
+	}
+	return f.Store.RecordMeasurement(ctx, runID, m)
+}
+
+func (f *failingValueStore) CompletedMeasurements(ctx context.Context, runID string) (map[store.MeasurementKey]struct{}, error) {
+	if f.failCompleted {
+		return nil, errValueStore
+	}
+	return f.Store.CompletedMeasurements(ctx, runID)
+}
+
+func (f *failingValueStore) WriteValuation(ctx context.Context, runID string, v *knov1.Valuation) error {
+	if f.failValuation {
+		return errValueStore
+	}
+	return f.Store.WriteValuation(ctx, runID, v)
+}
+
+// TestValueSurfacesStoreFailures: a failing store ends the run with the
+// failure, never with a half-written result presented as complete.
+func TestValueSurfacesStoreFailures(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		apply func(*failingValueStore)
+	}{
+		{"create run", func(f *failingValueStore) { f.failCreate = true }},
+		{"append event", func(f *failingValueStore) { f.failAppend = true }},
+		{"finish run", func(f *failingValueStore) { f.failFinish = true }},
+		{"write valuation", func(f *failingValueStore) { f.failValuation = true }},
+		{"measurements", func(f *failingValueStore) { f.failMeasure = true }},
+		{"record measurement", func(f *failingValueStore) { f.failRecord = true }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			inner := openTestStore(t)
+			failing := &failingValueStore{Store: inner}
+			tc.apply(failing)
+
+			// A baseline with one score, one Case measured: the failure fires
+			// on the chosen operation.
+			run := &knov1.Run{
+				Id: "base-1", Stage: knov1.Stage_STAGE_BASELINE, GoalName: "g",
+				GoalDirection: knov1.Direction_DIRECTION_MAXIMIZE,
+				CaseExecution: &knov1.CaseExecution{ResolvedModels: []string{"m"}},
+			}
+			if err := inner.CreateRun(context.Background(), run); err != nil {
+				t.Fatalf("CreateRun: %v", err)
+			}
+			if err := inner.RecordOutcome(context.Background(), "base-1", &store.Outcome{
+				CaseID: "c1", Score: &knov1.Score{CaseId: "c1", Value: 0.9, Passed: true},
+			}); err != nil {
+				t.Fatalf("RecordOutcome: %v", err)
+			}
+			cases := &caseSource{list: []*Case{
+				{Id: "c1", Input: "q", Expected: "a", Split: knov1.Split_SPLIT_DEV},
+				{Id: "c2", Input: "q", Expected: "a", Split: knov1.Split_SPLIT_DEV},
+			}}
+			opts := ValueOptions{
+				RunID: "run-1", BaselineRunID: "base-1",
+				Agent: stubAgent{}, AgentRef: &knov1.AgentRef{Ref: "fake:", Scheme: "fake"},
+				Goal:        fixedDirectionGoal{dir: knov1.Direction_DIRECTION_MAXIMIZE, domain: knov1.ScoreDomain_SCORE_DOMAIN_BINARY},
+				GoalName:    "g",
+				Guard:       budget.New(budget.Limits{}, nil, 0),
+				Store:       failing,
+				Evals:       Seal(cases),
+				Concurrency: 2,
+				Routing:     value.Options{Seed: 1},
+			}
+			pool := stubPool{assets: []*Asset{{Id: "a1"}}}
+			if _, err := opts.Value(context.Background(), pool); err == nil {
+				t.Errorf("Value over a store failing at %s returned no error", tc.name)
+			}
+		})
+	}
+}
+
+// caseSource is an Evals over a fixed list, for the failure tests.
+type caseSource struct{ list []*Case }
+
+func (c *caseSource) Cases(context.Context) (iter.Seq2[*Case, error], error) {
+	return func(yield func(*Case, error) bool) {
+		for _, cs := range c.list {
+			if !yield(cs, nil) {
+				return
+			}
+		}
+	}, nil
+}
+
+// TestLoopHelpersCoverTheCorners drives the small branches the end-to-end
+// runs never reach: the retry-bound resolution, the key projection helpers,
+// and the emit-failure recorder.
+func TestLoopHelpersCoverTheCorners(t *testing.T) {
+	t.Parallel()
+
+	opts := ValueOptions{MaxAttempts: 7, RetryBudget: 123, RetryBackoff: 456}
+	if opts.maxAttempts() != 7 || opts.retryBudget() != 123 ||
+		opts.retryBackoff() != 456 {
+		t.Error("explicit retry bounds did not win over the defaults")
+	}
+	opts = ValueOptions{}
+	if opts.maxAttempts() != DefaultMaxAttempts ||
+		opts.retryBudget() != DefaultRetryBudget ||
+		opts.retryBackoff() != DefaultRetryBackoff {
+		t.Error("the defaults did not resolve")
+	}
+
+	if valueStringPtr("") != nil || *valueStringPtr("x") != "x" {
+		t.Error("valueStringPtr does not distinguish empty from set")
+	}
+	if valueArm(store.ArmUnspecified) != nil || *valueArm(store.ArmTreatment) != knov1.Arm_ARM_TREATMENT {
+		t.Error("valueArm does not project the measurement arm")
+	}
+	if valueTrialPtr(0) != nil || *valueTrialPtr(3) != 3 {
+		t.Error("valueTrialPtr does not distinguish unset from set")
+	}
+
+	em := &valueEmitter{}
+	em.recordEmitFailure(nil)
+	if em.emitFailure.Load() != nil {
+		t.Error("a nil failure was recorded")
+	}
+	err := errors.New("first failure")
+	em.recordEmitFailure(err)
+	if got := em.emitFailure.Load(); got == nil || *got != err {
+		t.Error("the first failure was not the one kept")
+	}
+	em.recordEmitFailure(errors.New("second failure"))
+	if got := em.emitFailure.Load(); got == nil || *got != err {
+		t.Error("a second failure displaced the first")
+	}
+
+	// perCaseMeans refuses the ragged shape it exists to refuse.
+	if _, _, ok := perCaseMeans([][]float64{{0.5}, {0.6, 0.7}}); ok {
+		t.Error("perCaseMeans accepted ragged vectors")
+	}
+	if means, trials, ok := perCaseMeans(nil); ok || means != nil || trials != 0 {
+		t.Errorf("perCaseMeans(nil) = %v, %d, %v; want a refusal", means, trials, ok)
+	}
+}
+
+// erroringPool is a Pool whose source is broken, for the read-error path.
+type erroringPool struct{}
+
+func (erroringPool) Assets(context.Context) (iter.Seq2[*Asset, error], error) {
+	return func(yield func(*Asset, error) bool) { yield(nil, errors.New("pool source is gone")) }, nil
+}
+
+// erroringInjector builds a treatment arm that cannot be built.
+type erroringInjector struct{ stubAgent }
+
+func (erroringInjector) WithContext(*Asset) (Agent, error) {
+	return nil, errors.New("injection failed")
+}
+
+// TestValueRefusesAnUnpriceableRunBeforeSpend: an estimator that errors under
+// a dollar cap fails the measurement before Authorize, and the row records
+// the failure rather than the spend.
+func TestValueRefusesAnUnpriceableRunBeforeSpend(t *testing.T) {
+	t.Parallel()
+
+	st := openTestStore(t)
+	createBaselineRun(t, st, "base-1", []string{"m"})
+	if err := st.RecordOutcome(context.Background(), "base-1", &store.Outcome{
+		CaseID: "c1", Score: &knov1.Score{CaseId: "c1", Value: 0.9, Passed: true},
+	}); err != nil {
+		t.Fatalf("RecordOutcome: %v", err)
+	}
+	cases := &caseSource{list: []*Case{
+		{Id: "c1", Input: "q", Expected: "a", Split: knov1.Split_SPLIT_DEV},
+		{Id: "c2", Input: "q", Expected: "a", Split: knov1.Split_SPLIT_DEV},
+	}}
+	opts := ValueOptions{
+		RunID: "run-1", BaselineRunID: "base-1",
+		Agent:    pricingAgent{estErr: errors.New("no price row")},
+		AgentRef: &knov1.AgentRef{Ref: "fake:", Scheme: "fake"},
+		Goal:     fixedDirectionGoal{dir: knov1.Direction_DIRECTION_MAXIMIZE, domain: knov1.ScoreDomain_SCORE_DOMAIN_BINARY},
+		GoalName: "g",
+		Guard:    budget.New(budget.Limits{MaxCostUSDMicros: 1000}, nil, 0),
+		Store:    st, Evals: Seal(cases),
+		Concurrency: 2,
+		Routing:     value.Options{Seed: 1},
+	}
+	// The refusal is per-measurement and lands BEFORE Authorize: the run
+	// completes with every measurement errored, and the provider was never
+	// called — the unpriceable Case cost nothing.
+	res, err := opts.Value(context.Background(), stubPool{assets: []*Asset{{Id: "a1"}}})
+	if err != nil {
+		t.Fatalf("Value: %v", err)
+	}
+	spent, err := st.SettledSpend(context.Background(), "run-1")
+	if err != nil {
+		t.Fatalf("SettledSpend: %v", err)
+	}
+	if spent.Calls != 0 {
+		t.Errorf("an unpriceable run settled %d calls; the refusal must land "+
+			"before Authorize", spent.Calls)
+	}
+	rows, err := st.Measurements(context.Background(), "run-1", "a1")
+	if err != nil {
+		t.Fatalf("Measurements: %v", err)
+	}
+	for _, m := range rows {
+		if m.Err == "" {
+			t.Errorf("measurement %s/%s scored despite the unpriceable estimate", m.Key.AssetID, m.Key.CaseID)
+		}
+	}
+	_ = res
+}
+
+// TestValueRefusesBrokenSources: a pool that cannot be read, an evals source
+// that cannot be read, and an injector that cannot build the treatment arm
+// all refuse with the failure, not a partial run.
+func TestValueRefusesBrokenSources(t *testing.T) {
+	t.Parallel()
+
+	t.Run("broken pool", func(t *testing.T) {
+		t.Parallel()
+		st := openTestStore(t)
+		createBaselineRun(t, st, "base-1", []string{"m"})
+		opts := ValueOptions{
+			RunID: "run-1", BaselineRunID: "base-1",
+			Agent: stubAgent{}, AgentRef: &knov1.AgentRef{Ref: "fake:", Scheme: "fake"},
+			Goal:     fixedDirectionGoal{dir: knov1.Direction_DIRECTION_MAXIMIZE, domain: knov1.ScoreDomain_SCORE_DOMAIN_BINARY},
+			GoalName: "g",
+			Guard:    budget.New(budget.Limits{}, nil, 0),
+			Store:    st, Evals: Seal(&caseSource{}),
+			Routing: value.Options{Seed: 1},
+		}
+		if _, err := opts.Value(context.Background(), erroringPool{}); err == nil {
+			t.Error("a broken pool source produced no error")
+		}
+	})
+
+	t.Run("broken evals", func(t *testing.T) {
+		t.Parallel()
+		st := openTestStore(t)
+		createBaselineRun(t, st, "base-1", []string{"m"})
+		opts := ValueOptions{
+			RunID: "run-1", BaselineRunID: "base-1",
+			Agent: stubAgent{}, AgentRef: &knov1.AgentRef{Ref: "fake:", Scheme: "fake"},
+			Goal:     fixedDirectionGoal{dir: knov1.Direction_DIRECTION_MAXIMIZE, domain: knov1.ScoreDomain_SCORE_DOMAIN_BINARY},
+			GoalName: "g",
+			Guard:    budget.New(budget.Limits{}, nil, 0),
+			Store:    st,
+			Evals:    Seal(&erroringCaseSource{}),
+			Routing:  value.Options{Seed: 1},
+		}
+		if _, err := opts.Value(context.Background(), stubPool{}); err == nil {
+			t.Error("a broken evals source produced no error")
+		}
+	})
+
+	t.Run("broken injector", func(t *testing.T) {
+		t.Parallel()
+		st := openTestStore(t)
+		createBaselineRun(t, st, "base-1", []string{"m"})
+		if err := st.RecordOutcome(context.Background(), "base-1", &store.Outcome{
+			CaseID: "c1", Score: &knov1.Score{CaseId: "c1", Value: 0.9, Passed: true},
+		}); err != nil {
+			t.Fatalf("RecordOutcome: %v", err)
+		}
+		cases := &caseSource{list: []*Case{
+			{Id: "c1", Input: "q", Expected: "a", Split: knov1.Split_SPLIT_DEV},
+			{Id: "c2", Input: "q", Expected: "a", Split: knov1.Split_SPLIT_DEV},
+		}}
+		opts := ValueOptions{
+			RunID: "run-1", BaselineRunID: "base-1",
+			Agent: erroringInjector{}, AgentRef: &knov1.AgentRef{Ref: "fake:", Scheme: "fake"},
+			Goal:     fixedDirectionGoal{dir: knov1.Direction_DIRECTION_MAXIMIZE, domain: knov1.ScoreDomain_SCORE_DOMAIN_BINARY},
+			GoalName: "g",
+			Guard:    budget.New(budget.Limits{}, nil, 0),
+			Store:    st, Evals: Seal(cases),
+			Routing: value.Options{Seed: 1},
+		}
+		if _, err := opts.Value(context.Background(), stubPool{assets: []*Asset{{Id: "a1"}}}); err == nil {
+			t.Error("an injector that cannot build the treatment arm produced no error")
+		}
+	})
+}
+
+// erroringCaseSource is an Evals whose iterator fails.
+type erroringCaseSource struct{}
+
+func (erroringCaseSource) Cases(context.Context) (iter.Seq2[*Case, error], error) {
+	return func(yield func(*Case, error) bool) {
+		yield(nil, errors.New("evals source is gone"))
+	}, nil
+}
+
+// panickyGoal panics on Score, so the workFunc panic guard can be driven
+// through a real run rather than asserted against.
+type panickyGoal struct{}
+
+func (panickyGoal) Score(context.Context, *Case, *Response) (*Score, error) {
+	panic("the goal blew up")
+}
+
+func (panickyGoal) Direction() Direction { return knov1.Direction_DIRECTION_MAXIMIZE }
+
+func (panickyGoal) Domain() ScoreDomain { return knov1.ScoreDomain_SCORE_DOMAIN_BINARY }
+
+// TestValueSurvivesAPanickingGoal: a panic in the Ring-1 plug-in point must
+// not take the run or the paid call down with it.
+func TestValueSurvivesAPanickingGoal(t *testing.T) {
+	t.Parallel()
+
+	st := openTestStore(t)
+	createBaselineRun(t, st, "base-1", []string{"m"})
+	if err := st.RecordOutcome(context.Background(), "base-1", &store.Outcome{
+		CaseID: "c1", Score: &knov1.Score{CaseId: "c1", Value: 0.9, Passed: true},
+	}); err != nil {
+		t.Fatalf("RecordOutcome: %v", err)
+	}
+	cases := &caseSource{list: []*Case{
+		{Id: "c1", Input: "q", Expected: "a", Split: knov1.Split_SPLIT_DEV},
+		{Id: "c2", Input: "q", Expected: "a", Split: knov1.Split_SPLIT_DEV},
+	}}
+	opts := ValueOptions{
+		RunID: "run-1", BaselineRunID: "base-1",
+		Agent: stubAgent{}, AgentRef: &knov1.AgentRef{Ref: "fake:", Scheme: "fake"},
+		Goal: panickyGoal{}, GoalName: "panicky",
+		Guard: budget.New(budget.Limits{}, nil, 0),
+		Store: st, Evals: Seal(cases),
+		Concurrency: 2,
+		Routing:     value.Options{Seed: 1},
+	}
+	res, err := opts.Value(context.Background(), stubPool{assets: []*Asset{{Id: "a1"}}})
+	if err != nil {
+		t.Fatalf("Value: %v", err)
+	}
+	if res.Status != knov1.RunStatus_RUN_STATUS_COMPLETED {
+		t.Errorf("Status = %v; a panicking goal must not stop the run", res.Status)
+	}
+	rows, err := st.Measurements(context.Background(), "run-1", "a1")
+	if err != nil {
+		t.Fatalf("Measurements: %v", err)
+	}
+	for _, m := range rows {
+		if !strings.Contains(m.Err, "panic") {
+			t.Errorf("measurement %s/%s err = %q, want the panic recorded",
+				m.Key.AssetID, m.Key.CaseID, m.Err)
+		}
+	}
+}
+
+// TestValueRefusesAnEmptyPool: routing has nothing to do, and the refusal is
+// free.
+func TestValueRefusesAnEmptyPool(t *testing.T) {
+	t.Parallel()
+
+	st := openTestStore(t)
+	createBaselineRun(t, st, "base-1", []string{"m"})
+	opts := ValueOptions{
+		RunID: "run-1", BaselineRunID: "base-1",
+		Agent: stubAgent{}, AgentRef: &knov1.AgentRef{Ref: "fake:", Scheme: "fake"},
+		Goal:     fixedDirectionGoal{dir: knov1.Direction_DIRECTION_MAXIMIZE, domain: knov1.ScoreDomain_SCORE_DOMAIN_BINARY},
+		GoalName: "g",
+		Guard:    budget.New(budget.Limits{}, nil, 0),
+		Store:    st, Evals: Seal(&caseSource{}),
+		Routing: value.Options{Seed: 1},
+	}
+	if _, err := opts.Value(context.Background(), stubPool{}); err == nil {
+		t.Error("an empty pool produced no refusal")
+	}
+}
+
+// TestValueResumeSurfacesAStoreFailure: the resume path's GetRun failure is
+// returned, not guessed around.
+func TestValueResumeSurfacesAStoreFailure(t *testing.T) {
+	t.Parallel()
+
+	inner := openTestStore(t)
+	createBaselineRun(t, inner, "base-1", []string{"m"})
+	failing := &failingValueStore{Store: inner, failGetRun: true}
+	opts := ValueOptions{
+		RunID: "run-1", BaselineRunID: "base-1", Resume: true,
+		Agent: stubAgent{}, AgentRef: &knov1.AgentRef{Ref: "fake:", Scheme: "fake"},
+		Goal:     fixedDirectionGoal{dir: knov1.Direction_DIRECTION_MAXIMIZE, domain: knov1.ScoreDomain_SCORE_DOMAIN_BINARY},
+		GoalName: "g",
+		Guard:    budget.New(budget.Limits{}, nil, 0),
+		Store:    failing, Evals: Seal(&caseSource{}),
+		Routing: value.Options{Seed: 1},
+	}
+	if _, err := opts.Value(context.Background(), stubPool{assets: []*Asset{{Id: "a1"}}}); err == nil {
+		t.Error("a resume over a failing store produced no error")
+	}
+}
+
+// TestCasesSeqHonorsEarlyBreak: the iterator adapter must stop when the
+// consumer stops.
+func TestCasesSeqHonorsEarlyBreak(t *testing.T) {
+	t.Parallel()
+
+	seen := 0
+	casesSeq([]*Case{{Id: "c1"}, {Id: "c2"}, {Id: "c3"}})(func(*Case, error) bool {
+		seen++
+		return seen < 2
+	})
+	if seen != 2 {
+		t.Errorf("seen = %d, want 2: the consumer broke and the iterator kept yielding", seen)
+	}
+}
+
+// evalsOpenError is an Evals whose OPEN fails, the branch casesByID's
+// materialization path cannot produce through the iterator.
+type evalsOpenError struct{}
+
+func (evalsOpenError) Cases(context.Context) (iter.Seq2[*Case, error], error) {
+	return nil, errors.New("evals source cannot be opened")
+}
+
+// TestValueRefusesAtEveryEntryPoint drives the stage's own error returns —
+// not the helpers', the stage's: an invalid option set, a baseline that is
+// not a baseline, and an evals source that cannot be opened.
+func TestValueRefusesAtEveryEntryPoint(t *testing.T) {
+	t.Parallel()
+
+	st := openTestStore(t)
+	base := ValueOptions{
+		RunID: "run-1", BaselineRunID: "base-1",
+		Agent: stubAgent{}, AgentRef: &knov1.AgentRef{Ref: "fake:", Scheme: "fake"},
+		Goal:     fixedDirectionGoal{dir: knov1.Direction_DIRECTION_MAXIMIZE, domain: knov1.ScoreDomain_SCORE_DOMAIN_BINARY},
+		GoalName: "g",
+		Guard:    budget.New(budget.Limits{}, nil, 0),
+		Store:    st, Evals: Seal(&caseSource{}),
+		Routing: value.Options{Seed: 1},
+	}
+	pool := stubPool{assets: []*Asset{{Id: "a1"}}}
+
+	t.Run("invalid options", func(t *testing.T) {
+		t.Parallel()
+		opts := base
+		opts.Store = nil
+		if _, err := opts.Value(context.Background(), pool); err == nil {
+			t.Error("an invalid option set ran the stage")
+		}
+	})
+	t.Run("wrong-stage baseline", func(t *testing.T) {
+		t.Parallel()
+		ensureValueRun(t, st, "base-1") // a VALUE run where a baseline is required
+		if _, err := base.Value(context.Background(), pool); err == nil {
+			t.Error("a non-baseline reference was accepted")
+		}
+	})
+	t.Run("unopenable evals", func(t *testing.T) {
+		t.Parallel()
+		opts := base
+		opts.Evals = Seal(evalsOpenError{})
+		if _, err := opts.Value(context.Background(), pool); err == nil {
+			t.Error("an evals source that cannot be opened was accepted")
+		}
+	})
+}
+
+// TestAppendRefusesAfterRunFinished: the emitter's closed branch exists
+// because the schema promises RunFinished is last.
+func TestAppendRefusesAfterRunFinished(t *testing.T) {
+	t.Parallel()
+
+	st := openTestStore(t)
+	ensureValueRun(t, st, "run-1")
+	opts := ValueOptions{RunID: "run-1", Store: st}
+	em := &valueEmitter{}
+	if err := opts.append(context.Background(), em, func() *knov1.Event {
+		return &knov1.Event{Payload: &knov1.Event_RunFinished{RunFinished: &knov1.RunFinished{}}}
+	}, "run-finished"); err != nil {
+		t.Fatalf("closing append: %v", err)
+	}
+	if err := opts.append(context.Background(), em, func() *knov1.Event {
+		return &knov1.Event{Payload: &knov1.Event_RunStarted{RunStarted: &knov1.RunStarted{}}}
+	}, "run-started"); err == nil {
+		t.Error("an append after RunFinished was accepted")
+	}
+}
+
+// erroringGoal fails Score, so the workFunc scoring path is driven through a
+// real run.
+type erroringGoal struct{}
+
+func (erroringGoal) Score(context.Context, *Case, *Response) (*Score, error) {
+	return nil, errors.New("judge unavailable")
+}
+
+func (erroringGoal) Direction() Direction { return knov1.Direction_DIRECTION_MAXIMIZE }
+
+func (erroringGoal) Domain() ScoreDomain { return knov1.ScoreDomain_SCORE_DOMAIN_BINARY }
+
+// TestValueRecordsScoreFailures: a failing judge ends the measurement with
+// the failure recorded, never with a zero score.
+func TestValueRecordsScoreFailures(t *testing.T) {
+	t.Parallel()
+
+	st := openTestStore(t)
+	createBaselineRun(t, st, "base-1", []string{"m"})
+	if err := st.RecordOutcome(context.Background(), "base-1", &store.Outcome{
+		CaseID: "c1", Score: &knov1.Score{CaseId: "c1", Value: 0.9, Passed: true},
+	}); err != nil {
+		t.Fatalf("RecordOutcome: %v", err)
+	}
+	cases := &caseSource{list: []*Case{
+		{Id: "c1", Input: "q", Expected: "a", Split: knov1.Split_SPLIT_DEV},
+		{Id: "c2", Input: "q", Expected: "a", Split: knov1.Split_SPLIT_DEV},
+	}}
+	opts := ValueOptions{
+		RunID: "run-1", BaselineRunID: "base-1",
+		Agent: stubAgent{}, AgentRef: &knov1.AgentRef{Ref: "fake:", Scheme: "fake"},
+		Goal: erroringGoal{}, GoalName: "g",
+		Guard: budget.New(budget.Limits{}, nil, 0),
+		Store: st, Evals: Seal(cases),
+		Concurrency: 2,
+		Routing:     value.Options{Seed: 1},
+	}
+	res, err := opts.Value(context.Background(), stubPool{assets: []*Asset{{Id: "a1"}}})
+	if err != nil {
+		t.Fatalf("Value: %v", err)
+	}
+	rows, err := st.Measurements(context.Background(), "run-1", "a1")
+	if err != nil {
+		t.Fatalf("Measurements: %v", err)
+	}
+	if len(rows) == 0 {
+		t.Fatal("the run recorded nothing; a judge failure is a result, not an omission")
+	}
+	for _, m := range rows {
+		if m.Err == "" {
+			t.Errorf("measurement %s/%s scored despite the failing judge", m.Key.AssetID, m.Key.CaseID)
+		}
+	}
+	_ = res
+}
+
+// cancelingGoal cancels the run's context on its first Score, so the mid-run
+// interruption path is driven through a real loop rather than asserted
+// against a pre-cancelled context (which refuses at the baseline read).
+type cancelingGoal struct{ cancel context.CancelFunc }
+
+func (c cancelingGoal) Score(context.Context, *Case, *Response) (*Score, error) {
+	c.cancel()
+	return &knov1.Score{Value: 1}, nil
+}
+
+func (cancelingGoal) Direction() Direction { return knov1.Direction_DIRECTION_MAXIMIZE }
+
+func (cancelingGoal) Domain() ScoreDomain { return knov1.ScoreDomain_SCORE_DOMAIN_BINARY }
+
+// TestValueInterruptsResumably: a cancelled context stops the loop with
+// INTERRUPTED — a resumable stop, never a failure.
+func TestValueInterruptsResumably(t *testing.T) {
+	t.Parallel()
+
+	st := openTestStore(t)
+	createBaselineRun(t, st, "base-1", []string{"m"})
+	var cases []*Case
+	for i := range 40 {
+		cases = append(cases, &Case{
+			Id:    "c" + string(rune('a'+i%26)) + string(rune('0'+i/26)),
+			Input: "q", Expected: "a", Split: knov1.Split_SPLIT_DEV,
+		})
+	}
+	for _, c := range cases {
+		if err := st.RecordOutcome(context.Background(), "base-1", &store.Outcome{
+			CaseID: c.GetId(), Score: &knov1.Score{CaseId: c.GetId(), Value: 0.9, Passed: true},
+		}); err != nil {
+			t.Fatalf("RecordOutcome: %v", err)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	opts := ValueOptions{
+		RunID: "run-1", BaselineRunID: "base-1",
+		Agent: stubAgent{}, AgentRef: &knov1.AgentRef{Ref: "fake:", Scheme: "fake"},
+		Goal: cancelingGoal{cancel: cancel}, GoalName: "g",
+		Guard: budget.New(budget.Limits{}, nil, 0),
+		Store: st, Evals: Seal(&caseSource{list: cases}),
+		Concurrency: 2,
+		Routing:     value.Options{Seed: 1},
+	}
+	res, err := opts.Value(ctx, stubPool{assets: []*Asset{{Id: "a1"}}})
+	if err != nil {
+		t.Fatalf("Value: %v", err)
+	}
+	if res.Status != knov1.RunStatus_RUN_STATUS_INTERRUPTED {
+		t.Errorf("Status = %v, want INTERRUPTED for a cancelled run", res.Status)
+	}
+}
+
+// failingAfterNStore fails AppendEvent from the Nth call on, so the mid-run
+// emit-failure surfacing can be driven: the run finishes, and the first
+// hot-path write failure comes back with the result.
+type failingAfterNStore struct {
+	store.Store
+	after int
+	seen  int
+}
+
+func (f *failingAfterNStore) AppendEvent(ctx context.Context, ev *knov1.Event) error {
+	f.seen++
+	if f.seen > f.after {
+		return errValueStore
+	}
+	return f.Store.AppendEvent(ctx, ev)
+}
+
+// TestValueSurfacesMidRunEmitFailures: a hot-path event write failure is
+// remembered, not returned — the run it interrupted stays resumable — and
+// surfaces at close.
+func TestValueSurfacesMidRunEmitFailures(t *testing.T) {
+	t.Parallel()
+
+	inner := openTestStore(t)
+	createBaselineRun(t, inner, "base-1", []string{"m"})
+	if err := inner.RecordOutcome(context.Background(), "base-1", &store.Outcome{
+		CaseID: "c1", Score: &knov1.Score{CaseId: "c1", Value: 0.9, Passed: true},
+	}); err != nil {
+		t.Fatalf("RecordOutcome: %v", err)
+	}
+	cases := &caseSource{list: []*Case{
+		{Id: "c1", Input: "q", Expected: "a", Split: knov1.Split_SPLIT_DEV},
+		{Id: "c2", Input: "q", Expected: "a", Split: knov1.Split_SPLIT_DEV},
+	}}
+	// Two events before the first AssetValued emit: RunStarted + AssetRouted.
+	failing := &failingAfterNStore{Store: inner, after: 2}
+	opts := ValueOptions{
+		RunID: "run-1", BaselineRunID: "base-1",
+		Agent: stubAgent{}, AgentRef: &knov1.AgentRef{Ref: "fake:", Scheme: "fake"},
+		Goal:     fixedDirectionGoal{dir: knov1.Direction_DIRECTION_MAXIMIZE, domain: knov1.ScoreDomain_SCORE_DOMAIN_BINARY},
+		GoalName: "g",
+		Guard:    budget.New(budget.Limits{}, nil, 0),
+		Store:    failing, Evals: Seal(cases),
+		Concurrency: 2,
+		Routing:     value.Options{Seed: 1},
+	}
+	res, err := opts.Value(context.Background(), stubPool{assets: []*Asset{{Id: "a1"}}})
+	if err == nil {
+		t.Fatal("a mid-run emit failure did not surface at close")
+	}
+	if res == nil {
+		t.Fatal("the result was discarded with the emit failure; the run it " +
+			"describes is resumable and must come back")
+	}
+}
+
+// TestValueZeroRoutedFailurePaths: the free answer — an Asset routed to
+// nothing — still surfaces its own failures: the emit, the passthrough
+// Valuation read, and its write.
+func TestValueZeroRoutedFailurePaths(t *testing.T) {
+	t.Parallel()
+
+	newOpts := func(t *testing.T, failing store.Store) (ValueOptions, *caseSource) {
+		t.Helper()
+		cases := &caseSource{list: []*Case{
+			{Id: "c1", Input: "q", Expected: "a", Split: knov1.Split_SPLIT_DEV, Tags: []string{"billing"}},
+			{Id: "c2", Input: "q", Expected: "a", Split: knov1.Split_SPLIT_DEV, Tags: []string{"billing"}},
+		}}
+		opts := ValueOptions{
+			RunID: "run-1", BaselineRunID: "base-1",
+			Agent: stubAgent{}, AgentRef: &knov1.AgentRef{Ref: "fake:", Scheme: "fake"},
+			Goal:     fixedDirectionGoal{dir: knov1.Direction_DIRECTION_MAXIMIZE, domain: knov1.ScoreDomain_SCORE_DOMAIN_BINARY},
+			GoalName: "g",
+			Guard:    budget.New(budget.Limits{}, nil, 0),
+			Store:    failing, Evals: Seal(cases),
+			Concurrency: 2,
+			Routing:     value.Options{Seed: 1},
+		}
+		return opts, cases
+	}
+	// Every Case passes the baseline, the Asset is tagged for another domain:
+	// it routes to nothing.
+	baseline := func(t *testing.T, inner store.Store, cases *caseSource) {
+		t.Helper()
+		createBaselineRun(t, inner, "base-1", []string{"m"})
+		for _, c := range cases.list {
+			if err := inner.RecordOutcome(context.Background(), "base-1", &store.Outcome{
+				CaseID: c.GetId(),
+				Score:  &knov1.Score{CaseId: c.GetId(), Value: 0.9, Passed: true},
+			}); err != nil {
+				t.Fatalf("RecordOutcome: %v", err)
+			}
+		}
+	}
+	pool := stubPool{assets: []*Asset{{Id: "a1", Tags: []string{"astronomy"}}}}
+
+	t.Run("routed emit", func(t *testing.T) {
+		t.Parallel()
+		inner := openTestStore(t)
+		cases := &caseSource{list: []*Case{
+			{Id: "c1", Input: "q", Expected: "a", Split: knov1.Split_SPLIT_DEV, Tags: []string{"billing"}},
+			{Id: "c2", Input: "q", Expected: "a", Split: knov1.Split_SPLIT_DEV, Tags: []string{"billing"}},
+		}}
+		baseline(t, inner, cases)
+		failing := &failingAfterNStore{Store: inner, after: 1}
+		opts, _ := newOpts(t, failing)
+		if _, err := opts.Value(context.Background(), pool); err == nil {
+			t.Error("the zero-routed emit failure did not surface")
+		}
+	})
+
+	t.Run("passthrough read", func(t *testing.T) {
+		t.Parallel()
+		inner := openTestStore(t)
+		cases := &caseSource{list: []*Case{
+			{Id: "c1", Input: "q", Expected: "a", Split: knov1.Split_SPLIT_DEV, Tags: []string{"billing"}},
+			{Id: "c2", Input: "q", Expected: "a", Split: knov1.Split_SPLIT_DEV, Tags: []string{"billing"}},
+		}}
+		baseline(t, inner, cases)
+		failing := &failingValueStore{Store: inner, failMeasure: true}
+		opts, _ := newOpts(t, failing)
+		if _, err := opts.Value(context.Background(), pool); err == nil {
+			t.Error("the zero-routed Valuation read failure did not surface")
+		}
+	})
+
+	t.Run("passthrough write", func(t *testing.T) {
+		t.Parallel()
+		inner := openTestStore(t)
+		cases := &caseSource{list: []*Case{
+			{Id: "c1", Input: "q", Expected: "a", Split: knov1.Split_SPLIT_DEV, Tags: []string{"billing"}},
+			{Id: "c2", Input: "q", Expected: "a", Split: knov1.Split_SPLIT_DEV, Tags: []string{"billing"}},
+		}}
+		baseline(t, inner, cases)
+		failing := &failingValueStore{Store: inner, failValuation: true}
+		opts, _ := newOpts(t, failing)
+		if _, err := opts.Value(context.Background(), pool); err == nil {
+			t.Error("the zero-routed Valuation write failure did not surface")
+		}
+	})
+}
+
+// TestValueResumeCompletedReadFailure: the resume path's CompletedMeasurements
+// failure is surfaced, not guessed around.
+func TestValueResumeCompletedReadFailure(t *testing.T) {
+	t.Parallel()
+
+	inner := openTestStore(t)
+	createBaselineRun(t, inner, "base-1", []string{"m"})
+	failing := &failingValueStore{Store: inner, failCompleted: true}
+	opts := ValueOptions{
+		RunID: "run-1", BaselineRunID: "base-1", Resume: true,
+		Agent: stubAgent{}, AgentRef: &knov1.AgentRef{Ref: "fake:", Scheme: "fake"},
+		Goal:     fixedDirectionGoal{dir: knov1.Direction_DIRECTION_MAXIMIZE, domain: knov1.ScoreDomain_SCORE_DOMAIN_BINARY},
+		GoalName: "g",
+		Guard:    budget.New(budget.Limits{}, nil, 0),
+		Store:    failing, Evals: Seal(&caseSource{}),
+		Routing: value.Options{Seed: 1},
+	}
+	if _, err := opts.Value(context.Background(), stubPool{assets: []*Asset{{Id: "a1"}}}); err == nil {
+		t.Error("a resume over a CompletedMeasurements failure produced no error")
+	}
+}

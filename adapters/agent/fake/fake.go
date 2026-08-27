@@ -187,13 +187,14 @@ func (a *Agent) resolvedModel() string {
 
 // Capabilities reports what this adapter supports.
 //
-// The fake declares no injection capability unless Inject is set. It answers
-// Cases; it has no context to inject into and no knowledge index to write, and
-// claiming otherwise would let a valuation run report a measurement mode it
-// never used.
+// The fake declares context injection: WithContext records which Asset is
+// carried and delegates the call, which is what lets a Value run exercise the
+// real measurement path — treatment arm carrying the Asset, control arm not —
+// against an agent that costs nothing. There is no knowledge index to write,
+// and claiming one would let a valuation run report a mode it never used.
 func (a *Agent) Capabilities() *core.Capabilities {
 	return &knov1.Capabilities{
-		ContextInject:  a.opts.Inject,
+		ContextInject:  true,
 		KnowledgeWrite: false,
 		Stream:         false,
 		TokenCounts:    true,
@@ -201,7 +202,7 @@ func (a *Agent) Capabilities() *core.Capabilities {
 }
 
 // WithContext wraps the agent so the Asset travels with every Invoke, which is
-// what makes the treatment arm the treatment arm. Enabled by Inject.
+// what makes the treatment arm the treatment arm.
 func (a *Agent) WithContext(asset *core.Asset) (core.Agent, error) {
 	return &contextAgent{inner: a, asset: asset}, nil
 }

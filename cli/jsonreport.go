@@ -168,3 +168,61 @@ func decodeRaw(b []byte) (map[string]any, error) {
 	}
 	return raw, nil
 }
+
+// valueReport is the JSON shape of a Value run. Deltas travel beside their
+// intervals, or the reason they are absent — the same discipline the proto
+// godocs now enforce. Lives in this file because the --json contract is the
+// one encoding/json exemption the depguard config grants, for the same reason
+// as jsonReport: a hand-written shape aimed at a jq pipeline, not a kno.v1
+// type.
+type valueReport struct {
+	RunID      string                 `json:"run_id"`
+	Status     string                 `json:"status"`
+	Valuations []valueReportValuation `json:"valuations"`
+}
+
+type valueReportValuation struct {
+	AssetID      string   `json:"asset_id"`
+	NotMeasured  string   `json:"not_measured,omitempty"`
+	DeltaGoal    *float64 `json:"delta_goal,omitempty"`
+	Low          *float64 `json:"low,omitempty"`
+	High         *float64 `json:"high,omitempty"`
+	DeltaControl *float64 `json:"delta_control,omitempty"`
+	ControlLow   *float64 `json:"control_low,omitempty"`
+	NPairs       int32    `json:"n_pairs"`
+	NDropped     int32    `json:"n_dropped"`
+	NRouted      int32    `json:"n_routed"`
+	NDev         int32    `json:"n_dev"`
+}
+
+// renderValueJSON emits the machine-readable Value report.
+func renderValueJSON(out io.Writer, res *core.ValueResult, runID string) error {
+	rep := valueReport{RunID: runID, Status: res.Status.String()}
+	for _, v := range res.Valuations {
+		row := valueReportValuation{
+			AssetID:     v.GetAssetId(),
+			NotMeasured: v.GetNotMeasured().String(),
+			NPairs:      v.GetNPairs(),
+			NDropped:    v.GetNDropped(),
+			NRouted:     v.GetNRouted(),
+			NDev:        v.GetNDev(),
+		}
+		if iv := v.GetDeltaInterval(); iv != nil {
+			d := v.GetDeltaGoal()
+			low, high := iv.GetLow(), iv.GetHigh()
+			row.DeltaGoal, row.Low, row.High = &d, &low, &high
+		}
+		if iv := v.GetControlInterval(); iv != nil {
+			d := v.GetDeltaControl()
+			low := iv.GetLow()
+			row.DeltaControl, row.ControlLow = &d, &low
+		}
+		rep.Valuations = append(rep.Valuations, row)
+	}
+	enc := json.NewEncoder(out)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(rep); err != nil {
+		return fmt.Errorf("writing the value report: %w", err)
+	}
+	return nil
+}
