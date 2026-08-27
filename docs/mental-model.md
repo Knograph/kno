@@ -89,6 +89,60 @@ So Kno classifies each Asset before measuring it. Knowledge assets are valued by
 
 This is why the tool can tell you **where** an asset belongs, not just whether it's good.
 
+## Routing: which Cases measure which Asset
+
+Measuring every Asset against every Case is the obvious design and nobody can afford it. 200 Assets over a 500-Case dev split is 100,000 measurements before you have learned anything.
+
+So Kno **routes**. It clusters the dev Cases your baseline failed by tag, and measures an Asset against the clusters its own tags overlap. An Asset that matches nothing routes to nothing, costs nothing, and is reported as irrelevant — the cheapest valuable answer the stage gives you.
+
+Three fallbacks, because the common case is that nobody has tagged anything:
+
+- **An Asset with no tags** is measured against a sample of every failed Case. Unlabelled is not irrelevant.
+- **No Case carries a tag** — the default state of a real eval file — and there are no clusters to overlap. Every Asset is measured against a sample of the failed Cases. This is decided before you are asked to approve the cost, so the number you approve is the number this path costs.
+- **Nothing failed.** There is no failure signal to route on, so every Asset is measured against a sample of everything.
+
+Routing decides the candidates. `--sample-rate` bounds the draw from them. Both are reported.
+
+### Why a slice of the Cases is reserved before any of this
+
+Routing to the Cases your baseline failed is what makes the stage affordable. It is also a trap, and it is worth understanding because the trap looks like a free win.
+
+If Kno picks the Cases your baseline failed, and then compares the Asset against *those recorded failures*, it is reusing the same draw twice: once to choose the Case, once as the thing to beat. Every recorded score on that slice is zero by construction, so an Asset that does **nothing at all** measures a large positive gain. At a 70%-pass agent it measures **+0.70**, with a tight interval and a confident-looking report.
+
+Kno avoids this two ways. On the routed Cases it measures a **fresh** control — the Asset's absence, measured now, not read from the baseline file. That doubles the cost of the routed arm, and it is what the delta being real is bought with.
+
+And **before routing runs at all**, Kno sets aside a random slice of your dev Cases that routing never touches. Because that slice was chosen without looking at any outcome, your recorded baseline *is* a valid control there, and it costs one measurement per Case instead of two. That reserved slice is where the regression check lives.
+
+### The regression check, and when it is not one
+
+The reserved slice answers a different question from the routed one: not "did this help", but **"did this break something else"**. An Asset that fixes its own slice and quietly damages another is the failure mode worth paying to catch.
+
+That question is one-sided — you care about harm, not about symmetric uncertainty — and it needs enough Cases to answer. Small samples answer it badly, and badly in the direction that reads as good news: the interval crosses zero, and "no regression found" is what a wide interval looks like.
+
+So Kno reports **the smallest regression the run could actually have seen**, rather than only a pass/fail badge. Roughly:
+
+| Control Cases | Smallest detectable regression |
+|---|---|
+| 10 | 0.26 |
+| 20 | 0.18 |
+| 60 | 0.11 |
+| 100 | 0.08 |
+| 300 | 0.05 |
+
+Read that as a limit, not a score. A run with 30 control Cases that reports no regression has **not** cleared an Asset that costs you 10 points — it could not have seen one. Below 20 Cases Kno also marks the run **underpowered**, but treat that flag as a floor rather than a certificate: above it a run is not "powered", it is merely not absurd.
+
+This is why the reserved slice is a third of your dev split rather than a token sample, and why a bigger eval set buys you a sharper answer to "did this break something" even though it does not change what routing costs.
+
+**`--route none`** switches routing off: every Asset is measured against a sample of everything. It does not remove the regression check — the reserved slice is drawn before routing and does not depend on it — and it drops the fresh control arm, because a random sample was never conditioned on your baseline's outcomes in the first place.
+
+### What Kno cannot see
+
+All of the above protects you from *Kno's* conditioning. It cannot protect you from your own.
+
+If you read your baseline's failure report and then tag those Cases, or write Assets aimed at them, or run `kno value` twice and adjust in between, then the Cases being measured were chosen using the baseline's outcomes — through a channel that looks identical to honest labelling. Kno sees a tag string and an Asset file. There is no signal in either that separates "these Cases share a topic" from "these Cases are the ones that failed."
+
+The instrument for that is the holdout, which is why `validate` is a separate stage. See [what the numbers mean](what-the-numbers-mean.md).
+
 ## Cost is part of the measurement
 
 Every Asset carries a cost vector: context tokens (recurring, per call), fine-tuning tokens (one-time), acquisition cost, and a staleness flag. The ranking metric is improvement per unit cost.
