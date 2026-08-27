@@ -185,19 +185,19 @@ release:
 # been parsed by anything. The PR that enables it is the first run of
 # `make release-check` that covers it — expect to fix it there, not here.
 #
-# brews:
-#   - name: kno
-#     ids: [kno]
-#     repository:
-#       owner: knograph
-#       name: homebrew-tap
-#       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-#     directory: Formula
-#     homepage: https://github.com/knograph/kno
-#     description: Measure which of your data earns its place in an LLM agent
-#     license: Apache-2.0
-#     test: |
-#       system "#{bin}/kno", "--version"
+brews:
+  - name: kno
+    ids: [kno]
+    repository:
+      owner: Knograph
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: https://github.com/knograph/kno
+    description: Measure which of your data earns its place in an LLM agent
+    license: Apache-2.0
+    test: |
+      system "#{bin}/kno", "--version"
 
 snapshot:
   version_template: "{{ incpatch .Version }}-snapshot"
