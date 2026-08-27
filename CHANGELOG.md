@@ -44,6 +44,9 @@ covenants — breaking any of them requires a major version.
 - **The changelog fold is automated** — the release pipeline renames the hand-written
   `[Unreleased]` heading to the release it shipped in and opens an auto-merging PR
   (debt #76 repaid).
+- **Value's mid-run model gate arms on the first process** from the baseline's recorded
+  models, not only on resumes — an alias re-pointing mid-run is refused in the very run it
+  happens in (debt #80 repaid).
 - **The Homebrew tap is live.** `brew tap knograph/tap && brew install kno` installs a
   SHA-256-pinned, release-built binary; goreleaser updates the formula on every release.
 

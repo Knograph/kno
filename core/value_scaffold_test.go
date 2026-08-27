@@ -260,12 +260,12 @@ func TestBlendedBaselineIsRefusedUnlessOptedIn(t *testing.T) {
 		BaselineRunID: "base-1",
 		Store:         st,
 	}
-	if _, err := opts.baselineCases(context.Background()); err == nil ||
+	if _, _, err := opts.baselineCases(context.Background()); err == nil ||
 		!strings.Contains(err.Error(), "blended") {
 		t.Errorf("baselineCases err = %v, want a blended-model refusal", err)
 	}
 	opts.UnsafeBaseline = true
-	scores, err := opts.baselineCases(context.Background())
+	scores, _, err := opts.baselineCases(context.Background())
 	if err != nil {
 		t.Fatalf("baselineCases with the opt-in: %v", err)
 	}
@@ -288,7 +288,7 @@ func TestSingleModelBaselinePassesTheGate(t *testing.T) {
 		BaselineRunID: "base-1",
 		Store:         st,
 	}
-	if _, err := opts.baselineCases(context.Background()); err != nil {
+	if _, _, err := opts.baselineCases(context.Background()); err != nil {
 		t.Fatalf("baselineCases over a single-model baseline: %v", err)
 	}
 }
@@ -474,7 +474,7 @@ func TestBaselineCasesRefusesEverythingThatIsNotABaseline(t *testing.T) {
 
 	// Wrong stage.
 	ensureValueRun(t, st, "base-1")
-	if _, err := opts.baselineCases(context.Background()); err == nil ||
+	if _, _, err := opts.baselineCases(context.Background()); err == nil ||
 		!strings.Contains(err.Error(), "not a baseline") {
 		t.Errorf("err = %v, want the wrong-stage refusal", err)
 	}
@@ -490,7 +490,7 @@ func TestBaselineCasesRefusesEverythingThatIsNotABaseline(t *testing.T) {
 		t.Fatalf("CreateRun: %v", err)
 	}
 	opts2 := ValueOptions{BaselineRunID: "base-2", Store: st2}
-	if _, err := opts2.baselineCases(context.Background()); err == nil ||
+	if _, _, err := opts2.baselineCases(context.Background()); err == nil ||
 		!strings.Contains(err.Error(), "incomplete") {
 		t.Errorf("err = %v, want the incomplete-baseline refusal", err)
 	}
@@ -499,7 +499,7 @@ func TestBaselineCasesRefusesEverythingThatIsNotABaseline(t *testing.T) {
 	st3 := openTestStore(t)
 	createBaselineRun(t, st3, "base-3", []string{"model-a"})
 	opts3 := ValueOptions{BaselineRunID: "base-3", Store: st3}
-	if _, err := opts3.baselineCases(context.Background()); err == nil ||
+	if _, _, err := opts3.baselineCases(context.Background()); err == nil ||
 		!strings.Contains(err.Error(), "no scores") {
 		t.Errorf("err = %v, want the no-scores refusal", err)
 	}

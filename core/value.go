@@ -177,13 +177,13 @@ func (o ValueOptions) validate(pool Pool) error {
 // than the one every other Asset in the pool was compared against — so two
 // Assets' deltas would not be commensurable, which is the whole point of
 // ranking them.
-func (o ValueOptions) baselineCases(ctx context.Context) (map[string]store.CaseScore, error) {
+func (o ValueOptions) baselineCases(ctx context.Context) (map[string]store.CaseScore, []string, error) {
 	run, err := o.Store.GetRun(ctx, o.BaselineRunID)
 	if err != nil {
-		return nil, fmt.Errorf("loading baseline run %s: %w", o.BaselineRunID, err)
+		return nil, nil, fmt.Errorf("loading baseline run %s: %w", o.BaselineRunID, err)
 	}
 	if got := run.GetStage(); got != knov1.Stage_STAGE_BASELINE {
-		return nil, errs.ErrInvalidInput.
+		return nil, nil, errs.ErrInvalidInput.
 			WithFix("pass the run ID of a `kno baseline` run").
 			Wrap(fmt.Errorf("run %s is a %s run, not a baseline", o.BaselineRunID, got))
 	}
@@ -192,7 +192,7 @@ func (o ValueOptions) baselineCases(ctx context.Context) (map[string]store.CaseS
 	// pairing against them measures the Asset on a slice selected by transport
 	// failures — a selection nothing downstream can see or correct for.
 	if r := run.GetIncompleteReason(); r != "" {
-		return nil, errs.ErrInvalidInput.
+		return nil, nil, errs.ErrInvalidInput.
 			WithFix("re-run the baseline until it completes, then value against that run").
 			Wrap(fmt.Errorf("baseline run %s is marked incomplete (%s); its recorded "+
 				"scores cover only the Cases that happened to succeed, so a delta "+
@@ -206,7 +206,7 @@ func (o ValueOptions) baselineCases(ctx context.Context) (map[string]store.CaseS
 	// This is debt #55's marker, read here: the first stage consuming a
 	// Baseline as a reference refuses what would make the reference lie.
 	if models := run.GetCaseExecution().GetResolvedModels(); len(models) > 1 && !o.UnsafeBaseline {
-		return nil, errs.ErrInvalidInput.
+		return nil, nil, errs.ErrInvalidInput.
 			WithFix("re-run the baseline pinned to one model, or pass --unsafe-baseline if " +
 				"the blend is known not to matter for this Goal").
 			Wrap(fmt.Errorf("baseline run %s resolved %d models (%v); a delta against "+
@@ -216,14 +216,18 @@ func (o ValueOptions) baselineCases(ctx context.Context) (map[string]store.CaseS
 
 	scores, err := o.Store.CaseScores(ctx, o.BaselineRunID)
 	if err != nil {
-		return nil, fmt.Errorf("loading baseline scores for %s: %w", o.BaselineRunID, err)
+		return nil, nil, fmt.Errorf("loading baseline scores for %s: %w", o.BaselineRunID, err)
 	}
 	if len(scores) == 0 {
-		return nil, errs.ErrInvalidInput.
+		return nil, nil, errs.ErrInvalidInput.
 			WithFix("run `kno baseline` to completion first").
 			Wrap(fmt.Errorf("baseline run %s recorded no scores", o.BaselineRunID))
 	}
-	return scores, nil
+	// The baseline's resolved models arm the FIRST process's mid-run gate:
+	// the reference was measured against them, so a Value run whose agent is
+	// answered by anything else is blending two models into one delta. The
+	// resumed run's own record takes precedence when it exists.
+	return scores, run.GetCaseExecution().GetResolvedModels(), nil
 }
 
 // caseRefs builds the router's view of the dev split.
