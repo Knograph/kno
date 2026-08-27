@@ -107,6 +107,11 @@ type ValueResult struct {
 	// Status is how the run ended: COMPLETED, or BUDGET_STOPPED /
 	// INTERRUPTED with the truncated portfolio marked in the Valuations.
 	Status knov1.RunStatus
+
+	// GoalDirection is which way is better, so the report can un-negate
+	// MINIMIZE deltas for display: the stored delta is sign-corrected
+	// (positive is better), and the display wants the goal's own units.
+	GoalDirection knov1.Direction
 }
 
 // errNoInjection is returned when the agent cannot carry an Asset.

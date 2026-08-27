@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/knograph/kno/core/value"
+	"github.com/knograph/kno/executor"
 	knov1 "github.com/knograph/kno/gen/kno/v1"
 	"github.com/knograph/kno/stats/budget"
 	"github.com/knograph/kno/stats/interval"
@@ -743,6 +744,14 @@ func TestEstimateRefusesWhatACapCannotEnforce(t *testing.T) {
 			"would be discovered at settlement instead of before spend")
 	}
 
+	// With a good estimate and no cap, the estimate passes through.
+	good := pricingAgent{estimate: budget.Estimate{Calls: 1, CostUSDMicros: 42}}
+	if est, err := (&ValueOptions{
+		Guard: budget.New(budget.Limits{}, nil, 0),
+	}).estimate(context.Background(), good, c); err != nil || est.CostUSDMicros != 42 {
+		t.Errorf("priced estimate = %v, %v; want 42, nil", est, err)
+	}
+
 	// Without a cap, an unpriceable agent falls back to the flat estimate.
 	if est, err := (&ValueOptions{
 		Guard:                   budget.New(budget.Limits{}, nil, 0),
@@ -764,6 +773,7 @@ type failingValueStore struct {
 	failRecord    bool
 	failCompleted bool
 	failValuation bool
+	failScores    bool
 }
 
 var errValueStore = errors.New("value store is unavailable")
@@ -815,6 +825,13 @@ func (f *failingValueStore) CompletedMeasurements(ctx context.Context, runID str
 		return nil, errValueStore
 	}
 	return f.Store.CompletedMeasurements(ctx, runID)
+}
+
+func (f *failingValueStore) CaseScores(ctx context.Context, runID string) (map[string]store.CaseScore, error) {
+	if f.failScores {
+		return nil, errValueStore
+	}
+	return f.Store.CaseScores(ctx, runID)
 }
 
 func (f *failingValueStore) WriteValuation(ctx context.Context, runID string, v *knov1.Valuation) error {
@@ -919,7 +936,8 @@ func TestLoopHelpersCoverTheCorners(t *testing.T) {
 	if valueStringPtr("") != nil || *valueStringPtr("x") != "x" {
 		t.Error("valueStringPtr does not distinguish empty from set")
 	}
-	if valueArm(store.ArmUnspecified) != nil || *valueArm(store.ArmTreatment) != knov1.Arm_ARM_TREATMENT {
+	if valueArm(store.ArmUnspecified) != nil || *valueArm(store.ArmTreatment) != knov1.Arm_ARM_TREATMENT ||
+		*valueArm(store.ArmControl) != knov1.Arm_ARM_CONTROL {
 		t.Error("valueArm does not project the measurement arm")
 	}
 	if valueTrialPtr(0) != nil || *valueTrialPtr(3) != 3 {
@@ -939,6 +957,21 @@ func TestLoopHelpersCoverTheCorners(t *testing.T) {
 	em.recordEmitFailure(errors.New("second failure"))
 	if got := em.emitFailure.Load(); got == nil || *got != err {
 		t.Error("a second failure displaced the first")
+	}
+
+	// The resumed-emit clamp: a completed set larger than the plan (corrupt
+	// state) must not report a negative remainder.
+	emitStore := openTestStore(t)
+	ensureValueRun(t, emitStore, "run-1")
+	emitOpts := ValueOptions{RunID: "run-1", Store: emitStore}
+	emRun := &valueEmitter{}
+	inflated := map[store.MeasurementKey]struct{}{}
+	for i := range 100 {
+		inflated[store.MeasurementKey{AssetID: "a", CaseID: "c" + string(rune('a'+i%26)), Arm: store.ArmTreatment, Trial: 1}] = struct{}{}
+	}
+	if err := emitOpts.emitRunResumed(context.Background(), emRun,
+		&value.Plan{Trials: 1}, inflated); err != nil {
+		t.Fatalf("emitRunResumed: %v", err)
 	}
 
 	// perCaseMeans refuses the ragged shape it exists to refuse.
@@ -1028,7 +1061,7 @@ func TestValueRefusesBrokenSources(t *testing.T) {
 	t.Run("broken pool", func(t *testing.T) {
 		t.Parallel()
 		st := openTestStore(t)
-		createBaselineRun(t, st, "base-1", []string{"m"})
+		readyBaseline(t, st, "base-1")
 		opts := ValueOptions{
 			RunID: "run-1", BaselineRunID: "base-1",
 			Agent: stubAgent{}, AgentRef: &knov1.AgentRef{Ref: "fake:", Scheme: "fake"},
@@ -1046,7 +1079,7 @@ func TestValueRefusesBrokenSources(t *testing.T) {
 	t.Run("broken evals", func(t *testing.T) {
 		t.Parallel()
 		st := openTestStore(t)
-		createBaselineRun(t, st, "base-1", []string{"m"})
+		readyBaseline(t, st, "base-1")
 		opts := ValueOptions{
 			RunID: "run-1", BaselineRunID: "base-1",
 			Agent: stubAgent{}, AgentRef: &knov1.AgentRef{Ref: "fake:", Scheme: "fake"},
@@ -1221,27 +1254,42 @@ func (evalsOpenError) Cases(context.Context) (iter.Seq2[*Case, error], error) {
 	return nil, errors.New("evals source cannot be opened")
 }
 
+// readyBaseline creates a completed baseline with one score, so the stage
+// and the quote get past baselineCases to the branch under test.
+func readyBaseline(t *testing.T, st store.Store, runID string) {
+	t.Helper()
+	createBaselineRun(t, st, runID, []string{"m"})
+	if err := st.RecordOutcome(context.Background(), runID, &store.Outcome{
+		CaseID: "c0", Score: &knov1.Score{CaseId: "c0", Value: 0.9, Passed: true},
+	}); err != nil {
+		t.Fatalf("recording baseline outcome: %v", err)
+	}
+}
+
 // TestValueRefusesAtEveryEntryPoint drives the stage's own error returns —
 // not the helpers', the stage's: an invalid option set, a baseline that is
-// not a baseline, and an evals source that cannot be opened.
+// not a baseline, and an evals source that cannot be opened. Each subtest
+// owns its store, so a parallel sibling cannot change what another reads.
 func TestValueRefusesAtEveryEntryPoint(t *testing.T) {
 	t.Parallel()
 
-	st := openTestStore(t)
-	base := ValueOptions{
-		RunID: "run-1", BaselineRunID: "base-1",
-		Agent: stubAgent{}, AgentRef: &knov1.AgentRef{Ref: "fake:", Scheme: "fake"},
-		Goal:     fixedDirectionGoal{dir: knov1.Direction_DIRECTION_MAXIMIZE, domain: knov1.ScoreDomain_SCORE_DOMAIN_BINARY},
-		GoalName: "g",
-		Guard:    budget.New(budget.Limits{}, nil, 0),
-		Store:    st, Evals: Seal(&caseSource{}),
-		Routing: value.Options{Seed: 1},
+	newBase := func(t *testing.T, st store.Store) (ValueOptions, stubPool) {
+		t.Helper()
+		return ValueOptions{
+				RunID: "run-1", BaselineRunID: "base-1",
+				Agent: stubAgent{}, AgentRef: &knov1.AgentRef{Ref: "fake:", Scheme: "fake"},
+				Goal:     fixedDirectionGoal{dir: knov1.Direction_DIRECTION_MAXIMIZE, domain: knov1.ScoreDomain_SCORE_DOMAIN_BINARY},
+				GoalName: "g",
+				Guard:    budget.New(budget.Limits{}, nil, 0),
+				Store:    st, Evals: Seal(&caseSource{}),
+				Routing: value.Options{Seed: 1},
+			},
+			stubPool{assets: []*Asset{{Id: "a1"}}}
 	}
-	pool := stubPool{assets: []*Asset{{Id: "a1"}}}
 
 	t.Run("invalid options", func(t *testing.T) {
 		t.Parallel()
-		opts := base
+		opts, pool := newBase(t, openTestStore(t))
 		opts.Store = nil
 		if _, err := opts.Value(context.Background(), pool); err == nil {
 			t.Error("an invalid option set ran the stage")
@@ -1249,14 +1297,18 @@ func TestValueRefusesAtEveryEntryPoint(t *testing.T) {
 	})
 	t.Run("wrong-stage baseline", func(t *testing.T) {
 		t.Parallel()
+		st := openTestStore(t)
 		ensureValueRun(t, st, "base-1") // a VALUE run where a baseline is required
-		if _, err := base.Value(context.Background(), pool); err == nil {
+		opts, pool := newBase(t, st)
+		if _, err := opts.Value(context.Background(), pool); err == nil {
 			t.Error("a non-baseline reference was accepted")
 		}
 	})
 	t.Run("unopenable evals", func(t *testing.T) {
 		t.Parallel()
-		opts := base
+		st := openTestStore(t)
+		readyBaseline(t, st, "base-1")
+		opts, pool := newBase(t, st)
 		opts.Evals = Seal(evalsOpenError{})
 		if _, err := opts.Value(context.Background(), pool); err == nil {
 			t.Error("an evals source that cannot be opened was accepted")
@@ -1557,4 +1609,97 @@ func TestValueResumeCompletedReadFailure(t *testing.T) {
 	if _, err := opts.Value(context.Background(), stubPool{assets: []*Asset{{Id: "a1"}}}); err == nil {
 		t.Error("a resume over a CompletedMeasurements failure produced no error")
 	}
+}
+
+// TestModelGateReadsValueOutcomes pins the generalized hook: the gate must
+// read a Value measurement's model — the earlier shape asserted Baseline's
+// concrete outcome type, failed the assert, and never fired for Value.
+func TestModelGateReadsValueOutcomes(t *testing.T) {
+	t.Parallel()
+
+	gate := newModelGate(&knov1.Run{CaseExecution: &knov1.CaseExecution{
+		ResolvedModels: []string{"m1"},
+	}})
+	r := executor.Result[*Case, measureOutcome]{
+		Item:  &Case{Id: "c1"},
+		Value: &measureOutcome{Response: &Response{ResolvedModel: "m2"}},
+	}
+	if err := gate.afterRecord(r); err == nil {
+		t.Error("the gate accepted a model the run never recorded; the delta " +
+			"would mix two models into one measurement")
+	}
+	match := executor.Result[*Case, measureOutcome]{
+		Item:  &Case{Id: "c1"},
+		Value: &measureOutcome{Response: &Response{ResolvedModel: "m1"}},
+	}
+	if err := gate.afterRecord(match); err != nil {
+		t.Errorf("the gate refused a recorded model: %v", err)
+	}
+}
+
+// TestQuoteRefusesAtEveryEntryPoint: the pre-flight quote is the consent
+// figure, and its refusals must be exactly as free as the run's.
+func TestQuoteRefusesAtEveryEntryPoint(t *testing.T) {
+	t.Parallel()
+
+	newBase := func(t *testing.T, st store.Store) (ValueOptions, stubPool) {
+		t.Helper()
+		return ValueOptions{
+				RunID: "run-1", BaselineRunID: "base-1",
+				Agent: stubAgent{}, AgentRef: &knov1.AgentRef{Ref: "fake:", Scheme: "fake"},
+				Goal:     fixedDirectionGoal{dir: knov1.Direction_DIRECTION_MAXIMIZE, domain: knov1.ScoreDomain_SCORE_DOMAIN_BINARY},
+				GoalName: "g",
+				Guard:    budget.New(budget.Limits{}, nil, 0),
+				Store:    st, Evals: Seal(&caseSource{}),
+				Routing: value.Options{Seed: 1},
+			},
+			stubPool{assets: []*Asset{{Id: "a1"}}}
+	}
+
+	t.Run("invalid options", func(t *testing.T) {
+		t.Parallel()
+		opts, pool := newBase(t, openTestStore(t))
+		opts.Store = nil
+		if _, err := opts.Quote(context.Background(), pool); err == nil {
+			t.Error("an invalid option set quoted")
+		}
+	})
+	t.Run("wrong-stage baseline", func(t *testing.T) {
+		t.Parallel()
+		st := openTestStore(t)
+		ensureValueRun(t, st, "base-1")
+		opts, pool := newBase(t, st)
+		if _, err := opts.Quote(context.Background(), pool); err == nil {
+			t.Error("a non-baseline reference quoted")
+		}
+	})
+	t.Run("unopenable evals", func(t *testing.T) {
+		t.Parallel()
+		st := openTestStore(t)
+		readyBaseline(t, st, "base-1")
+		opts, pool := newBase(t, st)
+		opts.Evals = Seal(evalsOpenError{})
+		if _, err := opts.Quote(context.Background(), pool); err == nil {
+			t.Error("an unopenable evals source quoted")
+		}
+	})
+	t.Run("broken pool", func(t *testing.T) {
+		t.Parallel()
+		st := openTestStore(t)
+		readyBaseline(t, st, "base-1")
+		opts, pool := newBase(t, st)
+		if _, err := opts.Quote(context.Background(), erroringPool{}); err == nil {
+			t.Error("a broken pool source quoted")
+		}
+		_ = pool
+	})
+	t.Run("empty pool", func(t *testing.T) {
+		t.Parallel()
+		st := openTestStore(t)
+		readyBaseline(t, st, "base-1")
+		opts, _ := newBase(t, st)
+		if _, err := opts.Quote(context.Background(), stubPool{}); err == nil {
+			t.Error("an empty pool quoted; routing has nothing to do")
+		}
+	})
 }

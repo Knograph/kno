@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/knograph/kno/core/errs"
-	"github.com/knograph/kno/executor"
 	knov1 "github.com/knograph/kno/gen/kno/v1"
 )
 
@@ -103,9 +102,15 @@ func (g *modelGate) check(now string) error {
 // the enlarged set, matches, and completes a blended run. Both are
 // docs/debt.md#55, and neither is annotated on the Run today.
 func (g *modelGate) afterRecord(result any) error {
-	r, ok := result.(executor.Result[*Case, caseOutcome])
-	if !ok || r.Value == nil {
+	// The executor hands the Result over as `any`; both stages' outcome types
+	// implement Model() so the gate reads the response's model without
+	// knowing which stage produced it. A type assert on Baseline's concrete
+	// outcome type is how the Value stage wired this hook and the gate never
+	// fired — the assert failed, returned nil, and the run blended two models
+	// with no error.
+	r, ok := result.(interface{ Model() string })
+	if !ok {
 		return nil
 	}
-	return g.check(r.Value.Response.GetResolvedModel())
+	return g.check(r.Model())
 }

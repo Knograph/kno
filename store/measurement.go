@@ -261,6 +261,26 @@ func (s *SQLite) RecordMeasurement(ctx context.Context, runID string, m *Measure
 	return nil
 }
 
+// MeasurementCounts aggregates a run's measurements for CaseExecution:
+// attempted, scored, and errored, read from what is DURABLE rather than from
+// in-memory counters, so a resumed run's close reports the WHOLE run — the
+// first process's paid rows included — instead of only the tail this process
+// happened to execute.
+func (s *SQLite) MeasurementCounts(ctx context.Context, runID string) (attempted, scored, errored int32, err error) {
+	db, err := s.conn()
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	row := db.QueryRowContext(ctx,
+		`SELECT COUNT(*), COUNT(*) FILTER (WHERE scored = 1),
+		        COUNT(*) FILTER (WHERE err_code != '')
+		   FROM measurements WHERE run_id = ?`, runID)
+	if err := row.Scan(&attempted, &scored, &errored); err != nil {
+		return 0, 0, 0, fmt.Errorf("counting measurements for %s: %w", runID, err)
+	}
+	return attempted, scored, errored, nil
+}
+
 // CompletedMeasurements returns the key of every measurement already recorded.
 //
 // What a Value resume consults, for the same reason CompletedCases exists for

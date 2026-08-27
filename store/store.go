@@ -93,6 +93,12 @@ type Store interface {
 	// nothing done and re-pay for the entire run.
 	CompletedMeasurements(ctx context.Context, runID string) (map[MeasurementKey]struct{}, error)
 
+	// MeasurementCounts aggregates a run's measurements from the durable
+	// rows: attempted, scored, errored. Value's close reads this rather than
+	// in-memory counters, so a resumed run's CaseExecution describes the
+	// WHOLE run, first process included.
+	MeasurementCounts(ctx context.Context, runID string) (attempted, scored, errored int32, err error)
+
 	// CaseScores returns the recorded score of every Case in a run that
 	// produced one, distinguishing "no score" from "scored, number gone".
 	//

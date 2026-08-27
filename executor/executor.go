@@ -33,6 +33,23 @@ type Result[I proto.Message, T any] struct {
 // Done reports whether the item succeeded.
 func (r Result[I, T]) Done() bool { return r.Err == nil }
 
+// ModelCarrier is implemented by outcome types whose Value holds the model
+// that answered, so a stage-agnostic hook can read it without knowing the
+// stage's concrete outcome type.
+type ModelCarrier interface{ Model() string }
+
+// Model reports which model answered, or "" — the one piece of an outcome
+// the mid-run model gate needs, abstracted over the generic T.
+func (r Result[I, T]) Model() string {
+	if r.Value == nil {
+		return ""
+	}
+	if m, ok := any(r.Value).(ModelCarrier); ok {
+		return m.Model()
+	}
+	return ""
+}
+
 // Options configures a Run.
 type Options struct {
 	// Concurrency bounds in-flight work. Zero means a conservative default.

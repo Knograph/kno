@@ -21,20 +21,32 @@ func renderValue(
 	_ jsonl.SplitCounts,
 	runID string,
 ) error {
-	if f.jsonOut {
-		return renderValueJSON(out, res, runID)
+	// The stored deltas are sign-corrected — positive is better, whatever the
+	// Goal's direction — and the display un-negates MINIMIZE once, here, so
+	// the report reads in the Goal's own units. The negation happens in
+	// exactly one place (the engine's pairs) and the un-negation in exactly
+	// one place (here).
+	dir := 1.0
+	if res.GoalDirection == knov1.Direction_DIRECTION_MINIMIZE {
+		dir = -1.0
 	}
-	return renderValueHuman(out, res, runID)
+	if f.jsonOut {
+		return renderValueJSON(out, res, runID, dir)
+	}
+	return renderValueHuman(out, res, runID, dir)
 }
 
 // renderValueHuman prints one line per Asset: the delta with its interval,
 // the harm bound, and the reason when there is no number.
-func renderValueHuman(out io.Writer, res *core.ValueResult, runID string) error {
+func renderValueHuman(out io.Writer, res *core.ValueResult, runID string, dir float64) error {
 	if _, err := fmt.Fprintf(out, "Value run %s (%s)\n\n", runID, res.Status); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(out, "%-12s  %-28s  %-18s  %s\n",
-		"ASSET", "DELTA (95% CI)", "CONTROL", "NOTE"); err != nil {
+	// "positive = goal direction": a MINIMIZE goal shows its own units here,
+	// so +0.05 means "5 points worse" on a lower-is-better goal — the sign
+	// follows the Goal, not a universal convention.
+	if _, err := fmt.Fprintf(out, "%-12s  %-34s  %-18s  %s\n",
+		"ASSET", "DELTA (95% CI, positive = goal dir)", "CONTROL", "NOTE"); err != nil {
 		return err
 	}
 	for _, v := range res.Valuations {
@@ -50,7 +62,8 @@ func renderValueHuman(out io.Writer, res *core.ValueResult, runID string) error 
 			note = "sample too small or ragged to form an interval"
 		default:
 			if iv := v.GetDeltaInterval(); iv != nil {
-				delta = fmt.Sprintf("%+.4f  [%+.4f, %+.4f]", v.GetDeltaGoal(), iv.GetLow(), iv.GetHigh())
+				delta = fmt.Sprintf("%+.4f  [%+.4f, %+.4f]",
+					dir*v.GetDeltaGoal(), dir*iv.GetLow(), dir*iv.GetHigh())
 			}
 			if iv := v.GetControlInterval(); iv != nil {
 				control = fmt.Sprintf("low %+.4f", iv.GetLow())
@@ -59,7 +72,7 @@ func renderValueHuman(out io.Writer, res *core.ValueResult, runID string) error 
 				}
 			}
 			if v.GetNDropped() > 0 {
-				note = fmt.Sprintf("%d of %d pairs dropped", v.GetNDropped(), v.GetNPairs()+v.GetNDropped())
+				note = fmt.Sprintf("%d measurements dropped", v.GetNDropped())
 			}
 		}
 		if _, err := fmt.Fprintf(out, "%-12s  %-28s  %-18s  %s\n",

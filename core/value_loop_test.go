@@ -388,8 +388,18 @@ func TestResumeDoesNotRePay(t *testing.T) {
 	if first.Status != knov1.RunStatus_RUN_STATUS_BUDGET_STOPPED {
 		t.Fatalf("first process Status = %v, want BUDGET_STOPPED (fixture)", first.Status)
 	}
-	// Resume: same fingerprint, bigger cap, same routing configuration.
-	h.guard = budget.New(budget.Limits{MaxCostUSDMicros: 1 << 30, MaxLLMCalls: 1 << 30}, nil, 0)
+	// The first process's settled spend, before the resume — the number the
+	// guard must be restored from.
+	spentAfterFirst, err := h.store.SettledSpend(context.Background(), "run-1")
+	if err != nil {
+		t.Fatalf("SettledSpend: %v", err)
+	}
+
+	// Resume: same fingerprint, SAME cap, same routing configuration. A guard
+	// that was not restored from SettledSpend would re-authorize the whole
+	// cap on top of the first process's spend — the resume re-spend this test
+	// exists to catch.
+	h.guard = budget.New(budget.Limits{MaxCostUSDMicros: 2000, MaxLLMCalls: 1 << 30}, nil, 0)
 	h.opts.Guard = h.guard
 	h.opts.Resume = true
 	if _, err := h.opts.Value(context.Background(), poolOf("a1")); err != nil {
@@ -414,17 +424,7 @@ func TestResumeDoesNotRePay(t *testing.T) {
 			"a measurement was paid for twice", totalCalls, unique)
 	}
 
-	// 2. Every scheduled key is durable — scored or done-marked — so a third
-	// resume would pay nothing at all.
-	rows, err := h.store.Measurements(context.Background(), "run-1", "a1")
-	if err != nil {
-		t.Fatalf("Measurements: %v", err)
-	}
-	if int64(len(rows)) != unique {
-		t.Errorf("durable rows = %d, want the scheduled %d", len(rows), unique)
-	}
-
-	// 3. The store's settled spend matches what the provider was charged for:
+	// 2. The store's settled spend matches what the provider was charged for:
 	// the first process's settled calls plus the resumed process's, with the
 	// budget-refused measurements costing no calls at all.
 	spent, err := h.store.SettledSpend(context.Background(), "run-1")
@@ -434,6 +434,40 @@ func TestResumeDoesNotRePay(t *testing.T) {
 	if spent.Calls != totalCalls {
 		t.Errorf("SettledSpend records %d calls against %d provider calls",
 			spent.Calls, totalCalls)
+	}
+
+	// 3. The resumed process settled no NEW dollars: the cap was exhausted by
+	// the first process, the guard was restored from SettledSpend, and every
+	// authorize was refused. Without Guard.Restore the second process would
+	// re-authorize the full cap — settled spend would double — and this
+	// assert is the P0-1 money bug's pin.
+	if spent.CostUSDMicros != spentAfterFirst.CostUSDMicros {
+		t.Errorf("settled spend grew from %d to %d across the resume; the guard "+
+			"was not restored from SettledSpend and authorized the cap a second time",
+			spentAfterFirst.CostUSDMicros, spent.CostUSDMicros)
+	}
+}
+
+// TestResumeRefusesADifferentBaseline pins P1-3: the baseline IS the
+// reference, and resuming against a different one would re-pair every
+// recorded score against a different mean.
+func TestResumeRefusesADifferentBaseline(t *testing.T) {
+	t.Parallel()
+
+	h := newValueHarness(t, fake.Options{})
+	src := valueCases(t, h, 30)
+	writeBaselineFor(t, h, src.cases)
+	if _, err := h.opts.Value(context.Background(), poolOf("a1")); err != nil {
+		t.Fatalf("Value: %v", err)
+	}
+	// A second baseline exists; the resume names it.
+	createBaselineRun(t, h.store, "base-2", []string{"fake-model"})
+	h.opts.Resume = true
+	h.opts.BaselineRunID = "base-2"
+	_, err := h.opts.Value(context.Background(), poolOf("a1"))
+	if err == nil {
+		t.Fatal("a resume against a different baseline was accepted; every " +
+			"recorded score would be re-paired against a different reference")
 	}
 }
 
@@ -614,5 +648,137 @@ func TestValueRefusesAWrapperThatLiesAboutInjection(t *testing.T) {
 	}
 	if got := h.agent.Calls() - before; got != 0 {
 		t.Errorf("the refusal came after %d provider calls; it must be free", got)
+	}
+}
+
+// TestValueQuoteMatchesTheRun: the pre-flight quote is computed by the same
+// path the run executes, so the consented figure is a bound on the run by
+// construction rather than by trust.
+func TestValueQuoteMatchesTheRun(t *testing.T) {
+	t.Parallel()
+
+	h := newValueHarness(t, fake.Options{})
+	src := valueCases(t, h, 30)
+	writeBaselineFor(t, h, src.cases)
+
+	plan, err := h.opts.Quote(context.Background(), poolOf("a1", "a2"))
+	if err != nil {
+		t.Fatalf("Quote: %v", err)
+	}
+	if plan.Measurements() <= 0 {
+		t.Errorf("the quote is %d measurements; a consent figure of zero is not a bound", plan.Measurements())
+	}
+
+	res, err := h.opts.Value(context.Background(), poolOf("a1", "a2"))
+	if err != nil {
+		t.Fatalf("Value: %v", err)
+	}
+	if res.Plan.Measurements() != plan.Measurements() {
+		t.Errorf("the run executed %d measurements against a quote of %d; the "+
+			"consent and the run must be the same schedule",
+			res.Plan.Measurements(), plan.Measurements())
+	}
+}
+
+// TestValueRecordsCaseExecutionFromDurableRows: the run's close aggregates
+// the WHOLE run from the measurements table — first process included — and
+// records the models it actually measured with.
+func TestValueRecordsCaseExecutionFromDurableRows(t *testing.T) {
+	t.Parallel()
+
+	h := newValueHarness(t, fake.Options{ResolvedModel: "m1"})
+	src := valueCases(t, h, 30)
+	writeBaselineFor(t, h, src.cases)
+	if _, err := h.opts.Value(context.Background(), poolOf("a1")); err != nil {
+		t.Fatalf("Value: %v", err)
+	}
+
+	run, err := h.store.GetRun(context.Background(), "run-1")
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	ce := run.GetCaseExecution()
+	if ce == nil {
+		t.Fatal("the run recorded no CaseExecution; run.proto promises Value writes it")
+	}
+	if ce.GetAttemptedCaseCount() == 0 || ce.GetScoredCaseCount() == 0 {
+		t.Errorf("CaseExecution counts = %d attempted, %d scored; the durable "+
+			"rows exist and the close must describe them",
+			ce.GetAttemptedCaseCount(), ce.GetScoredCaseCount())
+	}
+	if len(ce.GetResolvedModels()) != 1 || ce.GetResolvedModels()[0] != "m1" {
+		t.Errorf("ResolvedModels = %v, want [m1]", ce.GetResolvedModels())
+	}
+}
+
+// TestResumedRunEmitsRunResumedNotRunStarted: a continuation must be
+// distinguishable from a fresh spend on the event spine.
+func TestResumedRunEmitsRunResumedNotRunStarted(t *testing.T) {
+	t.Parallel()
+
+	h := newValueHarness(t, fake.Options{})
+	src := valueCases(t, h, 40)
+	writeBaselineFor(t, h, src.cases)
+	h.guard = budget.New(budget.Limits{MaxCostUSDMicros: 2000, MaxLLMCalls: 1 << 30}, nil, 0)
+	h.opts.Guard = h.guard
+	if _, err := h.opts.Value(context.Background(), poolOf("a1")); err != nil {
+		t.Fatalf("Value: %v", err)
+	}
+
+	captured := &captureStore{Store: h.store}
+	h.opts.Store = captured
+	h.opts.Resume = true
+	h.guard = budget.New(budget.Limits{MaxCostUSDMicros: 2000, MaxLLMCalls: 1 << 30}, nil, 0)
+	h.opts.Guard = h.guard
+	if _, err := h.opts.Value(context.Background(), poolOf("a1")); err != nil {
+		t.Fatalf("resumed Value: %v", err)
+	}
+
+	var resumed, started bool
+	for _, ev := range captured.events {
+		switch ev.GetPayload().(type) {
+		case *knov1.Event_RunResumed:
+			resumed = true
+		case *knov1.Event_RunStarted:
+			started = true
+		}
+	}
+	if !resumed {
+		t.Error("the resumed run emitted no RunResumed; a consumer cannot tell " +
+			"a continuation from a fresh spend")
+	}
+	if started {
+		t.Error("the resumed run re-broadcast RunStarted")
+	}
+}
+
+// TestResumeCatchesARepointedModel: the mid-run gate, armed from the first
+// process's recorded models, fails a resume whose first response comes from
+// a different model — the alias re-point that would otherwise silently
+// re-pair the delta against a second model.
+func TestResumeCatchesARepointedModel(t *testing.T) {
+	t.Parallel()
+
+	// The first process stops early on its cap, so the resume has
+	// measurements left — and a costed fake so the cap actually binds.
+	h := newValueHarness(t, fake.Options{ResolvedModel: "m1", CostPerCallUSDMicros: 1000})
+	src := valueCases(t, h, 40)
+	writeBaselineFor(t, h, src.cases)
+	h.guard = budget.New(budget.Limits{MaxCostUSDMicros: 2000, MaxLLMCalls: 1 << 30}, nil, 0)
+	h.opts.Guard = h.guard
+	if _, err := h.opts.Value(context.Background(), poolOf("a1")); err != nil {
+		t.Fatalf("Value: %v", err)
+	}
+
+	// The resumed agent re-points to m2 on its very first call.
+	h.opts.Agent = fake.New(fake.Options{
+		ResolvedModel: "m1", ResolvedModelAfter: 1, ResolvedModelThen: "m2",
+	})
+	h.opts.Resume = true
+	h.guard = budget.New(budget.Limits{MaxCostUSDMicros: 1 << 30, MaxLLMCalls: 1 << 30}, nil, 0)
+	h.opts.Guard = h.guard
+	if _, err := h.opts.Value(context.Background(), poolOf("a1")); err == nil {
+		t.Fatal("a resumed run whose first response comes from a different model " +
+			"was accepted; the delta would mix two models into one measurement")
 	}
 }

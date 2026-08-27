@@ -268,6 +268,22 @@ func runValue(ctx context.Context, out, errOut io.Writer, f valueFlags) error {
 		Routing:                 routing,
 	}
 
+	// The consent figure, printed BEFORE the run in --yes human mode: the
+	// measurement count the quote's own formula produces, so the scrollback
+	// shows what was agreed to. JSON mode stays a pure document — the figure
+	// travels in the report instead.
+	if f.yes && !f.jsonOut {
+		plan, quoteErr := opts.Quote(ctx, pool)
+		if quoteErr != nil {
+			return quoteErr
+		}
+		if _, err := fmt.Fprintf(out,
+			"Planning %d measurements over %d assets against baseline %s.\n",
+			plan.Measurements(), len(plan.Routed), f.baselineRunID); err != nil {
+			return err
+		}
+	}
+
 	res, runErr := opts.Value(ctx, pool)
 	if res == nil {
 		return runErr

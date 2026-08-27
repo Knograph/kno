@@ -274,6 +274,11 @@ type Run struct {
 	// field existed have it unset, and unset means "trials unknown", never a
 	// refusal.
 	Trials *int32 `protobuf:"varint,28,opt,name=trials,proto3,oneof" json:"trials,omitempty"`
+	// The baseline run this Value run paired against. Part of the resume
+	// consent: a resume against a DIFFERENT baseline would silently re-pair
+	// every recorded score against a different reference, mixing two baselines
+	// into one delta.
+	BaselineRunId string `protobuf:"bytes,30,opt,name=baseline_run_id,json=baselineRunId,proto3" json:"baseline_run_id,omitempty"`
 	// The serialized value.Plan a Value run executed under, recorded at close.
 	// A resume consumes this instead of re-running routing — re-running with a
 	// drifted ControlReserve, seed, or Asset set would produce measurements the
@@ -519,6 +524,13 @@ func (x *Run) GetTrials() int32 {
 		return *x.Trials
 	}
 	return 0
+}
+
+func (x *Run) GetBaselineRunId() string {
+	if x != nil {
+		return x.BaselineRunId
+	}
+	return ""
 }
 
 func (x *Run) GetValuePlan() []byte {
@@ -956,7 +968,7 @@ var File_kno_v1_run_proto protoreflect.FileDescriptor
 
 const file_kno_v1_run_proto_rawDesc = "" +
 	"\n" +
-	"\x10kno/v1/run.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/portfolio.proto\"\xd6\n" +
+	"\x10kno/v1/run.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/portfolio.proto\"\xfe\n" +
 	"\n" +
 	"\x03Run\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12#\n" +
@@ -974,7 +986,8 @@ const file_kno_v1_run_proto_rawDesc = "" +
 	" \x01(\tR\x10incompleteReason\x12+\n" +
 	"\x11input_fingerprint\x18\v \x01(\tR\x10inputFingerprint\x12*\n" +
 	"\x11eval_content_hash\x18\x15 \x01(\tR\x0fevalContentHash\x12\x1b\n" +
-	"\x06trials\x18\x1c \x01(\x05H\x01R\x06trials\x88\x01\x01\x12\x1d\n" +
+	"\x06trials\x18\x1c \x01(\x05H\x01R\x06trials\x88\x01\x01\x12&\n" +
+	"\x0fbaseline_run_id\x18\x1e \x01(\tR\rbaselineRunId\x12\x1d\n" +
 	"\n" +
 	"value_plan\x18\x1d \x01(\fR\tvaluePlan\x12\x1d\n" +
 	"\n" +

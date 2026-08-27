@@ -125,6 +125,12 @@ message Run {
   // refusal.
   optional int32 trials = 28;
 
+  // The baseline run this Value run paired against. Part of the resume
+  // consent: a resume against a DIFFERENT baseline would silently re-pair
+  // every recorded score against a different reference, mixing two baselines
+  // into one delta.
+  string baseline_run_id = 30;
+
   // The serialized value.Plan a Value run executed under, recorded at close.
   // A resume consumes this instead of re-running routing — re-running with a
   // drifted ControlReserve, seed, or Asset set would produce measurements the

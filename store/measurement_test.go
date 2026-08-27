@@ -776,3 +776,62 @@ func TestNewReadersFailClosedAfterClose(t *testing.T) {
 		t.Error("Valuations succeeded on a closed store")
 	}
 }
+
+// TestMeasurementCountsAggregatesFromDurableRows: attempted/scored/errored
+// come from the measurements table, done-markers counted as errored — the
+// shape Value's close reads to describe the WHOLE run across a resume.
+func TestMeasurementCountsAggregatesFromDurableRows(t *testing.T) {
+	t.Parallel()
+
+	st := openMeasurementStore(t)
+	createMeasurementRun(t, st, "run-1")
+	writeMeasurementRow(t, st, "run-1", "a", "c1", store.ArmTreatment, 1, 0.9)
+	writeMeasurementRow(t, st, "run-1", "a", "c2", store.ArmTreatment, 1, 0.8)
+	// A done-marker: budget-refused, no score.
+	if err := st.RecordMeasurement(context.Background(), "run-1", &store.Measurement{
+		Key: store.MeasurementKey{AssetID: "a", CaseID: "c3", Arm: store.ArmTreatment, Trial: 1},
+		Err: "BUDGET_EXCEEDED",
+	}); err != nil {
+		t.Fatalf("recording done-marker: %v", err)
+	}
+
+	attempted, scored, errored, err := st.MeasurementCounts(context.Background(), "run-1")
+	if err != nil {
+		t.Fatalf("MeasurementCounts: %v", err)
+	}
+	if attempted != 3 || scored != 2 || errored != 1 {
+		t.Errorf("counts = %d/%d/%d, want 3/2/1 (done-marker counted as errored)",
+			attempted, scored, errored)
+	}
+}
+
+// openMeasurementStore builds a store and a Value run row for the
+// measurements FK.
+func openMeasurementStore(t *testing.T) *store.SQLite {
+	t.Helper()
+	st, err := store.NewSQLite(context.Background(), t.TempDir()+"/kno.db")
+	if err != nil {
+		t.Fatalf("opening store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	return st
+}
+
+func createMeasurementRun(t *testing.T, st *store.SQLite, runID string) {
+	t.Helper()
+	if err := st.CreateRun(context.Background(), &knov1.Run{
+		Id: runID, Stage: knov1.Stage_STAGE_VALUE,
+	}); err != nil {
+		t.Fatalf("creating run: %v", err)
+	}
+}
+
+func writeMeasurementRow(t *testing.T, st *store.SQLite, runID, assetID, caseID string, arm store.Arm, trial int32, score float64) {
+	t.Helper()
+	if err := st.RecordMeasurement(context.Background(), runID, &store.Measurement{
+		Key:   store.MeasurementKey{AssetID: assetID, CaseID: caseID, Arm: arm, Trial: trial},
+		Score: &knov1.Score{CaseId: caseID, Value: score},
+	}); err != nil {
+		t.Fatalf("recording measurement: %v", err)
+	}
+}

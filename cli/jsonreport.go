@@ -176,9 +176,10 @@ func decodeRaw(b []byte) (map[string]any, error) {
 // as jsonReport: a hand-written shape aimed at a jq pipeline, not a kno.v1
 // type.
 type valueReport struct {
-	RunID      string                 `json:"run_id"`
-	Status     string                 `json:"status"`
-	Valuations []valueReportValuation `json:"valuations"`
+	RunID         string                 `json:"run_id"`
+	Status        string                 `json:"status"`
+	GoalDirection string                 `json:"goal_direction"`
+	Valuations    []valueReportValuation `json:"valuations"`
 }
 
 type valueReportValuation struct {
@@ -196,8 +197,8 @@ type valueReportValuation struct {
 }
 
 // renderValueJSON emits the machine-readable Value report.
-func renderValueJSON(out io.Writer, res *core.ValueResult, runID string) error {
-	rep := valueReport{RunID: runID, Status: res.Status.String()}
+func renderValueJSON(out io.Writer, res *core.ValueResult, runID string, dir float64) error {
+	rep := valueReport{RunID: runID, Status: res.Status.String(), GoalDirection: res.GoalDirection.String()}
 	for _, v := range res.Valuations {
 		row := valueReportValuation{
 			AssetID:     v.GetAssetId(),
@@ -208,13 +209,16 @@ func renderValueJSON(out io.Writer, res *core.ValueResult, runID string) error {
 			NDev:        v.GetNDev(),
 		}
 		if iv := v.GetDeltaInterval(); iv != nil {
-			d := v.GetDeltaGoal()
-			low, high := iv.GetLow(), iv.GetHigh()
+			// Un-negated like the human report: the document carries
+			// goal_direction, so a MINIMIZE consumer can read the Goal's own
+			// units.
+			d := dir * v.GetDeltaGoal()
+			low, high := dir*iv.GetLow(), dir*iv.GetHigh()
 			row.DeltaGoal, row.Low, row.High = &d, &low, &high
 		}
 		if iv := v.GetControlInterval(); iv != nil {
-			d := v.GetDeltaControl()
-			low := iv.GetLow()
+			d := dir * v.GetDeltaControl()
+			low := dir * iv.GetLow()
 			row.DeltaControl, row.ControlLow = &d, &low
 		}
 		rep.Valuations = append(rep.Valuations, row)

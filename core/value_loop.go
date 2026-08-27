@@ -44,6 +44,15 @@ type measureOutcome struct {
 	SettledCalls    int64
 }
 
+// Model reports which model answered, for the mid-run gate — the one field
+// both stages' outcome types share with it.
+func (o *measureOutcome) Model() string {
+	if o == nil || o.Response == nil {
+		return ""
+	}
+	return o.Response.GetResolvedModel()
+}
+
 // valueCounts accumulates the run-level counters. The sink runs on one
 // goroutine per executor invocation, and a Value run invokes the executor
 // once per (Asset, arm, trial) — so the counts are atomic.
@@ -51,6 +60,39 @@ type valueCounts struct {
 	attempted atomic.Int32
 	scored    atomic.Int32
 	errored   atomic.Int32
+
+	// models collects the resolved models the run actually measured with, so
+	// CaseExecution carries what a mid-run model gate and a reader need. The
+	// sink is the only writer and it is single-goroutine per executor pass,
+	// but passes are sequential only within an arm — the mutex keeps the
+	// arm-to-arm handoff honest.
+	modelMu sync.Mutex
+	seen    map[string]bool
+}
+
+// recordModel remembers one resolved model.
+func (c *valueCounts) recordModel(m string) {
+	if m == "" {
+		return
+	}
+	c.modelMu.Lock()
+	defer c.modelMu.Unlock()
+	if c.seen == nil {
+		c.seen = make(map[string]bool)
+	}
+	c.seen[m] = true
+}
+
+// models returns the sorted set of resolved models.
+func (c *valueCounts) models() []string {
+	c.modelMu.Lock()
+	defer c.modelMu.Unlock()
+	out := make([]string, 0, len(c.seen))
+	for m := range c.seen {
+		out = append(out, m)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // valueEmitter serializes event writes with the same discipline Baseline's
@@ -165,24 +207,35 @@ func (o ValueOptions) Value(ctx context.Context, pool Pool) (*ValueResult, error
 		return nil, err
 	}
 	result := &ValueResult{
-		RunID:      o.RunID,
-		Valuations: make([]*Valuation, 0, len(plan.Routed)),
-		Plan:       plan,
+		RunID:         o.RunID,
+		Valuations:    make([]*Valuation, 0, len(plan.Routed)),
+		Plan:          plan,
+		GoalDirection: o.Goal.Direction(),
 	}
 
 	em := &valueEmitter{}
-	if err := o.emitRunStarted(ctx, em, plan, scheduled); err != nil {
+	if !o.Resume {
+		if err := o.emitRunStarted(ctx, em, plan, scheduled); err != nil {
+			return nil, err
+		}
+	} else if err := o.emitRunResumed(ctx, em, plan, completed); err != nil {
 		return nil, err
 	}
 
 	var stopReason atomic.Int32
 	counts := &valueCounts{}
+	// The mid-run model gate, armed from the RESUMED run's record: a provider
+	// alias re-pointing mid-run changes what every later delta measures, and
+	// a Value run's wall-clock is a multiple of Baseline's. The first process
+	// has nothing recorded to arm from — the inert gate costs nothing — and
+	// its close records the models for the resume to check.
+	gate := newModelGate(run)
 	for _, routing := range plan.Routed {
 		if ctx.Err() != nil {
 			stopReason.Store(int32(knov1.RunStatus_RUN_STATUS_INTERRUPTED))
 			break
 		}
-		if err := o.measureAsset(ctx, em, routing, plan, baseline, cases, completed, result, counts, &stopReason); err != nil {
+		if err := o.measureAsset(ctx, em, gate, routing, plan, baseline, cases, completed, result, counts, &stopReason); err != nil {
 			return nil, err
 		}
 		if stopReason.Load() != 0 {
@@ -209,6 +262,45 @@ func (o ValueOptions) Value(ctx context.Context, pool Pool) (*ValueResult, error
 		return result, fmt.Errorf("an event write failed mid-run: %w", *f)
 	}
 	return result, nil
+}
+
+// Quote computes the routing plan a Value run would execute under, without
+// spending: the figure the user consents to before the first authorize. The
+// run re-computes the plan itself — deterministic under the same seed — and
+// asserts the schedule against it, so the quoted number is a bound on the
+// run by construction rather than by trust.
+func (o ValueOptions) Quote(ctx context.Context, pool Pool) (*value.Plan, error) {
+	if err := o.validate(pool); err != nil {
+		return nil, err
+	}
+	baseline, err := o.baselineCases(ctx)
+	if err != nil {
+		return nil, err
+	}
+	cases, err := o.casesByID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	refs, _, err := caseRefs(casesSeq(cases), baseline)
+	if err != nil {
+		return nil, err
+	}
+	assets, err := o.sortedAssets(ctx, pool)
+	if err != nil {
+		return nil, err
+	}
+	plan, err := value.Route(refs, assetRefs(assets), o.Routing)
+	if err != nil {
+		return nil, err
+	}
+	scheduled := 0
+	for i := range plan.Routed {
+		scheduled += len(measurementsFor(plan.Routed[i], plan, plan.Routed[i].AssetID))
+	}
+	if err := assertQuoteBounds(scheduled, plan); err != nil {
+		return nil, err
+	}
+	return plan, nil
 }
 
 // casesSeq adapts a materialized slice to the iterator shape caseRefs reads.
@@ -285,6 +377,7 @@ func (o ValueOptions) openRun(ctx context.Context, plan *value.Plan) (*knov1.Run
 			InputFingerprint: o.InputFingerprint,
 			GoalScoreDomain:  o.Goal.Domain(),
 			SamplingSeed:     proto.Int64(plan.Seed),
+			BaselineRunId:    o.BaselineRunID,
 			DevCaseCount:     int32(plan.EligibleCases), //nolint:gosec // bounded by the eval set
 		}
 		if err := o.Store.CreateRun(ctx, run); err != nil {
@@ -301,6 +394,15 @@ func (o ValueOptions) openRun(ctx context.Context, plan *value.Plan) (*knov1.Run
 		return nil, nil, errs.ErrInvalidInput.
 			WithFix("resume the same run with the same evals, goal, and agent").
 			Wrap(fmt.Errorf("the checkpoint's inputs do not match this configuration"))
+	}
+	// The baseline IS the reference. Resuming against a different one would
+	// silently re-pair every recorded score against a different mean, mixing
+	// two baselines into one delta.
+	if run.GetBaselineRunId() != "" && run.GetBaselineRunId() != o.BaselineRunID {
+		return nil, nil, errs.ErrInvalidInput.
+			WithFix("resume against the same baseline run this run recorded").
+			Wrap(fmt.Errorf("the checkpoint was measured against baseline %s, not %s",
+				run.GetBaselineRunId(), o.BaselineRunID))
 	}
 	if len(run.GetValuePlan()) > 0 {
 		var recorded value.Plan
@@ -319,6 +421,15 @@ func (o ValueOptions) openRun(ctx context.Context, plan *value.Plan) (*knov1.Run
 	if err != nil {
 		return nil, nil, fmt.Errorf("reading completed measurements: %w", err)
 	}
+	// The guard is in-memory. Without this a resumed run believes it has
+	// spent nothing and can consume its cap a second time — a $10 consent
+	// authorizing $18 of work. The store is the only thing that outlives the
+	// process, and SettledSpend is what the first process actually settled.
+	restored, err := o.Store.SettledSpend(ctx, o.RunID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("loading prior spend: %w", err)
+	}
+	o.Guard.Restore(restored)
 	return run, completed, nil
 }
 
@@ -348,6 +459,7 @@ func equalPlans(a, b *value.Plan) bool {
 func (o ValueOptions) measureAsset(
 	ctx context.Context,
 	em *valueEmitter,
+	gate *modelGate,
 	routing value.AssetRouting,
 	plan *value.Plan,
 	baseline map[string]store.CaseScore,
@@ -425,7 +537,7 @@ func (o ValueOptions) measureAsset(
 		if len(arm.ids) == 0 {
 			continue
 		}
-		if err := o.measureArm(ctx, em, arm.arm, arm.agent, arm.ids, routing.AssetID, plan, cases, completed, counts, stopReason); err != nil {
+		if err := o.measureArm(ctx, em, gate, arm.arm, arm.agent, arm.ids, routing.AssetID, plan, cases, completed, counts, stopReason); err != nil {
 			return err
 		}
 		if stopReason.Load() != 0 {
@@ -491,6 +603,7 @@ func detached(ctx context.Context) (context.Context, context.CancelFunc) {
 func (o ValueOptions) measureArm(
 	ctx context.Context,
 	em *valueEmitter,
+	gate *modelGate,
 	arm store.Arm,
 	agent Agent,
 	caseIDs []string,
@@ -525,6 +638,11 @@ func (o ValueOptions) measureArm(
 		sink := o.sinkFunc(key, counts)
 
 		_, runErr := executor.Run(ctx, casesSlice(armCases), work, sink, executor.Options{
+			// The only path from a SUCCESSFUL measurement to shutdown: a
+			// re-pointed model alias is visible in an answer already paid for,
+			// and continuing would measure the rest of the Asset against a
+			// different model than the one the run recorded.
+			AfterRecord: gate.afterRecord,
 			Concurrency: o.Concurrency,
 			ID:          func(item any) string { c, _ := item.(*Case); return c.GetId() },
 			Skip: func(id string) bool {
@@ -712,6 +830,9 @@ func (o ValueOptions) sinkFunc(key store.MeasurementKey, counts *valueCounts) ex
 		} else {
 			counts.errored.Add(1)
 		}
+		if out.Response != nil {
+			counts.recordModel(out.Response.GetResolvedModel())
+		}
 		return nil
 	}
 }
@@ -786,6 +907,26 @@ func (o ValueOptions) emitRunStarted(ctx context.Context, em *valueEmitter, _ *v
 	}, "run-started")
 }
 
+// emitRunResumed opens a continuation: overall progress starts at
+// already_completed, and the session denominator is what remains — the two
+// coordinate systems the RunResumed godoc exists to keep separate.
+func (o ValueOptions) emitRunResumed(ctx context.Context, em *valueEmitter, plan *value.Plan, completed map[store.MeasurementKey]struct{}) error {
+	total := int64(plan.Measurements())
+	already := int64(len(completed))
+	remaining := total - already
+	if remaining < 0 {
+		remaining = 0
+	}
+	return o.append(ctx, em, func() *knov1.Event {
+		return &knov1.Event{
+			Payload: &knov1.Event_RunResumed{RunResumed: &knov1.RunResumed{
+				AlreadyCompleted: int32(already),   //nolint:gosec // bounded by the quote
+				Remaining:        int32(remaining), //nolint:gosec // bounded by the quote
+			}},
+		}
+	}, "run-resumed")
+}
+
 // emitAssetRouted reports one Asset's routing decision before any of its
 // spend.
 func (o ValueOptions) emitAssetRouted(ctx context.Context, em *valueEmitter, routing value.AssetRouting, plan *value.Plan) error {
@@ -817,9 +958,10 @@ func (o ValueOptions) emitAssetValued(ctx context.Context, em *valueEmitter, v *
 			ev.DeltaGoal = v.GetDeltaGoal()
 			ev.DeltaInterval = iv
 		}
-		if c := v.GetMeasurementCostUsdMicros(); c != 0 {
-			ev.MeasurementCostUsdMicros = c
-		}
+		// Zero when the stage does not compute cost yet; carried verbatim so
+		// the field's meaning does not fork into an "absent vs zero" branch
+		// nothing reads.
+		ev.MeasurementCostUsdMicros = v.GetMeasurementCostUsdMicros()
 		return &knov1.Event{Payload: &knov1.Event_AssetValued{AssetValued: ev}}
 	}, "asset-valued")
 }
@@ -843,9 +985,22 @@ func (o ValueOptions) finishRun(
 	run.ValuePlan = buf.Bytes()
 	run.Status = status
 	run.FinishedAt = proto.String(time.Now().Format(time.RFC3339))
-	run.AttemptedCaseCount = counts.attempted.Load()
-	run.ScoredCaseCount = counts.scored.Load()
-	run.ErroredCaseCount = counts.errored.Load()
+	// CaseExecution is aggregated from what is DURABLE, not from this
+	// process's in-memory counters: a resumed run's close must report the
+	// WHOLE run — the first process's paid rows included — never the tail.
+	attempted, scored, errored, err := o.Store.MeasurementCounts(ctx, o.RunID)
+	if err != nil {
+		return fmt.Errorf("counting the run's measurements: %w", err)
+	}
+	run.CaseExecution = &knov1.CaseExecution{
+		AttemptedCaseCount: attempted,
+		ScoredCaseCount:    scored,
+		ErroredCaseCount:   errored,
+		ResolvedModels:     counts.models(),
+	}
+	run.AttemptedCaseCount = attempted
+	run.ScoredCaseCount = scored
+	run.ErroredCaseCount = errored
 	if err := o.Store.FinishRun(ctx, run); err != nil {
 		return fmt.Errorf("closing the run: %w", err)
 	}
@@ -853,9 +1008,9 @@ func (o ValueOptions) finishRun(
 		return &knov1.Event{
 			Payload: &knov1.Event_RunFinished{RunFinished: &knov1.RunFinished{
 				Status:    status,
-				Attempted: counts.attempted.Load(),
-				Scored:    counts.scored.Load(),
-				Errored:   counts.errored.Load(),
+				Attempted: attempted,
+				Scored:    scored,
+				Errored:   errored,
 			}},
 		}
 	}, "run-finished")

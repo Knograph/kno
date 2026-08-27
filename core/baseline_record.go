@@ -959,6 +959,15 @@ type caseOutcome struct {
 	Err      error
 }
 
+// Model reports which model answered, for the mid-run gate — the one field
+// both stages' outcome types share with it.
+func (o *caseOutcome) Model() string {
+	if o == nil || o.Response == nil {
+		return ""
+	}
+	return o.Response.GetResolvedModel()
+}
+
 // codeOf extracts a machine-readable code, never verbatim provider text.
 func codeOf(err error) string {
 	var a *errs.Actionable
