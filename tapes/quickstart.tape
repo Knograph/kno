@@ -1,0 +1,66 @@
+# The README quickstart, recorded.
+#
+#   brew install vhs && make tape
+#
+# What this shows, and why in this order: what the build supports, a real eval
+# file, one command, a scored run that costs nothing, and three Cases held
+# back. The held-back line is the point of the whole tool, so it has to survive
+# into a GIF that people watch for eleven seconds and then decide about.
+#
+# `fake:` throughout. A quickstart that bills the viewer's API key the first
+# time they paste it is not a quickstart, and a tape recorded against a real
+# provider would make this file's output vary with someone else's model.
+#
+# The score will read 1.000, and that is honest rather than flattering: `fake:`
+# answers every Case with what the Case expects, by construction. The GIF is
+# showing that a run HAPPENED, was scored against a declared Goal, cost nothing,
+# and sealed a holdout — not that anybody's agent is perfect. The README says so
+# in the line directly under it, and this comment exists so nobody "improves"
+# the tape by picking an eval file that makes the number look earned.
+
+Output docs/quickstart.gif
+
+Require kno
+
+Set Shell zsh
+Set FontSize 16
+Set Width 1100
+Set Height 620
+Set Padding 20
+Set Framerate 24
+Set PlaybackSpeed 1.0
+Set TypingSpeed 55ms
+# Theme is pinned rather than left to the recorder's terminal, so a
+# re-recording after a CLI change differs only where the CLI changed.
+Set Theme "Catppuccin Mocha"
+
+Hide
+Type "cd $(mktemp -d)" Enter
+# Nine Cases, so the split is visible: six dev, three held back, and the
+# under-powered-holdout warning fires. A three-Case eval file would hide both.
+Type "cat > cases.jsonl <<'JSONL'" Enter
+Type '{"id":"refund-01","input":"How do I get a refund?","expected":"Refunds are issued within 5 business days.","tags":["refunds"]}' Enter
+Type '{"id":"refund-02","input":"Refund policy for sale items?","expected":"Sale items are final and non-refundable.","tags":["refunds"]}' Enter
+Type '{"id":"ship-01","input":"When will my order arrive?","expected":"Standard shipping takes 3-5 business days.","tags":["shipping"]}' Enter
+Type '{"id":"ship-02","input":"Do you ship internationally?","expected":"We ship to 40 countries.","tags":["shipping"]}' Enter
+Type '{"id":"acct-01","input":"How do I reset my password?","expected":"Use the reset link on the sign-in page.","tags":["account"]}' Enter
+Type '{"id":"acct-02","input":"Can I change my email?","expected":"Yes, from Settings > Account.","tags":["account"]}' Enter
+Type '{"id":"bill-01","input":"Why was I charged twice?","expected":"A duplicate charge is released within 48 hours.","tags":["billing"]}' Enter
+Type '{"id":"bill-02","input":"Where is my invoice?","expected":"Invoices are emailed and available under Billing.","tags":["billing"]}' Enter
+Type '{"id":"bill-03","input":"Do you take purchase orders?","expected":"Yes, for annual plans.","tags":["billing"]}' Enter
+Type "JSONL" Enter
+Type "clear" Enter
+Show
+
+Type "kno doctor" Sleep 500ms Enter
+Sleep 3.5s
+Type "clear" Enter
+
+Type "head -2 cases.jsonl" Sleep 500ms Enter
+Sleep 2.5s
+
+Type "kno baseline --evals cases.jsonl --agent fake: --goal exact-match" Sleep 500ms Enter
+Sleep 5s
+
+# Held on the result, because this is the frame people screenshot.
+Sleep 3s

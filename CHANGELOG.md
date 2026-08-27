@@ -18,6 +18,37 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
+- **A completed run no longer points at a command that does not exist.** `kno baseline` closed with
+  *"Next: `kno value` …"*, and `kno value` is the next stage rather than a command in this release —
+  so the last line of a first successful run named something the binary rejects with `unknown
+  command`. A next step is a promise about this binary, not about the roadmap. README carried the
+  same line and now carries the same correction.
+
+- **`tapes/quickstart.tape` and `make tape`** ([debt #64](docs/debt.md#64), partly). The Definition
+  of Done has asked for a re-recorded vhs tape since it was written, and there was no tape anywhere
+  in the repo to re-record — so every PR satisfied that clause vacuously. The tape records `kno
+  doctor`, a nine-Case eval file, and one `kno baseline` run against `fake:`, with the theme and
+  typing speed pinned so a re-recording after a CLI change differs only where the CLI changed. The
+  GIF itself is still owed and README deliberately does not reference one yet: a missing image is
+  worse than no image.
+
+  The tape says in a comment that the 1.000 score is honest rather than flattering — `fake:` answers
+  every Case with what the Case expects — so nobody later "improves" it by picking an eval file that
+  makes the number look earned. README says the same thing under the sample output.
+
+- **`make ledger-check`, and the release refuses to build without it.** CLAUDE.md has said since the
+  beginning that *"CI fails a release tag if any ledger entry's trigger has lapsed without a
+  disposition"*. Nothing implemented it, so the rule the whole Debt Ledger rests on was enforced by
+  remembering — and at the 0.0.1 close-out it caught a real lapse ([#64](docs/debt.md#64)) that had
+  been missed by eye.
+
+  It runs against the **tag**, before anything is built and before any credential is used, and it
+  refuses to run without a version rather than defaulting to `.release-please-manifest.json` — that
+  file holds the *last released* version, so checking against it asks whether an already-cut release
+  is clear, which nothing names and which therefore always passes. Verified in both directions:
+  green as the ledger stands, red with one disposition removed.
+
+
 - **`core/value`** — which Cases measure which Asset, and what that will cost, decided before any
   money is spent. Nothing calls it yet.
 

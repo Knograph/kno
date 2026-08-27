@@ -68,10 +68,12 @@ Baseline 20260821T091515-ffc3097d49da
 
   warning: the holdout has only 6 cases, too few for a meaningful confidence interval at validate
 
-Next: `kno value` to measure which of your assets earn their place.
+Scores and traces are recorded. `kno purge` removes trace content when you no longer need it.
 ```
 
 **`6 held back`** is the holdout. Nothing reads it — not this run, not valuation, not selection — until `validate`. That constraint is the reason any number Kno reports later means anything. [Why](docs/mental-model.md#why-devholdout-exists).
+
+**The score reads 1.000 because `fake:` answers every Case with what the Case expects.** That is the point of it: the quickstart proves the loop runs, is scored against a declared Goal, costs nothing, and seals a holdout — not that any agent is perfect. Point it at a real provider and the number starts meaning something.
 
 That run used `fake:`, the local agent that costs nothing. Pointing it at a real provider is one flag:
 

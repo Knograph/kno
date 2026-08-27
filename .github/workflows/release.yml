@@ -107,6 +107,15 @@ jobs:
           fi
           echo "${GITHUB_SHA} is on main"
 
+      # Before anything is built, and before any credential is used. CLAUDE.md:
+      # "CI fails a release tag if any ledger entry's trigger has lapsed without
+      # a disposition." Until 0.0.1 that rule was enforced by remembering.
+      #
+      # Runs against the TAG, which is the only version that identifies the
+      # release actually being cut.
+      - name: A lapsed ledger trigger stops the release
+        run: make ledger-check VERSION="${GITHUB_REF_NAME}"
+
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
