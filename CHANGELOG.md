@@ -14,7 +14,18 @@ it rather than a tool defaulting into it.
 the proto schema, the plugin protocol, exit codes, the `kno.yaml` schema, and the public Go API are
 covenants — breaking any of them requires a major version.
 
-## [Unreleased]
+<!-- Two sections per release, and they are not redundant.
+     release-please writes the one above this comment from Conventional Commit
+     subjects: one line per PR, mechanically derived, and it is what the GitHub
+     release page shows. The section below is written by hand and is where the
+     reasoning lives — what broke, what it cost to find, and why a fix is
+     shaped the way it is. CLAUDE.md requires both, and neither substitutes for
+     the other: a commit subject cannot carry a paragraph, and a hand-written
+     file cannot be trusted to be complete.
+     At release time the hand-written heading is renamed from [Unreleased] to
+     the version. See docs/debt.md#76 for why that is still a manual step. -->
+
+## 0.0.1 — in detail
 
 ### Added
 
