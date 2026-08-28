@@ -145,7 +145,9 @@ func TestAMalformedKeyBindingDoesNotEchoItself(t *testing.T) {
 // therefore bounded, but it is still one paid round trip and a message about a
 // provider rejecting a credential that was never sent. Closes docs/debt.md#57.
 func TestAProviderRunWithNoCredentialIsRefusedBeforeAnyRequest(t *testing.T) {
-	t.Parallel()
+	// Serial: withoutEnv mutates the process env the in-process CLI reads, so
+	// no parallel sibling may run during the window.
+	withoutEnv(t, "OPENAI_API_KEY")
 
 	cases := writeCases(t, 30)
 	_, stderr, code := run(t, "baseline", "--evals", cases,
@@ -386,7 +388,10 @@ func TestTheAnthropicSchemeIsReachableAndSaysWhatItNeeds(t *testing.T) {
 	})
 
 	t.Run("no credential", func(t *testing.T) {
-		t.Parallel()
+		// Serial for the same reason as
+		// TestAProviderRunWithNoCredentialIsRefusedBeforeAnyRequest: absence
+		// is manufactured in the process env the in-process CLI reads.
+		withoutEnv(t, "ANTHROPIC_API_KEY")
 		_, stderr, code := run(t, "baseline", "--evals", cases,
 			"--agent", "anthropic:claude-opus-5", "--max-output-tokens", "256",
 			"--db", filepath.Join(t.TempDir(), "kno.db"))

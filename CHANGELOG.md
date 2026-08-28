@@ -90,6 +90,18 @@ covenants — breaking any of them requires a major version.
   was written. `make pricing-check` runs it live locally; it deliberately is not part of
   `make check`, which stays network-free for PR CI.
 
+### Bug Fixes
+
+- **CLI wiring tests no longer inherit ambient API keys under live mode.** The
+  nightly live job was armed with real credentials for the first time, and two
+  wiring tests broke: they assert the no-credential refusal, but the `cli`
+  TestMain env scrub — which used to guarantee a credential-free process — is
+  skipped when `KNO_LIVE_TESTS=1`, so the keys leaked in and the refusal never
+  fired. The tests now manufacture ABSENCE themselves (`withoutEnv`), not
+  emptiness: the refusal's fix line names the variable to export only when
+  nothing is bound to it. Serial, because the CLI runs in-process and reads the
+  process env.
+
 ## 0.0.2 — in detail
 
 ### Features

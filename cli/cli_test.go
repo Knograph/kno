@@ -48,6 +48,32 @@ func run(t *testing.T, args ...string) (stdout, stderr string, code int) {
 	return out.String(), errOut.String(), code
 }
 
+// withoutEnv makes the named variable ABSENT from the process env for the
+// test's duration, restoring it afterwards.
+//
+// Absence, not emptiness: the credential refusal's fix line names the variable
+// to export only when nothing is bound to it, and binding it to "" is the
+// OTHER fix line. t.Setenv cannot produce absence. The TestMain scrub normally
+// guarantees it, but it is skipped when KNO_LIVE_TESTS=1 — and a CI runner
+// armed with real secrets then leaks them into the tests, which is exactly how
+// the nightly job caught this. A test that needs this must NOT be parallel:
+// the CLI runs in-process, and a sibling test's Execute may read the env
+// during the window the variable is unset.
+func withoutEnv(t *testing.T, name string) {
+	t.Helper()
+	old, had := os.LookupEnv(name)
+	if had {
+		if err := os.Unsetenv(name); err != nil {
+			t.Fatalf("unsetting %s: %v", name, err)
+		}
+	}
+	t.Cleanup(func() {
+		if had {
+			_ = os.Setenv(name, old)
+		}
+	})
+}
+
 func normalize(s string) string {
 	return runIDPattern.ReplaceAllString(s, "RUNID")
 }
