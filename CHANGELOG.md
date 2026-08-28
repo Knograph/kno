@@ -114,6 +114,12 @@ covenants — breaking any of them requires a major version.
   emptiness: the refusal's fix line names the variable to export only when
   nothing is bound to it. Serial, because the CLI runs in-process and reads the
   process env.
+- **The pricing-check workflow bootstraps its own label.** Its first post-merge
+  run failed with "could not add label: 'pricing-drift' not found" — the label
+  had never been created on the repo, and `gh issue create` treats a missing
+  label as fatal. The job now creates the label if absent before the lifecycle
+  walk, so a fresh repo or a deleted label cannot red the job for an infra gap
+  the workflow can close itself.
 
 ## 0.0.2 — in detail
 
