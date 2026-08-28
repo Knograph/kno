@@ -1,0 +1,15 @@
+# kno pricingcheck fixture captures
+# recorded 2026-08-28T16:48:25Z
+
+openrouter.json
+  url: https://openrouter.ai/api/v1/models
+  sha256: a7a5b14318fb1a48029b9f4dbc025ce18b83dad7dc6e5638524b5bb730bc097f
+
+anthropic.html
+  url: https://platform.claude.com/docs/en/about-claude/pricing
+  sha256: 47a5014ba67ec3287195c5cf41acf6ea075ec8a5bdb727f5791cd1fb89a8d1fc
+
+openai.html
+  url: https://developers.openai.com/api/docs/models/compare
+  sha256: 6e1b0ef209d024bc87c5324c5844185d57d27bd11bd192668811ccc32b828824
+

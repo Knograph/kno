@@ -202,6 +202,43 @@ an existing dependency can't, its license, and its maintenance signal.
 updated (godoc, CLI help, OpenAPI, and the mental-model or cookbook page if user-visible) ·
 CHANGELOG entry under `Unreleased` · vhs tape re-recorded if CLI output changed.
 
+## Pricing drift
+
+The price table ([`adapters/agent/pricing/table.go`](adapters/agent/pricing/table.go)) is
+hand-entered and dated, and providers reprice without asking. A weekly scheduled job — and
+`make pricing-check` for local runs — fetches the providers' published rates, compares them
+against the table, and reports. It is **not** part of `make check`: a network-dependent gate
+in PR CI is flaky by construction, so the detector's place in PR CI is network-free (same
+posture as `test-live`; the parser and check logic ride `go test ./...` against recorded
+fixtures). Design and accepted tradeoffs live in
+[the plan](docs/plans/2026-08-22-pricing-drift-detector.md).
+
+When the job finds a problem it files a `pricing-drift` issue — one per signature,
+deduplicated, reporting both values and both URLs, proposing nothing. Responding is a normal
+reviewed diff:
+
+1. Verify against the provider's published page by hand.
+2. Edit `adapters/agent/pricing/table.go`, and bump `pricing.Version` to the day the rates
+   were read — the table's date is what the age check reads.
+3. Ship it as an ordinary PR with a CHANGELOG entry. A price edit is a spend-path change and
+   is reviewed like one; there is no "it's just a number" lane.
+
+Two committed lists ride with the table, and every entry carries a written reason:
+**suppressed disagreements** (a known cross-source gap — `gpt-5.6-sol` is seeded) and
+**exclusions** (`deliberate` for an intentionally absent model, `pending` for variants owed
+rows under [docs/debt.md#46](docs/debt.md)). An entry must die when its reason dies: a
+suppression whose sources have since converged, or an exclusion whose model gained a table
+row, fails the check. The diff that lands the fix must delete the entry, or the next run is
+red for the wrong reason.
+
+Each open `pricing-drift` issue closes itself with a verification comment on the first run
+whose report no longer carries its finding — silence is not the same as closure, and neither
+is a finding that nobody files: a run whose gated checks pass but that still has report-only
+findings (a disagreement, a discovery, a pending debt-46 variant) stays green and keeps the
+matching issue open and updated. Never close a drift issue by hand before the table fix
+lands: the weekly run is the arbiter, and closing it early is how a finding is forgotten
+while its cause lives on.
+
 ## Security
 
 Do not open a public issue for a vulnerability — see [SECURITY.md](SECURITY.md).

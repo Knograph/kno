@@ -1,0 +1,21 @@
+# kno pricingcheck SYNTHETIC broken fixtures
+# Hand-built, deliberately broken, to drive the detector's error paths.
+# None of these pretend to be a real capture.
+
+anthropic-batch.html
+  purpose: two tables carry the committed header literal -> errSelect,
+  check 2 FAIL (selection is ambiguous)
+
+anthropic-shifted.html
+  purpose: header cells shifted one right -> zero matches -> errSelect,
+  check 2 FAIL (no table selected)
+
+anthropic-duplicated.html
+  purpose: header row duplicated as a data row -> errRow, check 3 FAIL
+
+anthropic-badcell.html
+  purpose: a data row with five cells -> errRow, check 3 FAIL
+
+openrouter-bad.json
+  purpose: wrong envelope (no "data" array) -> errShape, exit 2 in
+  fixture mode

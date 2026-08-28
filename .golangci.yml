@@ -64,6 +64,13 @@ linters:
             # shape aimed at a jq pipeline, not a kno.v1 type. Scoped to the
             # one file so it cannot spread.
             - "!**/cli/jsonreport.go"
+            # internal/cmd/pricingcheck is a standalone build tool, not engine
+            # code: its report is a hand-written shape for the drift workflow
+            # (same contract as cli/jsonreport.go), its fixture envelope is a
+            # debounced JSON format it records and re-parses (same contract as
+            # adapters/**/format.go), and neither touches a kno.v1 type. Scoped
+            # to the one directory so it cannot spread to engine code.
+            - "!**/internal/cmd/pricingcheck/**"
           deny:
             - pkg: encoding/json
               desc: >-

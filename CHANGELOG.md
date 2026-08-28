@@ -72,6 +72,24 @@ covenants — breaking any of them requires a major version.
 
 * cosign legacy sign format, store coverage determinism ([#68](https://github.com/Knograph/kno/issues/68)) ([62f7174](https://github.com/Knograph/kno/commit/62f7174a8dce19bf1916fae5364241a89a2dd9cb))
 
+## [Unreleased]
+
+### Features
+
+- **The pricing drift detector repays the staleness debt.** `internal/cmd/pricingcheck`
+  fetches the three price-of-record sources (OpenRouter's model list, Anthropic's pricing
+  page, OpenAI's model comparison page), compares them against the committed table, and
+  files deduplicated `pricing-drift` issues that close themselves when the finding is gone.
+  Six checks: the table's age (the 90-day trigger of `docs/debt.md#40`, enforced for the
+  first time by machine rather than by a date on a row), Anthropic table selection by a
+  committed header literal, the providers' published cache-ratio invariants, cross-source
+  agreement, discovery, and prefix-colliding variants — the last one reporting the 16 owed
+  `docs/debt.md#46` rows every run until they land. The weekly scheduled job holds no write
+  token beyond `issues: write`; every check is fixture-tested against real captures with
+  provenance, and every error path was verified failing before the check that catches it
+  was written. `make pricing-check` runs it live locally; it deliberately is not part of
+  `make check`, which stays network-free for PR CI.
+
 ## 0.0.2 — in detail
 
 ### Features

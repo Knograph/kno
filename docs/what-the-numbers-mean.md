@@ -130,6 +130,13 @@ Stated plainly, because a tool that lists its limits is easier to trust than one
 
 - **The harm bound is a limit, not a score.** The run's Plan — recorded on the Run at close — reports `min_detectable_harm`: the smallest regression its control sample could have separated from zero, at the shipped confidence level, computed from the worst-case paired variance — it does not shrink because your observed variance happened to be small, and it uses the t distribution at small samples. Against a harm margin of 0.10 the honest threshold sits near 135 control Cases, so most real runs report a bound larger than the margin and carry the underpowered flag. That is information, not noise: a run reporting no regression while able to see only ±0.27 has not cleared an asset that costs 0.10, and the number says so. **A delta is reported only beside its interval** — if no interval could be formed (too few pairs, or ragged attrition), the Valuation reports `UNDERPOWERED` and no delta, never a bare number.
 
+## What a cost figure claims
+
+Every cost figure Kno reports claims exactly this: **reported usage at rates as published on `<date>`** — the token counts the provider reported, multiplied by the rates in the price table, where `<date>` is the day those rates were read, carried on the table as `pricing.Version`. The figure is an estimate, not an invoice: settlement reconciles against the provider's own reported usage, and the two can differ — discounts and committed-use pricing are things your provider knows and this table does not. If a price is wrong or missing for your model, you do not have to wait for a release: `--price-input-per-mtok` and `--price-output-per-mtok` state the rates for a run.
+
+The table is hand-entered and dated, so it can go stale — and a stale table is refused loudly, not silently wrong. When the table is older than 90 days the pricing check fails and files a `pricing-drift` issue, because a cost cap's ceiling is only as good as the rates it was computed from. The thing watching the date is the pricing drift detector: a weekly scheduled job, and `make pricing-check` locally, that fetches the providers' published rates and compares them against the table. Each open issue closes itself with a verification comment on the first run whose report
+no longer carries its finding; findings still present keep their issue open and updated.
+
 ## If you only remember one thing
 
 **The holdout number is the one you may put in a slide.** Everything else is a measurement in service of producing it.
