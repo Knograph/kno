@@ -69,7 +69,7 @@ func TestRunFixturesClean(t *testing.T) {
 		"CHECK 2: table selection — PASS",
 		"CHECK 3: cache ratios — PASS",
 		"CHECK 4: discovery — PASS",
-		"CHECK 5: prefix collisions — REPORT (16 findings)",
+		"CHECK 5: prefix collisions — PASS",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q\n%s", want, out)
@@ -91,9 +91,10 @@ func TestRunFixturesClean(t *testing.T) {
 			t.Errorf("line begins with a forbidden word or shape: %q", line)
 		}
 	}
-	// 16 pending exclusions, all report-only.
-	if reportLines != 16 {
-		t.Errorf("expected 16 report detail lines, got %d\n%s", reportLines, out)
+	// docs/debt.md#46 repaid: no pending exclusions remain, so a clean run
+	// carries no report-only findings at all.
+	if reportLines != 0 {
+		t.Errorf("expected 0 report detail lines, got %d\n%s", reportLines, out)
 	}
 }
 
@@ -109,6 +110,8 @@ func TestRunExit1BrokenAnthropic(t *testing.T) {
 		{"shifted", "anthropic-shifted.html", "no table has the committed header", "check 2: table selection"},
 		{"duplicated", "anthropic-duplicated.html", "price row malformed", "check 3: cache ratios"},
 		{"badcell", "anthropic-badcell.html", "price row malformed", "check 3: cache ratios"},
+		{"fast missing", "anthropic-fast-missing.html", "no table has the committed fast-mode header", "check 2: table selection"},
+		{"fast duplicated", "anthropic-fast-duplicated.html", "2 tables match the committed fast-mode header", "check 2: table selection"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -165,13 +168,8 @@ func TestRunJSONShape(t *testing.T) {
 	if len(rep.FailedGated) != 0 {
 		t.Errorf("failed_gated = %v, want none", rep.FailedGated)
 	}
-	if len(rep.Reported) != 16 {
-		t.Errorf("reported = %d findings, want 16 (pending exclusions)", len(rep.Reported))
-	}
-	for _, f := range rep.Reported {
-		if f.Check != 5 || f.Name != "prefix collisions" || f.Detail == "" {
-			t.Errorf("bad reported finding: %+v", f)
-		}
+	if len(rep.Reported) != 0 {
+		t.Errorf("reported = %d findings, want 0 — docs/debt.md#46 is repaid and no report-only findings remain on a clean run", len(rep.Reported))
 	}
 }
 
@@ -239,7 +237,7 @@ func TestRunRecord(t *testing.T) {
 			return []byte(`{ "data" : [ { "id" : "openai/gpt-5.6-sol", "pricing" : { "prompt" : "0.000002", "completion" : "0.00002" } } ] }`), nil
 		}
 		if strings.Contains(url, "platform.claude.com") {
-			return []byte(`<html><body><script>var x=1;</script><table><thead><tr><th>Model</th><th>Base Input Tokens</th><th>5m Cache Writes</th><th>1h Cache Writes</th><th>Cache Hits &amp; Refreshes</th><th>Output Tokens</th></tr></thead><tbody><tr><td>Claude Opus 5</td><td>$5 / MTok</td><td>$6.25 / MTok</td><td>$10 / MTok</td><td>$0.50 / MTok</td><td>$25 / MTok</td></tr></tbody></table></body></html>`), nil
+			return []byte(`<html><body><script>var x=1;</script><table><thead><tr><th>Model</th><th>Base Input Tokens</th><th>5m Cache Writes</th><th>1h Cache Writes</th><th>Cache Hits &amp; Refreshes</th><th>Output Tokens</th></tr></thead><tbody><tr><td>Claude Opus 5</td><td>$5 / MTok</td><td>$6.25 / MTok</td><td>$10 / MTok</td><td>$0.50 / MTok</td><td>$25 / MTok</td></tr></tbody></table><table><thead><tr><th>Model</th><th>Input</th><th>Output</th></tr></thead><tbody><tr><td>Claude Opus 5 / Claude Opus 4.8</td><td>$10 / MTok</td><td>$50 / MTok</td></tr></tbody></table></body></html>`), nil
 		}
 		// The header row and the section content are siblings inside one
 		// wrapper; the label rows are the content container's direct children.

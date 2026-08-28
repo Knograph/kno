@@ -225,19 +225,18 @@ reviewed diff:
 
 Two committed lists ride with the table, and every entry carries a written reason:
 **suppressed disagreements** (a known cross-source gap — `gpt-5.6-sol` is seeded) and
-**exclusions** (`deliberate` for an intentionally absent model, `pending` for variants owed
-rows under [docs/debt.md#46](docs/debt.md)). An entry must die when its reason dies: a
-suppression whose sources have since converged, or an exclusion whose model gained a table
-row, fails the check. The diff that lands the fix must delete the entry, or the next run is
-red for the wrong reason.
+**exclusions** (models the table deliberately does not price — invitation-only models, the
+batch variants whose rows land with batch-mode support, and variants no price-of-record page
+publishes). An entry must die when its reason dies: a suppression whose sources have since
+converged, or an exclusion whose model gained a table row, fails the check. The diff that
+lands the fix must delete the entry, or the next run is red for the wrong reason.
 
 Each open `pricing-drift` issue closes itself with a verification comment on the first run
 whose report no longer carries its finding — silence is not the same as closure, and neither
 is a finding that nobody files: a run whose gated checks pass but that still has report-only
-findings (a disagreement, a discovery, a pending debt-46 variant) stays green and keeps the
-matching issue open and updated. Never close a drift issue by hand before the table fix
-lands: the weekly run is the arbiter, and closing it early is how a finding is forgotten
-while its cause lives on.
+findings (a disagreement, a discovery) stays green and keeps the matching issue open and
+updated. Never close a drift issue by hand before the table fix lands: the weekly run is the
+arbiter, and closing it early is how a finding is forgotten while its cause lives on.
 
 ## Security
 

@@ -151,10 +151,9 @@ jobs:
 
           # One gh listing drives the whole lifecycle. An open issue's
           # signature is its whole SET of normalized finding lines, not just
-          # its first: a body that carries several findings (the pending-46
-          # evergreen has 16 REPORT lines every run) must match each of them,
-          # or every run would file a duplicate for each line past the first —
-          # a re-open storm. Rules:
+          # its first: a body that carries several findings must match each of
+          # them, or every run would file a duplicate for each line past the
+          # first — a re-open storm. Rules:
           #   update — an issue whose line-set intersects this run's set gets
           #            the fresh report, so no issue ever goes stale
           #   close  — an issue whose line-set is disjoint from this run's set
@@ -183,11 +182,11 @@ jobs:
 
           # Update intersecting issues, close disjoint ones — one walk, and a
           # just-updated issue is never closed in the same pass because its
-          # listing lines are precisely what made it intersect. The evergreen
-          # pending-46 issue is expected to land here every run, refreshed
-          # weekly, until docs/debt.md#46's rows land — then the package's own
-          # dead-exclusion check fails the run and a human removes the
-          # exclusions.
+          # listing lines are precisely what made it intersect. docs/debt.md#46
+          # was repaid 2026-08-28: a clean run carries no findings, so any
+          # issue whose lines are absent closes here on the first run after the
+          # fix — including the evergreen issue the pending list used to
+          # refresh.
           while read -r n; do
             issue_lines=$(awk -F'\t' -v n="$n" '$1 == n {print $2}' "$open_lines")
             if [ -n "$issue_lines" ] && printf '%s\n' "$issue_lines" | grep -qFf "$run_sigs"; then

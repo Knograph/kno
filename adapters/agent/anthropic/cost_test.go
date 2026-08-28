@@ -61,6 +61,39 @@ func TestCachedInputIsPricedAtItsOwnRate(t *testing.T) {
 	}
 }
 
+// TestANilCachedRateSettlesCacheReadsAtTheFreshRate.
+//
+// The fast rows (docs/debt.md#46) publish no cached rate — nil, "not billed
+// separately" — but a cache read can still happen unrequested, because the
+// provider caches on its own. Settling those tokens at zero under-counts
+// spend and loosens the cap by exactly that term; the fallback is the fresh
+// input rate, the same one the openaicompat sibling makes.
+func TestANilCachedRateSettlesCacheReadsAtTheFreshRate(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := serve(t, func(w http.ResponseWriter, _ *http.Request) {
+		answer(w, `{"id":"m","model":"claude-opus-5-fast","content":[{"type":"text","text":"ok"}],
+		            "stop_reason":"end_turn",
+		            "usage":{"input_tokens":1000,"output_tokens":1,
+		                     "cache_read_input_tokens":1000}}`)
+	})
+	a := newAgent(t, srv)
+
+	resp, err := a.Invoke(t.Context(), aCase("q"))
+	if err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+
+	// claude-opus-5-fast has no cached rate, so the 1000 cache-read tokens
+	// settle at the fresh $10/MTok input rate — 10_000 micro-USD — not $0.
+	// A zero there is the cap-accounting hole this test exists for.
+	// fresh input 1000 + cache read 1000, both at $10/MTok; output 1 at $50.
+	const want = 1000*10 + 1000*10 + 1*50
+	if got := resp.GetCostUsdMicros(); got != want {
+		t.Errorf("cost = %d micro-USD, want %d — a nil cached rate must fall back to the fresh input rate", got, want)
+	}
+}
+
 // TestAMissingUsageBlockSettlesAtTheEstimateNeverAtZero.
 //
 // A zero settlement is what makes a dollar cap unenforceable, and it has

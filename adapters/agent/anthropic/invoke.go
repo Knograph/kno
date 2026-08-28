@@ -298,10 +298,19 @@ func price(resolved, requested string) (*knov1.Price, bool) {
 // per Case, against a Case that costs thousands, and it is the direction that
 // cannot make a cap silently loose.
 func costOf(p *knov1.Price, u *usage) int64 {
+	// Absent is not free. The fast rows (docs/debt.md#46) publish no cached
+	// rate, and a cache read can still happen unrequested — the provider
+	// caches on its own — so a nil cached rate settles reads at the FRESH
+	// input rate, the same fallback the openaicompat sibling makes. The
+	// alternative silently discounts tokens the invoice charges in full.
+	cachedRate := p.GetCachedInputPerMtokUsdMicros()
+	if p.CachedInputPerMtokUsdMicros == nil {
+		cachedRate = p.GetInputPerMtokUsdMicros()
+	}
 	return add(
 		micros(p.GetInputPerMtokUsdMicros(), tokens(u.InputTokens)),
 		micros(p.GetCacheWritePerMtokUsdMicros(), tokens(u.CacheCreationInputTokens)),
-		micros(p.GetCachedInputPerMtokUsdMicros(), tokens(u.CacheReadInputTokens)),
+		micros(cachedRate, tokens(u.CacheReadInputTokens)),
 		micros(p.GetOutputPerMtokUsdMicros(), tokens(u.OutputTokens)),
 	)
 }

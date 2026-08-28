@@ -28,6 +28,11 @@ var anthropicHeader = []string{
 // the five rates, in header order.
 var anthropicColumns = []string{"model", "input", "cacheWrite5m", "cacheWrite1h", "cachedRead", "output"}
 
+// anthropicFastHeader is the fast-mode table's header: model, input, output.
+// Fast mode publishes no cache rates, matching the table's presence rule —
+// nil, "not billed separately".
+var anthropicFastHeader = []string{"Model", "Input", "Output"}
+
 // parseOpenRouter reads the OpenRouter model list.
 //
 // The envelope is a contract: an object whose "data" is an array, each item
@@ -151,6 +156,69 @@ func parseAnthropic(body []byte) ([]row, error) {
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("%w: table has no data rows", errShape)
+	}
+	fast, err := parseAnthropicFast(tables)
+	if err != nil {
+		return nil, err
+	}
+	return append(out, fast...), nil
+}
+
+// parseAnthropicFast reads the fast-mode table, selected by its own header
+// literal. Selection is as gated as the main table's: fast rows price
+// variants that authorize real spend (docs/debt.md#46's rows), so a page
+// that stops publishing them is a restructure to fail on, not to ignore.
+//
+// The fast table names two models per row ("Claude Opus 5 / Claude Opus
+// 4.8"), so each row splits into one row per model. The id is the page's own
+// naming convention carried to its API spelling: the canonicalized model
+// name with "-fast" appended, which is exactly the table key
+// (claude-opus-5-fast). Constructing the variant id here — rather than
+// matching the page's prose name — is what lets the agreement check compare
+// these rows against OpenRouter's variant ids.
+func parseAnthropicFast(tables [][][]string) ([]row, error) {
+	var matched [][][]string
+	for _, t := range tables {
+		if len(t) > 0 && headerEqual(t[0], anthropicFastHeader) {
+			matched = append(matched, t)
+		}
+	}
+	switch len(matched) {
+	case 0:
+		return nil, fmt.Errorf("%w: no table has the committed fast-mode header %q", errSelect, strings.Join(anthropicFastHeader, " | "))
+	case 1:
+	default:
+		return nil, fmt.Errorf("%w: %d tables match the committed fast-mode header literal", errSelect, len(matched))
+	}
+	table := matched[0]
+	var out []row
+	for i, cells := range table[1:] {
+		if len(cells) != len(anthropicFastHeader) {
+			return nil, fmt.Errorf("%w: fast-mode row %d has %d cells, want %d", errRow, i+1, len(cells), len(anthropicFastHeader))
+		}
+		in, err := microsPerMTokFromUSDPerMTok(cells[1])
+		if err != nil {
+			return nil, fmt.Errorf("%w: fast-mode row %d input: %v", errRow, i+1, err)
+		}
+		outRate, err := microsPerMTokFromUSDPerMTok(cells[2])
+		if err != nil {
+			return nil, fmt.Errorf("%w: fast-mode row %d output: %v", errRow, i+1, err)
+		}
+		for _, name := range strings.Split(cells[0], "/") {
+			name = strings.TrimSpace(stripParenthetical(name))
+			if name == "" {
+				return nil, fmt.Errorf("%w: fast-mode row %d has an empty model name", errRow, i+1)
+			}
+			id := canonicalModel(name) + "-fast"
+			out = append(out, row{
+				source: "anthropic", scheme: "anthropic",
+				model: id, canonical: id,
+				input: in, output: outRate,
+			})
+		}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("%w: fast-mode table has no data rows", errShape)
 	}
 	return out, nil
 }
