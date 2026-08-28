@@ -174,7 +174,7 @@ kno value --evals cases.jsonl --pool pool.jsonl --baseline-run-id <run id> --max
 
 Keys come from the environment, never from a flag. Kno prices each Case from its own table, so the cap binds *before* the call rather than at settlement. `kno doctor` prints which providers, models, and goals this build supports — it contacts nothing.
 
-Full walkthrough: **[Score your agent for the first time](docs/cookbook/first-baseline.md)**, then **[Point Kno at your own provider](docs/cookbook/your-own-provider.md)**.
+Full walkthrough: **[Score your agent for the first time](docs/cookbook/first-baseline.md)**, then **[Point Kno at your own provider](docs/cookbook/your-own-provider.md)**. Got a support stack already? **[Value your Zendesk knowledge](docs/cookbook/zendesk.md)** shows the whole recipe against real vendor data.
 
 ## How it works
 
