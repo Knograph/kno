@@ -28,6 +28,13 @@ jobs:
       # signed releases. A mutable tag on the highest-privilege consumer in the
       # repository is the one place docs/debt.md#14 cannot wait for its own
       # trigger.
+      #
+      # docs/debt.md#82: when this SHA is next upgraded, the pinned version's
+      # inputs must be re-checked for a `signoff` mechanism — v5 ignores the
+      # input, so release PR commits ship without a DCO trailer and are signed
+      # by hand today. The upgrade PR either re-adds the input or keeps the
+      # manual amend in the release runbook; a bump that silently drops the
+      # obligation is the failure that entry exists to prevent.
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5
         with:
           config-file: release-please-config.json
