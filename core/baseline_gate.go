@@ -57,6 +57,13 @@ func newModelGate(run *knov1.Run) *modelGate {
 	return &modelGate{recorded: run.GetCaseExecution().GetResolvedModels()}
 }
 
+// newModelGateFrom arms the gate from a caller-supplied model set — the
+// Value stage's first process uses the BASELINE's recorded models, because
+// the reference was measured against them and nothing else is recorded yet.
+func newModelGateFrom(models []string) *modelGate {
+	return &modelGate{recorded: append([]string(nil), models...)}
+}
+
 // check reports whether this response's model contradicts the record.
 //
 // Evaluated on EVERY response, not memoized. A provider can re-point a moving

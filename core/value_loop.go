@@ -159,7 +159,7 @@ func (o ValueOptions) Value(ctx context.Context, pool Pool) (*ValueResult, error
 		return nil, err
 	}
 
-	baseline, err := o.baselineCases(ctx)
+	baseline, baselineModels, err := o.baselineCases(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -224,12 +224,17 @@ func (o ValueOptions) Value(ctx context.Context, pool Pool) (*ValueResult, error
 
 	var stopReason atomic.Int32
 	counts := &valueCounts{}
-	// The mid-run model gate, armed from the RESUMED run's record: a provider
-	// alias re-pointing mid-run changes what every later delta measures, and
-	// a Value run's wall-clock is a multiple of Baseline's. The first process
-	// has nothing recorded to arm from — the inert gate costs nothing — and
-	// its close records the models for the resume to check.
+	// The mid-run model gate. A resumed run arms from its own record; the
+	// FIRST process arms from the BASELINE's recorded models, because the
+	// reference was measured against them — a provider alias re-pointing
+	// mid-run changes what every later delta measures, and a Value run's
+	// wall-clock is a multiple of Baseline's. Whichever set exists is the
+	// gate; both empty means there is nothing to compare and the gate is
+	// inert by construction.
 	gate := newModelGate(run)
+	if len(gate.recorded) == 0 {
+		gate = newModelGateFrom(baselineModels)
+	}
 	for _, routing := range plan.Routed {
 		if ctx.Err() != nil {
 			stopReason.Store(int32(knov1.RunStatus_RUN_STATUS_INTERRUPTED))
@@ -273,7 +278,7 @@ func (o ValueOptions) Quote(ctx context.Context, pool Pool) (*value.Plan, error)
 	if err := o.validate(pool); err != nil {
 		return nil, err
 	}
-	baseline, err := o.baselineCases(ctx)
+	baseline, _, err := o.baselineCases(ctx)
 	if err != nil {
 		return nil, err
 	}

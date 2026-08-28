@@ -112,7 +112,14 @@ func loopCaseID(i int) string { return "dev-" + string(rune('a'+i%26)) + string(
 // run has something to pair against. Every Case passes.
 func writeBaselineFor(t *testing.T, h *valueHarness, cases []*core.Case) {
 	t.Helper()
-	createBaselineRun(t, h.store, "base-1", []string{"fake-model"})
+	writeBaselineForModels(t, h, cases, "fake-model")
+}
+
+// writeBaselineForModels is writeBaselineFor with the resolved model chosen,
+// for fixtures whose agent answers as a specific model the gate checks.
+func writeBaselineForModels(t *testing.T, h *valueHarness, cases []*core.Case, model string) {
+	t.Helper()
+	createBaselineRun(t, h.store, "base-1", []string{model})
 	for _, c := range cases {
 		writeBaselineOutcome(t, h.store, "base-1", c.GetId(), 1.0)
 	}
@@ -448,6 +455,23 @@ func TestResumeDoesNotRePay(t *testing.T) {
 	}
 }
 
+// TestFirstProcessCatchesARepointedModel: the FIRST process arms its gate
+// from the BASELINE's recorded models — nothing else is recorded yet — and
+// an alias re-pointing mid-run is refused in the very run it happens in.
+func TestFirstProcessCatchesARepointedModel(t *testing.T) {
+	t.Parallel()
+
+	h := newValueHarness(t, fake.Options{
+		ResolvedModel: "m1", ResolvedModelAfter: 2, ResolvedModelThen: "m2",
+	})
+	src := valueCases(t, h, 30)
+	writeBaselineForModels(t, h, src.cases, "m1")
+	if _, err := h.opts.Value(context.Background(), poolOf("a1")); err == nil {
+		t.Fatal("a first process whose agent re-pointed to a different model " +
+			"was accepted; the delta would blend two models into one measurement")
+	}
+}
+
 // TestResumeRefusesADifferentBaseline pins P1-3: the baseline IS the
 // reference, and resuming against a different one would re-pair every
 // recorded score against a different mean.
@@ -688,7 +712,7 @@ func TestValueRecordsCaseExecutionFromDurableRows(t *testing.T) {
 
 	h := newValueHarness(t, fake.Options{ResolvedModel: "m1"})
 	src := valueCases(t, h, 30)
-	writeBaselineFor(t, h, src.cases)
+	writeBaselineForModels(t, h, src.cases, "m1")
 	if _, err := h.opts.Value(context.Background(), poolOf("a1")); err != nil {
 		t.Fatalf("Value: %v", err)
 	}
@@ -763,7 +787,7 @@ func TestResumeCatchesARepointedModel(t *testing.T) {
 	// measurements left — and a costed fake so the cap actually binds.
 	h := newValueHarness(t, fake.Options{ResolvedModel: "m1", CostPerCallUSDMicros: 1000})
 	src := valueCases(t, h, 40)
-	writeBaselineFor(t, h, src.cases)
+	writeBaselineForModels(t, h, src.cases, "m1")
 	h.guard = budget.New(budget.Limits{MaxCostUSDMicros: 2000, MaxLLMCalls: 1 << 30}, nil, 0)
 	h.opts.Guard = h.guard
 	if _, err := h.opts.Value(context.Background(), poolOf("a1")); err != nil {
