@@ -55,7 +55,8 @@ Two of these are worth pausing on.
 
 **Export** — the training set, the report, and the gaps: failure clusters that *no Asset in your pool* improved, which is the tool telling you what to start collecting.
 
-Today only Baseline is implemented.
+Today Baseline and Value are implemented; Select, Validate, and Export are planned. The
+[README Status table](../README.md#status) is the canonical state.
 
 ## Why dev/holdout exists
 

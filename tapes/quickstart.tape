@@ -59,7 +59,22 @@ Type "clear" Enter
 Type "head -2 cases.jsonl" Sleep 500ms Enter
 Sleep 2.5s
 
-Type "kno baseline --evals cases.jsonl --agent fake: --goal exact-match" Sleep 500ms Enter
+Type "kno baseline --evals cases.jsonl --agent fake: --goal exact-match --run-id qs" Sleep 500ms Enter
+Sleep 5s
+
+# The distinctive half: value three candidate assets against that baseline.
+# With fake: the deltas read 0.0000 and the README says why — the tape is
+# proving the LOOP (routed, injected, re-measured against controls, reported
+# with intervals), not that any asset helps. Do not "improve" this tape by
+# choosing assets that make the numbers look earned.
+Type "cat > pool.jsonl <<'JSONL'" Enter
+Type '{"id":"refund-policy-v3","content":"Refunds are issued within 5 business days.","kind":"knowledge"}' Enter
+Type '{"id":"ship-promise","content":"Standard shipping takes 3-5 business days.","kind":"knowledge"}' Enter
+Type '{"id":"brand-guide","content":"Use sentence case everywhere.","kind":"knowledge"}' Enter
+Type "JSONL" Enter
+Type "clear" Enter
+
+Type "kno value --evals cases.jsonl --pool pool.jsonl --baseline-run-id qs" Sleep 500ms Enter
 Sleep 5s
 
 # Held on the result, because this is the frame people screenshot.

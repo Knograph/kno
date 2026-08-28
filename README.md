@@ -1,12 +1,84 @@
 # Kno
 
-Kno measures the marginal value of every data asset you're considering feeding an LLM agent — then tells you which ones earn their place, what they cost, and where each belongs: context, knowledge base, or fine-tuning set.
+**Kno tells you what data actually makes your AI better.**
 
-Most teams curate agent data by intuition and dump the rest into JSONL. Kno replaces the guess with a measurement. It runs your agent against your evals, injects each candidate asset, re-runs the affected slice against untouched controls, and reports the delta with a confidence interval — ranked by improvement per dollar, validated as a portfolio against a holdout you never touched. Assets that do nothing get rejected with a reason. Failure modes nothing in your pool can fix get flagged as data you should start collecting.
+Give Kno your agent, your evals, and the data you're considering adding. Kno measures which documents, examples, facts, instructions, and other assets improve the agent, how much they improve it, what they cost, and where they belong.
+
+Instead of evaluating only models and prompts, Kno treats **data as an experimental variable** and measures its marginal contribution to agent performance.
 
 Single Go binary. No infra. Works with any OpenAI-compatible endpoint, Anthropic, or your own agent behind a shell command.
 
-> **Status: early.** Of the five stages, only `baseline` runs today. The default agent is a local fake that costs nothing, so you can see the whole loop work before pointing it at something that bills you. See [Status](#status) for what exists.
+> **Status: early.** `baseline` and `value` ship; `select`, `validate`, and `export` are planned. The default agent is a local fake that costs nothing, so you can see the whole loop work before pointing it at something that bills you. See [Status](#status) for what exists.
+
+## Why Kno?
+
+Agent teams have lots of data and very little evidence about which of it actually helps: product docs, support conversations, examples, policies, tool descriptions, few-shot demonstrations, internal knowledge, synthetic data, behavioral examples.
+
+The usual approach is some combination of "put it in RAG", "stuff it into context", or "fine-tune on it".
+
+Kno asks a different question:
+
+> **Did this data actually improve the outcome enough to justify including it?**
+
+```
+Traditional evals
+
+Prompt ─────┐
+Model ──────┼──► Agent ───► Score
+Tools ──────┘
+
+
+Kno
+
+                  ┌─ Document A ──► +12%
+                  ├─ Example B ───►  +8%
+Agent + Evals ────┼─ Policy C ────►   0%
+                  └─ Dataset D ───►  -3%
+                         │
+                         ▼
+              impact × cost × destination
+```
+
+**Kno does not replace your evals. It uses them.** Existing evals tell you whether your agent is getting better or worse. Kno uses those evals to determine *why a particular data asset changes the outcome, and whether that asset is worth keeping*.
+
+```
+Eval framework:  "Does version B perform better than version A?"
+
+Kno:             "Which of these 500 data assets caused the improvement,
+                  how confident are we, what did it cost, and where
+                  should each one live?"
+```
+
+### Use Kno when you want to know
+
+- Which documents actually improve my RAG agent?
+- Which examples belong in my system prompt?
+- Which few-shot examples are earning their token cost?
+- Which data should I fine-tune on?
+- Is this new knowledge source actually improving the agent?
+- Which data is redundant?
+- Which data is actively hurting performance?
+- What knowledge is my agent missing entirely?
+- Is the improvement worth the inference cost?
+
+### What counts as an Asset
+
+An asset can be almost anything you're considering feeding your agent:
+
+`document · fact · few-shot example · policy · conversation · tool example · instruction · training example`
+
+### Example: a support agent
+
+Suppose your support agent is bad at refund questions. You have 300 help-center documents, 2,000 historical support conversations, 50 curated examples, an outdated refund policy, and a new one. Kno evaluates the candidate assets against your refund evals and (with a real agent) reports something shaped like this:
+
+```text
+new_refund_policy.md     +18%     keep → knowledge_base
+example_42.json           +7%     keep → context
+example_91.json           +1%     reject
+old_refund_policy.md      -9%     reject → harmful
+```
+
+*(The numbers above are illustrative. Real runs report a delta with its confidence interval, and the destination column arrives with `select` — see [Status](#status).)*
 
 ## Install
 
@@ -24,24 +96,6 @@ go install github.com/knograph/kno/cmd/kno@latest
 
 A `go install` binary reports the module version with no commit or date — `kno version v0.0.1`. A released binary reports both — `kno version v0.0.1 (a1b2c3d, 2026-08-26T…)`. The parenthetical is how you tell them apart in a bug report, and it is the only functional difference.
 
-### Verifying a download
-
-Every release ships a `checksums.txt`, a keyless [cosign](https://docs.sigstore.dev/) signature over it, an SPDX SBOM per archive, and SLSA build provenance. There is no private signing key — so there is none to steal.
-
-```bash
-cosign verify-blob checksums.txt \
-  --new-bundle-format --bundle checksums.txt.bundle \
-  --certificate-identity-regexp '^https://github\.com/[Kk]nograph/kno/\.github/workflows/release\.yml@refs/tags/.+$' \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com
-
-grep " kno_<version>_<os>_<arch>.tar.gz$" checksums.txt | shasum -a 256 -c -
-
-gh attestation verify kno_<version>_<os>_<arch>.tar.gz --repo Knograph/kno \
-  --signer-workflow knograph/kno/.github/workflows/release.yml
-```
-
-Both identity flags are the part that matters. Without `--certificate-identity-regexp`, `verify-blob` accepts a valid signature from anyone; without `--signer-workflow`, `attestation verify` accepts an attestation from any workflow in the repository. The checksum line is written with `grep`+`shasum` rather than `sha256sum --ignore-missing` because macOS ships neither.
-
 Homebrew:
 
 ```sh
@@ -53,14 +107,16 @@ The formula pins each platform archive's SHA-256 and is updated automatically by
 
 ## Quickstart
 
-Write some Cases — one scoreable interaction per line, each with a stable `id`:
+The whole loop, in four steps.
+
+**1. Write some Cases** — one scoreable interaction per line, each with a stable `id`:
 
 ```jsonl
 {"id":"refund-01","input":"How do I get a refund?","expected":"Refunds are processed within 5 business days."}
 {"id":"ship-01","input":"When does my order ship?","expected":"Orders ship within 1 business day."}
 ```
 
-Run it:
+**2. Measure the agent as it is today** — the reference every later number is compared against:
 
 ```bash
 kno baseline --evals cases.jsonl
@@ -80,30 +136,79 @@ Scores and traces are recorded. `kno purge` removes trace content when you no lo
 
 **`6 held back`** is the holdout. Nothing reads it — not this run, not valuation, not selection — until `validate`. That constraint is the reason any number Kno reports later means anything. [Why](docs/mental-model.md#why-devholdout-exists).
 
+**3. Write a pool of candidate assets:**
+
+```jsonl
+{"id":"refund-policy-v3","content":"Refunds are processed within 5 business days.","kind":"knowledge"}
+{"id":"refund-example-17","content":"Example: a 30-day-old refund request is declined.","kind":"knowledge"}
+{"id":"brand-guide","content":"Use sentence case everywhere.","kind":"knowledge"}
+```
+
+**4. Value them** — each asset is injected into the slices it could affect, re-measured against fresh controls, and reported with an interval:
+
+```bash
+kno value --evals cases.jsonl --pool pool.jsonl --baseline-run-id <the run id from step 2>
+```
+
+```
+Planning 150 measurements over 3 assets against baseline 20260821T091515-ffc3097d49da.
+Value run 20260828T233124-05cda2dcdac6 (RUN_STATUS_COMPLETED)
+
+ASSET         DELTA (95% CI, positive = goal dir)  CONTROL             NOTE
+brand-guide   +0.0000  [-0.1260, +0.1260]   low -0.1938 (underpowered)
+refund-example-17  +0.0000  [-0.1260, +0.1260]   low -0.1938 (underpowered)
+refund-policy-v3  +0.0000  [-0.1260, +0.1260]   low -0.1938 (underpowered)
+
+Scores and traces are recorded. `kno purge` removes trace content when you no longer need it.
+```
+
 ![Kno quickstart](docs/quickstart.gif)
 
-**The score reads 1.000 because `fake:` answers every Case with what the Case expects.** That is the point of it: the quickstart proves the loop runs, is scored against a declared Goal, costs nothing, and seals a holdout — not that any agent is perfect. Point it at a real provider and the number starts meaning something.
-
-That run used `fake:`, the local agent that costs nothing. Pointing it at a real provider is one flag:
+**The deltas read 0.0000 because `fake:` answers every Case with what the Case expects.** That is the point of it: the quickstart proves the loop runs — assets routed, injected, re-measured against controls, reported with intervals — costs nothing, and seals a holdout, not that any asset helps. Point it at a real provider and the numbers start meaning something:
 
 ```bash
 export OPENAI_API_KEY=sk-...
 kno baseline --evals cases.jsonl --agent openai:gpt-4.1 --max-cost-usd 2.00
+kno value --evals cases.jsonl --pool pool.jsonl --baseline-run-id <run id> --max-cost-usd 5.00
 ```
 
 Keys come from the environment, never from a flag. Kno prices each Case from its own table, so the cap binds *before* the call rather than at settlement. `kno doctor` prints which providers, models, and goals this build supports — it contacts nothing.
 
 Full walkthrough: **[Score your agent for the first time](docs/cookbook/first-baseline.md)**, then **[Point Kno at your own provider](docs/cookbook/your-own-provider.md)**.
 
-## Three properties worth knowing up front
+## How it works
 
-**Every reported delta carries a confidence interval, or it isn't reported.** A number without its uncertainty is a number that flatters you. [What the numbers mean](docs/what-the-numbers-mean.md).
+Five stages, one question each:
 
-**Nothing spends your money silently.** Every path that can call a provider goes through a budget guard: estimate, confirm, checkpoint. Caps are enforced *before* the call, not discovered at settlement.
+| Stage | Question |
+|---|---|
+| **Baseline** | How good is the agent now? |
+| **Value** | Which assets improve it? |
+| **Select** | Which combination should I keep? |
+| **Validate** | Does the combination still work on untouched evals? |
+| **Export** | Where should each asset go? |
 
-**Interrupting is boring.** Work is checkpointed as each Case completes, in one transaction with its result. `--resume` skips what's finished and reconstructs prior spend from disk, so an interrupted run cannot pay twice.
+The deep explanation — routing, fresh controls, holdout separation, regression detection, cost-aware ranking — is **[the mental model](docs/mental-model.md)**, one page.
 
-**Your traces stay yours, and nothing expires on its own.** Runs are stored locally in SQLite, including the agent's output — which is conversation content if your evals come from production logs. Kno itself sends nothing anywhere — there is no telemetry of content, ever. Your Cases go to whatever provider you point Kno at, and that provider's retention is theirs. `kno purge` deletes it when you decide to, keeping the scores and costs so the run stays resumable. [Retention, in full](docs/cookbook/retention.md).
+## Why trust the result?
+
+Kno is deliberately opinionated about experimentation:
+
+- **Holdouts stay sealed.** Selection never sees the validation set.
+- **Deltas include uncertainty.** Kno reports confidence intervals rather than point estimates pretending to be truth — a delta without its interval is not reported at all. [What the numbers mean](docs/what-the-numbers-mean.md).
+- **Regression is measured separately.** An asset that improves one class of requests can still break another; controls measure exactly that.
+- **Cost is part of value.** A tiny asset producing a 5% improvement can be more valuable than a giant document producing 6% — ranking is per dollar, not per point.
+- **Provider failures aren't bad scores.** Infrastructure errors don't artificially lower your baseline; they're counted separately.
+- **Nothing spends your money silently.** Every path that can call a provider goes through a budget guard: estimate, confirm, checkpoint. Caps are enforced *before* the call, not discovered at settlement.
+- **Interrupting is boring.** Work is checkpointed as each Case completes, in one transaction with its result. `--resume` skips what's finished and reconstructs prior spend from disk, so an interrupted run cannot pay twice.
+- **Your traces stay yours, and nothing expires on its own.** Runs are stored locally in SQLite, including the agent's output — which is conversation content if your evals come from production logs. Kno itself sends nothing anywhere — there is no telemetry of content, ever. Your Cases go to whatever provider you point Kno at, and that provider's retention is theirs. `kno purge` deletes it when you decide to, keeping the scores and costs so the run stays resumable. [Retention, in full](docs/cookbook/retention.md).
+
+## Supported agents and providers
+
+- `openai:` — any OpenAI-compatible endpoint via `--base-url` (vLLM, Ollama, llama.cpp need no key)
+- `anthropic:`
+- `fake:` — the local agent that costs nothing
+- `exec:` and `tuned:` arrive with the stages that need them
 
 ## Exit codes
 
@@ -129,7 +234,23 @@ A CI gate branches on these, so they're a contract rather than an afterthought.
 | **Validate** | Measure the Portfolio as a set against the untouched holdout | Planned |
 | **Export** | Training set, report, and the gaps nothing in your pool could fix | Planned |
 
-Provider adapters are **shipped**: `openai:` (and any OpenAI-compatible endpoint via `--base-url`), `anthropic:`, and `fake:`. `exec:` and `tuned:` arrive with the stages that need them.
+## Verifying a download
+
+Every release ships a `checksums.txt`, a keyless [cosign](https://docs.sigstore.dev/) signature over it, an SPDX SBOM per archive, and SLSA build provenance. There is no private signing key — so there is none to steal.
+
+```bash
+cosign verify-blob checksums.txt \
+  --new-bundle-format --bundle checksums.txt.bundle \
+  --certificate-identity-regexp '^https://github\.com/[Kk]nograph/kno/\.github/workflows/release\.yml@refs/tags/.+$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+grep " kno_<version>_<os>_<arch>.tar.gz$" checksums.txt | shasum -a 256 -c -
+
+gh attestation verify kno_<version>_<os>_<arch>.tar.gz --repo Knograph/kno \
+  --signer-workflow knograph/kno/.github/workflows/release.yml
+```
+
+Both identity flags are the part that matters. Without `--certificate-identity-regexp`, `verify-blob` accepts a valid signature from anyone; without `--signer-workflow`, `attestation verify` accepts an attestation from any workflow in the repository. The checksum line is written with `grep`+`shasum` rather than `sha256sum --ignore-missing` because macOS ships neither.
 
 ## Documentation
 
