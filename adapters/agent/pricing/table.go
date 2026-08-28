@@ -30,7 +30,7 @@ import (
 // A date, because that is the only honest thing to call it: these are the
 // prices as published on this day, and a run's cost figures mean "reported
 // usage at these rates" rather than "your invoice".
-const Version = "2026-08-21"
+const Version = "2026-08-28"
 
 // usd converts dollars-per-million-tokens to the micro-USD the schema uses.
 //
@@ -56,7 +56,8 @@ func price(input, cachedRead, cacheWrite, output *int64) *knov1.Price {
 
 // table is keyed by scheme and then by model.
 //
-// Prices as published on 2026-08-21:
+// Base rows as published on 2026-08-21, fast-mode rows as published on
+// 2026-08-28, both read from the same pages:
 //   - https://platform.claude.com/docs/en/about-claude/pricing
 //   - https://developers.openai.com/api/docs/models/compare
 //
@@ -81,6 +82,18 @@ var table = map[string]map[string]*knov1.Price{
 		"claude-sonnet-4-5": price(usd(3), usd(0.30), usd(3.75), usd(15)),
 		"claude-haiku-4-5":  price(usd(1), usd(0.10), usd(1.25), usd(5)),
 		"claude-fable-5":    price(usd(10), usd(1), usd(12.50), usd(50)),
+		// Fast mode. The provider's page prices exactly these two models on
+		// the fast tier (input/output only — no cache rates are published for
+		// fast mode, so the cache dimensions stay nil, "not billed
+		// separately" being the only claim presence allows). Before these rows
+		// existed, a capped run on fast mode was refused once, up front,
+		// naming pricing; now it is authorized at the published rate.
+		// docs/debt.md#46. Deliberately NOT the OpenRouter-listed
+		// claude-opus-4-7-fast: no price-of-record page publishes it, and a
+		// non-price-of-record rate is refused as a source for a
+		// spend-authorizing row — it stays a deliberate detector exclusion.
+		"claude-opus-5-fast":   price(usd(10), nil, nil, usd(50)),
+		"claude-opus-4-8-fast": price(usd(10), nil, nil, usd(50)),
 	},
 	"openai": {
 		// No separate cache-WRITE rate is published: OpenAI discounts cached

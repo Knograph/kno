@@ -301,14 +301,19 @@ func checkDiscovery(in checkInput) checkResult {
 		for i := range rows {
 			rw := &rows[i]
 			seen = true
-			if matchExclusion(deliberateExclusions, rw.scheme, rw.model, rw.canonical) != nil {
+			if e := matchExclusion(deliberateExclusions, rw.scheme, rw.model, rw.canonical); e != nil {
+				if e.pageAbsent {
+					// The exclusion's reason — "no price-of-record page
+					// publishes this model" — just died: the page row IS
+					// the price of record now. Fail rather than skip, or
+					// the exclusion hides the one signal that prices it.
+					r.fail(fmt.Sprintf("exclusion %s/%s is dead: the price-of-record page now publishes %s; add a row and remove the exclusion",
+						e.scheme, e.model, rw.canonical))
+				}
 				continue
 			}
 			if coveredByTable(rw.scheme, rw.model, rw.canonical) {
 				continue
-			}
-			if matchExclusion(pendingExclusions, rw.scheme, rw.model, rw.canonical) != nil {
-				continue // pending exclusions are check 5's to report
 			}
 			r.report(fmt.Sprintf("model %s (%s) is on the price-of-record page but the table does not price it; add a row or an exclusion",
 				rw.canonical, scheme))
@@ -329,13 +334,13 @@ func checkDiscovery(in checkInput) checkResult {
 	return *r
 }
 
-// checkPrefixCollisions is check 5 (gate with a pending exception): a model
-// whose id lives under a priced table key but that Lookup refuses — a
-// variant with its own price — is a defect: the engine refuses it under a
-// cost cap while the table looks covered. The committed pending exclusions
-// are the exception, and they are REPORTED every run, never gated, until
-// their rows land. Lifecycle: an exclusion (pending or deliberate) whose
-// model the table now prices is dead and FAILS.
+// checkPrefixCollisions is check 5 (gate): a model whose id lives under a
+// priced table key but that Lookup refuses — a variant with its own price —
+// is a defect: the engine refuses it under a cost cap while the table looks
+// covered. The deliberate exclusions are the named exceptions (docs/debt.md#46
+// was repaid 2026-08-28 partly as rows, partly as these exclusions), and the
+// dead-exclusion rule in checkDiscovery is what fails the run the day such an
+// exclusion's model gains a row.
 func checkPrefixCollisions(in checkInput) checkResult {
 	r := newResult(5, "prefix collisions")
 	for _, srcName := range []string{"openrouter", "anthropic", "openai"} {
@@ -361,22 +366,9 @@ func checkPrefixCollisions(in checkInput) checkResult {
 			if matchExclusion(deliberateExclusions, rw.scheme, rw.model, rw.canonical) != nil {
 				continue
 			}
-			if matchExclusion(pendingExclusions, rw.scheme, rw.model, rw.canonical) != nil {
-				continue
-			}
 			r.report(fmt.Sprintf("model %s/%s prefix-matches priced %s but Lookup refuses it; add a row or an exclusion",
 				rw.scheme, rw.canonical, base))
 		}
-	}
-	for i := range pendingExclusions {
-		e := &pendingExclusions[i]
-		if coveredByTable(e.scheme, e.model) {
-			r.fail(fmt.Sprintf("pending exclusion %s/%s is now priced: the docs/debt.md#46 row exists; remove the exclusion",
-				e.scheme, e.model))
-			continue
-		}
-		r.report(fmt.Sprintf("model %s/%s carries its own price; a row is owed before 0.1.0 (docs/debt.md#46)",
-			e.scheme, e.model))
 	}
 	return *r
 }

@@ -131,10 +131,13 @@ one is a second copy of the rule that can drift from `table.go`; calling the rea
 **Check 5 — prefix-collision hard stop (gate).** A *discovered* identifier that
 prefix-resolves to an existing row — i.e. `Lookup` says not-found but `longestPrefix` finds a
 base — is a defect, not a note: it is debt 46's failure mode, watched for automatically now
-that we know it happens. Gated **subject to the pending exclusion below**, because debt 46's
-variants are *known* to exist and their rows are owed before 0.1.0; the detector is their
-promised input, so they are reported every run under a "pending, linked to debt 46"
-disposition rather than failing the job every week until the rows land. *(R2b, R9)*
+that we know it happens. As designed it was gated subject to a pending exclusion, because
+debt 46's variants were *known* to exist and their rows owed before 0.1.0; the detector was
+their promised input, and they were reported every run under a "pending, linked to debt 46"
+disposition rather than failing the job every week until the rows landed. *(R2b, R9)*
+*(Amended 2026-08-28, the day debt 46 was repaid: the pending list is empty — the fast
+variants became rows and the rest became deliberate exclusions with written reasons, so
+this check now gates every unexcluded collider. See docs/debt.md#46.)*
 
 A magnitude comparison is still *reported*. It is not a gate.
 
@@ -187,10 +190,12 @@ One open issue per signature, never a re-open storm:
 - **Close-when-absent**: the disjoint rule above. A run with an empty set is disjoint from
   everything, so it closes all open issues — the old "close-on-green" is the empty-set case.
   Job color is keyed on the detector's exit code alone: exit 0 with a non-empty set files
-  and stays green. The evergreen pending-46 issue (the 16 owed rows) is expected to stay
-  open and refreshed weekly until the rows land, at which point the detector's own
-  dead-exclusion check fails the run and a human removes the exclusions. Silence is not the
-  same as closure — and neither is a report that nobody files.
+  and stays green. *(Amended 2026-08-28, the day it shipped:* docs/debt.md#46 *was repaid
+  right after this plan merged — the pending list is gone, the fast variants are rows the
+  detector now watches through the fast-table selection, and the evergreen pending-46 issue
+  closes itself on the first post-repayment run. The lifecycle machinery itself is
+  unchanged; it simply has one fewer long-lived issue to manage.)* Silence is not the same
+  as closure — and neither is a report that nobody files.
 
 ### Containment
 
