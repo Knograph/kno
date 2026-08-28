@@ -32,10 +32,11 @@ jobs:
     timeout-minutes: 30
     # This is the only job in the repository that can spend money.
     #
-    # It is DISARMED until the budget guard exists. `make test-live` refuses to
-    # run unless KNO_MAX_COST_USD is set AND some Go code actually reads it —
-    # so this cannot become a silent-overspend trap the moment someone adds the
-    # first adapter test. stats/budget lands in M0c; see docs/debt.md#11.
+    # `make test-live` refuses to run unless KNO_MAX_COST_USD is set AND some
+    # Go code actually reads it, and the cap below is the ceiling. The job
+    # also needs OPENAI_API_KEY and ANTHROPIC_API_KEY repository secrets:
+    # with either absent, the adapters' construction-time credential check
+    # refuses and the job fails naming the missing variable.
     #
     # CLAUDE.md: live tests are NEVER in PR CI. Fixture-based integration tests
     # run there instead, via `make test` -> `make test-integration`.
