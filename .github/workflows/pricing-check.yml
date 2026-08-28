@@ -167,6 +167,12 @@ jobs:
           #            the check-0 summary and says PASS even on a failing
           #            run). Its body is the full report, so the remaining
           #            signatures are covered on the next run.
+          # Bootstrap the label: a missing label must not red the job (it
+          # did, on the first post-merge run — gh issue create failed with
+          # "'pricing-drift' not found"). Create if absent, ignore if present.
+          gh label create pricing-drift --color d73a4a \
+            --description "Filed by the weekly pricing drift detector; closes itself when the finding is gone" \
+            2>/dev/null || true
           issues=$(gh issue list --label pricing-drift --state open --json number,body)
           numbers=$(mktemp)
           printf '%s' "$issues" | jq -r '.[].number' > "$numbers"
