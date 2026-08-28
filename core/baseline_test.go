@@ -3446,6 +3446,14 @@ type billingAgent struct {
 	core.Agent
 	perCallUSDMicros int64
 	calls            atomic.Int64
+
+	// firstCall, when non-nil, is closed once when the first Invoke lands.
+	// TestACancelDuringBackoffKeepsTheChargeItAlreadyIncurred uses it to
+	// cancel after the first Invoke instead of racing a wall clock. The
+	// signal fires BEFORE the charge settles — the charge is recorded anyway
+	// because Reservation.Settle is ctx-unconditional.
+	firstCall chan struct{}
+	firstOnce sync.Once
 }
 
 // Spends reports that this double costs nothing, which is true: it wraps the
@@ -3459,6 +3467,9 @@ func (*billingAgent) Spends() bool { return false }
 
 func (a *billingAgent) Invoke(context.Context, *core.Case) (*knov1.Response, error) {
 	a.calls.Add(1)
+	if a.firstCall != nil {
+		a.firstOnce.Do(func() { close(a.firstCall) })
+	}
 	return nil, billedFailure{
 		error:  errs.ErrTransportTransient.Wrap(errors.New("the provider charged and then failed")),
 		micros: a.perCallUSDMicros,
@@ -3935,7 +3946,8 @@ func TestACancelDuringBackoffKeepsTheChargeItAlreadyIncurred(t *testing.T) {
 	h := newHarness(t, 6, 3, fake.Options{})
 	orphans := &orphanCountingStore{Store: h.store}
 	h.opts.Store = orphans
-	h.opts.Agent = &billingAgent{perCallUSDMicros: perCall}
+	billing := &billingAgent{perCallUSDMicros: perCall, firstCall: make(chan struct{})}
+	h.opts.Agent = billing
 	h.opts.Concurrency = 1
 	h.opts.MaxAttempts = 3
 	// Long enough that the cancellation below lands inside the wait rather
@@ -3946,8 +3958,19 @@ func TestACancelDuringBackoffKeepsTheChargeItAlreadyIncurred(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		// After the first attempt is billed and the backoff has begun.
-		time.Sleep(80 * time.Millisecond)
+		// Cancel only once the first Invoke has happened and its backoff
+		// has begun. A wall-clock sleep raced the runner's scheduler: under
+		// -race on a loaded machine, harness setup could outlast the sleep
+		// and the cancellation landed before any charge. The signal is
+		// closed by the first Invoke, so at least one Invoke precedes the
+		// stop however the scheduler interleaves; the charge from it is
+		// recorded because Reservation.Settle is ctx-unconditional, so the
+		// stop landing between signal and settle still bills. Residual
+		// window, accepted: a cancel goroutine starved past the whole
+		// backoff sequence (~5.4s here) would fail the assertions below
+		// loudly rather than vacuously — orders rarer than the sleep race
+		// it replaces.
+		<-billing.firstCall
 		cancel()
 	}()
 
