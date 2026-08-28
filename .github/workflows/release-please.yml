@@ -58,4 +58,9 @@ jobs:
           # token's owner rather than by github-actions[bot], and dco.yml
           # matches the trailer against the author — so this value has to be
           # that identity, not a bot's.
-          signoff: "DeVaris Brown <devaris@devaris.com>"
+          # The pinned action version (SHA 45996ed) does NOT accept a
+          # `signoff` input — the run logs the warning "Unexpected input(s)
+          # 'signoff'" and the commit ships without a trailer. The release PR
+          # therefore still needs a manual `--signoff` amend before merge,
+          # which is the documented step in docs/debt.md#82. Removing the
+          # dead input keeps the file honest about what it does.

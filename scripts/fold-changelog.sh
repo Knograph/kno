@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
-# fold-changelog.sh — rename the hand-written [Unreleased] changelog heading
-# to the release it shipped in, via a PR (never a direct push to main).
+# fold-changelog.sh — post-publish reconciliation, via a PR (never a direct
+# push to main):
+#   1. rename the hand-written [Unreleased] changelog heading to the release
+#      it shipped in,
+#   2. repair .release-please-manifest.json when the pinned release-please
+#      action's post-merge bump did not land — measured once, when 0.0.3
+#      shipped and the manifest stayed at 0.0.2, making release-please
+#      re-propose 0.0.3 against a tag that already existed.
 #
 # Debt #76 was the manual version of this: "At release time the hand-written
 # heading is renamed from [Unreleased] to the version." The rename must land
@@ -35,18 +41,30 @@ fi
 # not be touched — hence the 0,/…/…/ construction.
 if ! grep -qF "## [Unreleased]" CHANGELOG.md; then
 	echo "fold-changelog: no [Unreleased] heading to fold; a release shipped " \
-		"with no hand-written entries — leaving CHANGELOG.md untouched." >&2
-	exit 0
-fi
+		"with no hand-written entries." >&2
+else
 # awk, not sed: the GNU-only "0,/re/" address for "first match only" is a
 # silent no-op on BSD sed — measured on the exact bug it was meant to fix.
 # Exact-line equality matters: later prose that MENTIONS the heading must
 # not match.
-awk -v h="## ${version} — in detail" '
-	!done && $0 == "## [Unreleased]" { print h; done = 1; next }
-	{ print }
-' CHANGELOG.md > CHANGELOG.md.tmp
-mv CHANGELOG.md.tmp CHANGELOG.md
+	awk -v h="## ${version} — in detail" '
+		!done && $0 == "## [Unreleased]" { print h; done = 1; next }
+		{ print }
+	' CHANGELOG.md > CHANGELOG.md.tmp
+	mv CHANGELOG.md.tmp CHANGELOG.md
+fi
+
+# 2. Manifest repair. The manifest must say the version that just shipped;
+# anything else is the staleness that made release-please re-propose a
+# released version. Recorded as part of debt #76's repayment.
+manifest=".release-please-manifest.json"
+if [ -f "$manifest" ]; then
+	want="{\".\": \"${version}\"}"
+	if [ "$(cat "$manifest" | tr -d ' \n')" != "$(printf '%s' "$want" | tr -d ' \n')" ]; then
+		printf '{\n  ".": "%s"\n}\n' "$version" > "$manifest"
+		echo "fold-changelog: manifest recorded as ${version}."
+	fi
+fi
 
 git add CHANGELOG.md
 if ! git -c user.name="DeVaris Brown" -c user.email="devaris@devaris.com" \
