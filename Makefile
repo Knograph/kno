@@ -220,6 +220,19 @@ test-live: ## Integration tests against LIVE providers. Spends real money.
 	@$(SAFE) $(call live_spend_guard,test-live)
 	@KNO_LIVE_TESTS=1 go test $(GOTESTFLAGS) -tags=integration ./...
 
+# Not part of `check`: this hits the live pricing sources, and a
+# network-dependent gate in PR CI is flaky by construction — the same posture
+# as test-live. The scheduled workflow owns the live run and the issue
+# lifecycle (.github/workflows/pricing-check.yml); this target is the manual
+# equivalent. KNO_LIVE_TESTS=1 arms the detector: without it the binary
+# disarms --live and compares against frozen fixtures — a silent no-op. The
+# same variable gates the package's live test fetches, so it has one meaning
+# everywhere: "the live path may run". Spends nothing — read-only fetches, no
+# provider API calls — so there is no live_spend_guard.
+.PHONY: pricing-check
+pricing-check: ## Compare the committed pricing table against the live sources (network)
+	@KNO_LIVE_TESTS=1 go run ./internal/cmd/pricingcheck --live
+
 .PHONY: coverage-check
 coverage-check: ## Enforce coverage floors and the no-decrease ratchet
 	@go run ./internal/cmd/covercheck -profile=$(COVERAGE) -baseline=$(BASELINE)

@@ -1,0 +1,233 @@
+name: Pricing check
+
+# The committed pricing table (adapters/agent/pricing/table.go) is
+# hand-entered and dated, and nothing else watches it. docs/debt.md#40's
+# trigger is "or when the committed table is 90 days old", so this workflow
+# runs the checks that trigger names and turns a stale or wrong table into a
+# visible pricing-drift issue instead of a silent estimate error — debt 46's
+# failure mode, which a human found by hand the first time.
+#
+# Weekly, not daily: the sources' goodwill and the issue noise both matter
+# (the 90-day trigger needs ~12 checks/year). Monday 07:17 UTC matches
+# nightly.yml's hour-and-minute convention, off the :00 minute so a burst of
+# synchronized schedules does not stall this one; a workflow has exactly one
+# schedule, and nightly.yml's is taken (plan R6). The push trigger catches
+# drift right after a merge — safe because filing is deduplicated.
+#
+# The detector proposes nothing and edits no code: a human edits table.go by
+# hand, and that edit arrives as an ordinary reviewed diff. Permissions are
+# `contents: read` plus job-scoped `issues: write` — the detector never holds
+# a write token that could touch code. All issue mechanics are `gh` in run
+# steps (the changelog.yml precedent, docs/debt.md#49), so the only actions
+# here are checkout and setup-go, pinned to commit SHAs per docs/debt.md#14.
+#
+# Report contract with internal/cmd/pricingcheck — a hard contract on the
+# detector's output, enforced in the step below:
+#   - a line beginning with FAIL marks a failed gated check
+#   - a line beginning with REPORT marks a report-only finding (cross-source
+#     disagreement, discovery, pending debt-46 entries)
+#   - the issue lifecycle is SET-based: every FAIL/REPORT line is one
+#     signature (digits collapsed to "N"); each signature updates its
+#     matching open issue or files a new one, and every open issue whose
+#     signature is absent from the run is closed with a verification comment.
+#     A run with no FAIL/REPORT lines closes everything, so close-on-green
+#     falls out of the same rule.
+#   - job color is keyed on the detector's exit code alone: report-only
+#     findings never fail the run (exit 0 stays green), a gated failure is
+#     red (exit 1), an internal error is red with no issue (exit 2).
+# The enforcement points repeat the line prefixes where they run, so the
+# coupling is visible at the enforcement point:
+#   awk '/^(FAIL|REPORT)/' with digit runs collapsed to "N"
+#   jq select(startswith("FAIL") or startswith("REPORT"))
+
+on:
+  schedule:
+    - cron: "17 7 * * 1"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - adapters/agent/pricing/**
+      - internal/cmd/pricingcheck/**
+      - .github/workflows/pricing-check.yml
+
+# Serialize runs: the issue API is one resource, and two runs deciding "no
+# open issue" at the same moment would file two. Dedupe is the primary
+# defense; this makes the race impossible rather than merely unlikely.
+concurrency:
+  group: pricing-check
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: pricing drift detector
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # A job-level permissions key REPLACES the workflow-level one, so
+    # `contents: read` is re-listed here for checkout, alongside the only
+    # write scope this job gets.
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            tools/go.sum
+
+      - name: Detect pricing drift
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # The detector's arming switch: --live is disarmed without it, so a
+          # scheduled job would compare against frozen fixtures forever — a
+          # silent no-op (Phase-3 P0). The same variable gates the package's
+          # live test fetches: one meaning everywhere, "the live path may
+          # run".
+          KNO_LIVE_TESTS: "1"
+        run: |
+          set -euo pipefail
+
+          # Contract with internal/cmd/pricingcheck (the plan's report-vs-gate
+          # table, set-based since the Phase-3 review):
+          #   - a line beginning with FAIL marks a failed gated check
+          #   - a line beginning with REPORT marks a report-only finding
+          #     (cross-source disagreement, discovery, pending debt-46)
+          #   - exit 0: gated checks green. A run with findings files/updates
+          #     issues and STAYS green — report-only findings never fail the
+          #     run (plan R2a: a job that is red from birth gets muted).
+          #   - exit 1: gated failure. Same issue lifecycle, but the job goes
+          #     red.
+          #   - exit 2: internal error. A bug in the detector's own code, not
+          #     a pricing finding: the job goes red and NO issue is filed.
+          #   - The lifecycle is SET-based: every FAIL/REPORT line is one
+          #     signature (digit runs collapsed to "N"); each signature
+          #     updates its matching open issue or files a new one; every open
+          #     issue whose signature is absent from this run is closed with a
+          #     verification comment. A run with no FAIL/REPORT lines closes
+          #     everything — close-on-green falls out of the same rule.
+          #
+          # Enforcement points of the line contract, kept verbatim so the
+          # coupling is visible where it runs:
+          #   awk '/^(FAIL|REPORT)/'  and  jq select(startswith("FAIL") or startswith("REPORT"))
+          #
+          # The detector's stdout is teed so the report is always visible in
+          # the log and the file feeds the gh steps below. Stderr passes
+          # through to the log untouched and never lands in an issue body.
+          report=$(mktemp)
+          set +e
+          KNO_LIVE_TESTS=1 go run ./internal/cmd/pricingcheck --live | tee "$report"
+          status=${PIPESTATUS[0]}
+          set -e
+
+          # This run's signature SET: every FAIL/REPORT line, digit runs
+          # collapsed to "N", deduplicated. Each signature keeps its first
+          # original line as the title for any issue this run files.
+          set_file=$(mktemp)
+          awk '
+            /^(FAIL|REPORT)/ {
+              norm = $0
+              while (match(norm, /[0-9]+/)) {
+                norm = substr(norm, 1, RSTART - 1) "N" substr(norm, RSTART + RLENGTH)
+              }
+              if (!seen[norm]++) print norm "\t" $0
+            }
+          ' "$report" > "$set_file"
+
+          # An exit-1 report that names no finding is unparseable output, not
+          # a gated failure — most likely `go run` failing to build. Refuse
+          # to file an issue from it and go red with a message; the push
+          # trigger re-runs the detector on the pricing surface.
+          if [ "$status" -eq 1 ] && [ ! -s "$set_file" ]; then
+            echo "::error::pricingcheck exited 1 but the report names no finding (no line starting with 'FAIL' or 'REPORT')."
+            echo "::error::Refusing to file an issue from an unparseable report — treat this as an internal error and fix the detector."
+            exit 1
+          fi
+
+          # One gh listing drives the whole lifecycle. An open issue's
+          # signature is its whole SET of normalized finding lines, not just
+          # its first: a body that carries several findings (the pending-46
+          # evergreen has 16 REPORT lines every run) must match each of them,
+          # or every run would file a duplicate for each line past the first —
+          # a re-open storm. Rules:
+          #   update — an issue whose line-set intersects this run's set gets
+          #            the fresh report, so no issue ever goes stale
+          #   close  — an issue whose line-set is disjoint from this run's set
+          #            has no finding left; closed with a verification comment.
+          #            An empty run set is disjoint from everything, so it
+          #            closes all open issues — close-on-green falls out of
+          #            the same rule
+          #   create — at most ONE new issue per run, for the first signature
+          #            no open issue carries (title = that signature's own
+          #            report line, never the report's first line, which is
+          #            the check-0 summary and says PASS even on a failing
+          #            run). Its body is the full report, so the remaining
+          #            signatures are covered on the next run.
+          issues=$(gh issue list --label pricing-drift --state open --json number,body)
+          numbers=$(mktemp)
+          printf '%s' "$issues" | jq -r '.[].number' > "$numbers"
+          open_lines=$(mktemp)
+          printf '%s' "$issues" \
+            | jq -r '.[] | .number as $n | (.body // "" | split("\n")[] | select(startswith("FAIL") or startswith("REPORT")) | gsub("[0-9]+"; "N")) | [$n, .] | @tsv' > "$open_lines"
+          open_all=$(mktemp)
+          cut -f2- "$open_lines" | sort -u > "$open_all"
+          run_sigs=$(mktemp)
+          # Report order, already deduped by the awk above — the first
+          # uncovered signature in the report is the natural issue title.
+          cut -f1 "$set_file" > "$run_sigs"
+
+          # Update intersecting issues, close disjoint ones — one walk, and a
+          # just-updated issue is never closed in the same pass because its
+          # listing lines are precisely what made it intersect. The evergreen
+          # pending-46 issue is expected to land here every run, refreshed
+          # weekly, until docs/debt.md#46's rows land — then the package's own
+          # dead-exclusion check fails the run and a human removes the
+          # exclusions.
+          while read -r n; do
+            issue_lines=$(awk -F'\t' -v n="$n" '$1 == n {print $2}' "$open_lines")
+            if [ -n "$issue_lines" ] && printf '%s\n' "$issue_lines" | grep -qFf "$run_sigs"; then
+              gh issue edit "$n" --body-file "$report"
+              echo "pricing drift persists; issue #$n updated with this run's report"
+            else
+              gh issue close "$n" --comment "finding absent from the $(date -u +%F) run — closing."
+            fi
+          done < "$numbers"
+
+          # The first signature no open issue carries becomes the run's one
+          # new issue.
+          uncovered=$(grep -vxF -f "$open_all" "$run_sigs" | head -n 1 || true)
+          if [ -n "$uncovered" ]; then
+            title=$(grep -m1 -F "$uncovered"$'\t' "$set_file" | cut -f2-)
+            gh issue create --label pricing-drift --title "$title" --body-file "$report"
+            echo "pricing drift filed as a new issue: $title"
+          fi
+
+          case "$status" in
+            0)
+              if [ -s "$set_file" ]; then
+                echo "pricing check green with reported findings (see the issues)"
+              else
+                echo "pricing check green"
+              fi
+              ;;
+            1)
+              echo "::error::pricing drift: gated checks failed — see the filed issue"
+              exit 1
+              ;;
+            2)
+              # Internal error — the red job IS the bug report, and the push
+              # trigger will have landed the change in the same breath. No
+              # issue: this is not a pricing finding.
+              echo "::error::pricingcheck exited 2 (internal error). Fix the detector; no issue was filed."
+              exit 1
+              ;;
+            *)
+              echo "::error::pricingcheck exited $status — unexpected status. No issue was filed."
+              exit 1
+              ;;
+          esac
