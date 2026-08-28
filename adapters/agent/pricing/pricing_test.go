@@ -38,6 +38,10 @@ var publishedPrices = []struct {
 	{scheme: "anthropic", model: "claude-sonnet-4-5", input: 3, cachedRead: 0.30, cacheWrite: 3.75, hasCacheWrite: true, output: 15},
 	{scheme: "anthropic", model: "claude-haiku-4-5", input: 1, cachedRead: 0.10, cacheWrite: 1.25, hasCacheWrite: true, output: 5},
 	{scheme: "anthropic", model: "claude-fable-5", input: 10, cachedRead: 1, cacheWrite: 12.50, hasCacheWrite: true, output: 50},
+	// Fast mode publishes input/output only — no cache rates exist for it, so
+	// cachedRead stays 0 ("unpublished"), which the test reads as nil presence.
+	{scheme: "anthropic", model: "claude-opus-5-fast", input: 10, output: 50},
+	{scheme: "anthropic", model: "claude-opus-4-8-fast", input: 10, output: 50},
 	// OpenAI publishes no separate cache-WRITE rate. Unset, not zero.
 	{scheme: "openai", model: "gpt-5.6-sol", input: 4, cachedRead: 0.40, output: 20},
 	{scheme: "openai", model: "gpt-5.6-terra", input: 2, cachedRead: 0.20, output: 12},
@@ -62,7 +66,12 @@ func TestTableMatchesThePublishedPrices(t *testing.T) {
 			if got, want := p.GetInputPerMtokUsdMicros(), micros(tc.input); got != want {
 				t.Errorf("input = %d, want %d ($%.2f/MTok)", got, want, tc.input)
 			}
-			if got, want := p.GetCachedInputPerMtokUsdMicros(), micros(tc.cachedRead); got != want {
+			if tc.cachedRead == 0 {
+				// Unpublished, not free: the presence distinction is the claim.
+				if p.CachedInputPerMtokUsdMicros != nil {
+					t.Errorf("cached input present, want unpublished (nil)")
+				}
+			} else if got, want := p.GetCachedInputPerMtokUsdMicros(), micros(tc.cachedRead); got != want {
 				t.Errorf("cached input = %d, want %d ($%.2f/MTok)", got, want, tc.cachedRead)
 			}
 			if got, want := p.GetOutputPerMtokUsdMicros(), micros(tc.output); got != want {
@@ -595,7 +604,10 @@ func TestAVariantSuffixIsUnpricedRatherThanGuessed(t *testing.T) {
 		{"latest is an alias to the current snapshot", "anthropic", "claude-opus-5-latest", true},
 
 		// Variants are words, and these carry their own price.
-		{"fast mode is a different price", "anthropic", "claude-opus-5-fast", false},
+		// claude-opus-5-fast and claude-opus-4-8-fast now HAVE rows of their
+		// own (docs/debt.md#46): an exact row must win over the suffix rule,
+		// and TestTableMatchesThePublishedPrices pins their rates at $10/$50 —
+		// a fallthrough to the $5/$25 base row fails that pin.
 		{"so is fast mode on sonnet", "anthropic", "claude-sonnet-5-fast", false},
 		{"a pro tier is a different product", "openai", "gpt-5.6-sol-pro", false},
 		{"a preview is not the released model", "anthropic", "claude-opus-5-preview", false},

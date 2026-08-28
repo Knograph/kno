@@ -322,22 +322,25 @@ func TestCheckDiscoveryNoData(t *testing.T) {
 
 // --- check 5 ---
 
-func TestCheckPrefixCollisionsPendingReported(t *testing.T) {
+func TestCheckPrefixCollisionsNoPendingExclusions(t *testing.T) {
 	t.Parallel()
+	// docs/debt.md#46 repaid: the pending list is gone (fast variants became
+	// rows; batch and no-price-of-record variants became deliberate
+	// exclusions), so an empty source set produces no findings and no gate —
+	// the old contract reported every pending exclusion on every run, which
+	// would now be permanent noise.
 	r := checkPrefixCollisions(mkInput(map[string]sourceData{}))
-	if r.Verdict != verdictReport {
-		t.Errorf("pending exclusions must be reported every run, got %s", r.Verdict)
+	if r.Verdict != verdictPass {
+		t.Errorf("no pending exclusions remain; got %s, want PASS", r.Verdict)
 	}
-	if len(r.Findings) != len(pendingExclusions) {
-		t.Errorf("got %d findings, want one per pending exclusion (%d)", len(r.Findings), len(pendingExclusions))
+	if len(r.Findings) != 0 {
+		t.Errorf("got %d findings, want none", len(r.Findings))
 	}
-	wantFinding(t, r, verdictReport, "claude-opus-5-fast carries its own price; a row is owed before 0.1.0 (docs/debt.md#46)")
-	wantFinding(t, r, verdictReport, "gpt-5.6-luna-pro")
 }
 
 // TestCheckPrefixCollisionsNewCollider uses a model on NO committed list —
-// gpt-5.6-sol-pro itself is a committed pending exclusion, so it must not
-// also be reported as a fresh collider.
+// gpt-5.6-sol-pro itself is a committed deliberate exclusion, so a fresh
+// suffix on it must still be reported as a collider.
 func TestCheckPrefixCollisionsNewCollider(t *testing.T) {
 	t.Parallel()
 	collider := mkRow("openrouter", "openai", "gpt-5.6-sol-pro-max", rat(5_000_000), nil, nil, nil, rat(25_000_000))
@@ -345,9 +348,6 @@ func TestCheckPrefixCollisionsNewCollider(t *testing.T) {
 		"openrouter": sourceOf([]row{collider}),
 	}))
 	wantFinding(t, r, verdictReport, "model openai/gpt-5-6-sol-pro-max prefix-matches priced gpt-5.6-sol but Lookup refuses it")
-	// The pending exclusions are reported every run; the new collider must
-	// not be double-reported through them. The detail spells the canonical
-	// (dash) form, so count on that.
 	found := 0
 	for _, f := range r.Findings {
 		if strings.Contains(f.Detail, "gpt-5-6-sol-pro-max") {
@@ -361,9 +361,8 @@ func TestCheckPrefixCollisionsNewCollider(t *testing.T) {
 
 func TestCheckPrefixCollisionsCoveredSilent(t *testing.T) {
 	t.Parallel()
-	// A covered model (the table prices gpt-5.6-sol) is not a collider. The
-	// pending exclusions are still reported every run — that is the contract
-	// — so "silent" here means no collider line and no gate.
+	// A covered model (the table prices gpt-5.6-sol) is not a collider:
+	// no collider line and no gate.
 	priced := mkRow("openrouter", "openai", "gpt-5.6-sol", rat(2_000_000), nil, nil, nil, rat(10_000_000))
 	r := checkPrefixCollisions(mkInput(map[string]sourceData{
 		"openrouter": sourceOf([]row{priced}),
@@ -391,15 +390,4 @@ func wantNoCollider(t *testing.T, r checkResult) {
 			t.Errorf("check %d: unexpected collider finding: %s", r.Number, f.Detail)
 		}
 	}
-}
-
-// TestCheckPrefixCollisionsPendingPaid is serial: it makes one pending
-// exclusion's model covered by the table, which must FAIL the check.
-func TestCheckPrefixCollisionsPendingPaid(t *testing.T) {
-	orig := pendingExclusions
-	pendingExclusions = append(append([]exclusion{}, orig...), exclusion{scheme: "openai", model: "gpt-5.6-sol", reason: "test", ledger: "docs/debt.md#46", pending: true})
-	defer func() { pendingExclusions = orig }()
-
-	r := checkPrefixCollisions(mkInput(map[string]sourceData{}))
-	wantFinding(t, r, verdictFail, "pending exclusion openai/gpt-5.6-sol is now priced")
 }

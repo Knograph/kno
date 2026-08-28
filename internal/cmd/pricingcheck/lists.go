@@ -21,20 +21,24 @@ var suppressions = []suppression{
 	},
 }
 
-// exclusion records a model the detector deliberately does not flag. The
-// deliberate ones cover models the table will never price; the pending ones
-// cover models that carry their own price but whose rows are owed — the
-// detector's pending list is the input docs/debt.md#46 promises. Lifecycle:
-// an exclusion whose model gains a table row is dead and FAILS the check.
+// exclusion records a model the detector deliberately does not flag — a
+// model the table will not price, with the reason why a row would be wrong.
+// Lifecycle: an exclusion whose model gains a table row is dead and FAILS
+// the check, so the list cannot outlive its reasons. pageAbsent marks an
+// exclusion whose reason is that NO price-of-record page publishes the model:
+// the day a parsed page row matches it, that reason is dead too, and the
+// check fails instead of silently skipping.
 type exclusion struct {
-	scheme  string
-	model   string // raw id as the sources spell it
-	reason  string
-	ledger  string // docs/debt.md#N, empty for deliberate exclusions
-	pending bool
+	scheme     string
+	model      string // raw id as the sources spell it
+	reason     string
+	pageAbsent bool
 }
 
-// deliberateExclusions: models the table will not price, by design.
+// deliberateExclusions: models the table will not price, by design. Each
+// entry's reason is the disposition: docs/debt.md#46 was repaid 2026-08-28
+// partly by ROWS (the fast variants, which the provider's own page prices)
+// and partly by these exclusions, each naming why a row would be wrong.
 //
 //	claude-mythos-5         invitation-only; pricing it would price a model
 //	                        most runs cannot call
@@ -47,29 +51,34 @@ var deliberateExclusions = []exclusion{
 	{scheme: "anthropic", model: "claude-opus-4", reason: "retired (except on Google Cloud); not served by the M2 adapters"},
 	{scheme: "anthropic", model: "claude-sonnet-4", reason: "retired (except on Bedrock and Google Cloud); not served by the M2 adapters"},
 	{scheme: "anthropic", model: "claude-haiku-3-5", reason: "retired (except on Bedrock and Google Cloud); not served by the M2 adapters"},
-}
-
-// pendingExclusions: prefix-resolving variants discovered on the live sources
-// (2026-08-28) that carry their own price and therefore must NOT inherit the
-// base row. Their table rows are owed before 0.1.0 — docs/debt.md#46 — and
-// the detector reports them every run, gated or not, until the debt is paid.
-var pendingExclusions = []exclusion{
-	{scheme: "anthropic", model: "claude-opus-5-fast", reason: "fast mode carries its own price (2x base on 2026-08-28)", ledger: "docs/debt.md#46", pending: true},
-	{scheme: "anthropic", model: "claude-opus-5:batch", reason: "batch mode carries its own price", ledger: "docs/debt.md#46", pending: true},
-	{scheme: "anthropic", model: "claude-sonnet-5:batch", reason: "batch mode carries its own price", ledger: "docs/debt.md#46", pending: true},
-	{scheme: "anthropic", model: "claude-fable-5:batch", reason: "batch mode carries its own price", ledger: "docs/debt.md#46", pending: true},
-	{scheme: "anthropic", model: "claude-opus-4-8-fast", reason: "fast mode carries its own price", ledger: "docs/debt.md#46", pending: true},
-	{scheme: "anthropic", model: "claude-opus-4-8:batch", reason: "batch mode carries its own price", ledger: "docs/debt.md#46", pending: true},
-	{scheme: "anthropic", model: "claude-opus-4-7-fast", reason: "fast mode carries its own price", ledger: "docs/debt.md#46", pending: true},
-	{scheme: "anthropic", model: "claude-opus-4-7:batch", reason: "batch mode carries its own price", ledger: "docs/debt.md#46", pending: true},
-	{scheme: "anthropic", model: "claude-opus-4-6:batch", reason: "batch mode carries its own price", ledger: "docs/debt.md#46", pending: true},
-	{scheme: "anthropic", model: "claude-opus-4-5:batch", reason: "batch mode carries its own price", ledger: "docs/debt.md#46", pending: true},
-	{scheme: "anthropic", model: "claude-sonnet-4-6:batch", reason: "batch mode carries its own price", ledger: "docs/debt.md#46", pending: true},
-	{scheme: "anthropic", model: "claude-sonnet-4-5:batch", reason: "batch mode carries its own price", ledger: "docs/debt.md#46", pending: true},
-	{scheme: "anthropic", model: "claude-haiku-4-5:batch", reason: "batch mode carries its own price", ledger: "docs/debt.md#46", pending: true},
-	{scheme: "openai", model: "gpt-5.6-sol-pro", reason: "pro variant carries its own price", ledger: "docs/debt.md#46", pending: true},
-	{scheme: "openai", model: "gpt-5.6-terra-pro", reason: "pro variant carries its own price", ledger: "docs/debt.md#46", pending: true},
-	{scheme: "openai", model: "gpt-5.6-luna-pro", reason: "pro variant carries its own price", ledger: "docs/debt.md#46", pending: true},
+	// Batch variants. Anthropic publishes batch rates (50% of base) on its
+	// own page, but no adapter speaks the batch endpoint: pricing these rows
+	// would authorize a capped run that the Messages endpoint rejects per
+	// Case, which is strictly worse than today's one-time refusal naming
+	// pricing. The rows land with batch-mode support; until then a batch id
+	// stays unpriced and refused, and the detector keeps the page's batch
+	// table in view through the pending → deliberate move (docs/debt.md#46,
+	// repaid 2026-08-28 with this disposition).
+	{scheme: "anthropic", model: "claude-opus-5:batch", reason: "batch mode: rates published (50% base) but no adapter speaks the batch endpoint; row lands with batch-mode support"},
+	{scheme: "anthropic", model: "claude-sonnet-5:batch", reason: "batch mode: rates published (50% base) but no adapter speaks the batch endpoint; row lands with batch-mode support"},
+	{scheme: "anthropic", model: "claude-fable-5:batch", reason: "batch mode: rates published (50% base) but no adapter speaks the batch endpoint; row lands with batch-mode support"},
+	{scheme: "anthropic", model: "claude-opus-4-8:batch", reason: "batch mode: rates published (50% base) but no adapter speaks the batch endpoint; row lands with batch-mode support"},
+	{scheme: "anthropic", model: "claude-opus-4-7:batch", reason: "batch mode: rates published (50% base) but no adapter speaks the batch endpoint; row lands with batch-mode support"},
+	{scheme: "anthropic", model: "claude-opus-4-6:batch", reason: "batch mode: rates published (50% base) but no adapter speaks the batch endpoint; row lands with batch-mode support"},
+	{scheme: "anthropic", model: "claude-opus-4-5:batch", reason: "batch mode: rates published (50% base) but no adapter speaks the batch endpoint; row lands with batch-mode support"},
+	{scheme: "anthropic", model: "claude-sonnet-4-6:batch", reason: "batch mode: rates published (50% base) but no adapter speaks the batch endpoint; row lands with batch-mode support"},
+	{scheme: "anthropic", model: "claude-sonnet-4-5:batch", reason: "batch mode: rates published (50% base) but no adapter speaks the batch endpoint; row lands with batch-mode support"},
+	{scheme: "anthropic", model: "claude-haiku-4-5:batch", reason: "batch mode: rates published (50% base) but no adapter speaks the batch endpoint; row lands with batch-mode support"},
+	// OpenRouter-listed variants with NO price-of-record page. The ledger's
+	// own standard (docs/debt.md#46) refuses a non-price-of-record source for
+	// a spend-authorizing row, so these are deliberate exclusions rather than
+	// rows — and the dead-exclusion check fails the run the day a
+	// price-of-record page starts publishing them, which is the signal to
+	// revisit.
+	{scheme: "anthropic", model: "claude-opus-4-7-fast", reason: "OpenRouter-listed; Anthropic's page prices fast mode for Opus 5 and 4.8 only — no price-of-record exists", pageAbsent: true},
+	{scheme: "openai", model: "gpt-5.6-sol-pro", reason: "OpenRouter-listed; OpenAI's model page publishes no pro-tier rates — no price-of-record exists", pageAbsent: true},
+	{scheme: "openai", model: "gpt-5.6-terra-pro", reason: "OpenRouter-listed; OpenAI's model page publishes no pro-tier rates — no price-of-record exists", pageAbsent: true},
+	{scheme: "openai", model: "gpt-5.6-luna-pro", reason: "OpenRouter-listed; OpenAI's model page publishes no pro-tier rates — no price-of-record exists", pageAbsent: true},
 }
 
 // matchSuppression finds the suppression covering a row, by scheme and by id.

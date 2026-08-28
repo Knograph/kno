@@ -65,8 +65,8 @@ func TestParseAnthropicFixture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if len(rows) != 15 {
-		t.Errorf("expected 15 data rows, got %d", len(rows))
+	if len(rows) != 17 {
+		t.Errorf("expected 17 data rows (15 main + 2 fast), got %d", len(rows))
 	}
 	opus := findRow(t, rows, "anthropic", "claude-opus-5")
 	want := []struct {
@@ -94,6 +94,14 @@ func TestParseAnthropicFixture(t *testing.T) {
 	for _, want := range []string{"claude-mythos-5", "claude-opus-4-1", "claude-haiku-3-5"} {
 		findRow(t, rows, "anthropic", want)
 	}
+	// The fast table splits its combined cells into one row per model, and
+	// the constructed variant id matches the table key so the agreement
+	// check can compare it against OpenRouter.
+	fast := findRow(t, rows, "anthropic", "claude-opus-5-fast")
+	if fast.input.Cmp(big.NewRat(10_000_000, 1)) != 0 || fast.output.Cmp(big.NewRat(50_000_000, 1)) != 0 {
+		t.Errorf("claude-opus-5-fast = %s in / %s out, want 10_000_000 / 50_000_000", fast.input, fast.output)
+	}
+	findRow(t, rows, "anthropic", "claude-opus-4-8-fast")
 }
 
 // TestParseOpenAIFixture parses the recorded capture of
@@ -277,7 +285,7 @@ func TestTrimHTMLAndMinifyJSON(t *testing.T) {
 	t.Parallel()
 	// The header must span the committed literal's full column set — the
 	// parser selects by it, and both cache-write columns are load-bearing.
-	htmlIn := `<html><head><title>x</title></head><body><script>var s="<table></table>";</script><table><thead><tr><th>Model</th><th>Base Input Tokens</th><th>5m Cache Writes</th><th>1h Cache Writes</th><th>Cache Hits &amp; Refreshes</th><th>Output Tokens</th></tr></thead><tbody><tr><td>Claude Opus 5</td><td>$5 / MTok</td><td>$6.25 / MTok</td><td>$10 / MTok</td><td>$0.50 / MTok</td><td>$25 / MTok</td></tr></tbody></table></body></html>`
+	htmlIn := `<html><head><title>x</title></head><body><script>var s="<table></table>";</script><table><thead><tr><th>Model</th><th>Base Input Tokens</th><th>5m Cache Writes</th><th>1h Cache Writes</th><th>Cache Hits &amp; Refreshes</th><th>Output Tokens</th></tr></thead><tbody><tr><td>Claude Opus 5</td><td>$5 / MTok</td><td>$6.25 / MTok</td><td>$10 / MTok</td><td>$0.50 / MTok</td><td>$25 / MTok</td></tr></tbody></table><table><thead><tr><th>Model</th><th>Input</th><th>Output</th></tr></thead><tbody><tr><td>Claude Opus 5 / Claude Opus 4.8</td><td>$10 / MTok</td><td>$50 / MTok</td></tr></tbody></table></body></html>`
 	out, err := trimHTML([]byte(htmlIn))
 	if err != nil {
 		t.Fatalf("trimHTML: %v", err)
@@ -292,8 +300,14 @@ func TestTrimHTMLAndMinifyJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("trimmed html must still parse: %v", err)
 	}
-	if len(rows) != 1 || rows[0].canonical != "claude-opus-5" {
-		t.Errorf("parsed %d rows from trimmed html, want 1 opus-5", len(rows))
+	if len(rows) != 3 {
+		t.Errorf("parsed %d rows from trimmed html, want 3 (1 main + 2 fast)", len(rows))
+	}
+	if rows[0].canonical != "claude-opus-5" {
+		t.Errorf("first row = %s, want claude-opus-5", rows[0].canonical)
+	}
+	for _, want := range []string{"claude-opus-5-fast", "claude-opus-4-8-fast"} {
+		findRow(t, rows, "anthropic", want) // Fatals on absence
 	}
 
 	jsonIn := `{ "data" : [ { "id" : "openai/gpt-5.6-sol", "pricing" : { "prompt" : "0.000002", "completion" : "0.00002" } } ] }`

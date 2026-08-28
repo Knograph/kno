@@ -76,6 +76,19 @@ covenants — breaking any of them requires a major version.
 
 ### Features
 
+- **Fast-mode variants are priced, and the rest of the variant debt is disposed with
+  reasons.** `claude-opus-5-fast` and `claude-opus-4-8-fast` have rows at the published
+  $10/$50 per MTok, so a capped run on fast mode is authorized at its real rate instead of
+  being refused once, up front — `docs/debt.md#46` repaid on its trigger. The batch
+  variants (published at 50% of base) stay deliberately unpriced because no adapter speaks
+  the batch endpoint: a row would authorize a run the Messages endpoint rejects per Case,
+  which is worse than the one-time refusal. The OpenRouter-only variants
+  (`gpt-5.6-*-pro`, `claude-opus-4-7-fast`) stay unpriced because no price-of-record page
+  publishes them. The detector keeps every one of these exclusions honest — it fails the
+  run the day any of them gains a row or a published rate — and now selects the fast table
+  by its own header literal, so the two new rows are cross-checked rather than
+  single-sourced. `pricing.Version` moves to 2026-08-28.
+
 - **The pricing drift detector repays the staleness debt.** `internal/cmd/pricingcheck`
   fetches the three price-of-record sources (OpenRouter's model list, Anthropic's pricing
   page, OpenAI's model comparison page), compares them against the committed table, and
