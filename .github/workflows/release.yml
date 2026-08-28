@@ -140,6 +140,30 @@ jobs:
       # PATH before `make release` runs, not after.
       - uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
 
+      # Debt #81's mitigation: release-please creates the release PUBLISHED and
+      # empty at tag time, so a pipeline that dies before goreleaser uploads
+      # anything leaves a public page with zero assets. Remove exactly that
+      # shape before building — published AND empty — and nothing else. A
+      # release with assets is real work and is never deleted here; a draft is
+      # goreleaser's own and is also left alone.
+      - name: Remove an empty published release, when one exists
+        run: |
+          set -euo pipefail
+          # Re-asserted here rather than trusted from the guard above: the
+          # ref reaches shell commands in this step, and defense in depth is
+          # the point of a workflow whose job is signing things.
+          case "${GITHUB_REF_NAME}" in
+            v[0-9]*) ;;
+            *) echo "::error::unexpected ref ${GITHUB_REF_NAME}; refusing."; exit 1 ;;
+          esac
+          if gh release view "${GITHUB_REF_NAME}" \
+              --json assets,isDraft \
+              --jq 'select(.isDraft == false and (.assets | length) == 0) | "empty"' \
+              | grep -q empty; then
+            echo "removing the empty published release page for ${GITHUB_REF_NAME}"
+            gh release delete "${GITHUB_REF_NAME}" --yes
+          fi
+
       # One target, one goreleaser byte-pinned by tools/goreleaser/go.sum — the
       # same one `make release-check` validated on every PR that touched the
       # config. The target itself refuses to run outside GitHub Actions, so this
