@@ -25,6 +25,25 @@ covenants — breaking any of them requires a major version.
      At release time the hand-written heading is renamed from [Unreleased] to
      the version. See docs/debt.md#76 for why that is still a manual step. -->
 
+## [0.0.3](https://github.com/Knograph/kno/compare/v0.0.2...v0.0.3) (2026-08-28)
+
+
+### Features
+
+* arm Value's model gate on the first process — debt [#80](https://github.com/Knograph/kno/issues/80) ([#76](https://github.com/Knograph/kno/issues/76)) ([901507a](https://github.com/Knograph/kno/commit/901507abeeb4f2222aa089133fe1c628600d2c36))
+* ship the Homebrew tap ([#73](https://github.com/Knograph/kno/issues/73)) ([53a1dac](https://github.com/Knograph/kno/commit/53a1dac9e073c90ab02a99f2b7ef6ead0763d623))
+
+
+### Bug Fixes
+
+* identity regexp accepts the repo owner's case; repay [#13](https://github.com/Knograph/kno/issues/13) ([#71](https://github.com/Knograph/kno/issues/71)) ([29a646f](https://github.com/Knograph/kno/commit/29a646f432640fa1a5f3360463c388edb5d8a54a))
+
+
+### Documentation
+
+* record the README quickstart GIF — debt [#64](https://github.com/Knograph/kno/issues/64) repaid ([#77](https://github.com/Knograph/kno/issues/77)) ([410383b](https://github.com/Knograph/kno/commit/410383b995abf2576dc36b1afa53fe455dc95b9f))
+* sweep after the first verified release ([#72](https://github.com/Knograph/kno/issues/72)) ([c8a98d8](https://github.com/Knograph/kno/commit/c8a98d8e952eeeee8bd75413eaa00679622ed826))
+
 ## [0.0.2](https://github.com/Knograph/kno/compare/v0.0.1...v0.0.2) (2026-08-27)
 
 
