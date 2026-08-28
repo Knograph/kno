@@ -149,6 +149,13 @@ jobs:
       - name: Remove an empty published release, when one exists
         run: |
           set -euo pipefail
+          # Re-asserted here rather than trusted from the guard above: the
+          # ref reaches shell commands in this step, and defense in depth is
+          # the point of a workflow whose job is signing things.
+          case "${GITHUB_REF_NAME}" in
+            v[0-9]*) ;;
+            *) echo "::error::unexpected ref ${GITHUB_REF_NAME}; refusing."; exit 1 ;;
+          esac
           if gh release view "${GITHUB_REF_NAME}" \
               --json assets,isDraft \
               --jq 'select(.isDraft == false and (.assets | length) == 0) | "empty"' \
