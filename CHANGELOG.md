@@ -39,6 +39,11 @@ covenants — breaking any of them requires a major version.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A failed release build no longer leaves a published empty release page** — the release
+  workflow removes exactly the published-but-empty shape before building (debt #81 repaid).
+
 ### Features
 
 - **The README quickstart GIF is recorded** — `make tape` output committed as
