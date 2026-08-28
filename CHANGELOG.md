@@ -41,6 +41,8 @@ covenants — breaking any of them requires a major version.
 
 ### Features
 
+- **The README quickstart GIF is recorded** — `make tape` output committed as
+  `docs/quickstart.gif` and embedded in the README (debt #64 repaid).
 - **The changelog fold is automated** — the release pipeline renames the hand-written
   `[Unreleased]` heading to the release it shipped in and opens an auto-merging PR
   (debt #76 repaid).
