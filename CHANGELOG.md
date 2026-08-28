@@ -41,6 +41,9 @@ covenants — breaking any of them requires a major version.
 
 ### Fixed
 
+- **The release pipeline now self-heals its own state after publishing** — the changelog
+  fold and the release-please manifest reconciliation happen in one post-publish PR, so a
+  manifest that goes stale (as it did after 0.0.3) cannot survive the next release.
 - **A failed release build no longer leaves a published empty release page** — the release
   workflow removes exactly the published-but-empty shape before building (debt #81 repaid).
 
