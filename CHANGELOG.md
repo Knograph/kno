@@ -37,7 +37,7 @@ covenants — breaking any of them requires a major version.
 
 * cosign legacy sign format, store coverage determinism ([#68](https://github.com/Knograph/kno/issues/68)) ([62f7174](https://github.com/Knograph/kno/commit/62f7174a8dce19bf1916fae5364241a89a2dd9cb))
 
-## [Unreleased]
+## [0.0.4](https://github.com/Knograph/kno/compare/v0.0.3...v0.0.4) (2026-08-28)
 
 ### Fixed
 
