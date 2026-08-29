@@ -32,9 +32,9 @@ message Interval {
 
   // How the interval was computed: "bootstrap", "t", "wilson", "tango",
   // "agresti-min", "adjusted-wald", "mover-wilson", "sign", "net-loss-shared",
-  // "net-loss-indep". Recorded because the method is
-  // part of the claim, and because a delta whose method changed between two
-  // runs did not become more precise — it was measured differently.
+  // "net-loss-indep", "portfolio-greedy-shared". Recorded because the method
+  // is part of the claim, and because a delta whose method changed between
+  // two runs did not become more precise — it was measured differently.
   string method = 4;
 
   // Which sides are bounded.

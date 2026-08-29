@@ -40,6 +40,16 @@ type (
 	// Portfolio is the selected subset of Assets with its rejection log.
 	Portfolio = knov1.Portfolio
 
+	// PortfolioEntry is one selected Asset and the measurement that earned it.
+	PortfolioEntry = knov1.PortfolioEntry
+
+	// Rejection is one excluded Asset and why.
+	Rejection = knov1.Rejection
+
+	// Interval is a confidence interval, deliberately a message so absence
+	// is representable.
+	Interval = knov1.Interval
+
 	// Report is the deliverable: what shipped, what didn't, and what it's worth.
 	Report = knov1.Report
 

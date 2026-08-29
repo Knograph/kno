@@ -97,6 +97,18 @@ message Portfolio {
 
   // Confidence interval on dev_estimated_gain.
   Interval dev_estimated_interval = 7;
+
+  // The Value run this Portfolio was built from.
+  string source_run_id = 8;
+
+  // How that run ended. Carried here because "built from a run that was
+  // budget-stopped" is a different statement from "built from a completed
+  // run": the source's incompleteness travels with the Portfolio either way,
+  // so a reader does not have to go look.
+  RunStatus source_status = 9;
+
+  // The source run's incomplete_reason, verbatim, when it had one.
+  string source_incomplete_reason = 10;
 }
 
 // Budget is the constraint set a Portfolio was built under.

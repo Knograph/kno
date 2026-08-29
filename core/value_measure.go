@@ -124,6 +124,31 @@ func (o ValueOptions) valuationFor(
 		under := true
 		v.ControlUnderpowered = &under
 	}
+	// The net-loss judgement (docs/debt.md#67) weights the treatment and
+	// control deltas by their POPULATIONS, and the recorded interval cannot
+	// recover the sample size — so the count the combination needs is
+	// recorded here, next to the number it weights.
+	if len(plan.ControlCaseIDs) > 0 {
+		//nolint:gosec // bounded by the eval set: a dev split cannot hold 2^31 Cases
+		v.NControl = int32Ptr(int32(len(plan.ControlCaseIDs)))
+	}
+	// Whether the control arm was measured fresh decides the COVARIANCE of
+	// every net judgement this Valuation contributes to: a recorded-baseline
+	// arm pairs all deltas against the same draw, a fresh arm against its
+	// own (docs/debt.md#66). The fact travels with the numbers.
+	if routing.FreshControlArm {
+		fresh := true
+		v.FreshControlArm = &fresh
+	}
+	// Which pairing scheme produced these deltas, per docs/debt.md#78's
+	// recording half. The treatment deltas pair against the fresh control
+	// when there is one, and every other delta in this Valuation pairs
+	// against the recorded baseline — so the scheme is the arm's.
+	if routing.FreshControlArm {
+		v.PairingScheme = knov1.PairingScheme_PAIRING_SCHEME_FRESH_PER_TRIAL
+	} else {
+		v.PairingScheme = knov1.PairingScheme_PAIRING_SCHEME_RECORDED_BASELINE
+	}
 	// delta_per_cost is the ranking metric, and its denominator is the
 	// Asset's carrying cost in context_tokens — the tokenizer-biased count
 	// docs/debt.md#68 names: the estimate reserves ~3x what English prose

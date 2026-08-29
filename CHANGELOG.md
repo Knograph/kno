@@ -74,6 +74,12 @@ covenants — breaking any of them requires a major version.
 
 ## [Unreleased]
 
+### Migration notes
+
+- **The store schema moves to version 4** (additive): a new `portfolios`
+  table records the Select stage's output, one row per Select run. Existing
+  databases upgrade in place on open; no data is rewritten.
+
 ### Features
 
 - **LangSmith datasets are first-class Evals.** `kno baseline --evals

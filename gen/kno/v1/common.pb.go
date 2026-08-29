@@ -437,6 +437,83 @@ func (Arm) EnumDescriptor() ([]byte, []int) {
 	return file_kno_v1_common_proto_rawDescGZIP(), []int{5}
 }
 
+// RunStatus is how a Run ended, or that it has not.
+//
+// The distinction between FAILED and BUDGET_STOPPED is load-bearing: one means
+// something is wrong, the other means the run did exactly what it was told and
+// can be continued. Collapsing them would make a deploy gate treat a
+// deliberate spending limit as a broken build.
+//
+// Declared here rather than beside Run because Portfolio also carries a
+// source run's status (Portfolio.source_status), and Portfolio is imported by
+// run.proto — declaring RunStatus in run.proto would cycle the imports. The
+// wire identity is unchanged: the enum keeps its full name kno.v1.RunStatus
+// and its numbers, so a record written before this move decodes identically.
+type RunStatus int32
+
+const (
+	// Unset.
+	RunStatus_RUN_STATUS_UNSPECIFIED RunStatus = 0
+	// Still executing, or the process died without recording an ending.
+	RunStatus_RUN_STATUS_RUNNING RunStatus = 1
+	// Finished. Note that a completed Run may still be unusable as a reference —
+	// see Run.incomplete_reason and Run.error_rate_exceeded.
+	RunStatus_RUN_STATUS_COMPLETED RunStatus = 2
+	// Stopped by an error. Exit code 1.
+	RunStatus_RUN_STATUS_FAILED RunStatus = 3
+	// Stopped by a budget cap. Resumable, and NOT a failure. Exit code 2.
+	RunStatus_RUN_STATUS_BUDGET_STOPPED RunStatus = 4
+	// Stopped by a signal. Checkpointed, resumable.
+	RunStatus_RUN_STATUS_INTERRUPTED RunStatus = 5
+)
+
+// Enum value maps for RunStatus.
+var (
+	RunStatus_name = map[int32]string{
+		0: "RUN_STATUS_UNSPECIFIED",
+		1: "RUN_STATUS_RUNNING",
+		2: "RUN_STATUS_COMPLETED",
+		3: "RUN_STATUS_FAILED",
+		4: "RUN_STATUS_BUDGET_STOPPED",
+		5: "RUN_STATUS_INTERRUPTED",
+	}
+	RunStatus_value = map[string]int32{
+		"RUN_STATUS_UNSPECIFIED":    0,
+		"RUN_STATUS_RUNNING":        1,
+		"RUN_STATUS_COMPLETED":      2,
+		"RUN_STATUS_FAILED":         3,
+		"RUN_STATUS_BUDGET_STOPPED": 4,
+		"RUN_STATUS_INTERRUPTED":    5,
+	}
+)
+
+func (x RunStatus) Enum() *RunStatus {
+	p := new(RunStatus)
+	*p = x
+	return p
+}
+
+func (x RunStatus) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (RunStatus) Descriptor() protoreflect.EnumDescriptor {
+	return file_kno_v1_common_proto_enumTypes[6].Descriptor()
+}
+
+func (RunStatus) Type() protoreflect.EnumType {
+	return &file_kno_v1_common_proto_enumTypes[6]
+}
+
+func (x RunStatus) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use RunStatus.Descriptor instead.
+func (RunStatus) EnumDescriptor() ([]byte, []int) {
+	return file_kno_v1_common_proto_rawDescGZIP(), []int{6}
+}
+
 // CostVector is what carrying an Asset costs. Every Asset has one, because the
 // ranking metric is Δgoal per unit cost, not raw Δgoal — a mediocre 200-token
 // Asset can and should out-rank a strong 8,000-token one.
@@ -1101,7 +1178,14 @@ const file_kno_v1_common_proto_rawDesc = "" +
 	"\x03Arm\x12\x13\n" +
 	"\x0fARM_UNSPECIFIED\x10\x00\x12\x11\n" +
 	"\rARM_TREATMENT\x10\x01\x12\x0f\n" +
-	"\vARM_CONTROL\x10\x02B|\n" +
+	"\vARM_CONTROL\x10\x02*\xab\x01\n" +
+	"\tRunStatus\x12\x1a\n" +
+	"\x16RUN_STATUS_UNSPECIFIED\x10\x00\x12\x16\n" +
+	"\x12RUN_STATUS_RUNNING\x10\x01\x12\x18\n" +
+	"\x14RUN_STATUS_COMPLETED\x10\x02\x12\x15\n" +
+	"\x11RUN_STATUS_FAILED\x10\x03\x12\x1d\n" +
+	"\x19RUN_STATUS_BUDGET_STOPPED\x10\x04\x12\x1a\n" +
+	"\x16RUN_STATUS_INTERRUPTED\x10\x05B|\n" +
 	"\n" +
 	"com.kno.v1B\vCommonProtoP\x01Z(github.com/knograph/kno/gen/kno/v1;knov1\xa2\x02\x03KXX\xaa\x02\x06Kno.V1\xca\x02\x06Kno\\V1\xe2\x02\x12Kno\\V1\\GPBMetadata\xea\x02\aKno::V1b\x06proto3"
 
@@ -1117,7 +1201,7 @@ func file_kno_v1_common_proto_rawDescGZIP() []byte {
 	return file_kno_v1_common_proto_rawDescData
 }
 
-var file_kno_v1_common_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
+var file_kno_v1_common_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
 var file_kno_v1_common_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_kno_v1_common_proto_goTypes = []any{
 	(Kind)(0),            // 0: kno.v1.Kind
@@ -1126,12 +1210,13 @@ var file_kno_v1_common_proto_goTypes = []any{
 	(Destination)(0),     // 3: kno.v1.Destination
 	(InjectionMode)(0),   // 4: kno.v1.InjectionMode
 	(Arm)(0),             // 5: kno.v1.Arm
-	(*CostVector)(nil),   // 6: kno.v1.CostVector
-	(*Provenance)(nil),   // 7: kno.v1.Provenance
-	(*Capabilities)(nil), // 8: kno.v1.Capabilities
-	(*Price)(nil),        // 9: kno.v1.Price
-	(*Generation)(nil),   // 10: kno.v1.Generation
-	(*AgentRef)(nil),     // 11: kno.v1.AgentRef
+	(RunStatus)(0),       // 6: kno.v1.RunStatus
+	(*CostVector)(nil),   // 7: kno.v1.CostVector
+	(*Provenance)(nil),   // 8: kno.v1.Provenance
+	(*Capabilities)(nil), // 9: kno.v1.Capabilities
+	(*Price)(nil),        // 10: kno.v1.Price
+	(*Generation)(nil),   // 11: kno.v1.Generation
+	(*AgentRef)(nil),     // 12: kno.v1.AgentRef
 }
 var file_kno_v1_common_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for method output_type
@@ -1153,7 +1238,7 @@ func file_kno_v1_common_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kno_v1_common_proto_rawDesc), len(file_kno_v1_common_proto_rawDesc)),
-			NumEnums:      6,
+			NumEnums:      7,
 			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   0,

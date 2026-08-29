@@ -34,31 +34,10 @@ enum Stage {
 
 // RunStatus is how a Run ended, or that it has not.
 //
-// The distinction between FAILED and BUDGET_STOPPED is load-bearing: one means
-// something is wrong, the other means the run did exactly what it was told and
-// can be continued. Collapsing them would make a deploy gate treat a
-// deliberate spending limit as a broken build.
-enum RunStatus {
-  // Unset.
-  RUN_STATUS_UNSPECIFIED = 0;
-
-  // Still executing, or the process died without recording an ending.
-  RUN_STATUS_RUNNING = 1;
-
-  // Finished. Note that a completed Run may still be unusable as a reference —
-  // see Run.incomplete_reason and Run.error_rate_exceeded.
-  RUN_STATUS_COMPLETED = 2;
-
-  // Stopped by an error. Exit code 1.
-  RUN_STATUS_FAILED = 3;
-
-  // Stopped by a budget cap. Resumable, and NOT a failure. Exit code 2.
-  RUN_STATUS_BUDGET_STOPPED = 4;
-
-  // Stopped by a signal. Checkpointed, resumable.
-  RUN_STATUS_INTERRUPTED = 5;
-}
-
+// Declared in common.proto, not here: Portfolio carries a source run's status
+// (Portfolio.source_status), and this file imports portfolio.proto — so the
+// enum has to live in the file both import. Full name and numbers unchanged,
+// so records written before the move decode identically.
 // Run is one execution of one pipeline stage.
 //
 // It is the correlation key for every trace, score, and event the stage

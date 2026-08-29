@@ -236,8 +236,17 @@ type Portfolio struct {
 	DevEstimatedGain float64 `protobuf:"fixed64,6,opt,name=dev_estimated_gain,json=devEstimatedGain,proto3" json:"dev_estimated_gain,omitempty"`
 	// Confidence interval on dev_estimated_gain.
 	DevEstimatedInterval *Interval `protobuf:"bytes,7,opt,name=dev_estimated_interval,json=devEstimatedInterval,proto3" json:"dev_estimated_interval,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// The Value run this Portfolio was built from.
+	SourceRunId string `protobuf:"bytes,8,opt,name=source_run_id,json=sourceRunId,proto3" json:"source_run_id,omitempty"`
+	// How that run ended. Carried here because "built from a run that was
+	// budget-stopped" is a different statement from "built from a completed
+	// run": the source's incompleteness travels with the Portfolio either way,
+	// so a reader does not have to go look.
+	SourceStatus RunStatus `protobuf:"varint,9,opt,name=source_status,json=sourceStatus,proto3,enum=kno.v1.RunStatus" json:"source_status,omitempty"`
+	// The source run's incomplete_reason, verbatim, when it had one.
+	SourceIncompleteReason string `protobuf:"bytes,10,opt,name=source_incomplete_reason,json=sourceIncompleteReason,proto3" json:"source_incomplete_reason,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *Portfolio) Reset() {
@@ -317,6 +326,27 @@ func (x *Portfolio) GetDevEstimatedInterval() *Interval {
 		return x.DevEstimatedInterval
 	}
 	return nil
+}
+
+func (x *Portfolio) GetSourceRunId() string {
+	if x != nil {
+		return x.SourceRunId
+	}
+	return ""
+}
+
+func (x *Portfolio) GetSourceStatus() RunStatus {
+	if x != nil {
+		return x.SourceStatus
+	}
+	return RunStatus_RUN_STATUS_UNSPECIFIED
+}
+
+func (x *Portfolio) GetSourceIncompleteReason() string {
+	if x != nil {
+		return x.SourceIncompleteReason
+	}
+	return ""
 }
 
 // Budget is the constraint set a Portfolio was built under.
@@ -433,7 +463,7 @@ const file_kno_v1_portfolio_proto_rawDesc = "" +
 	"\x06reason\x18\x02 \x01(\x0e2\x17.kno.v1.RejectionReasonR\x06reason\x127\n" +
 	"\x18redundant_with_asset_ids\x18\x03 \x03(\tR\x15redundantWithAssetIds\x12\x16\n" +
 	"\x06detail\x18\x04 \x01(\tR\x06detail\x12/\n" +
-	"\tvaluation\x18\x05 \x01(\v2\x11.kno.v1.ValuationR\tvaluation\"\xd6\x02\n" +
+	"\tvaluation\x18\x05 \x01(\v2\x11.kno.v1.ValuationR\tvaluation\"\xec\x03\n" +
 	"\tPortfolio\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x122\n" +
 	"\bselected\x18\x02 \x03(\v2\x16.kno.v1.PortfolioEntryR\bselected\x12-\n" +
@@ -442,7 +472,11 @@ const file_kno_v1_portfolio_proto_rawDesc = "" +
 	"\n" +
 	"total_cost\x18\x05 \x01(\v2\x12.kno.v1.CostVectorR\ttotalCost\x12,\n" +
 	"\x12dev_estimated_gain\x18\x06 \x01(\x01R\x10devEstimatedGain\x12F\n" +
-	"\x16dev_estimated_interval\x18\a \x01(\v2\x10.kno.v1.IntervalR\x14devEstimatedInterval\"\x8e\x02\n" +
+	"\x16dev_estimated_interval\x18\a \x01(\v2\x10.kno.v1.IntervalR\x14devEstimatedInterval\x12\"\n" +
+	"\rsource_run_id\x18\b \x01(\tR\vsourceRunId\x126\n" +
+	"\rsource_status\x18\t \x01(\x0e2\x11.kno.v1.RunStatusR\fsourceStatus\x128\n" +
+	"\x18source_incomplete_reason\x18\n" +
+	" \x01(\tR\x16sourceIncompleteReason\"\x8e\x02\n" +
 	"\x06Budget\x12,\n" +
 	"\x12max_context_tokens\x18\x01 \x01(\x03R\x10maxContextTokens\x122\n" +
 	"\x15max_training_examples\x18\x02 \x01(\x03R\x13maxTrainingExamples\x127\n" +
@@ -476,22 +510,24 @@ var file_kno_v1_portfolio_proto_goTypes = []any{
 	(RejectionReason)(0),   // 6: kno.v1.RejectionReason
 	(*CostVector)(nil),     // 7: kno.v1.CostVector
 	(*Interval)(nil),       // 8: kno.v1.Interval
+	(RunStatus)(0),         // 9: kno.v1.RunStatus
 }
 var file_kno_v1_portfolio_proto_depIdxs = []int32{
-	4, // 0: kno.v1.PortfolioEntry.destination:type_name -> kno.v1.Destination
-	5, // 1: kno.v1.PortfolioEntry.valuation:type_name -> kno.v1.Valuation
-	6, // 2: kno.v1.Rejection.reason:type_name -> kno.v1.RejectionReason
-	5, // 3: kno.v1.Rejection.valuation:type_name -> kno.v1.Valuation
-	0, // 4: kno.v1.Portfolio.selected:type_name -> kno.v1.PortfolioEntry
-	1, // 5: kno.v1.Portfolio.rejected:type_name -> kno.v1.Rejection
-	3, // 6: kno.v1.Portfolio.budget:type_name -> kno.v1.Budget
-	7, // 7: kno.v1.Portfolio.total_cost:type_name -> kno.v1.CostVector
-	8, // 8: kno.v1.Portfolio.dev_estimated_interval:type_name -> kno.v1.Interval
-	9, // [9:9] is the sub-list for method output_type
-	9, // [9:9] is the sub-list for method input_type
-	9, // [9:9] is the sub-list for extension type_name
-	9, // [9:9] is the sub-list for extension extendee
-	0, // [0:9] is the sub-list for field type_name
+	4,  // 0: kno.v1.PortfolioEntry.destination:type_name -> kno.v1.Destination
+	5,  // 1: kno.v1.PortfolioEntry.valuation:type_name -> kno.v1.Valuation
+	6,  // 2: kno.v1.Rejection.reason:type_name -> kno.v1.RejectionReason
+	5,  // 3: kno.v1.Rejection.valuation:type_name -> kno.v1.Valuation
+	0,  // 4: kno.v1.Portfolio.selected:type_name -> kno.v1.PortfolioEntry
+	1,  // 5: kno.v1.Portfolio.rejected:type_name -> kno.v1.Rejection
+	3,  // 6: kno.v1.Portfolio.budget:type_name -> kno.v1.Budget
+	7,  // 7: kno.v1.Portfolio.total_cost:type_name -> kno.v1.CostVector
+	8,  // 8: kno.v1.Portfolio.dev_estimated_interval:type_name -> kno.v1.Interval
+	9,  // 9: kno.v1.Portfolio.source_status:type_name -> kno.v1.RunStatus
+	10, // [10:10] is the sub-list for method output_type
+	10, // [10:10] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_kno_v1_portfolio_proto_init() }

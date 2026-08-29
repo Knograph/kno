@@ -16,6 +16,9 @@ var (
 
 	// ErrRunExists means a run with that ID was already created.
 	ErrRunExists = errors.New("store: run already exists")
+
+	// ErrPortfolioNotFound means no Portfolio is recorded for the given run.
+	ErrPortfolioNotFound = errors.New("store: portfolio not found")
 )
 
 // Store is durable state for a run.
@@ -129,6 +132,16 @@ type Store interface {
 	// Valuations returns every Valuation recorded for a run, ordered by Asset
 	// ID.
 	Valuations(ctx context.Context, runID string) ([]*knov1.Valuation, error)
+
+	// WritePortfolio records the Portfolio one Select run produced. One row
+	// per run; rewriting the same run replaces the row, so a resume that
+	// reaches the end again records the current decision rather than the
+	// first one.
+	WritePortfolio(ctx context.Context, runID string, p *knov1.Portfolio) error
+
+	// Portfolio loads a run's Portfolio. Returns ErrPortfolioNotFound when
+	// the run recorded none.
+	Portfolio(ctx context.Context, runID string) (*knov1.Portfolio, error)
 
 	// CompletedCases returns the IDs of every Case with a terminal outcome.
 	//

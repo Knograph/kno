@@ -22,7 +22,7 @@ import (
 //
 // Version 0 is the M1 schema. Every later version is a numbered step in
 // migrations below.
-const schemaVersion = 3
+const schemaVersion = 4
 
 // schema is the version-0 base, applied on open. It is idempotent.
 //
@@ -364,6 +364,21 @@ var migrations = []migration{{
 		    asset_id  TEXT NOT NULL,
 		    proto     BLOB NOT NULL,
 		    PRIMARY KEY (run_id, asset_id)
+		)`,
+	},
+}, {
+	to: 4,
+	// M-SE1. The Select stage's output. One Portfolio per Select run, written
+	// atomically at the end of the stage — there is no per-Asset progression
+	// to checkpoint, and a half-written Portfolio would read as a real
+	// decision. WritePortfolio is INSERT OR REPLACE so a resume that reaches
+	// the end again rewrites the row to match the current decision rather than
+	// pinning the first one.
+	stmts: []string{
+		`CREATE TABLE IF NOT EXISTS portfolios (
+		    run_id  TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+		    proto   BLOB NOT NULL,
+		    PRIMARY KEY (run_id)
 		)`,
 	},
 }}
