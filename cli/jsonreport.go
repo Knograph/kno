@@ -236,3 +236,140 @@ func renderValueJSON(out io.Writer, res *core.ValueResult, runID string, dir flo
 	}
 	return nil
 }
+
+// selectReport is the JSON shape of a Select run.
+//
+// The Portfolio's proto shape is a wire type that will gain fields; this is a
+// CLI contract aimed at somebody's jq pipeline, hand-written for the same
+// reason as the reports above (ADR-0001).
+type selectReport struct {
+	RunID        string                  `json:"run_id"`
+	Status       string                  `json:"status"`
+	SourceRunID  string                  `json:"source_run_id"`
+	SourceStatus string                  `json:"source_status"`
+	Budget       selectReportBudget      `json:"budget"`
+	Selected     []selectReportEntry     `json:"selected"`
+	Rejected     []selectReportRejection `json:"rejected"`
+	// DevGain is absent when nothing was selected — no claim, no row.
+	DevGain       *float64   `json:"dev_estimated_gain,omitempty"`
+	GainLow       *float64   `json:"dev_estimated_low,omitempty"`
+	GainHigh      *float64   `json:"dev_estimated_high,omitempty"`
+	DegradedRules []string   `json:"degraded_rules,omitempty"`
+	TotalCost     costReport `json:"total_cost"`
+}
+
+// selectReportBudget carries the caps the Portfolio was built under, as the
+// flag names that set them. Absent caps are absent keys.
+type selectReportBudget struct {
+	MaxContextTokens    int64  `json:"max_context_tokens,omitempty"`
+	MaxTrainingExamples int64  `json:"max_training_examples,omitempty"`
+	MaxCostUSD          string `json:"max_cost_usd,omitempty"`
+}
+
+// selectReportEntry is one selected Asset and the measurement behind the
+// decision, in selection order. The interval is the recorded one; the
+// keep/reject decision used the Bonferroni-corrected interval, which the
+// schema does not carry per entry.
+type selectReportEntry struct {
+	AssetID      string   `json:"asset_id"`
+	Destination  string   `json:"destination"`
+	Rank         int32    `json:"rank"`
+	DeltaGoal    *float64 `json:"delta_goal,omitempty"`
+	Low          *float64 `json:"low,omitempty"`
+	High         *float64 `json:"high,omitempty"`
+	NRoutedScale *float64 `json:"n_routed_scale,omitempty"`
+}
+
+// selectReportRejection is one excluded Asset and why. RedundantWith names
+// the already-selected Assets it duplicates when the reason is "redundant".
+type selectReportRejection struct {
+	AssetID       string   `json:"asset_id"`
+	Reason        string   `json:"reason"`
+	Detail        string   `json:"detail,omitempty"`
+	RedundantWith []string `json:"redundant_with,omitempty"`
+}
+
+// costReport is the carrying cost of the selected set, dollars rendered like
+// every other dollar in the CLI contract.
+type costReport struct {
+	ContextTokens  int64  `json:"context_tokens"`
+	FTTokens       int64  `json:"ft_tokens"`
+	AcquisitionUSD string `json:"acquisition_usd"`
+}
+
+// renderSelectJSON emits the machine-readable Select report.
+func renderSelectJSON(out io.Writer, res *core.SelectResult) error {
+	p := res.Portfolio
+	rep := selectReport{
+		RunID:        res.RunID,
+		Status:       res.Status.String(),
+		SourceRunID:  p.GetSourceRunId(),
+		SourceStatus: statusName(p.GetSourceStatus()),
+		Budget: selectReportBudget{
+			MaxContextTokens:    p.GetBudget().GetMaxContextTokens(),
+			MaxTrainingExamples: p.GetBudget().GetMaxTrainingExamples(),
+		},
+		DegradedRules: res.DegradedRules,
+		TotalCost: costReport{
+			ContextTokens:  p.GetTotalCost().GetContextTokens(),
+			FTTokens:       p.GetTotalCost().GetFtTokens(),
+			AcquisitionUSD: formatUSD(p.GetTotalCost().GetAcquisitionUsdMicros()),
+		},
+	}
+	if b := p.GetBudget(); b.GetMaxCostUsdMicros() > 0 {
+		rep.Budget.MaxCostUSD = formatUSD(b.GetMaxCostUsdMicros())
+	}
+	for _, e := range p.GetSelected() {
+		row := selectReportEntry{
+			AssetID:     e.GetAssetId(),
+			Destination: destinationName(e.GetDestination()),
+			Rank:        e.GetRank(),
+		}
+		if v := e.GetValuation(); v.GetDeltaInterval() != nil {
+			iv := v.GetDeltaInterval()
+			row.DeltaGoal, row.Low, row.High = &v.DeltaGoal, &iv.Low, &iv.High
+		}
+		if e.NRoutedScale != nil {
+			row.NRoutedScale = e.NRoutedScale
+		}
+		rep.Selected = append(rep.Selected, row)
+	}
+	for _, r := range p.GetRejected() {
+		rep.Rejected = append(rep.Rejected, selectReportRejection{
+			AssetID:       r.GetAssetId(),
+			Reason:        rejectReasonName(r.GetReason()),
+			Detail:        r.GetDetail(),
+			RedundantWith: r.GetRedundantWithAssetIds(),
+		})
+	}
+	if iv := p.GetDevEstimatedInterval(); iv != nil {
+		rep.DevGain, rep.GainLow, rep.GainHigh = &p.DevEstimatedGain, &iv.Low, &iv.High
+	}
+	return writeJSON(out, rep)
+}
+
+// exportReport is the JSON shape of an Export run.
+type exportReport struct {
+	RunID        string `json:"run_id"`
+	Status       string `json:"status"`
+	SelectRunID  string `json:"select_run_id"`
+	Destination  string `json:"destination"`
+	AssetCount   int    `json:"asset_count"`
+	BytesWritten int64  `json:"bytes_written"`
+	Path         string `json:"path"`
+	Manifest     string `json:"manifest_path"`
+}
+
+// renderExportJSON emits the machine-readable Export report.
+func renderExportJSON(out io.Writer, res *core.ExportResult) error {
+	rep := exportReport{
+		RunID:        res.RunID,
+		Status:       "completed",
+		Destination:  destinationName(res.Destination),
+		AssetCount:   res.AssetCount,
+		BytesWritten: res.BytesWritten,
+		Path:         res.Path,
+		Manifest:     res.Path + ".manifest.md",
+	}
+	return writeJSON(out, rep)
+}

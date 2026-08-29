@@ -92,77 +92,6 @@ func (Stage) EnumDescriptor() ([]byte, []int) {
 	return file_kno_v1_run_proto_rawDescGZIP(), []int{0}
 }
 
-// RunStatus is how a Run ended, or that it has not.
-//
-// The distinction between FAILED and BUDGET_STOPPED is load-bearing: one means
-// something is wrong, the other means the run did exactly what it was told and
-// can be continued. Collapsing them would make a deploy gate treat a
-// deliberate spending limit as a broken build.
-type RunStatus int32
-
-const (
-	// Unset.
-	RunStatus_RUN_STATUS_UNSPECIFIED RunStatus = 0
-	// Still executing, or the process died without recording an ending.
-	RunStatus_RUN_STATUS_RUNNING RunStatus = 1
-	// Finished. Note that a completed Run may still be unusable as a reference —
-	// see Run.incomplete_reason and Run.error_rate_exceeded.
-	RunStatus_RUN_STATUS_COMPLETED RunStatus = 2
-	// Stopped by an error. Exit code 1.
-	RunStatus_RUN_STATUS_FAILED RunStatus = 3
-	// Stopped by a budget cap. Resumable, and NOT a failure. Exit code 2.
-	RunStatus_RUN_STATUS_BUDGET_STOPPED RunStatus = 4
-	// Stopped by a signal. Checkpointed, resumable.
-	RunStatus_RUN_STATUS_INTERRUPTED RunStatus = 5
-)
-
-// Enum value maps for RunStatus.
-var (
-	RunStatus_name = map[int32]string{
-		0: "RUN_STATUS_UNSPECIFIED",
-		1: "RUN_STATUS_RUNNING",
-		2: "RUN_STATUS_COMPLETED",
-		3: "RUN_STATUS_FAILED",
-		4: "RUN_STATUS_BUDGET_STOPPED",
-		5: "RUN_STATUS_INTERRUPTED",
-	}
-	RunStatus_value = map[string]int32{
-		"RUN_STATUS_UNSPECIFIED":    0,
-		"RUN_STATUS_RUNNING":        1,
-		"RUN_STATUS_COMPLETED":      2,
-		"RUN_STATUS_FAILED":         3,
-		"RUN_STATUS_BUDGET_STOPPED": 4,
-		"RUN_STATUS_INTERRUPTED":    5,
-	}
-)
-
-func (x RunStatus) Enum() *RunStatus {
-	p := new(RunStatus)
-	*p = x
-	return p
-}
-
-func (x RunStatus) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (RunStatus) Descriptor() protoreflect.EnumDescriptor {
-	return file_kno_v1_run_proto_enumTypes[1].Descriptor()
-}
-
-func (RunStatus) Type() protoreflect.EnumType {
-	return &file_kno_v1_run_proto_enumTypes[1]
-}
-
-func (x RunStatus) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use RunStatus.Descriptor instead.
-func (RunStatus) EnumDescriptor() ([]byte, []int) {
-	return file_kno_v1_run_proto_rawDescGZIP(), []int{1}
-}
-
 // ConcurrencyReason names why an effective concurrency differs from what was
 // requested.
 //
@@ -204,11 +133,11 @@ func (x ConcurrencyReason) String() string {
 }
 
 func (ConcurrencyReason) Descriptor() protoreflect.EnumDescriptor {
-	return file_kno_v1_run_proto_enumTypes[2].Descriptor()
+	return file_kno_v1_run_proto_enumTypes[1].Descriptor()
 }
 
 func (ConcurrencyReason) Type() protoreflect.EnumType {
-	return &file_kno_v1_run_proto_enumTypes[2]
+	return &file_kno_v1_run_proto_enumTypes[1]
 }
 
 func (x ConcurrencyReason) Number() protoreflect.EnumNumber {
@@ -217,9 +146,15 @@ func (x ConcurrencyReason) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ConcurrencyReason.Descriptor instead.
 func (ConcurrencyReason) EnumDescriptor() ([]byte, []int) {
-	return file_kno_v1_run_proto_rawDescGZIP(), []int{2}
+	return file_kno_v1_run_proto_rawDescGZIP(), []int{1}
 }
 
+// RunStatus is how a Run ended, or that it has not.
+//
+// Declared in common.proto, not here: Portfolio carries a source run's status
+// (Portfolio.source_status), and this file imports portfolio.proto — so the
+// enum has to live in the file both import. Full name and numbers unchanged,
+// so records written before the move decode identically.
 // Run is one execution of one pipeline stage.
 //
 // It is the correlation key for every trace, score, and event the stage
@@ -1062,14 +997,7 @@ const file_kno_v1_run_proto_rawDesc = "" +
 	"\vSTAGE_VALUE\x10\x02\x12\x10\n" +
 	"\fSTAGE_SELECT\x10\x03\x12\x12\n" +
 	"\x0eSTAGE_VALIDATE\x10\x04\x12\x10\n" +
-	"\fSTAGE_EXPORT\x10\x05*\xab\x01\n" +
-	"\tRunStatus\x12\x1a\n" +
-	"\x16RUN_STATUS_UNSPECIFIED\x10\x00\x12\x16\n" +
-	"\x12RUN_STATUS_RUNNING\x10\x01\x12\x18\n" +
-	"\x14RUN_STATUS_COMPLETED\x10\x02\x12\x15\n" +
-	"\x11RUN_STATUS_FAILED\x10\x03\x12\x1d\n" +
-	"\x19RUN_STATUS_BUDGET_STOPPED\x10\x04\x12\x1a\n" +
-	"\x16RUN_STATUS_INTERRUPTED\x10\x05*X\n" +
+	"\fSTAGE_EXPORT\x10\x05*X\n" +
 	"\x11ConcurrencyReason\x12\"\n" +
 	"\x1eCONCURRENCY_REASON_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bCONCURRENCY_REASON_COST_CAP\x10\x01By\n" +
@@ -1088,32 +1016,32 @@ func file_kno_v1_run_proto_rawDescGZIP() []byte {
 	return file_kno_v1_run_proto_rawDescData
 }
 
-var file_kno_v1_run_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_kno_v1_run_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
 var file_kno_v1_run_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_kno_v1_run_proto_goTypes = []any{
 	(Stage)(0),                  // 0: kno.v1.Stage
-	(RunStatus)(0),              // 1: kno.v1.RunStatus
-	(ConcurrencyReason)(0),      // 2: kno.v1.ConcurrencyReason
-	(*Run)(nil),                 // 3: kno.v1.Run
-	(*ConcurrencyDecision)(nil), // 4: kno.v1.ConcurrencyDecision
-	(*CaseExecution)(nil),       // 5: kno.v1.CaseExecution
-	(*AgentRef)(nil),            // 6: kno.v1.AgentRef
-	(Direction)(0),              // 7: kno.v1.Direction
-	(*Budget)(nil),              // 8: kno.v1.Budget
+	(ConcurrencyReason)(0),      // 1: kno.v1.ConcurrencyReason
+	(*Run)(nil),                 // 2: kno.v1.Run
+	(*ConcurrencyDecision)(nil), // 3: kno.v1.ConcurrencyDecision
+	(*CaseExecution)(nil),       // 4: kno.v1.CaseExecution
+	(*AgentRef)(nil),            // 5: kno.v1.AgentRef
+	(Direction)(0),              // 6: kno.v1.Direction
+	(*Budget)(nil),              // 7: kno.v1.Budget
+	(RunStatus)(0),              // 8: kno.v1.RunStatus
 	(*Generation)(nil),          // 9: kno.v1.Generation
 	(ScoreDomain)(0),            // 10: kno.v1.ScoreDomain
 }
 var file_kno_v1_run_proto_depIdxs = []int32{
 	0,  // 0: kno.v1.Run.stage:type_name -> kno.v1.Stage
-	6,  // 1: kno.v1.Run.agent:type_name -> kno.v1.AgentRef
-	7,  // 2: kno.v1.Run.goal_direction:type_name -> kno.v1.Direction
-	8,  // 3: kno.v1.Run.budget:type_name -> kno.v1.Budget
-	1,  // 4: kno.v1.Run.status:type_name -> kno.v1.RunStatus
-	5,  // 5: kno.v1.Run.case_execution:type_name -> kno.v1.CaseExecution
+	5,  // 1: kno.v1.Run.agent:type_name -> kno.v1.AgentRef
+	6,  // 2: kno.v1.Run.goal_direction:type_name -> kno.v1.Direction
+	7,  // 3: kno.v1.Run.budget:type_name -> kno.v1.Budget
+	8,  // 4: kno.v1.Run.status:type_name -> kno.v1.RunStatus
+	4,  // 5: kno.v1.Run.case_execution:type_name -> kno.v1.CaseExecution
 	9,  // 6: kno.v1.Run.generation:type_name -> kno.v1.Generation
-	4,  // 7: kno.v1.Run.concurrency:type_name -> kno.v1.ConcurrencyDecision
+	3,  // 7: kno.v1.Run.concurrency:type_name -> kno.v1.ConcurrencyDecision
 	10, // 8: kno.v1.Run.goal_score_domain:type_name -> kno.v1.ScoreDomain
-	2,  // 9: kno.v1.ConcurrencyDecision.reason:type_name -> kno.v1.ConcurrencyReason
+	1,  // 9: kno.v1.ConcurrencyDecision.reason:type_name -> kno.v1.ConcurrencyReason
 	10, // [10:10] is the sub-list for method output_type
 	10, // [10:10] is the sub-list for method input_type
 	10, // [10:10] is the sub-list for extension type_name
@@ -1136,7 +1064,7 @@ func file_kno_v1_run_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kno_v1_run_proto_rawDesc), len(file_kno_v1_run_proto_rawDesc)),
-			NumEnums:      3,
+			NumEnums:      2,
 			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   0,

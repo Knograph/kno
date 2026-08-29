@@ -163,6 +163,9 @@ func TestMoneyIsAlwaysInt64MicroUSD(t *testing.T) {
 		// place the attribution to a Case exists.
 		"kno.v1.OrphanSpend.cost_usd_micros",
 		"kno.v1.RunFinished.total_cost_usd_micros",
+		// The Select stage's event: what the constructed Portfolio is
+		// estimated to carry, acquisition dollars included.
+		"kno.v1.PortfolioSelected.total_cost_usd_micros",
 		// M2-10b: the two terms of the concurrency reduction's arithmetic. Both
 		// are carried because one is not enough: the engine divides a fraction
 		// of the headroom by the per-Case estimate, and a consumer given only

@@ -197,6 +197,67 @@ func (RejectionReason) EnumDescriptor() ([]byte, []int) {
 	return file_kno_v1_valuation_proto_rawDescGZIP(), []int{1}
 }
 
+// PairingScheme records which draw each trial of a measurement paired against.
+//
+// The question matters because it decides whether trials are independent
+// observations. Under RECORDED_BASELINE every trial of one Case pairs against
+// the same recorded score, so the trials are repeats of one comparison rather
+// than draws from a distribution; under FRESH_PER_TRIAL each trial has its own
+// control draw and the pairs are closer to independent.
+type PairingScheme int32
+
+const (
+	// Unset. Read as "the scheme this record does not name"; never assume either
+	// scheme from it.
+	PairingScheme_PAIRING_SCHEME_UNSPECIFIED PairingScheme = 0
+	// Every trial paired against the same recorded baseline draw. The scheme
+	// docs/debt.md#78's sample-splitting question is about replacing.
+	PairingScheme_PAIRING_SCHEME_RECORDED_BASELINE PairingScheme = 1
+	// Each trial paired against the fresh control draw taken in the same trial.
+	PairingScheme_PAIRING_SCHEME_FRESH_PER_TRIAL PairingScheme = 2
+)
+
+// Enum value maps for PairingScheme.
+var (
+	PairingScheme_name = map[int32]string{
+		0: "PAIRING_SCHEME_UNSPECIFIED",
+		1: "PAIRING_SCHEME_RECORDED_BASELINE",
+		2: "PAIRING_SCHEME_FRESH_PER_TRIAL",
+	}
+	PairingScheme_value = map[string]int32{
+		"PAIRING_SCHEME_UNSPECIFIED":       0,
+		"PAIRING_SCHEME_RECORDED_BASELINE": 1,
+		"PAIRING_SCHEME_FRESH_PER_TRIAL":   2,
+	}
+)
+
+func (x PairingScheme) Enum() *PairingScheme {
+	p := new(PairingScheme)
+	*p = x
+	return p
+}
+
+func (x PairingScheme) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (PairingScheme) Descriptor() protoreflect.EnumDescriptor {
+	return file_kno_v1_valuation_proto_enumTypes[2].Descriptor()
+}
+
+func (PairingScheme) Type() protoreflect.EnumType {
+	return &file_kno_v1_valuation_proto_enumTypes[2]
+}
+
+func (x PairingScheme) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use PairingScheme.Descriptor instead.
+func (PairingScheme) EnumDescriptor() ([]byte, []int) {
+	return file_kno_v1_valuation_proto_rawDescGZIP(), []int{2}
+}
+
 // Interval is a confidence interval. It is a message rather than a pair of
 // scalars so that its ABSENCE is representable: a Valuation with no Interval
 // means "no confidence interval was computed", which is categorically
@@ -222,9 +283,10 @@ type Interval struct {
 	// one-sided 0.95 as a two-sided 0.95 overstates confidence.
 	Level float64 `protobuf:"fixed64,3,opt,name=level,proto3" json:"level,omitempty"`
 	// How the interval was computed: "bootstrap", "t", "wilson", "tango",
-	// "agresti-min", "adjusted-wald", "mover-wilson", "sign". Recorded because the method is
-	// part of the claim, and because a delta whose method changed between two
-	// runs did not become more precise — it was measured differently.
+	// "agresti-min", "adjusted-wald", "mover-wilson", "sign", "net-loss-shared",
+	// "net-loss-indep", "portfolio-greedy-shared". Recorded because the method
+	// is part of the claim, and because a delta whose method changed between
+	// two runs did not become more precise — it was measured differently.
 	Method string `protobuf:"bytes,4,opt,name=method,proto3" json:"method,omitempty"`
 	// Which sides are bounded.
 	//
@@ -427,7 +489,41 @@ type Valuation struct {
 	// the routed mean.
 	NPairs *int32 `protobuf:"varint,19,opt,name=n_pairs,json=nPairs,proto3,oneof" json:"n_pairs,omitempty"`
 	// How many pairs were dropped before the delta was computed. See n_pairs.
-	NDropped      *int32 `protobuf:"varint,20,opt,name=n_dropped,json=nDropped,proto3,oneof" json:"n_dropped,omitempty"`
+	NDropped *int32 `protobuf:"varint,20,opt,name=n_dropped,json=nDropped,proto3,oneof" json:"n_dropped,omitempty"`
+	// How many Cases the control arm measured.
+	//
+	// Present because the net-loss judgement (docs/debt.md#67) combines the
+	// treatment and control deltas weighted by their POPULATIONS, and a reader
+	// holding only the interval cannot recover the sample size from it. A
+	// recorded-baseline control arm measures `n_control` Cases against the
+	// baseline's recorded scores; a fresh control arm measures the same number
+	// afresh. Without the count, the weighted combination is uncomputable from
+	// the named inputs.
+	NControl *int32 `protobuf:"varint,21,opt,name=n_control,json=nControl,proto3,oneof" json:"n_control,omitempty"`
+	// Whether the control arm was measured fresh rather than read from the
+	// recorded baseline.
+	//
+	// Present because it decides the COVARIANCE of the net judgement: a
+	// recorded-baseline control arm pairs every Asset's delta against the same
+	// draw (docs/debt.md#66 names the correlation), while a fresh arm pairs each
+	// against its own. Two Valuations with the same numbers but different arms
+	// have different joint uncertainty, and the record must say which it is.
+	//
+	// False means the recorded baseline served as the control — valid exactly
+	// where the selection did not condition on the baseline outcome.
+	FreshControlArm *bool `protobuf:"varint,22,opt,name=fresh_control_arm,json=freshControlArm,proto3,oneof" json:"fresh_control_arm,omitempty"`
+	// Which pairing scheme produced every delta in this Valuation.
+	//
+	// The A7 recording (docs/debt.md#78, recording half): which trial routed
+	// which Case is a function of this scheme. Under RECORDED_BASELINE, every
+	// trial of every routed Case pairs against the single recorded baseline
+	// draw — so the trials are correlated and the interval's effective pair
+	// count is the Case count, not the trial count. Under FRESH_PER_TRIAL, each
+	// trial pairs against the control draw taken in the same trial.
+	//
+	// UNSPECIFIED means the record predates the field or the emitter did not
+	// name a scheme; a reader must not assume either scheme from it.
+	PairingScheme PairingScheme `protobuf:"varint,23,opt,name=pairing_scheme,json=pairingScheme,proto3,enum=kno.v1.PairingScheme" json:"pairing_scheme,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -602,6 +698,27 @@ func (x *Valuation) GetNDropped() int32 {
 	return 0
 }
 
+func (x *Valuation) GetNControl() int32 {
+	if x != nil && x.NControl != nil {
+		return *x.NControl
+	}
+	return 0
+}
+
+func (x *Valuation) GetFreshControlArm() bool {
+	if x != nil && x.FreshControlArm != nil {
+		return *x.FreshControlArm
+	}
+	return false
+}
+
+func (x *Valuation) GetPairingScheme() PairingScheme {
+	if x != nil {
+		return x.PairingScheme
+	}
+	return PairingScheme_PAIRING_SCHEME_UNSPECIFIED
+}
+
 var File_kno_v1_valuation_proto protoreflect.FileDescriptor
 
 const file_kno_v1_valuation_proto_rawDesc = "" +
@@ -615,7 +732,7 @@ const file_kno_v1_valuation_proto_rawDesc = "" +
 	"\tsidedness\x18\x05 \x01(\x0e2\x11.kno.v1.SidednessR\tsidedness\x12\x1c\n" +
 	"\an_pairs\x18\x06 \x01(\x05H\x00R\x06nPairs\x88\x01\x01B\n" +
 	"\n" +
-	"\b_n_pairs\"\xd2\x06\n" +
+	"\b_n_pairs\"\x87\b\n" +
 	"\tValuation\x12\x19\n" +
 	"\basset_id\x18\x01 \x01(\tR\aassetId\x12\x15\n" +
 	"\x06run_id\x18\x0e \x01(\tR\x05runId\x12\x1d\n" +
@@ -638,14 +755,20 @@ const file_kno_v1_valuation_proto_rawDesc = "" +
 	"\x05n_dev\x18\x11 \x01(\x05H\x01R\x04nDev\x88\x01\x01\x126\n" +
 	"\x14control_underpowered\x18\x12 \x01(\bH\x02R\x13controlUnderpowered\x88\x01\x01\x12\x1c\n" +
 	"\an_pairs\x18\x13 \x01(\x05H\x03R\x06nPairs\x88\x01\x01\x12 \n" +
-	"\tn_dropped\x18\x14 \x01(\x05H\x04R\bnDropped\x88\x01\x01B\v\n" +
+	"\tn_dropped\x18\x14 \x01(\x05H\x04R\bnDropped\x88\x01\x01\x12 \n" +
+	"\tn_control\x18\x15 \x01(\x05H\x05R\bnControl\x88\x01\x01\x12/\n" +
+	"\x11fresh_control_arm\x18\x16 \x01(\bH\x06R\x0ffreshControlArm\x88\x01\x01\x12<\n" +
+	"\x0epairing_scheme\x18\x17 \x01(\x0e2\x15.kno.v1.PairingSchemeR\rpairingSchemeB\v\n" +
 	"\t_n_routedB\b\n" +
 	"\x06_n_devB\x17\n" +
 	"\x15_control_underpoweredB\n" +
 	"\n" +
 	"\b_n_pairsB\f\n" +
 	"\n" +
-	"_n_dropped*i\n" +
+	"_n_droppedB\f\n" +
+	"\n" +
+	"_n_controlB\x14\n" +
+	"\x12_fresh_control_arm*i\n" +
 	"\tSidedness\x12\x19\n" +
 	"\x15SIDEDNESS_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13SIDEDNESS_TWO_SIDED\x10\x01\x12\x13\n" +
@@ -661,7 +784,11 @@ const file_kno_v1_valuation_proto_rawDesc = "" +
 	"\x1bREJECTION_REASON_IRRELEVANT\x10\x06\x12%\n" +
 	"!REJECTION_REASON_BUDGET_EXHAUSTED\x10\a\x12'\n" +
 	"#REJECTION_REASON_MEASUREMENT_FAILED\x10\b\x12!\n" +
-	"\x1dREJECTION_REASON_UNDERPOWERED\x10\tB\x7f\n" +
+	"\x1dREJECTION_REASON_UNDERPOWERED\x10\t*y\n" +
+	"\rPairingScheme\x12\x1e\n" +
+	"\x1aPAIRING_SCHEME_UNSPECIFIED\x10\x00\x12$\n" +
+	" PAIRING_SCHEME_RECORDED_BASELINE\x10\x01\x12\"\n" +
+	"\x1ePAIRING_SCHEME_FRESH_PER_TRIAL\x10\x02B\x7f\n" +
 	"\n" +
 	"com.kno.v1B\x0eValuationProtoP\x01Z(github.com/knograph/kno/gen/kno/v1;knov1\xa2\x02\x03KXX\xaa\x02\x06Kno.V1\xca\x02\x06Kno\\V1\xe2\x02\x12Kno\\V1\\GPBMetadata\xea\x02\aKno::V1b\x06proto3"
 
@@ -677,30 +804,32 @@ func file_kno_v1_valuation_proto_rawDescGZIP() []byte {
 	return file_kno_v1_valuation_proto_rawDescData
 }
 
-var file_kno_v1_valuation_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_kno_v1_valuation_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
 var file_kno_v1_valuation_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_kno_v1_valuation_proto_goTypes = []any{
 	(Sidedness)(0),       // 0: kno.v1.Sidedness
 	(RejectionReason)(0), // 1: kno.v1.RejectionReason
-	(*Interval)(nil),     // 2: kno.v1.Interval
-	(*Valuation)(nil),    // 3: kno.v1.Valuation
-	(InjectionMode)(0),   // 4: kno.v1.InjectionMode
-	(*CostVector)(nil),   // 5: kno.v1.CostVector
-	(Kind)(0),            // 6: kno.v1.Kind
+	(PairingScheme)(0),   // 2: kno.v1.PairingScheme
+	(*Interval)(nil),     // 3: kno.v1.Interval
+	(*Valuation)(nil),    // 4: kno.v1.Valuation
+	(InjectionMode)(0),   // 5: kno.v1.InjectionMode
+	(*CostVector)(nil),   // 6: kno.v1.CostVector
+	(Kind)(0),            // 7: kno.v1.Kind
 }
 var file_kno_v1_valuation_proto_depIdxs = []int32{
 	0, // 0: kno.v1.Interval.sidedness:type_name -> kno.v1.Sidedness
-	2, // 1: kno.v1.Valuation.delta_interval:type_name -> kno.v1.Interval
-	2, // 2: kno.v1.Valuation.control_interval:type_name -> kno.v1.Interval
-	4, // 3: kno.v1.Valuation.mode:type_name -> kno.v1.InjectionMode
-	5, // 4: kno.v1.Valuation.cost:type_name -> kno.v1.CostVector
-	6, // 5: kno.v1.Valuation.kind:type_name -> kno.v1.Kind
+	3, // 1: kno.v1.Valuation.delta_interval:type_name -> kno.v1.Interval
+	3, // 2: kno.v1.Valuation.control_interval:type_name -> kno.v1.Interval
+	5, // 3: kno.v1.Valuation.mode:type_name -> kno.v1.InjectionMode
+	6, // 4: kno.v1.Valuation.cost:type_name -> kno.v1.CostVector
+	7, // 5: kno.v1.Valuation.kind:type_name -> kno.v1.Kind
 	1, // 6: kno.v1.Valuation.not_measured:type_name -> kno.v1.RejectionReason
-	7, // [7:7] is the sub-list for method output_type
-	7, // [7:7] is the sub-list for method input_type
-	7, // [7:7] is the sub-list for extension type_name
-	7, // [7:7] is the sub-list for extension extendee
-	0, // [0:7] is the sub-list for field type_name
+	2, // 7: kno.v1.Valuation.pairing_scheme:type_name -> kno.v1.PairingScheme
+	8, // [8:8] is the sub-list for method output_type
+	8, // [8:8] is the sub-list for method input_type
+	8, // [8:8] is the sub-list for extension type_name
+	8, // [8:8] is the sub-list for extension extendee
+	0, // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_kno_v1_valuation_proto_init() }
@@ -716,7 +845,7 @@ func file_kno_v1_valuation_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kno_v1_valuation_proto_rawDesc), len(file_kno_v1_valuation_proto_rawDesc)),
-			NumEnums:      2,
+			NumEnums:      3,
 			NumMessages:   2,
 			NumExtensions: 0,
 			NumServices:   0,

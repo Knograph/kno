@@ -20,6 +20,18 @@ message PortfolioEntry {
   // Selection order. Portfolio construction is greedy on delta-per-cost, so
   // rank is informative about marginal contribution, not just a row number.
   int32 rank = 4;
+
+  // The scaling factor applied to this entry's tagged delta to make it
+  // comparable to an untagged one, under the model docs/debt.md#65 names:
+  // the effect is uniform on the routed slice and zero elsewhere, so a tagged
+  // delta over n_routed of n_dev Cases scales by n_routed / n_dev.
+  //
+  // ABSENT means the delta was not scaled — either the Valuation was untagged
+  // (already an effect over the whole dev split) or n_routed was absent (the
+  // scale would be a silent division, and the entry is flagged instead of
+  // scaled). Presence of this field is the flag: a reader can tell a scaled
+  // entry from an unscaled one without re-deriving the factor.
+  optional double n_routed_scale = 5;
 }
 
 // Rejection is one excluded Asset and why.
@@ -85,6 +97,18 @@ message Portfolio {
 
   // Confidence interval on dev_estimated_gain.
   Interval dev_estimated_interval = 7;
+
+  // The Value run this Portfolio was built from.
+  string source_run_id = 8;
+
+  // How that run ended. Carried here because "built from a run that was
+  // budget-stopped" is a different statement from "built from a completed
+  // run": the source's incompleteness travels with the Portfolio either way,
+  // so a reader does not have to go look.
+  RunStatus source_status = 9;
+
+  // The source run's incomplete_reason, verbatim, when it had one.
+  string source_incomplete_reason = 10;
 }
 
 // Budget is the constraint set a Portfolio was built under.

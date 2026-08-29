@@ -394,3 +394,36 @@ message AgentRef {
   // credential and this value is persisted, streamed, and logged.
   string base_url = 4;
 }
+
+// RunStatus is how a Run ended, or that it has not.
+//
+// The distinction between FAILED and BUDGET_STOPPED is load-bearing: one means
+// something is wrong, the other means the run did exactly what it was told and
+// can be continued. Collapsing them would make a deploy gate treat a
+// deliberate spending limit as a broken build.
+//
+// Declared here rather than beside Run because Portfolio also carries a
+// source run's status (Portfolio.source_status), and Portfolio is imported by
+// run.proto — declaring RunStatus in run.proto would cycle the imports. The
+// wire identity is unchanged: the enum keeps its full name kno.v1.RunStatus
+// and its numbers, so a record written before this move decodes identically.
+enum RunStatus {
+  // Unset.
+  RUN_STATUS_UNSPECIFIED = 0;
+
+  // Still executing, or the process died without recording an ending.
+  RUN_STATUS_RUNNING = 1;
+
+  // Finished. Note that a completed Run may still be unusable as a reference —
+  // see Run.incomplete_reason and Run.error_rate_exceeded.
+  RUN_STATUS_COMPLETED = 2;
+
+  // Stopped by an error. Exit code 1.
+  RUN_STATUS_FAILED = 3;
+
+  // Stopped by a budget cap. Resumable, and NOT a failure. Exit code 2.
+  RUN_STATUS_BUDGET_STOPPED = 4;
+
+  // Stopped by a signal. Checkpointed, resumable.
+  RUN_STATUS_INTERRUPTED = 5;
+}

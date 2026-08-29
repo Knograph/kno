@@ -49,13 +49,13 @@ Two of these are worth pausing on.
 
 **Value** — for each Asset: route it to the failure slices it could plausibly affect, classify it as knowledge or behavior, inject it, re-run the affected slices *plus untouched controls*, and record the delta with a confidence interval. Ranked by **Δgoal per unit cost**, not raw Δgoal — a mediocre 200-token asset can and should out-rank a strong 8,000-token one.
 
-**Select** — build the Portfolio under budget: greedy on Δ-per-cost with redundancy penalties. Outputs the selection *and* the rejection log. "Include nothing new" is a legal, first-class answer.
+**Select** — build the Portfolio under budget: greedy on Δ-per-cost, honestly labeled — feasible, deterministic, reproducible, and no approximation guarantee. Every keep/reject decision runs at a Bonferroni-corrected interval, in precedence order (regression, no effect, redundant, cost-dominated, wrong mechanism), and the output is the selection *and* the rejection log. "Include nothing new" is a legal, first-class answer. The portfolio-level gain is a single corrected claim, winner's-curse inflation included — it is a selection-time estimate, not a result.
 
 **Validate** — the Portfolio ships as a set, so it is measured as a set, against the holdout. Two individually-helpful documents can be jointly contradictory. This produces the honest number.
 
-**Export** — the training set, the report, and the gaps: failure clusters that *no Asset in your pool* improved, which is the tool telling you what to start collecting.
+**Export** — write the selected assets into the destination grammar: `context` (a context-pack manifest plus the rendered pack), `knowledge_base` (a manifest plus an instruction list; writable knowledge-base adapters arrive with v0.2), or `tuning_set` (OpenAI chat format JSONL, the shape the Tuner adapters parse). Re-exporting the same Portfolio is byte-identical, and export never mutates a destination.
 
-Today Baseline and Value are implemented; Select, Validate, and Export are planned. The
+Today Baseline, Value, Select, and Export are implemented; Validate is next. The
 [README Status table](../README.md#status) is the canonical state.
 
 ## Why dev/holdout exists

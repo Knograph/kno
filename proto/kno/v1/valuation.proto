@@ -31,9 +31,10 @@ message Interval {
   double level = 3;
 
   // How the interval was computed: "bootstrap", "t", "wilson", "tango",
-  // "agresti-min", "adjusted-wald", "mover-wilson", "sign". Recorded because the method is
-  // part of the claim, and because a delta whose method changed between two
-  // runs did not become more precise — it was measured differently.
+  // "agresti-min", "adjusted-wald", "mover-wilson", "sign", "net-loss-shared",
+  // "net-loss-indep", "portfolio-greedy-shared". Recorded because the method
+  // is part of the claim, and because a delta whose method changed between
+  // two runs did not become more precise — it was measured differently.
   string method = 4;
 
   // Which sides are bounded.
@@ -270,8 +271,65 @@ message Valuation {
   // How many pairs were dropped before the delta was computed. See n_pairs.
   optional int32 n_dropped = 20;
 
+  // How many Cases the control arm measured.
+  //
+  // Present because the net-loss judgement (docs/debt.md#67) combines the
+  // treatment and control deltas weighted by their POPULATIONS, and a reader
+  // holding only the interval cannot recover the sample size from it. A
+  // recorded-baseline control arm measures `n_control` Cases against the
+  // baseline's recorded scores; a fresh control arm measures the same number
+  // afresh. Without the count, the weighted combination is uncomputable from
+  // the named inputs.
+  optional int32 n_control = 21;
+
+  // Whether the control arm was measured fresh rather than read from the
+  // recorded baseline.
+  //
+  // Present because it decides the COVARIANCE of the net judgement: a
+  // recorded-baseline control arm pairs every Asset's delta against the same
+  // draw (docs/debt.md#66 names the correlation), while a fresh arm pairs each
+  // against its own. Two Valuations with the same numbers but different arms
+  // have different joint uncertainty, and the record must say which it is.
+  //
+  // False means the recorded baseline served as the control — valid exactly
+  // where the selection did not condition on the baseline outcome.
+  optional bool fresh_control_arm = 22;
+
+  // Which pairing scheme produced every delta in this Valuation.
+  //
+  // The A7 recording (docs/debt.md#78, recording half): which trial routed
+  // which Case is a function of this scheme. Under RECORDED_BASELINE, every
+  // trial of every routed Case pairs against the single recorded baseline
+  // draw — so the trials are correlated and the interval's effective pair
+  // count is the Case count, not the trial count. Under FRESH_PER_TRIAL, each
+  // trial pairs against the control draw taken in the same trial.
+  //
+  // UNSPECIFIED means the record predates the field or the emitter did not
+  // name a scheme; a reader must not assume either scheme from it.
+  PairingScheme pairing_scheme = 23;
+
 // (n_comparisons lives on CaseExecution, not here: it is a run-level fact, and
   // a Valuation is written when its Asset finishes rather than when the run
   // does — so the count is unknowable at write time and every row would need
   // rewriting at close.)
+}
+
+// PairingScheme records which draw each trial of a measurement paired against.
+//
+// The question matters because it decides whether trials are independent
+// observations. Under RECORDED_BASELINE every trial of one Case pairs against
+// the same recorded score, so the trials are repeats of one comparison rather
+// than draws from a distribution; under FRESH_PER_TRIAL each trial has its own
+// control draw and the pairs are closer to independent.
+enum PairingScheme {
+  // Unset. Read as "the scheme this record does not name"; never assume either
+  // scheme from it.
+  PAIRING_SCHEME_UNSPECIFIED = 0;
+
+  // Every trial paired against the same recorded baseline draw. The scheme
+  // docs/debt.md#78's sample-splitting question is about replacing.
+  PAIRING_SCHEME_RECORDED_BASELINE = 1;
+
+  // Each trial paired against the fresh control draw taken in the same trial.
+  PAIRING_SCHEME_FRESH_PER_TRIAL = 2;
 }

@@ -19,3 +19,10 @@ breaking:
   use:
     - FILE
     - WIRE_JSON
+  # RunStatus moved from run.proto to common.proto — portfolio.proto needs it
+  # for Portfolio.source_status, and run.proto imports portfolio.proto, so the
+  # enum's file would have cycled. The WIRE identity is untouched: same full
+  # name kno.v1.RunStatus, same numbers, so every record written before the
+  # move decodes identically. FILE-level rules cannot see that.
+  ignore:
+    - proto/kno/v1/run.proto
