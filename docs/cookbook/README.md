@@ -11,6 +11,7 @@ Task-shaped recipes. Each one is a thing you might actually want to do, start to
 | [Gate a deploy on Kno in CI](ci-gate.md) | Exit codes, `--json`, and what to fail the build on |
 | [Choose a portfolio under budget](select-a-portfolio.md) | Which assets earn their place, what the corrected intervals mean, and why the rejection log is a deliverable |
 | [Export a tuning set](export-a-tuning-set.md) | The destination grammar, the overwrite refusal, and the byte-identical re-export contract |
+| [Read the whole story with `kno report`](read-the-whole-story.md) | One page across the stages — what each section means, what "no cluster data" says, and why the holdout caveat is mandatory |
 | [Delete stored conversation content](retention.md) | What Kno keeps, what `kno purge` removes, and why it keeps the rest |
 
 ## Vendor recipes

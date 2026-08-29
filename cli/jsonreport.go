@@ -373,3 +373,202 @@ func renderExportJSON(out io.Writer, res *core.ExportResult) error {
 	}
 	return writeJSON(out, rep)
 }
+
+// reportJSON is the --json shape of `kno report`: the machine twin of the
+// one-page document, hand-written for the same reason as the reports above
+// (ADR-0001). The two renderers share one reportData, so a change to the
+// reading code changes both, and the equivalence goldens pin them together.
+type reportJSON struct {
+	ValueRunID      string           `json:"value_run_id"`
+	ValueStatus     string           `json:"value_status"`
+	ValueIncomplete string           `json:"value_incomplete_reason,omitempty"`
+	Baseline        reportBaseline   `json:"baseline"`
+	Assets          []reportAsset    `json:"assets"`
+	Portfolio       *reportPortfolio `json:"portfolio,omitempty"`
+	Gaps            *reportGaps      `json:"gaps,omitempty"`
+}
+
+// reportBaseline is the reference the page's deltas are measured against.
+// Score is absent when the reference recorded no readable scores.
+type reportBaseline struct {
+	RunID   string   `json:"run_id"`
+	Status  string   `json:"status"`
+	Score   *float64 `json:"score,omitempty"`
+	Scored  int      `json:"scored"`
+	Errored int      `json:"errored"`
+}
+
+// reportAsset is one Asset's verdict. DeltaGoal, Low and High are the
+// un-negated interval (positive is toward the Goal, matching the human
+// page); all three are absent when the Asset was not measured, and
+// not_measured says why.
+type reportAsset struct {
+	AssetID     string   `json:"asset_id"`
+	NotMeasured string   `json:"not_measured,omitempty"`
+	DeltaGoal   *float64 `json:"delta_goal,omitempty"`
+	Low         *float64 `json:"low,omitempty"`
+	High        *float64 `json:"high,omitempty"`
+	// NRoutedScale is the Select run's correction metadata for this Asset,
+	// when it recorded one — the machine form of the page's Corrected
+	// column. Absent means no correction was recorded, not a correction of
+	// one.
+	NRoutedScale *float64 `json:"n_routed_scale,omitempty"`
+}
+
+// reportPortfolio is the Portfolio section. DevGain and its interval are
+// absent when nothing was selected; validated_on_holdout is the machine
+// form of the mandatory caveat line — false in this release, always,
+// because validate does not exist yet and a headline number must not
+// pretend otherwise.
+type reportPortfolio struct {
+	RunID  string `json:"run_id"`
+	Status string `json:"status"`
+	// NotRecorded is true when the named Select run has not recorded a
+	// Portfolio yet — the machine form of "portfolio not yet recorded".
+	NotRecorded bool `json:"not_recorded,omitempty"`
+
+	DevGain  *float64 `json:"dev_estimated_gain,omitempty"`
+	GainLow  *float64 `json:"dev_estimated_low,omitempty"`
+	GainHigh *float64 `json:"dev_estimated_high,omitempty"`
+
+	ValidatedOnHoldout bool                 `json:"validated_on_holdout"`
+	Rejected           []reportRejectionRow `json:"rejected_by_reason,omitempty"`
+}
+
+// reportRejectionRow is one rejection reason folded across the log, in the
+// same order as the human page's table.
+type reportRejectionRow struct {
+	Reason string   `json:"reason"`
+	Count  int      `json:"count"`
+	Assets []string `json:"assets"`
+}
+
+// reportGaps is the gaps section. NoClusterData is true when the Export
+// run recorded no gaps record — the machine form of "no cluster data for
+// this run", which the store's absent-answer makes a first-class state.
+type reportGaps struct {
+	RunID           string             `json:"run_id"`
+	Status          string             `json:"status"`
+	NoClusterData   bool               `json:"no_cluster_data,omitempty"`
+	MultipleTesting bool               `json:"multiple_testing"`
+	Clusters        []reportGapCluster `json:"clusters"`
+}
+
+// reportGapCluster is one failure cluster's verdict. BestDelta, Low and
+// High are un-negated like the asset rows; all three are absent when no
+// Asset covered enough of the cluster to form an interval.
+type reportGapCluster struct {
+	Tag          string   `json:"tag"`
+	Status       string   `json:"status"`
+	CaseCount    int32    `json:"case_count"`
+	CoveredCount int32    `json:"covered_count"`
+	BestAssetID  string   `json:"best_asset_id,omitempty"`
+	BestDelta    *float64 `json:"best_delta,omitempty"`
+	Low          *float64 `json:"low,omitempty"`
+	High         *float64 `json:"high,omitempty"`
+}
+
+// writeReportJSON emits the machine-readable report.
+func writeReportJSON(out io.Writer, d *reportData) error {
+	rep := reportJSON{
+		ValueRunID:      d.ValueRun.GetId(),
+		ValueStatus:     statusName(d.ValueRun.GetStatus()),
+		ValueIncomplete: d.ValueRun.GetIncompleteReason(),
+		Baseline: reportBaseline{
+			RunID:   d.Baseline.GetId(),
+			Status:  statusName(d.Baseline.GetStatus()),
+			Score:   d.BaselineScore,
+			Scored:  d.BaselineScored,
+			Errored: d.BaselineErrored,
+		},
+	}
+	for _, v := range d.Valuations {
+		row := reportAsset{AssetID: v.GetAssetId()}
+		if nm := v.GetNotMeasured(); nm != knov1.RejectionReason_REJECTION_REASON_UNSPECIFIED {
+			row.NotMeasured = rejectReasonName(nm)
+		} else if iv := v.GetDeltaInterval(); iv != nil {
+			row.DeltaGoal, row.Low, row.High = unnegate(d, v.GetDeltaGoal(), iv.GetLow(), iv.GetHigh())
+		}
+		if scale, ok := portfolioScale(d.Portfolio, v.GetAssetId()); ok {
+			row.NRoutedScale = &scale
+		}
+		rep.Assets = append(rep.Assets, row)
+	}
+	if d.SelectRun != nil {
+		p := &reportPortfolio{RunID: d.SelectRun.GetId(), Status: statusName(d.SelectRun.GetStatus())}
+		if d.Portfolio == nil {
+			p.NotRecorded = true
+		} else {
+			po := d.Portfolio
+			if iv := po.GetDevEstimatedInterval(); iv != nil {
+				p.DevGain, p.GainLow, p.GainHigh = &po.DevEstimatedGain, &iv.Low, &iv.High
+			}
+			p.ValidatedOnHoldout = false
+			for _, g := range rejectionsByReason(po.GetRejected()) {
+				p.Rejected = append(p.Rejected, reportRejectionRow{
+					Reason: g.reason, Count: g.count, Assets: g.assets,
+				})
+			}
+		}
+		rep.Portfolio = p
+	}
+	if d.ExportRun != nil {
+		g := &reportGaps{RunID: d.ExportRun.GetId(), Status: statusName(d.ExportRun.GetStatus())}
+		if d.Gaps == nil {
+			g.NoClusterData = true
+		} else {
+			g.MultipleTesting = d.Gaps.GetMultipleTesting()
+			for _, c := range d.Gaps.GetClusters() {
+				row := reportGapCluster{
+					Tag:          c.GetTag(),
+					Status:       gapStatusWord(c),
+					CaseCount:    c.GetCaseCount(),
+					CoveredCount: c.GetCoveredCount(),
+					BestAssetID:  c.GetBestAssetId(),
+				}
+				if iv := c.GetBestInterval(); iv != nil {
+					row.BestDelta, row.Low, row.High = unnegate(d, c.GetBestDelta(), iv.GetLow(), iv.GetHigh())
+				}
+				g.Clusters = append(g.Clusters, row)
+			}
+		}
+		rep.Gaps = g
+	}
+	return writeJSON(out, rep)
+}
+
+// unnegate applies the page's display direction to a stored delta and its
+// interval.
+func unnegate(d *reportData, delta, low, high float64) (*float64, *float64, *float64) {
+	dir := reportDir(d.ValueRun)
+	out := []*float64{}
+	for _, v := range []float64{delta, low, high} {
+		u := dir * v
+		out = append(out, &u)
+	}
+	return out[0], out[1], out[2]
+}
+
+// gapStatusWord is the machine word for a cluster's verdict; the two
+// UNKNOWN flavors are told apart by covered_count, the way the record
+// itself tells them.
+func gapStatusWord(c *knov1.GapCluster) string {
+	switch c.GetStatus() {
+	case knov1.GapStatus_GAP_STATUS_IMPROVED:
+		return "improved"
+	case knov1.GapStatus_GAP_STATUS_GAP:
+		return "gap"
+	default:
+		return "unknown"
+	}
+}
+
+// decodeReportJSON parses a rendered report JSON document. Used by tests,
+// which would otherwise need their own encoding/json import.
+func decodeReportJSON(b []byte) (reportJSON, error) {
+	var rep reportJSON
+	if err := json.Unmarshal(b, &rep); err != nil {
+		return reportJSON{}, fmt.Errorf("decoding report json: %w", err)
+	}
+	return rep, nil
+}

@@ -125,6 +125,24 @@ covenants — breaking any of them requires a major version.
   labeled. Old plan blobs decode with an empty snapshot (gob is
   append-tolerant) and record no row. Plan:
   `docs/plans/2026-08-29-report-tui.md` (Step 0).
+- **`kno report` composes the recorded stages into one page** — the report
+  plan's Step 1. The Baseline it was measured against (with its score),
+  every Asset's verdict with its interval, the Portfolio Select built (dev
+  estimate with its interval and the mandatory "not yet validated on
+  holdout" caveat, rejection log folded by reason), and the gaps Export
+  recorded — or the honest absent-answer, "no cluster data for this run",
+  never a guess. The page reads recorded aggregates only: no LLM calls, no
+  evals re-read, no trace content. A Baseline that Value's own rules would
+  refuse (error rate exceeded, blended models) is refused here too, with the
+  fix, before a page can compose around it. `--watch` re-renders every 2
+  seconds while the Value run is not terminal and exits 0 the moment it is;
+  it needs a terminal and cannot combine with `--json`. The `--json`
+  contract is hand-written (ADR-0001) and golden-pinned to the human page:
+  two renderers, one composed snapshot. Rendered through glamour — glow
+  v1.5 exports no library API, so the report uses the engine glow itself
+  renders through, MIT, ~20 charmbracelet modules. Plan:
+  `docs/plans/2026-08-29-report-tui.md` (Step 1).
+
 
 - **Select and Export close the measurement-to-destination loop.** `kno select`
   builds a Portfolio from a recorded Value run: greedy on delta-per-cost,
