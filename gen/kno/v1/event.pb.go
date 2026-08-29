@@ -205,6 +205,8 @@ type Event struct {
 	//	*Event_OrphanSpend
 	//	*Event_AssetRouted
 	//	*Event_AssetValued
+	//	*Event_PortfolioSelected
+	//	*Event_ExportWritten
 	Payload       isEvent_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -394,6 +396,24 @@ func (x *Event) GetAssetValued() *AssetValued {
 	return nil
 }
 
+func (x *Event) GetPortfolioSelected() *PortfolioSelected {
+	if x != nil {
+		if x, ok := x.Payload.(*Event_PortfolioSelected); ok {
+			return x.PortfolioSelected
+		}
+	}
+	return nil
+}
+
+func (x *Event) GetExportWritten() *ExportWritten {
+	if x != nil {
+		if x, ok := x.Payload.(*Event_ExportWritten); ok {
+			return x.ExportWritten
+		}
+	}
+	return nil
+}
+
 type isEvent_Payload interface {
 	isEvent_Payload()
 }
@@ -472,6 +492,16 @@ type Event_AssetValued struct {
 	AssetValued *AssetValued `protobuf:"bytes,23,opt,name=asset_valued,json=assetValued,proto3,oneof"`
 }
 
+type Event_PortfolioSelected struct {
+	// The Portfolio was constructed.
+	PortfolioSelected *PortfolioSelected `protobuf:"bytes,24,opt,name=portfolio_selected,json=portfolioSelected,proto3,oneof"`
+}
+
+type Event_ExportWritten struct {
+	// Assets were written to a Destination.
+	ExportWritten *ExportWritten `protobuf:"bytes,25,opt,name=export_written,json=exportWritten,proto3,oneof"`
+}
+
 func (*Event_RunStarted) isEvent_Payload() {}
 
 func (*Event_CaseScored) isEvent_Payload() {}
@@ -499,6 +529,176 @@ func (*Event_OrphanSpend) isEvent_Payload() {}
 func (*Event_AssetRouted) isEvent_Payload() {}
 
 func (*Event_AssetValued) isEvent_Payload() {}
+
+func (*Event_PortfolioSelected) isEvent_Payload() {}
+
+func (*Event_ExportWritten) isEvent_Payload() {}
+
+// PortfolioSelected reports that Select finished constructing a Portfolio.
+//
+// Carries the headline numbers only — the Portfolio itself lives in the store,
+// and an event stream that duplicated it would be two things to keep
+// consistent. The counts tell a watcher the shape of the decision; the gain is
+// the DEV estimate, inflated by the winner's curse, and is labelled as such.
+type PortfolioSelected struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// How many Assets were selected.
+	Selected int32 `protobuf:"varint,1,opt,name=selected,proto3" json:"selected,omitempty"`
+	// How many were rejected, with a reason. Never truncated on the record; the
+	// event carries the count, the store carries the log.
+	Rejected int32 `protobuf:"varint,2,opt,name=rejected,proto3" json:"rejected,omitempty"`
+	// The aggregate dev-slice gain of the selected set. Selection-time
+	// estimate, NOT a result — see Portfolio.dev_estimated_gain.
+	DevEstimatedGain float64 `protobuf:"fixed64,3,opt,name=dev_estimated_gain,json=devEstimatedGain,proto3" json:"dev_estimated_gain,omitempty"`
+	// The interval on dev_estimated_gain, corrected for multiplicity.
+	DevEstimatedInterval *Interval `protobuf:"bytes,4,opt,name=dev_estimated_interval,json=devEstimatedInterval,proto3" json:"dev_estimated_interval,omitempty"`
+	// Total carrying cost of the selected set, in MICRO-USD.
+	TotalCostUsdMicros int64 `protobuf:"varint,5,opt,name=total_cost_usd_micros,json=totalCostUsdMicros,proto3" json:"total_cost_usd_micros,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *PortfolioSelected) Reset() {
+	*x = PortfolioSelected{}
+	mi := &file_kno_v1_event_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PortfolioSelected) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PortfolioSelected) ProtoMessage() {}
+
+func (x *PortfolioSelected) ProtoReflect() protoreflect.Message {
+	mi := &file_kno_v1_event_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PortfolioSelected.ProtoReflect.Descriptor instead.
+func (*PortfolioSelected) Descriptor() ([]byte, []int) {
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *PortfolioSelected) GetSelected() int32 {
+	if x != nil {
+		return x.Selected
+	}
+	return 0
+}
+
+func (x *PortfolioSelected) GetRejected() int32 {
+	if x != nil {
+		return x.Rejected
+	}
+	return 0
+}
+
+func (x *PortfolioSelected) GetDevEstimatedGain() float64 {
+	if x != nil {
+		return x.DevEstimatedGain
+	}
+	return 0
+}
+
+func (x *PortfolioSelected) GetDevEstimatedInterval() *Interval {
+	if x != nil {
+		return x.DevEstimatedInterval
+	}
+	return nil
+}
+
+func (x *PortfolioSelected) GetTotalCostUsdMicros() int64 {
+	if x != nil {
+		return x.TotalCostUsdMicros
+	}
+	return 0
+}
+
+// ExportWritten reports that assets were written to a Destination.
+//
+// The destination is named but its CONTENT is not — export writes full Asset
+// content, which must never reach the event stream. Path and bytes let a
+// watcher confirm what was produced without opening it.
+type ExportWritten struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Which Destination was written: context, knowledge_base, or tuning_set.
+	Destination Destination `protobuf:"varint,1,opt,name=destination,proto3,enum=kno.v1.Destination" json:"destination,omitempty"`
+	// How many Assets were written.
+	AssetCount int32 `protobuf:"varint,2,opt,name=asset_count,json=assetCount,proto3" json:"asset_count,omitempty"`
+	// How many bytes landed on disk, after the temp-then-rename.
+	BytesWritten int64 `protobuf:"varint,3,opt,name=bytes_written,json=bytesWritten,proto3" json:"bytes_written,omitempty"`
+	// The written artifact's path, as resolved for the destination.
+	Path          string `protobuf:"bytes,4,opt,name=path,proto3" json:"path,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExportWritten) Reset() {
+	*x = ExportWritten{}
+	mi := &file_kno_v1_event_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExportWritten) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExportWritten) ProtoMessage() {}
+
+func (x *ExportWritten) ProtoReflect() protoreflect.Message {
+	mi := &file_kno_v1_event_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExportWritten.ProtoReflect.Descriptor instead.
+func (*ExportWritten) Descriptor() ([]byte, []int) {
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *ExportWritten) GetDestination() Destination {
+	if x != nil {
+		return x.Destination
+	}
+	return Destination_DESTINATION_UNSPECIFIED
+}
+
+func (x *ExportWritten) GetAssetCount() int32 {
+	if x != nil {
+		return x.AssetCount
+	}
+	return 0
+}
+
+func (x *ExportWritten) GetBytesWritten() int64 {
+	if x != nil {
+		return x.BytesWritten
+	}
+	return 0
+}
+
+func (x *ExportWritten) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
 
 // EventError is a failure as it appears ON THE EVENT STREAM.
 //
@@ -530,7 +730,7 @@ type EventError struct {
 
 func (x *EventError) Reset() {
 	*x = EventError{}
-	mi := &file_kno_v1_event_proto_msgTypes[1]
+	mi := &file_kno_v1_event_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -542,7 +742,7 @@ func (x *EventError) String() string {
 func (*EventError) ProtoMessage() {}
 
 func (x *EventError) ProtoReflect() protoreflect.Message {
-	mi := &file_kno_v1_event_proto_msgTypes[1]
+	mi := &file_kno_v1_event_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -555,7 +755,7 @@ func (x *EventError) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EventError.ProtoReflect.Descriptor instead.
 func (*EventError) Descriptor() ([]byte, []int) {
-	return file_kno_v1_event_proto_rawDescGZIP(), []int{1}
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *EventError) GetCode() string {
@@ -611,7 +811,7 @@ type RunStarted struct {
 
 func (x *RunStarted) Reset() {
 	*x = RunStarted{}
-	mi := &file_kno_v1_event_proto_msgTypes[2]
+	mi := &file_kno_v1_event_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -623,7 +823,7 @@ func (x *RunStarted) String() string {
 func (*RunStarted) ProtoMessage() {}
 
 func (x *RunStarted) ProtoReflect() protoreflect.Message {
-	mi := &file_kno_v1_event_proto_msgTypes[2]
+	mi := &file_kno_v1_event_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -636,7 +836,7 @@ func (x *RunStarted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunStarted.ProtoReflect.Descriptor instead.
 func (*RunStarted) Descriptor() ([]byte, []int) {
-	return file_kno_v1_event_proto_rawDescGZIP(), []int{2}
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *RunStarted) GetStage() Stage {
@@ -715,7 +915,7 @@ type CaseScored struct {
 
 func (x *CaseScored) Reset() {
 	*x = CaseScored{}
-	mi := &file_kno_v1_event_proto_msgTypes[3]
+	mi := &file_kno_v1_event_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -727,7 +927,7 @@ func (x *CaseScored) String() string {
 func (*CaseScored) ProtoMessage() {}
 
 func (x *CaseScored) ProtoReflect() protoreflect.Message {
-	mi := &file_kno_v1_event_proto_msgTypes[3]
+	mi := &file_kno_v1_event_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -740,7 +940,7 @@ func (x *CaseScored) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CaseScored.ProtoReflect.Descriptor instead.
 func (*CaseScored) Descriptor() ([]byte, []int) {
-	return file_kno_v1_event_proto_rawDescGZIP(), []int{3}
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *CaseScored) GetCaseId() string {
@@ -831,7 +1031,7 @@ type CaseErrored struct {
 
 func (x *CaseErrored) Reset() {
 	*x = CaseErrored{}
-	mi := &file_kno_v1_event_proto_msgTypes[4]
+	mi := &file_kno_v1_event_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -843,7 +1043,7 @@ func (x *CaseErrored) String() string {
 func (*CaseErrored) ProtoMessage() {}
 
 func (x *CaseErrored) ProtoReflect() protoreflect.Message {
-	mi := &file_kno_v1_event_proto_msgTypes[4]
+	mi := &file_kno_v1_event_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -856,7 +1056,7 @@ func (x *CaseErrored) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CaseErrored.ProtoReflect.Descriptor instead.
 func (*CaseErrored) Descriptor() ([]byte, []int) {
-	return file_kno_v1_event_proto_rawDescGZIP(), []int{4}
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *CaseErrored) GetCaseId() string {
@@ -935,7 +1135,7 @@ type StageProgress struct {
 
 func (x *StageProgress) Reset() {
 	*x = StageProgress{}
-	mi := &file_kno_v1_event_proto_msgTypes[5]
+	mi := &file_kno_v1_event_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -947,7 +1147,7 @@ func (x *StageProgress) String() string {
 func (*StageProgress) ProtoMessage() {}
 
 func (x *StageProgress) ProtoReflect() protoreflect.Message {
-	mi := &file_kno_v1_event_proto_msgTypes[5]
+	mi := &file_kno_v1_event_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -960,7 +1160,7 @@ func (x *StageProgress) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StageProgress.ProtoReflect.Descriptor instead.
 func (*StageProgress) Descriptor() ([]byte, []int) {
-	return file_kno_v1_event_proto_rawDescGZIP(), []int{5}
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *StageProgress) GetStage() Stage {
@@ -1029,7 +1229,7 @@ type SpendRecorded struct {
 
 func (x *SpendRecorded) Reset() {
 	*x = SpendRecorded{}
-	mi := &file_kno_v1_event_proto_msgTypes[6]
+	mi := &file_kno_v1_event_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1041,7 +1241,7 @@ func (x *SpendRecorded) String() string {
 func (*SpendRecorded) ProtoMessage() {}
 
 func (x *SpendRecorded) ProtoReflect() protoreflect.Message {
-	mi := &file_kno_v1_event_proto_msgTypes[6]
+	mi := &file_kno_v1_event_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1054,7 +1254,7 @@ func (x *SpendRecorded) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SpendRecorded.ProtoReflect.Descriptor instead.
 func (*SpendRecorded) Descriptor() ([]byte, []int) {
-	return file_kno_v1_event_proto_rawDescGZIP(), []int{6}
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *SpendRecorded) GetTotalCostUsdMicros() int64 {
@@ -1127,7 +1327,7 @@ type RunFinished struct {
 
 func (x *RunFinished) Reset() {
 	*x = RunFinished{}
-	mi := &file_kno_v1_event_proto_msgTypes[7]
+	mi := &file_kno_v1_event_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1139,7 +1339,7 @@ func (x *RunFinished) String() string {
 func (*RunFinished) ProtoMessage() {}
 
 func (x *RunFinished) ProtoReflect() protoreflect.Message {
-	mi := &file_kno_v1_event_proto_msgTypes[7]
+	mi := &file_kno_v1_event_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1152,7 +1352,7 @@ func (x *RunFinished) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunFinished.ProtoReflect.Descriptor instead.
 func (*RunFinished) Descriptor() ([]byte, []int) {
-	return file_kno_v1_event_proto_rawDescGZIP(), []int{7}
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *RunFinished) GetStatus() RunStatus {
@@ -1246,7 +1446,7 @@ type RunResumed struct {
 
 func (x *RunResumed) Reset() {
 	*x = RunResumed{}
-	mi := &file_kno_v1_event_proto_msgTypes[8]
+	mi := &file_kno_v1_event_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1258,7 +1458,7 @@ func (x *RunResumed) String() string {
 func (*RunResumed) ProtoMessage() {}
 
 func (x *RunResumed) ProtoReflect() protoreflect.Message {
-	mi := &file_kno_v1_event_proto_msgTypes[8]
+	mi := &file_kno_v1_event_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1271,7 +1471,7 @@ func (x *RunResumed) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunResumed.ProtoReflect.Descriptor instead.
 func (*RunResumed) Descriptor() ([]byte, []int) {
-	return file_kno_v1_event_proto_rawDescGZIP(), []int{8}
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *RunResumed) GetAlreadyCompleted() int32 {
@@ -1356,7 +1556,7 @@ type RetryAttempted struct {
 
 func (x *RetryAttempted) Reset() {
 	*x = RetryAttempted{}
-	mi := &file_kno_v1_event_proto_msgTypes[9]
+	mi := &file_kno_v1_event_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1368,7 +1568,7 @@ func (x *RetryAttempted) String() string {
 func (*RetryAttempted) ProtoMessage() {}
 
 func (x *RetryAttempted) ProtoReflect() protoreflect.Message {
-	mi := &file_kno_v1_event_proto_msgTypes[9]
+	mi := &file_kno_v1_event_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1381,7 +1581,7 @@ func (x *RetryAttempted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RetryAttempted.ProtoReflect.Descriptor instead.
 func (*RetryAttempted) Descriptor() ([]byte, []int) {
-	return file_kno_v1_event_proto_rawDescGZIP(), []int{9}
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *RetryAttempted) GetCaseId() string {
@@ -1464,7 +1664,7 @@ type RateLimitWaiting struct {
 
 func (x *RateLimitWaiting) Reset() {
 	*x = RateLimitWaiting{}
-	mi := &file_kno_v1_event_proto_msgTypes[10]
+	mi := &file_kno_v1_event_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1476,7 +1676,7 @@ func (x *RateLimitWaiting) String() string {
 func (*RateLimitWaiting) ProtoMessage() {}
 
 func (x *RateLimitWaiting) ProtoReflect() protoreflect.Message {
-	mi := &file_kno_v1_event_proto_msgTypes[10]
+	mi := &file_kno_v1_event_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1489,7 +1689,7 @@ func (x *RateLimitWaiting) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RateLimitWaiting.ProtoReflect.Descriptor instead.
 func (*RateLimitWaiting) Descriptor() ([]byte, []int) {
-	return file_kno_v1_event_proto_rawDescGZIP(), []int{10}
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *RateLimitWaiting) GetWaitMs() int64 {
@@ -1554,7 +1754,7 @@ type SettlementOvershoot struct {
 
 func (x *SettlementOvershoot) Reset() {
 	*x = SettlementOvershoot{}
-	mi := &file_kno_v1_event_proto_msgTypes[11]
+	mi := &file_kno_v1_event_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1566,7 +1766,7 @@ func (x *SettlementOvershoot) String() string {
 func (*SettlementOvershoot) ProtoMessage() {}
 
 func (x *SettlementOvershoot) ProtoReflect() protoreflect.Message {
-	mi := &file_kno_v1_event_proto_msgTypes[11]
+	mi := &file_kno_v1_event_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1579,7 +1779,7 @@ func (x *SettlementOvershoot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SettlementOvershoot.ProtoReflect.Descriptor instead.
 func (*SettlementOvershoot) Descriptor() ([]byte, []int) {
-	return file_kno_v1_event_proto_rawDescGZIP(), []int{11}
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *SettlementOvershoot) GetCaseId() string {
@@ -1675,7 +1875,7 @@ type OrphanSpend struct {
 
 func (x *OrphanSpend) Reset() {
 	*x = OrphanSpend{}
-	mi := &file_kno_v1_event_proto_msgTypes[12]
+	mi := &file_kno_v1_event_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1687,7 +1887,7 @@ func (x *OrphanSpend) String() string {
 func (*OrphanSpend) ProtoMessage() {}
 
 func (x *OrphanSpend) ProtoReflect() protoreflect.Message {
-	mi := &file_kno_v1_event_proto_msgTypes[12]
+	mi := &file_kno_v1_event_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1700,7 +1900,7 @@ func (x *OrphanSpend) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OrphanSpend.ProtoReflect.Descriptor instead.
 func (*OrphanSpend) Descriptor() ([]byte, []int) {
-	return file_kno_v1_event_proto_rawDescGZIP(), []int{12}
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *OrphanSpend) GetCaseId() string {
@@ -1779,7 +1979,7 @@ type ConcurrencyReduced struct {
 
 func (x *ConcurrencyReduced) Reset() {
 	*x = ConcurrencyReduced{}
-	mi := &file_kno_v1_event_proto_msgTypes[13]
+	mi := &file_kno_v1_event_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1791,7 +1991,7 @@ func (x *ConcurrencyReduced) String() string {
 func (*ConcurrencyReduced) ProtoMessage() {}
 
 func (x *ConcurrencyReduced) ProtoReflect() protoreflect.Message {
-	mi := &file_kno_v1_event_proto_msgTypes[13]
+	mi := &file_kno_v1_event_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1804,7 +2004,7 @@ func (x *ConcurrencyReduced) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConcurrencyReduced.ProtoReflect.Descriptor instead.
 func (*ConcurrencyReduced) Descriptor() ([]byte, []int) {
-	return file_kno_v1_event_proto_rawDescGZIP(), []int{13}
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ConcurrencyReduced) GetDecision() *ConcurrencyDecision {
@@ -1855,7 +2055,7 @@ type AssetRouted struct {
 
 func (x *AssetRouted) Reset() {
 	*x = AssetRouted{}
-	mi := &file_kno_v1_event_proto_msgTypes[14]
+	mi := &file_kno_v1_event_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1867,7 +2067,7 @@ func (x *AssetRouted) String() string {
 func (*AssetRouted) ProtoMessage() {}
 
 func (x *AssetRouted) ProtoReflect() protoreflect.Message {
-	mi := &file_kno_v1_event_proto_msgTypes[14]
+	mi := &file_kno_v1_event_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1880,7 +2080,7 @@ func (x *AssetRouted) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssetRouted.ProtoReflect.Descriptor instead.
 func (*AssetRouted) Descriptor() ([]byte, []int) {
-	return file_kno_v1_event_proto_rawDescGZIP(), []int{14}
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *AssetRouted) GetAssetId() string {
@@ -1968,7 +2168,7 @@ type AssetValued struct {
 
 func (x *AssetValued) Reset() {
 	*x = AssetValued{}
-	mi := &file_kno_v1_event_proto_msgTypes[15]
+	mi := &file_kno_v1_event_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1980,7 +2180,7 @@ func (x *AssetValued) String() string {
 func (*AssetValued) ProtoMessage() {}
 
 func (x *AssetValued) ProtoReflect() protoreflect.Message {
-	mi := &file_kno_v1_event_proto_msgTypes[15]
+	mi := &file_kno_v1_event_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1993,7 +2193,7 @@ func (x *AssetValued) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssetValued.ProtoReflect.Descriptor instead.
 func (*AssetValued) Descriptor() ([]byte, []int) {
-	return file_kno_v1_event_proto_rawDescGZIP(), []int{15}
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *AssetValued) GetAssetId() string {
@@ -2056,7 +2256,7 @@ var File_kno_v1_event_proto protoreflect.FileDescriptor
 
 const file_kno_v1_event_proto_rawDesc = "" +
 	"\n" +
-	"\x12kno/v1/event.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/valuation.proto\x1a\x16kno/v1/portfolio.proto\x1a\x10kno/v1/run.proto\"\xd9\a\n" +
+	"\x12kno/v1/event.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/valuation.proto\x1a\x16kno/v1/portfolio.proto\x1a\x10kno/v1/run.proto\"\xe5\b\n" +
 	"\x05Event\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x1d\n" +
 	"\n" +
@@ -2079,8 +2279,22 @@ const file_kno_v1_event_proto_rawDesc = "" +
 	"\x13concurrency_reduced\x18\x14 \x01(\v2\x1a.kno.v1.ConcurrencyReducedH\x00R\x12concurrencyReduced\x128\n" +
 	"\forphan_spend\x18\x15 \x01(\v2\x13.kno.v1.OrphanSpendH\x00R\vorphanSpend\x128\n" +
 	"\fasset_routed\x18\x16 \x01(\v2\x13.kno.v1.AssetRoutedH\x00R\vassetRouted\x128\n" +
-	"\fasset_valued\x18\x17 \x01(\v2\x13.kno.v1.AssetValuedH\x00R\vassetValuedB\t\n" +
-	"\apayload\"W\n" +
+	"\fasset_valued\x18\x17 \x01(\v2\x13.kno.v1.AssetValuedH\x00R\vassetValued\x12J\n" +
+	"\x12portfolio_selected\x18\x18 \x01(\v2\x19.kno.v1.PortfolioSelectedH\x00R\x11portfolioSelected\x12>\n" +
+	"\x0eexport_written\x18\x19 \x01(\v2\x15.kno.v1.ExportWrittenH\x00R\rexportWrittenB\t\n" +
+	"\apayload\"\xf4\x01\n" +
+	"\x11PortfolioSelected\x12\x1a\n" +
+	"\bselected\x18\x01 \x01(\x05R\bselected\x12\x1a\n" +
+	"\brejected\x18\x02 \x01(\x05R\brejected\x12,\n" +
+	"\x12dev_estimated_gain\x18\x03 \x01(\x01R\x10devEstimatedGain\x12F\n" +
+	"\x16dev_estimated_interval\x18\x04 \x01(\v2\x10.kno.v1.IntervalR\x14devEstimatedInterval\x121\n" +
+	"\x15total_cost_usd_micros\x18\x05 \x01(\x03R\x12totalCostUsdMicros\"\xa0\x01\n" +
+	"\rExportWritten\x125\n" +
+	"\vdestination\x18\x01 \x01(\x0e2\x13.kno.v1.DestinationR\vdestination\x12\x1f\n" +
+	"\vasset_count\x18\x02 \x01(\x05R\n" +
+	"assetCount\x12#\n" +
+	"\rbytes_written\x18\x03 \x01(\x03R\fbytesWritten\x12\x12\n" +
+	"\x04path\x18\x04 \x01(\tR\x04path\"W\n" +
 	"\n" +
 	"EventError\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\tR\x04code\x12\x18\n" +
@@ -2235,75 +2449,82 @@ func file_kno_v1_event_proto_rawDescGZIP() []byte {
 }
 
 var file_kno_v1_event_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_kno_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_kno_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_kno_v1_event_proto_goTypes = []any{
 	(OrphanReason)(0),           // 0: kno.v1.OrphanReason
 	(RetryReason)(0),            // 1: kno.v1.RetryReason
 	(*Event)(nil),               // 2: kno.v1.Event
-	(*EventError)(nil),          // 3: kno.v1.EventError
-	(*RunStarted)(nil),          // 4: kno.v1.RunStarted
-	(*CaseScored)(nil),          // 5: kno.v1.CaseScored
-	(*CaseErrored)(nil),         // 6: kno.v1.CaseErrored
-	(*StageProgress)(nil),       // 7: kno.v1.StageProgress
-	(*SpendRecorded)(nil),       // 8: kno.v1.SpendRecorded
-	(*RunFinished)(nil),         // 9: kno.v1.RunFinished
-	(*RunResumed)(nil),          // 10: kno.v1.RunResumed
-	(*RetryAttempted)(nil),      // 11: kno.v1.RetryAttempted
-	(*RateLimitWaiting)(nil),    // 12: kno.v1.RateLimitWaiting
-	(*SettlementOvershoot)(nil), // 13: kno.v1.SettlementOvershoot
-	(*OrphanSpend)(nil),         // 14: kno.v1.OrphanSpend
-	(*ConcurrencyReduced)(nil),  // 15: kno.v1.ConcurrencyReduced
-	(*AssetRouted)(nil),         // 16: kno.v1.AssetRouted
-	(*AssetValued)(nil),         // 17: kno.v1.AssetValued
-	(Stage)(0),                  // 18: kno.v1.Stage
-	(*AgentRef)(nil),            // 19: kno.v1.AgentRef
-	(Direction)(0),              // 20: kno.v1.Direction
-	(*Budget)(nil),              // 21: kno.v1.Budget
-	(ScoreDomain)(0),            // 22: kno.v1.ScoreDomain
-	(RunStatus)(0),              // 23: kno.v1.RunStatus
-	(Arm)(0),                    // 24: kno.v1.Arm
-	(*ConcurrencyDecision)(nil), // 25: kno.v1.ConcurrencyDecision
-	(RejectionReason)(0),        // 26: kno.v1.RejectionReason
-	(*Interval)(nil),            // 27: kno.v1.Interval
+	(*PortfolioSelected)(nil),   // 3: kno.v1.PortfolioSelected
+	(*ExportWritten)(nil),       // 4: kno.v1.ExportWritten
+	(*EventError)(nil),          // 5: kno.v1.EventError
+	(*RunStarted)(nil),          // 6: kno.v1.RunStarted
+	(*CaseScored)(nil),          // 7: kno.v1.CaseScored
+	(*CaseErrored)(nil),         // 8: kno.v1.CaseErrored
+	(*StageProgress)(nil),       // 9: kno.v1.StageProgress
+	(*SpendRecorded)(nil),       // 10: kno.v1.SpendRecorded
+	(*RunFinished)(nil),         // 11: kno.v1.RunFinished
+	(*RunResumed)(nil),          // 12: kno.v1.RunResumed
+	(*RetryAttempted)(nil),      // 13: kno.v1.RetryAttempted
+	(*RateLimitWaiting)(nil),    // 14: kno.v1.RateLimitWaiting
+	(*SettlementOvershoot)(nil), // 15: kno.v1.SettlementOvershoot
+	(*OrphanSpend)(nil),         // 16: kno.v1.OrphanSpend
+	(*ConcurrencyReduced)(nil),  // 17: kno.v1.ConcurrencyReduced
+	(*AssetRouted)(nil),         // 18: kno.v1.AssetRouted
+	(*AssetValued)(nil),         // 19: kno.v1.AssetValued
+	(*Interval)(nil),            // 20: kno.v1.Interval
+	(Destination)(0),            // 21: kno.v1.Destination
+	(Stage)(0),                  // 22: kno.v1.Stage
+	(*AgentRef)(nil),            // 23: kno.v1.AgentRef
+	(Direction)(0),              // 24: kno.v1.Direction
+	(*Budget)(nil),              // 25: kno.v1.Budget
+	(ScoreDomain)(0),            // 26: kno.v1.ScoreDomain
+	(RunStatus)(0),              // 27: kno.v1.RunStatus
+	(Arm)(0),                    // 28: kno.v1.Arm
+	(*ConcurrencyDecision)(nil), // 29: kno.v1.ConcurrencyDecision
+	(RejectionReason)(0),        // 30: kno.v1.RejectionReason
 }
 var file_kno_v1_event_proto_depIdxs = []int32{
-	4,  // 0: kno.v1.Event.run_started:type_name -> kno.v1.RunStarted
-	5,  // 1: kno.v1.Event.case_scored:type_name -> kno.v1.CaseScored
-	6,  // 2: kno.v1.Event.case_errored:type_name -> kno.v1.CaseErrored
-	7,  // 3: kno.v1.Event.stage_progress:type_name -> kno.v1.StageProgress
-	8,  // 4: kno.v1.Event.spend_recorded:type_name -> kno.v1.SpendRecorded
-	9,  // 5: kno.v1.Event.run_finished:type_name -> kno.v1.RunFinished
-	10, // 6: kno.v1.Event.run_resumed:type_name -> kno.v1.RunResumed
-	11, // 7: kno.v1.Event.retry_attempted:type_name -> kno.v1.RetryAttempted
-	12, // 8: kno.v1.Event.rate_limit_waiting:type_name -> kno.v1.RateLimitWaiting
-	13, // 9: kno.v1.Event.settlement_overshoot:type_name -> kno.v1.SettlementOvershoot
-	15, // 10: kno.v1.Event.concurrency_reduced:type_name -> kno.v1.ConcurrencyReduced
-	14, // 11: kno.v1.Event.orphan_spend:type_name -> kno.v1.OrphanSpend
-	16, // 12: kno.v1.Event.asset_routed:type_name -> kno.v1.AssetRouted
-	17, // 13: kno.v1.Event.asset_valued:type_name -> kno.v1.AssetValued
-	18, // 14: kno.v1.RunStarted.stage:type_name -> kno.v1.Stage
-	19, // 15: kno.v1.RunStarted.agent:type_name -> kno.v1.AgentRef
-	20, // 16: kno.v1.RunStarted.goal_direction:type_name -> kno.v1.Direction
-	21, // 17: kno.v1.RunStarted.budget:type_name -> kno.v1.Budget
-	22, // 18: kno.v1.RunStarted.goal_score_domain:type_name -> kno.v1.ScoreDomain
-	3,  // 19: kno.v1.CaseErrored.error:type_name -> kno.v1.EventError
-	18, // 20: kno.v1.StageProgress.stage:type_name -> kno.v1.Stage
-	23, // 21: kno.v1.RunFinished.status:type_name -> kno.v1.RunStatus
-	3,  // 22: kno.v1.RunFinished.error:type_name -> kno.v1.EventError
-	1,  // 23: kno.v1.RetryAttempted.reason:type_name -> kno.v1.RetryReason
-	24, // 24: kno.v1.RetryAttempted.arm:type_name -> kno.v1.Arm
-	24, // 25: kno.v1.SettlementOvershoot.arm:type_name -> kno.v1.Arm
-	0,  // 26: kno.v1.OrphanSpend.reason:type_name -> kno.v1.OrphanReason
-	24, // 27: kno.v1.OrphanSpend.arm:type_name -> kno.v1.Arm
-	25, // 28: kno.v1.ConcurrencyReduced.decision:type_name -> kno.v1.ConcurrencyDecision
-	26, // 29: kno.v1.AssetRouted.not_measured:type_name -> kno.v1.RejectionReason
-	27, // 30: kno.v1.AssetValued.delta_interval:type_name -> kno.v1.Interval
-	26, // 31: kno.v1.AssetValued.not_measured:type_name -> kno.v1.RejectionReason
-	32, // [32:32] is the sub-list for method output_type
-	32, // [32:32] is the sub-list for method input_type
-	32, // [32:32] is the sub-list for extension type_name
-	32, // [32:32] is the sub-list for extension extendee
-	0,  // [0:32] is the sub-list for field type_name
+	6,  // 0: kno.v1.Event.run_started:type_name -> kno.v1.RunStarted
+	7,  // 1: kno.v1.Event.case_scored:type_name -> kno.v1.CaseScored
+	8,  // 2: kno.v1.Event.case_errored:type_name -> kno.v1.CaseErrored
+	9,  // 3: kno.v1.Event.stage_progress:type_name -> kno.v1.StageProgress
+	10, // 4: kno.v1.Event.spend_recorded:type_name -> kno.v1.SpendRecorded
+	11, // 5: kno.v1.Event.run_finished:type_name -> kno.v1.RunFinished
+	12, // 6: kno.v1.Event.run_resumed:type_name -> kno.v1.RunResumed
+	13, // 7: kno.v1.Event.retry_attempted:type_name -> kno.v1.RetryAttempted
+	14, // 8: kno.v1.Event.rate_limit_waiting:type_name -> kno.v1.RateLimitWaiting
+	15, // 9: kno.v1.Event.settlement_overshoot:type_name -> kno.v1.SettlementOvershoot
+	17, // 10: kno.v1.Event.concurrency_reduced:type_name -> kno.v1.ConcurrencyReduced
+	16, // 11: kno.v1.Event.orphan_spend:type_name -> kno.v1.OrphanSpend
+	18, // 12: kno.v1.Event.asset_routed:type_name -> kno.v1.AssetRouted
+	19, // 13: kno.v1.Event.asset_valued:type_name -> kno.v1.AssetValued
+	3,  // 14: kno.v1.Event.portfolio_selected:type_name -> kno.v1.PortfolioSelected
+	4,  // 15: kno.v1.Event.export_written:type_name -> kno.v1.ExportWritten
+	20, // 16: kno.v1.PortfolioSelected.dev_estimated_interval:type_name -> kno.v1.Interval
+	21, // 17: kno.v1.ExportWritten.destination:type_name -> kno.v1.Destination
+	22, // 18: kno.v1.RunStarted.stage:type_name -> kno.v1.Stage
+	23, // 19: kno.v1.RunStarted.agent:type_name -> kno.v1.AgentRef
+	24, // 20: kno.v1.RunStarted.goal_direction:type_name -> kno.v1.Direction
+	25, // 21: kno.v1.RunStarted.budget:type_name -> kno.v1.Budget
+	26, // 22: kno.v1.RunStarted.goal_score_domain:type_name -> kno.v1.ScoreDomain
+	5,  // 23: kno.v1.CaseErrored.error:type_name -> kno.v1.EventError
+	22, // 24: kno.v1.StageProgress.stage:type_name -> kno.v1.Stage
+	27, // 25: kno.v1.RunFinished.status:type_name -> kno.v1.RunStatus
+	5,  // 26: kno.v1.RunFinished.error:type_name -> kno.v1.EventError
+	1,  // 27: kno.v1.RetryAttempted.reason:type_name -> kno.v1.RetryReason
+	28, // 28: kno.v1.RetryAttempted.arm:type_name -> kno.v1.Arm
+	28, // 29: kno.v1.SettlementOvershoot.arm:type_name -> kno.v1.Arm
+	0,  // 30: kno.v1.OrphanSpend.reason:type_name -> kno.v1.OrphanReason
+	28, // 31: kno.v1.OrphanSpend.arm:type_name -> kno.v1.Arm
+	29, // 32: kno.v1.ConcurrencyReduced.decision:type_name -> kno.v1.ConcurrencyDecision
+	30, // 33: kno.v1.AssetRouted.not_measured:type_name -> kno.v1.RejectionReason
+	20, // 34: kno.v1.AssetValued.delta_interval:type_name -> kno.v1.Interval
+	30, // 35: kno.v1.AssetValued.not_measured:type_name -> kno.v1.RejectionReason
+	36, // [36:36] is the sub-list for method output_type
+	36, // [36:36] is the sub-list for method input_type
+	36, // [36:36] is the sub-list for extension type_name
+	36, // [36:36] is the sub-list for extension extendee
+	0,  // [0:36] is the sub-list for field type_name
 }
 
 func init() { file_kno_v1_event_proto_init() }
@@ -2330,19 +2551,21 @@ func file_kno_v1_event_proto_init() {
 		(*Event_OrphanSpend)(nil),
 		(*Event_AssetRouted)(nil),
 		(*Event_AssetValued)(nil),
+		(*Event_PortfolioSelected)(nil),
+		(*Event_ExportWritten)(nil),
 	}
-	file_kno_v1_event_proto_msgTypes[6].OneofWrappers = []any{}
-	file_kno_v1_event_proto_msgTypes[7].OneofWrappers = []any{}
+	file_kno_v1_event_proto_msgTypes[8].OneofWrappers = []any{}
 	file_kno_v1_event_proto_msgTypes[9].OneofWrappers = []any{}
 	file_kno_v1_event_proto_msgTypes[11].OneofWrappers = []any{}
-	file_kno_v1_event_proto_msgTypes[12].OneofWrappers = []any{}
+	file_kno_v1_event_proto_msgTypes[13].OneofWrappers = []any{}
+	file_kno_v1_event_proto_msgTypes[14].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kno_v1_event_proto_rawDesc), len(file_kno_v1_event_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   16,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

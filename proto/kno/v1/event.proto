@@ -87,7 +87,57 @@ message Event {
 
     // An Asset's measurement finished, with its delta and interval.
     AssetValued asset_valued = 23;
+
+    // The Portfolio was constructed.
+    PortfolioSelected portfolio_selected = 24;
+
+    // Assets were written to a Destination.
+    ExportWritten export_written = 25;
   }
+}
+
+// PortfolioSelected reports that Select finished constructing a Portfolio.
+//
+// Carries the headline numbers only — the Portfolio itself lives in the store,
+// and an event stream that duplicated it would be two things to keep
+// consistent. The counts tell a watcher the shape of the decision; the gain is
+// the DEV estimate, inflated by the winner's curse, and is labelled as such.
+message PortfolioSelected {
+  // How many Assets were selected.
+  int32 selected = 1;
+
+  // How many were rejected, with a reason. Never truncated on the record; the
+  // event carries the count, the store carries the log.
+  int32 rejected = 2;
+
+  // The aggregate dev-slice gain of the selected set. Selection-time
+  // estimate, NOT a result — see Portfolio.dev_estimated_gain.
+  double dev_estimated_gain = 3;
+
+  // The interval on dev_estimated_gain, corrected for multiplicity.
+  Interval dev_estimated_interval = 4;
+
+  // Total carrying cost of the selected set, in MICRO-USD.
+  int64 total_cost_usd_micros = 5;
+}
+
+// ExportWritten reports that assets were written to a Destination.
+//
+// The destination is named but its CONTENT is not — export writes full Asset
+// content, which must never reach the event stream. Path and bytes let a
+// watcher confirm what was produced without opening it.
+message ExportWritten {
+  // Which Destination was written: context, knowledge_base, or tuning_set.
+  Destination destination = 1;
+
+  // How many Assets were written.
+  int32 asset_count = 2;
+
+  // How many bytes landed on disk, after the temp-then-rename.
+  int64 bytes_written = 3;
+
+  // The written artifact's path, as resolved for the destination.
+  string path = 4;
 }
 
 // EventError is a failure as it appears ON THE EVENT STREAM.

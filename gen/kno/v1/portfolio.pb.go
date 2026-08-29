@@ -33,7 +33,18 @@ type PortfolioEntry struct {
 	Valuation *Valuation `protobuf:"bytes,3,opt,name=valuation,proto3" json:"valuation,omitempty"`
 	// Selection order. Portfolio construction is greedy on delta-per-cost, so
 	// rank is informative about marginal contribution, not just a row number.
-	Rank          int32 `protobuf:"varint,4,opt,name=rank,proto3" json:"rank,omitempty"`
+	Rank int32 `protobuf:"varint,4,opt,name=rank,proto3" json:"rank,omitempty"`
+	// The scaling factor applied to this entry's tagged delta to make it
+	// comparable to an untagged one, under the model docs/debt.md#65 names:
+	// the effect is uniform on the routed slice and zero elsewhere, so a tagged
+	// delta over n_routed of n_dev Cases scales by n_routed / n_dev.
+	//
+	// ABSENT means the delta was not scaled — either the Valuation was untagged
+	// (already an effect over the whole dev split) or n_routed was absent (the
+	// scale would be a silent division, and the entry is flagged instead of
+	// scaled). Presence of this field is the flag: a reader can tell a scaled
+	// entry from an unscaled one without re-deriving the factor.
+	NRoutedScale  *float64 `protobuf:"fixed64,5,opt,name=n_routed_scale,json=nRoutedScale,proto3,oneof" json:"n_routed_scale,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -92,6 +103,13 @@ func (x *PortfolioEntry) GetValuation() *Valuation {
 func (x *PortfolioEntry) GetRank() int32 {
 	if x != nil {
 		return x.Rank
+	}
+	return 0
+}
+
+func (x *PortfolioEntry) GetNRoutedScale() float64 {
+	if x != nil && x.NRoutedScale != nil {
+		return *x.NRoutedScale
 	}
 	return 0
 }
@@ -402,12 +420,14 @@ var File_kno_v1_portfolio_proto protoreflect.FileDescriptor
 
 const file_kno_v1_portfolio_proto_rawDesc = "" +
 	"\n" +
-	"\x16kno/v1/portfolio.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/valuation.proto\"\xa7\x01\n" +
+	"\x16kno/v1/portfolio.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/valuation.proto\"\xe5\x01\n" +
 	"\x0ePortfolioEntry\x12\x19\n" +
 	"\basset_id\x18\x01 \x01(\tR\aassetId\x125\n" +
 	"\vdestination\x18\x02 \x01(\x0e2\x13.kno.v1.DestinationR\vdestination\x12/\n" +
 	"\tvaluation\x18\x03 \x01(\v2\x11.kno.v1.ValuationR\tvaluation\x12\x12\n" +
-	"\x04rank\x18\x04 \x01(\x05R\x04rank\"\xd9\x01\n" +
+	"\x04rank\x18\x04 \x01(\x05R\x04rank\x12)\n" +
+	"\x0en_routed_scale\x18\x05 \x01(\x01H\x00R\fnRoutedScale\x88\x01\x01B\x11\n" +
+	"\x0f_n_routed_scale\"\xd9\x01\n" +
 	"\tRejection\x12\x19\n" +
 	"\basset_id\x18\x01 \x01(\tR\aassetId\x12/\n" +
 	"\x06reason\x18\x02 \x01(\x0e2\x17.kno.v1.RejectionReasonR\x06reason\x127\n" +
@@ -481,6 +501,7 @@ func file_kno_v1_portfolio_proto_init() {
 	}
 	file_kno_v1_common_proto_init()
 	file_kno_v1_valuation_proto_init()
+	file_kno_v1_portfolio_proto_msgTypes[0].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
