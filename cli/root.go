@@ -114,8 +114,8 @@ func NewRootCmd() *cobra.Command {
 feeding an LLM agent, then tells you which ones earn their place, what they
 cost, and where each belongs.
 
-The loop is: baseline, value, select, validate, export. Today only baseline
-runs; the rest arrive milestone by milestone.`,
+The loop is: baseline, value, select, validate, export. Today baseline, value,
+select, and export run; validate arrives next.`,
 		Version:      identity().String(),
 		SilenceUsage: true,
 		// The top level renders errors in the CLI's grammar. Cobra printing
@@ -127,6 +127,8 @@ runs; the rest arrive milestone by milestone.`,
 	root.AddCommand(newBaselineCmd())
 	root.AddCommand(newMineCmd())
 	root.AddCommand(newValueCmd())
+	root.AddCommand(newSelectCmd())
+	root.AddCommand(newExportCmd())
 	root.AddCommand(newDoctorCmd())
 	root.AddCommand(newPurgeCmd())
 	return root
