@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"strings"
 	"testing"
 
 	"github.com/knograph/kno/core"
@@ -217,5 +218,36 @@ func TestErrProbeIsDistinguishable(t *testing.T) {
 	}
 	if errors.Is(wrapped, errors.New("coretest: injected fatal error")) {
 		t.Error("ErrProbe matched an unrelated error with identical text")
+	}
+}
+
+// TestCheckEvalsDuplicateIDsStopsAtAFatalErrorAndSkipsNil pins the remaining
+// branches: a nil Case contributes no id, and a fatal error stops the walk —
+// the duplicate check must not report violations past the point the consumer
+// itself would stop.
+func TestCheckEvalsDuplicateIDsStopsAtAFatalErrorAndSkipsNil(t *testing.T) {
+	t.Parallel()
+
+	seq := func(yield func(*core.Case, error) bool) {
+		if !yield(&core.Case{Id: "a"}, nil) {
+			return
+		}
+		if !yield(nil, nil) {
+			return
+		}
+		if !yield(&core.Case{Id: "a"}, nil) {
+			return
+		}
+		yield(&core.Case{Id: "b"}, coretest.ErrProbe)
+		// Nothing past a fatal error is ever read — the check stops at it,
+		// which is what the single-violation assertion below pins.
+	}
+
+	got := coretest.CheckEvalsDuplicateIDs(seq)
+	if len(got) != 1 {
+		t.Fatalf("got %d violations, want exactly 1 (the a/a duplicate)", len(got))
+	}
+	if !strings.Contains(got[0], `"a"`) {
+		t.Errorf("violation does not name the duplicate id: %q", got[0])
 	}
 }

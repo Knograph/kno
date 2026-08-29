@@ -730,3 +730,43 @@ func TestValidateGuidanceUsesTheConfiguredFraction(t *testing.T) {
 		t.Error("the guidance was computed from the default fraction, not the configured one")
 	}
 }
+
+// TestCountSplitsAndContentHashRefuseAnUnreadableSource pins the error paths
+// of both pass helpers: a source that cannot be opened must fail the pass, not
+// report a quiet zero.
+func TestCountSplitsAndContentHashRefuseAnUnreadableSource(t *testing.T) {
+	t.Parallel()
+
+	ev, err := jsonl.New(jsonl.Options{Path: filepath.Join(t.TempDir(), "missing.jsonl")})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := ev.CountSplits(t.Context()); err == nil {
+		t.Error("CountSplits opened a missing file")
+	}
+	if _, err := ev.ContentHash(t.Context()); err == nil {
+		t.Error("ContentHash hashed a missing file")
+	}
+}
+
+// TestTrimSpaceRecognizesEveryBlankForm pins the record-level whitespace rule:
+// every ASCII blank spelling must reduce to empty, and interior spacing must
+// survive untouched.
+func TestTrimSpaceRecognizesEveryBlankForm(t *testing.T) {
+	t.Parallel()
+
+	for _, b := range [][]byte{
+		nil,
+		[]byte(""),
+		[]byte(" "),
+		[]byte("\t\r\n"),
+		[]byte("  \r\n\t  "),
+	} {
+		if got := jsonl.TrimSpaceForTest(b); len(got) != 0 {
+			t.Errorf("trimSpace(%q) = %q, want empty", b, got)
+		}
+	}
+	if got := jsonl.TrimSpaceForTest([]byte("  a  b\t")); string(got) != "a  b" {
+		t.Errorf("trimSpace stripped interior spacing: %q", got)
+	}
+}
