@@ -165,6 +165,11 @@ type Options struct {
 
 	// Seed makes the partition and every sample reproducible. It is recorded on
 	// the Run, so a reader can re-derive exactly which Cases were chosen.
+	//
+	// The stream is specified from v0.1.0 (PCG + the inlined draw and shuffle
+	// in shuffle.go, docs/debt.md#75). Runs recorded by earlier releases
+	// re-derive only under the earlier binary: the shuffle was replaced, not
+	// preserved, and the field does not pretend otherwise.
 	Seed int64
 
 	// DisableRouting measures every Asset against a sample of every eligible
@@ -550,10 +555,11 @@ func reserve(cases []CaseRef, opts Options) (eligible, reserved []CaseRef) {
 	sort.Slice(order, func(i, j int) bool { return order[i].ID < order[j].ID })
 
 	//nolint:gosec // G404: sampling, not cryptography. Reproducibility from a
-	// recorded seed is the requirement, and a CSPRNG cannot provide it. See
-	// docs/debt.md#75 for the stability caveat on this generator.
+	// recorded seed is the requirement, and a CSPRNG cannot provide it. The
+	// stream is PCG (specified) and the bounded draw is inlined — issue #110,
+	// docs/debt.md#75, shuffle.go.
 	rng := rand.New(rand.NewPCG(uint64(opts.Seed), uint64(opts.Seed)+0x9e3779b9))
-	rng.Shuffle(len(order), func(i, j int) { order[i], order[j] = order[j], order[i] })
+	shuffle(rng, len(order), func(i, j int) { order[i], order[j] = order[j], order[i] })
 
 	n := int(float64(len(order)) * opts.ControlReserve)
 	// At least one on each side whenever there are two Cases, so neither the
@@ -696,10 +702,11 @@ func sampleIDs(candidates []CaseRef, rate float64, minSample int, seed int64, la
 	}
 
 	//nolint:gosec // G404: sampling, not cryptography. Reproducibility from a
-	// recorded seed is the requirement, and a CSPRNG cannot provide it. See
-	// docs/debt.md#75 for the stability caveat on this generator.
+	// recorded seed is the requirement, and a CSPRNG cannot provide it. The
+	// stream is PCG (specified) and the bounded draw is inlined — issue #110,
+	// docs/debt.md#75, shuffle.go.
 	rng := rand.New(rand.NewPCG(uint64(seed), hashLabel(label)))
-	rng.Shuffle(len(ids), func(i, j int) { ids[i], ids[j] = ids[j], ids[i] })
+	shuffle(rng, len(ids), func(i, j int) { ids[i], ids[j] = ids[j], ids[i] })
 	// Clipped: without it the returned slice keeps the full shuffle's capacity,
 	// so a caller's append writes into the discarded tail rather than
 	// allocating — handing them Cases that were deliberately not sampled.

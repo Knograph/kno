@@ -74,8 +74,27 @@ covenants — breaking any of them requires a major version.
 
 ## [Unreleased]
 
+### Changed
+
+- **The routing shuffle is inlined, and the seed's meaning is now specified.**
+  The Value stage's routing draw and label draw previously called
+  `rand.Rand.Shuffle`, whose consumption pattern and bounded-draw loop carry
+  no compatibility promise across Go releases — while the Run's recorded seed
+  exists to be re-derived years later. The draw is now an inlined
+  Fisher-Yates over the raw PCG stream with an owned bounded draw
+  (`core/value/shuffle.go`), pinned by a golden permutation test. The stream
+  changed once, at this release: seeds recorded by earlier releases
+  re-derive only under the earlier binary, and the `Seed` godoc states the
+  boundary instead of pretending otherwise. `docs/debt.md#75` repaid.
+
 ### Migration notes
 
+- **A checkpointed Value run recorded before v0.1.0 cannot be resumed under
+  v0.1.0.** The routing draw's stream changed with the #75 repayment below;
+  the recorded plan's sampled IDs can never match the recomputed plan, and
+  the resume refusal's fix line says so. Re-run instead; no money is lost —
+  the settled spend is checkpointed, and a fresh run starts from the recorded
+  baseline.
 - **The store schema moves to version 4** (additive): a new `portfolios`
   table records the Select stage's output, one row per Select run. Existing
   databases upgrade in place on open; no data is rewritten.

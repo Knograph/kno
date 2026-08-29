@@ -424,7 +424,9 @@ func (o ValueOptions) openRun(ctx context.Context, plan *value.Plan) (*knov1.Run
 		if !equalPlans(&recorded, plan) {
 			return nil, nil, errs.ErrInvalidInput.
 				WithFix("resume with the same routing configuration: --seed, --sample-rate, " +
-					"--control-sample-rate, --control-reserve, --route, and the same pool").
+					"--control-sample-rate, --control-reserve, --route, and the same pool; " +
+					"a run recorded before v0.1.0 cannot be resumed at all — its routing " +
+					"stream changed with docs/debt.md#75, so re-run it instead").
 				Wrap(fmt.Errorf("the checkpoint's routing plan does not match this configuration; " +
 					"continuing would pair new measurements against rows recorded under a different plan"))
 		}
