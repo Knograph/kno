@@ -8,7 +8,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 Version policy: releases stay in the `0.x` series until 1.0 is a deliberate decision. `feat:`
 bumps the patch and a breaking change bumps the minor, so reaching 1.0 requires someone to choose
-it rather than a tool defaulting into it.
+it rather than a tool defaulting into it. **This is the recorded decision, not a default** —
+re-affirmed 2026-08-29 at the v0.1 release (docs/debt.md#19): switching to feat-bumps-minor
+would let the version number climb toward 1.0 automatically, which is exactly what the policy
+exists to prevent.
 
 **Pre-1.0 compatibility:** minor bumps may break, with notice here and migration notes. After 1.0,
 the proto schema, the plugin protocol, exit codes, the `kno.yaml` schema, and the public Go API are

@@ -35,6 +35,14 @@ jobs:
       # by hand today. The upgrade PR either re-adds the input or keeps the
       # manual amend in the release runbook; a bump that silently drops the
       # obligation is the failure that entry exists to prevent.
+      #
+      # docs/debt.md#19, recorded here because release-please-config.json
+      # cannot carry comments: the bump policy below the config's keys —
+      # bump-minor-pre-major + bump-patch-for-minor-pre-major — is a DECISION,
+      # re-affirmed at the v0.1 release (2026-08-29), not a default. `feat:`
+      # bumps the patch and breaking changes bump the minor, so reaching 1.0
+      # requires a human choice. Changing either key without changing this
+      # comment is the silent-reversal this entry exists to prevent.
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5
         with:
           config-file: release-please-config.json
