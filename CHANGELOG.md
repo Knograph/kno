@@ -95,11 +95,33 @@ covenants — breaking any of them requires a major version.
   the resume refusal's fix line says so. Re-run instead; no money is lost —
   the settled spend is checkpointed, and a fresh run starts from the recorded
   baseline.
+- **The store schema moves to version 5** (additive): a new `gaps` table
+  records the per-cluster improvement verdicts each Export run computes,
+  keyed by the Export run that produced them. Runs recorded before this
+  version simply have no gaps row — the report reads that as "no cluster
+  data for this run" rather than guessing. Existing databases upgrade in
+  place on open; no data is rewritten.
 - **The store schema moves to version 4** (additive): a new `portfolios`
   table records the Select stage's output, one row per Select run. Existing
   databases upgrade in place on open; no data is rewritten.
 
 ### Features
+
+- **Export persists the gaps statistic the report will render** (the report
+  plan's Step 0). The Value run's plan now carries a `Clusters` snapshot —
+  the failure clusters routing already computed, frozen at planning time,
+  dev-only by construction (routing never sees the holdout; a canary test
+  plants a holdout Case in the source and pins that it reaches neither the
+  routing nor the snapshot). `kno export` reads the source plan, computes a
+  per-cluster verdict — IMPROVED when a covering Asset's delta CI excludes
+  zero, GAP when well-covered and nothing is significant, UNKNOWN when
+  nothing routed to enough of the cluster's Cases or the covering measurement
+  is underpowered — and persists it keyed by the Export run. Non-significance
+  is not absence: the reported number per cluster is the best covering
+  Asset's CI, never a cluster-level threshold game, and multiple testing is
+  labeled. Old plan blobs decode with an empty snapshot (gob is
+  append-tolerant) and record no row. Plan:
+  `docs/plans/2026-08-29-report-tui.md` (Step 0).
 
 - **Select and Export close the measurement-to-destination loop.** `kno select`
   builds a Portfolio from a recorded Value run: greedy on delta-per-cost,

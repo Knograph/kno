@@ -1,7 +1,9 @@
 package core
 
 import (
+	"bytes"
 	"context"
+	"encoding/gob"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"github.com/knograph/kno/core/errs"
+	"github.com/knograph/kno/core/value"
 	knov1 "github.com/knograph/kno/gen/kno/v1"
 	"github.com/knograph/kno/store"
 	"google.golang.org/protobuf/proto"
@@ -152,6 +155,10 @@ func (o ExportOptions) Export(ctx context.Context) (*ExportResult, error) {
 		return nil, err
 	}
 
+	if err := o.persistGaps(ctx, p); err != nil {
+		return nil, err
+	}
+
 	status := knov1.RunStatus_RUN_STATUS_COMPLETED
 	run.Status = status
 	run.FinishedAt = proto.String(time.Now().Format(time.RFC3339))
@@ -201,6 +208,57 @@ func (o ExportOptions) validate() error {
 		return errs.ErrInvalidInput.
 			WithFix("pass --out with the path to write").
 			Wrap(errors.New("export: an output path is required"))
+	}
+	return nil
+}
+
+// persistGaps computes the gaps statistic from the Portfolio's source Value
+// run and records it against THIS Export run, when the source has cluster
+// data to compute from.
+//
+// The report plan's Step 0 owns the shape: Export persists, the report
+// renders. A source run whose plan decodes with empty Clusters — the run
+// predates the field, or nothing failed, or routing was disabled — records
+// NO row: the report reads ErrGapsNotFound and says "no cluster data for
+// this run" rather than guessing. A ValuePlan that never decodes is the same
+// answer; a run that decodes but has no cluster snapshot cannot testify
+// about clusters.
+func (o ExportOptions) persistGaps(ctx context.Context, p *knov1.Portfolio) error {
+	sourceID := p.GetSourceRunId()
+	if sourceID == "" {
+		// A Portfolio with no source is a synthetic input; nothing to
+		// compute gaps from, and nothing to guess about.
+		return nil
+	}
+	source, err := o.Store.GetRun(ctx, sourceID)
+	if err != nil {
+		if errors.Is(err, store.ErrRunNotFound) {
+			// The source the Portfolio names is not in this store — the
+			// same "no cluster data for this run" answer as an empty
+			// snapshot: nothing to compute gaps from, nothing to guess.
+			return nil
+		}
+		return fmt.Errorf("loading the source Value run %s: %w", sourceID, err)
+	}
+	if len(source.GetValuePlan()) == 0 {
+		// Pre-plan run. Same answer as an empty snapshot.
+		return nil
+	}
+	var plan value.Plan
+	if err := gob.NewDecoder(bytes.NewReader(source.GetValuePlan())).Decode(&plan); err != nil {
+		return fmt.Errorf("decoding the source Value plan for %s: %w", sourceID, err)
+	}
+	if len(plan.Clusters) == 0 {
+		return nil
+	}
+	valuations, err := o.Store.Valuations(ctx, sourceID)
+	if err != nil {
+		return fmt.Errorf("loading the source Valuations for %s: %w", sourceID, err)
+	}
+	gaps := ComputeGaps(&plan, valuations)
+	gaps.RunId = o.RunID
+	if err := o.Store.WriteGaps(ctx, o.RunID, gaps); err != nil {
+		return fmt.Errorf("recording gaps for %s: %w", o.RunID, err)
 	}
 	return nil
 }

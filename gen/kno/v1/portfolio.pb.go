@@ -21,6 +21,64 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// GapStatus is the per-cluster improvement verdict Export computes and the
+// report renders.
+type GapStatus int32
+
+const (
+	// Unknown until Export says otherwise: no Asset routed to enough of the
+	// cluster's Cases, or no covering measurement was usable. The output is a
+	// spend recommendation, so non-significance is not absence — a cluster
+	// with no coverage reports UNKNOWN, never GAP.
+	GapStatus_GAP_STATUS_UNSPECIFIED GapStatus = 0
+	GapStatus_GAP_STATUS_IMPROVED    GapStatus = 1
+	GapStatus_GAP_STATUS_UNKNOWN     GapStatus = 2
+	GapStatus_GAP_STATUS_GAP         GapStatus = 3
+)
+
+// Enum value maps for GapStatus.
+var (
+	GapStatus_name = map[int32]string{
+		0: "GAP_STATUS_UNSPECIFIED",
+		1: "GAP_STATUS_IMPROVED",
+		2: "GAP_STATUS_UNKNOWN",
+		3: "GAP_STATUS_GAP",
+	}
+	GapStatus_value = map[string]int32{
+		"GAP_STATUS_UNSPECIFIED": 0,
+		"GAP_STATUS_IMPROVED":    1,
+		"GAP_STATUS_UNKNOWN":     2,
+		"GAP_STATUS_GAP":         3,
+	}
+)
+
+func (x GapStatus) Enum() *GapStatus {
+	p := new(GapStatus)
+	*p = x
+	return p
+}
+
+func (x GapStatus) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (GapStatus) Descriptor() protoreflect.EnumDescriptor {
+	return file_kno_v1_portfolio_proto_enumTypes[0].Descriptor()
+}
+
+func (GapStatus) Type() protoreflect.EnumType {
+	return &file_kno_v1_portfolio_proto_enumTypes[0]
+}
+
+func (x GapStatus) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use GapStatus.Descriptor instead.
+func (GapStatus) EnumDescriptor() ([]byte, []int) {
+	return file_kno_v1_portfolio_proto_rawDescGZIP(), []int{0}
+}
+
 // PortfolioEntry is one selected Asset and the measurement that earned it a
 // place.
 type PortfolioEntry struct {
@@ -349,6 +407,185 @@ func (x *Portfolio) GetSourceIncompleteReason() string {
 	return ""
 }
 
+// GapCluster is the gaps verdict for one failure cluster of the source Value
+// run.
+type GapCluster struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The cluster's normalized tag.
+	Tag string `protobuf:"bytes,1,opt,name=tag,proto3" json:"tag,omitempty"`
+	// How many failed dev Cases the cluster held at planning time.
+	CaseCount int32 `protobuf:"varint,2,opt,name=case_count,json=caseCount,proto3" json:"case_count,omitempty"`
+	// How many of those the verdict's covering Asset was routed to. Set even
+	// when the verdict is UNKNOWN for lack of a usable measurement: a record
+	// with covered_count set and no best_asset_id is "routed but
+	// underpowered", distinct from "nothing routed to the minimum" (zero).
+	CoveredCount int32 `protobuf:"varint,3,opt,name=covered_count,json=coveredCount,proto3" json:"covered_count,omitempty"`
+	// The verdict.
+	Status GapStatus `protobuf:"varint,4,opt,name=status,proto3,enum=kno.v1.GapStatus" json:"status,omitempty"`
+	// The Asset the verdict was computed from: the covering Asset with the
+	// strongest measured delta. Empty when nothing covered the cluster
+	// (status UNKNOWN for want of coverage).
+	BestAssetId string `protobuf:"bytes,5,opt,name=best_asset_id,json=bestAssetId,proto3" json:"best_asset_id,omitempty"`
+	// The reported number: the best covering Asset's delta and its 95%
+	// interval. One cluster, one number, never a cluster-level threshold game.
+	BestDelta float64 `protobuf:"fixed64,6,opt,name=best_delta,json=bestDelta,proto3" json:"best_delta,omitempty"`
+	// The 95% confidence interval on best_delta. Excluding zero is what
+	// IMPROVED means.
+	BestInterval  *Interval `protobuf:"bytes,7,opt,name=best_interval,json=bestInterval,proto3" json:"best_interval,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GapCluster) Reset() {
+	*x = GapCluster{}
+	mi := &file_kno_v1_portfolio_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GapCluster) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GapCluster) ProtoMessage() {}
+
+func (x *GapCluster) ProtoReflect() protoreflect.Message {
+	mi := &file_kno_v1_portfolio_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GapCluster.ProtoReflect.Descriptor instead.
+func (*GapCluster) Descriptor() ([]byte, []int) {
+	return file_kno_v1_portfolio_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *GapCluster) GetTag() string {
+	if x != nil {
+		return x.Tag
+	}
+	return ""
+}
+
+func (x *GapCluster) GetCaseCount() int32 {
+	if x != nil {
+		return x.CaseCount
+	}
+	return 0
+}
+
+func (x *GapCluster) GetCoveredCount() int32 {
+	if x != nil {
+		return x.CoveredCount
+	}
+	return 0
+}
+
+func (x *GapCluster) GetStatus() GapStatus {
+	if x != nil {
+		return x.Status
+	}
+	return GapStatus_GAP_STATUS_UNSPECIFIED
+}
+
+func (x *GapCluster) GetBestAssetId() string {
+	if x != nil {
+		return x.BestAssetId
+	}
+	return ""
+}
+
+func (x *GapCluster) GetBestDelta() float64 {
+	if x != nil {
+		return x.BestDelta
+	}
+	return 0
+}
+
+func (x *GapCluster) GetBestInterval() *Interval {
+	if x != nil {
+		return x.BestInterval
+	}
+	return nil
+}
+
+// Gaps is the persisted gaps record for one Export run, keyed by the run that
+// produced it.
+//
+// ABSENT means the run recorded none: the source Value run predates the
+// Clusters field, so there is no cluster data to report — the report says so
+// rather than guessing.
+type Gaps struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The Export run that computed this.
+	RunId string `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	// One verdict per failure cluster, in the source plan's tag order.
+	Clusters []*GapCluster `protobuf:"bytes,2,rep,name=clusters,proto3" json:"clusters,omitempty"`
+	// Whether multiple testing is in play: verdicts are per-cluster, so a
+	// run with several clusters multiplies the chance of a false positive.
+	// True when more than one cluster was evaluated. Labeled, never hidden.
+	MultipleTesting bool `protobuf:"varint,3,opt,name=multiple_testing,json=multipleTesting,proto3" json:"multiple_testing,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *Gaps) Reset() {
+	*x = Gaps{}
+	mi := &file_kno_v1_portfolio_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Gaps) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Gaps) ProtoMessage() {}
+
+func (x *Gaps) ProtoReflect() protoreflect.Message {
+	mi := &file_kno_v1_portfolio_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Gaps.ProtoReflect.Descriptor instead.
+func (*Gaps) Descriptor() ([]byte, []int) {
+	return file_kno_v1_portfolio_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *Gaps) GetRunId() string {
+	if x != nil {
+		return x.RunId
+	}
+	return ""
+}
+
+func (x *Gaps) GetClusters() []*GapCluster {
+	if x != nil {
+		return x.Clusters
+	}
+	return nil
+}
+
+func (x *Gaps) GetMultipleTesting() bool {
+	if x != nil {
+		return x.MultipleTesting
+	}
+	return false
+}
+
 // Budget is the constraint set a Portfolio was built under.
 type Budget struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -376,7 +613,7 @@ type Budget struct {
 
 func (x *Budget) Reset() {
 	*x = Budget{}
-	mi := &file_kno_v1_portfolio_proto_msgTypes[3]
+	mi := &file_kno_v1_portfolio_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -388,7 +625,7 @@ func (x *Budget) String() string {
 func (*Budget) ProtoMessage() {}
 
 func (x *Budget) ProtoReflect() protoreflect.Message {
-	mi := &file_kno_v1_portfolio_proto_msgTypes[3]
+	mi := &file_kno_v1_portfolio_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -401,7 +638,7 @@ func (x *Budget) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Budget.ProtoReflect.Descriptor instead.
 func (*Budget) Descriptor() ([]byte, []int) {
-	return file_kno_v1_portfolio_proto_rawDescGZIP(), []int{3}
+	return file_kno_v1_portfolio_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *Budget) GetMaxContextTokens() int64 {
@@ -476,14 +713,34 @@ const file_kno_v1_portfolio_proto_rawDesc = "" +
 	"\rsource_run_id\x18\b \x01(\tR\vsourceRunId\x126\n" +
 	"\rsource_status\x18\t \x01(\x0e2\x11.kno.v1.RunStatusR\fsourceStatus\x128\n" +
 	"\x18source_incomplete_reason\x18\n" +
-	" \x01(\tR\x16sourceIncompleteReason\"\x8e\x02\n" +
+	" \x01(\tR\x16sourceIncompleteReason\"\x87\x02\n" +
+	"\n" +
+	"GapCluster\x12\x10\n" +
+	"\x03tag\x18\x01 \x01(\tR\x03tag\x12\x1d\n" +
+	"\n" +
+	"case_count\x18\x02 \x01(\x05R\tcaseCount\x12#\n" +
+	"\rcovered_count\x18\x03 \x01(\x05R\fcoveredCount\x12)\n" +
+	"\x06status\x18\x04 \x01(\x0e2\x11.kno.v1.GapStatusR\x06status\x12\"\n" +
+	"\rbest_asset_id\x18\x05 \x01(\tR\vbestAssetId\x12\x1d\n" +
+	"\n" +
+	"best_delta\x18\x06 \x01(\x01R\tbestDelta\x125\n" +
+	"\rbest_interval\x18\a \x01(\v2\x10.kno.v1.IntervalR\fbestInterval\"x\n" +
+	"\x04Gaps\x12\x15\n" +
+	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12.\n" +
+	"\bclusters\x18\x02 \x03(\v2\x12.kno.v1.GapClusterR\bclusters\x12)\n" +
+	"\x10multiple_testing\x18\x03 \x01(\bR\x0fmultipleTesting\"\x8e\x02\n" +
 	"\x06Budget\x12,\n" +
 	"\x12max_context_tokens\x18\x01 \x01(\x03R\x10maxContextTokens\x122\n" +
 	"\x15max_training_examples\x18\x02 \x01(\x03R\x13maxTrainingExamples\x127\n" +
 	"\x18max_knowledge_base_bytes\x18\x06 \x01(\x03R\x15maxKnowledgeBaseBytes\x12-\n" +
 	"\x13max_cost_usd_micros\x18\x03 \x01(\x03R\x10maxCostUsdMicros\x12\"\n" +
 	"\rmax_llm_calls\x18\x04 \x01(\x03R\vmaxLlmCalls\x12\x16\n" +
-	"\x06trials\x18\x05 \x01(\x05R\x06trialsB\x7f\n" +
+	"\x06trials\x18\x05 \x01(\x05R\x06trials*l\n" +
+	"\tGapStatus\x12\x1a\n" +
+	"\x16GAP_STATUS_UNSPECIFIED\x10\x00\x12\x17\n" +
+	"\x13GAP_STATUS_IMPROVED\x10\x01\x12\x16\n" +
+	"\x12GAP_STATUS_UNKNOWN\x10\x02\x12\x12\n" +
+	"\x0eGAP_STATUS_GAP\x10\x03B\x7f\n" +
 	"\n" +
 	"com.kno.v1B\x0ePortfolioProtoP\x01Z(github.com/knograph/kno/gen/kno/v1;knov1\xa2\x02\x03KXX\xaa\x02\x06Kno.V1\xca\x02\x06Kno\\V1\xe2\x02\x12Kno\\V1\\GPBMetadata\xea\x02\aKno::V1b\x06proto3"
 
@@ -499,35 +756,42 @@ func file_kno_v1_portfolio_proto_rawDescGZIP() []byte {
 	return file_kno_v1_portfolio_proto_rawDescData
 }
 
-var file_kno_v1_portfolio_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_kno_v1_portfolio_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_kno_v1_portfolio_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_kno_v1_portfolio_proto_goTypes = []any{
-	(*PortfolioEntry)(nil), // 0: kno.v1.PortfolioEntry
-	(*Rejection)(nil),      // 1: kno.v1.Rejection
-	(*Portfolio)(nil),      // 2: kno.v1.Portfolio
-	(*Budget)(nil),         // 3: kno.v1.Budget
-	(Destination)(0),       // 4: kno.v1.Destination
-	(*Valuation)(nil),      // 5: kno.v1.Valuation
-	(RejectionReason)(0),   // 6: kno.v1.RejectionReason
-	(*CostVector)(nil),     // 7: kno.v1.CostVector
-	(*Interval)(nil),       // 8: kno.v1.Interval
-	(RunStatus)(0),         // 9: kno.v1.RunStatus
+	(GapStatus)(0),         // 0: kno.v1.GapStatus
+	(*PortfolioEntry)(nil), // 1: kno.v1.PortfolioEntry
+	(*Rejection)(nil),      // 2: kno.v1.Rejection
+	(*Portfolio)(nil),      // 3: kno.v1.Portfolio
+	(*GapCluster)(nil),     // 4: kno.v1.GapCluster
+	(*Gaps)(nil),           // 5: kno.v1.Gaps
+	(*Budget)(nil),         // 6: kno.v1.Budget
+	(Destination)(0),       // 7: kno.v1.Destination
+	(*Valuation)(nil),      // 8: kno.v1.Valuation
+	(RejectionReason)(0),   // 9: kno.v1.RejectionReason
+	(*CostVector)(nil),     // 10: kno.v1.CostVector
+	(*Interval)(nil),       // 11: kno.v1.Interval
+	(RunStatus)(0),         // 12: kno.v1.RunStatus
 }
 var file_kno_v1_portfolio_proto_depIdxs = []int32{
-	4,  // 0: kno.v1.PortfolioEntry.destination:type_name -> kno.v1.Destination
-	5,  // 1: kno.v1.PortfolioEntry.valuation:type_name -> kno.v1.Valuation
-	6,  // 2: kno.v1.Rejection.reason:type_name -> kno.v1.RejectionReason
-	5,  // 3: kno.v1.Rejection.valuation:type_name -> kno.v1.Valuation
-	0,  // 4: kno.v1.Portfolio.selected:type_name -> kno.v1.PortfolioEntry
-	1,  // 5: kno.v1.Portfolio.rejected:type_name -> kno.v1.Rejection
-	3,  // 6: kno.v1.Portfolio.budget:type_name -> kno.v1.Budget
-	7,  // 7: kno.v1.Portfolio.total_cost:type_name -> kno.v1.CostVector
-	8,  // 8: kno.v1.Portfolio.dev_estimated_interval:type_name -> kno.v1.Interval
-	9,  // 9: kno.v1.Portfolio.source_status:type_name -> kno.v1.RunStatus
-	10, // [10:10] is the sub-list for method output_type
-	10, // [10:10] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	7,  // 0: kno.v1.PortfolioEntry.destination:type_name -> kno.v1.Destination
+	8,  // 1: kno.v1.PortfolioEntry.valuation:type_name -> kno.v1.Valuation
+	9,  // 2: kno.v1.Rejection.reason:type_name -> kno.v1.RejectionReason
+	8,  // 3: kno.v1.Rejection.valuation:type_name -> kno.v1.Valuation
+	1,  // 4: kno.v1.Portfolio.selected:type_name -> kno.v1.PortfolioEntry
+	2,  // 5: kno.v1.Portfolio.rejected:type_name -> kno.v1.Rejection
+	6,  // 6: kno.v1.Portfolio.budget:type_name -> kno.v1.Budget
+	10, // 7: kno.v1.Portfolio.total_cost:type_name -> kno.v1.CostVector
+	11, // 8: kno.v1.Portfolio.dev_estimated_interval:type_name -> kno.v1.Interval
+	12, // 9: kno.v1.Portfolio.source_status:type_name -> kno.v1.RunStatus
+	0,  // 10: kno.v1.GapCluster.status:type_name -> kno.v1.GapStatus
+	11, // 11: kno.v1.GapCluster.best_interval:type_name -> kno.v1.Interval
+	4,  // 12: kno.v1.Gaps.clusters:type_name -> kno.v1.GapCluster
+	13, // [13:13] is the sub-list for method output_type
+	13, // [13:13] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_kno_v1_portfolio_proto_init() }
@@ -543,13 +807,14 @@ func file_kno_v1_portfolio_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kno_v1_portfolio_proto_rawDesc), len(file_kno_v1_portfolio_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   4,
+			NumEnums:      1,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_kno_v1_portfolio_proto_goTypes,
 		DependencyIndexes: file_kno_v1_portfolio_proto_depIdxs,
+		EnumInfos:         file_kno_v1_portfolio_proto_enumTypes,
 		MessageInfos:      file_kno_v1_portfolio_proto_msgTypes,
 	}.Build()
 	File_kno_v1_portfolio_proto = out.File

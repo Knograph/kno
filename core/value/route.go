@@ -331,6 +331,36 @@ type Plan struct {
 
 	// Seed is what the partition and every sample were drawn from.
 	Seed int64
+
+	// Clusters is the failure-cluster snapshot this run routed against, one
+	// entry per distinct tag with at least one failed Case. Dev-only by
+	// construction: routing never sees the holdout, so neither does this.
+	//
+	// Persisted with the plan (gob is append-tolerant, so runs recorded
+	// before this field decode with an empty Clusters — the report says "no
+	// cluster data for this run" rather than guessing). Empty also when
+	// nothing failed, when no tag is present on any failed Case, or when
+	// routing is disabled.
+	Clusters []ClusterSnapshot
+}
+
+// ClusterSnapshot is the planning-time failure cluster for one normalized
+// tag: the failed dev Cases carrying that tag. Export reads it to compute
+// per-cluster improvement (see ComputeGaps).
+type ClusterSnapshot struct {
+	// Tag is the normalized tag (lowercased, trimmed) the cluster was keyed
+	// by.
+	Tag string
+
+	// CaseIDs is the failed dev Cases carrying the tag, in eligible order,
+	// deduplicated: a Case tagged twice with the same tag belongs to the
+	// cluster exactly once. Its duplicate references are counted in NDropped.
+	CaseIDs []string
+
+	// NDropped is how many duplicate references to the tag were dropped while
+	// deduplicating CaseIDs — a Case tagged ["refunds","refunds"] records one
+	// CaseID and one dropped. Zero when the snapshot saw no duplicates.
+	NDropped int
 }
 
 // Measurements is the ceiling this Plan implies.
@@ -431,6 +461,7 @@ func Route(cases []CaseRef, assets []AssetRef, opts Options) (*Plan, error) {
 		clusters = nil
 	}
 	plan.Mode = mode
+	plan.Clusters = snapshotClusters(clusters)
 
 	plan.Routed = make([]AssetRouting, 0, len(assets))
 	for _, a := range assets {
@@ -615,6 +646,42 @@ func cluster(eligible []CaseRef) (map[string][]CaseRef, Mode) {
 		return nil, ModeAllFailed
 	}
 	return clusters, ModeTagOverlap
+}
+
+// snapshotClusters freezes cluster()'s output at planning time, in
+// deterministic tag order. The plan is gob-persisted and resume-compared, so
+// the snapshot is a pure function of (seed, evals, options): same inputs,
+// same bytes.
+func snapshotClusters(clusters map[string][]CaseRef) []ClusterSnapshot {
+	if len(clusters) == 0 {
+		return nil
+	}
+	tags := make([]string, 0, len(clusters))
+	for t := range clusters {
+		tags = append(tags, t)
+	}
+	sort.Strings(tags)
+
+	out := make([]ClusterSnapshot, 0, len(tags))
+	for _, t := range tags {
+		cases := clusters[t]
+		s := ClusterSnapshot{Tag: t}
+		seen := make(map[string]struct{}, len(cases))
+		for _, c := range cases {
+			if _, dup := seen[c.ID]; dup {
+				// A Case tagged twice with the same tag is one cluster member.
+				// candidatesFor's dedup makes this invisible to routing, so
+				// the count only shows up here, where it is a measurement of
+				// the source data rather than a routing decision.
+				s.NDropped++
+				continue
+			}
+			seen[c.ID] = struct{}{}
+			s.CaseIDs = append(s.CaseIDs, c.ID)
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 // candidatesFor returns the Cases an Asset may be measured against, before

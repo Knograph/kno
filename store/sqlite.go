@@ -22,7 +22,7 @@ import (
 //
 // Version 0 is the M1 schema. Every later version is a numbered step in
 // migrations below.
-const schemaVersion = 4
+const schemaVersion = 5
 
 // schema is the version-0 base, applied on open. It is idempotent.
 //
@@ -376,6 +376,21 @@ var migrations = []migration{{
 	// pinning the first one.
 	stmts: []string{
 		`CREATE TABLE IF NOT EXISTS portfolios (
+		    run_id  TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+		    proto   BLOB NOT NULL,
+		    PRIMARY KEY (run_id)
+		)`,
+	},
+}, {
+	to: 5,
+	// M-G1. The report plan's Step 0: the gaps statistic Export computes is
+	// persisted here, keyed by the EXPORT run that computed it, so the
+	// report reads it by the run it is asked about. ABSENCE (ErrGapsNotFound)
+	// is the first-class "no cluster data for this run" answer for runs whose
+	// source Value run predates the Clusters field. Written once per Export
+	// run, INSERT OR REPLACE like portfolios.
+	stmts: []string{
+		`CREATE TABLE IF NOT EXISTS gaps (
 		    run_id  TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
 		    proto   BLOB NOT NULL,
 		    PRIMARY KEY (run_id)

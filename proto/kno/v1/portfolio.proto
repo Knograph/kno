@@ -111,6 +111,69 @@ message Portfolio {
   string source_incomplete_reason = 10;
 }
 
+// GapStatus is the per-cluster improvement verdict Export computes and the
+// report renders.
+enum GapStatus {
+  // Unknown until Export says otherwise: no Asset routed to enough of the
+  // cluster's Cases, or no covering measurement was usable. The output is a
+  // spend recommendation, so non-significance is not absence — a cluster
+  // with no coverage reports UNKNOWN, never GAP.
+  GAP_STATUS_UNSPECIFIED = 0;
+  GAP_STATUS_IMPROVED = 1;
+  GAP_STATUS_UNKNOWN = 2;
+  GAP_STATUS_GAP = 3;
+}
+
+// GapCluster is the gaps verdict for one failure cluster of the source Value
+// run.
+message GapCluster {
+  // The cluster's normalized tag.
+  string tag = 1;
+
+  // How many failed dev Cases the cluster held at planning time.
+  int32 case_count = 2;
+
+  // How many of those the verdict's covering Asset was routed to. Set even
+  // when the verdict is UNKNOWN for lack of a usable measurement: a record
+  // with covered_count set and no best_asset_id is "routed but
+  // underpowered", distinct from "nothing routed to the minimum" (zero).
+  int32 covered_count = 3;
+
+  // The verdict.
+  GapStatus status = 4;
+
+  // The Asset the verdict was computed from: the covering Asset with the
+  // strongest measured delta. Empty when nothing covered the cluster
+  // (status UNKNOWN for want of coverage).
+  string best_asset_id = 5;
+
+  // The reported number: the best covering Asset's delta and its 95%
+  // interval. One cluster, one number, never a cluster-level threshold game.
+  double best_delta = 6;
+  // The 95% confidence interval on best_delta. Excluding zero is what
+  // IMPROVED means.
+  Interval best_interval = 7;
+}
+
+// Gaps is the persisted gaps record for one Export run, keyed by the run that
+// produced it.
+//
+// ABSENT means the run recorded none: the source Value run predates the
+// Clusters field, so there is no cluster data to report — the report says so
+// rather than guessing.
+message Gaps {
+  // The Export run that computed this.
+  string run_id = 1;
+
+  // One verdict per failure cluster, in the source plan's tag order.
+  repeated GapCluster clusters = 2;
+
+  // Whether multiple testing is in play: verdicts are per-cluster, so a
+  // run with several clusters multiplies the chance of a false positive.
+  // True when more than one cluster was evaluated. Labeled, never hidden.
+  bool multiple_testing = 3;
+}
+
 // Budget is the constraint set a Portfolio was built under.
 message Budget {
   // Maximum tokens the selected context may add per call.
