@@ -483,7 +483,7 @@ IDENTITY_DOCS    := .goreleaser.yaml SECURITY.md README.md install.sh
 # Every part of this string is load-bearing. Without the ^ anchor a certificate
 # whose identity merely CONTAINS ours matches. Without @refs/tags/ a signature
 # minted from a branch verifies. Without the escaped dots, . matches anything.
-COSIGN_IDENTITY := ^https://github\.com/[Kk]nograph/kno/\.github/workflows/release\.yml@refs/tags/.+$$
+COSIGN_IDENTITY := ^https://github\.com/uknoAI/kno/\.github/workflows/release\.yml@refs/tags/.+$$
 
 release-identity-check: ## The published cosign identity is one string, and every copy of it matches
 	@$(SAFE) if [ ! -f $(RELEASE_WORKFLOW) ]; then \

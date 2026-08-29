@@ -65,4 +65,4 @@ resumed under it (the seed stream changed, CHANGELOG migration notes) — and th
 is the covenant semver asks for in return. All checklist obligations disposed: ledger reviewed
 (#114), #19 recorded (#113), #73 verified (tap at 0.0.4; brews block re-enabled #112), tape
 re-recorded (#116), cookbook swept against the final CLI (#117). Post-tag watches: the
-release workflow's formula push to Knograph/homebrew-tap and the pricingcheck clean run.
+release workflow's formula push to uknoAI/homebrew-tap and the pricingcheck clean run.

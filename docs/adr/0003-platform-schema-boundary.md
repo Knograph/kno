@@ -6,7 +6,7 @@
 
 ## Context
 
-Kno is the OSS engine beneath the closed KnoGraph platform. `DESIGN.md` draws the open-core seam as
+Kno is the OSS engine beneath the closed uknoAI platform. `DESIGN.md` draws the open-core seam as
 "a directory boundary, not a fork," and `CLAUDE.md` makes `core` importing upward a rejectable
 offense.
 

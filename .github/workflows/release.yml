@@ -73,7 +73,7 @@ jobs:
     environment: release
 
     # The token that lets goreleaser push the updated formula to the tap
-    # repository. A fine-grained PAT scoped to Knograph/homebrew-tap with
+    # repository. A fine-grained PAT scoped to uknoAI/homebrew-tap with
     # contents: write only — it can touch nothing else, and the release is
     # the only place it is ever referenced.
     env:

@@ -10,7 +10,7 @@ disagree, `CLAUDE.md` wins and the disagreement is a bug — please file it.
 ## The short version
 
 ```bash
-git clone https://github.com/knograph/kno && cd kno
+git clone https://github.com/uknoAI/kno && cd kno
 make tools     # installs pinned build tools into ./bin
 make check     # runs every gate CI runs on a PR
 ```

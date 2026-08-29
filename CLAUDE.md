@@ -1,6 +1,6 @@
 # CLAUDE.md — Kno Engineering Operating Manual
 
-You are working on **Kno** (`github.com/knograph/kno`): a Go engine + CLI + API that measures the marginal value of data assets for LLM agents and curates portfolios for context, RAG, and fine-tuning. Read `DESIGN.md` first — it is the source of truth for architecture, vocabulary, and scope. This file is the source of truth for **how we work**. Where they conflict, stop and flag it; do not silently pick one.
+You are working on **Kno** (`github.com/uknoAI/kno`): a Go engine + CLI + API that measures the marginal value of data assets for LLM agents and curates portfolios for context, RAG, and fine-tuning. Read `DESIGN.md` first — it is the source of truth for architecture, vocabulary, and scope. This file is the source of truth for **how we work**. Where they conflict, stop and flag it; do not silently pick one.
 
 ## Prime directives
 

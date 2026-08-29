@@ -2,7 +2,7 @@
 #
 # Install kno.
 #
-#   curl -sSfL https://raw.githubusercontent.com/knograph/kno/main/install.sh | sh
+#   curl -sSfL https://raw.githubusercontent.com/uknoAI/kno/main/install.sh | sh
 #
 # What this does, in order: work out your platform, download the release
 # archive and its checksum file, VERIFY the checksum, verify the cosign
@@ -23,7 +23,7 @@
 
 set -eu
 
-REPO="knograph/kno"
+REPO="uknoAI/kno"
 
 log()  { printf '%s\n' "$*" >&2; }
 die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
@@ -130,7 +130,7 @@ if command -v cosign >/dev/null 2>&1; then
 	if cosign verify-blob "$tmp/checksums.txt" \
 		--new-bundle-format \
 		--bundle "$tmp/checksums.txt.bundle" \
-		--certificate-identity-regexp '^https://github\.com/[Kk]nograph/kno/\.github/workflows/release\.yml@refs/tags/.+$' \
+		--certificate-identity-regexp '^https://github\.com/uknoAI/kno/\.github/workflows/release\.yml@refs/tags/.+$' \
 		--certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
 		>"$tmp/cosign.log" 2>&1
 	then

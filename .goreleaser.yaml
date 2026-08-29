@@ -148,7 +148,7 @@ release:
     cosign verify-blob checksums.txt \
       --certificate checksums.txt.pem \
       --signature checksums.txt.sig \
-      --certificate-identity-regexp '^https://github\.com/[Kk]nograph/kno/\.github/workflows/release\.yml@refs/tags/.+$' \
+      --certificate-identity-regexp '^https://github\.com/uknoAI/kno/\.github/workflows/release\.yml@refs/tags/.+$' \
       --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
     # 2. Your download is really what the checksum file names. Substitute the
@@ -158,8 +158,8 @@ release:
 
     # 3. It was built by GitHub Actions from this repository, not on a laptop.
     gh attestation verify kno_{{ .Version }}_linux_amd64.tar.gz \
-      --repo knograph/kno \
-      --signer-workflow knograph/kno/.github/workflows/release.yml
+      --repo uknoAI/kno \
+      --signer-workflow uknoAI/kno/.github/workflows/release.yml
     ```
 
     Both identity flags are load-bearing. Without `--certificate-identity-regexp`,
@@ -173,7 +173,7 @@ release:
     different binary; that is a property of Go, not of this pipeline.
 
 # The Homebrew tap CLAUDE.md calls for. The tap repository
-# (Knograph/homebrew-tap) exists and carries Formula/kno.rb at 0.0.4 — the
+# (uknoAI/homebrew-tap) exists and carries Formula/kno.rb at 0.0.4 — the
 # 0.0.4 release pushed it through this block — and HOMEBREW_TAP_TOKEN is set
 # in the repo secrets, so the two preconditions the disabled comment named
 # are both met and the block is enabled again (docs/debt.md#73).
@@ -181,11 +181,11 @@ brews:
   - name: kno
     ids: [kno]
     repository:
-      owner: Knograph
+      owner: uknoAI
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     directory: Formula
-    homepage: https://github.com/knograph/kno
+    homepage: https://github.com/uknoAI/kno
     description: Measure which of your data earns its place in an LLM agent
     license: Apache-2.0
     test: |
