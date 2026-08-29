@@ -122,7 +122,7 @@ continues without paying for anything twice.`,
 
 	flags := cmd.Flags()
 	flags.StringVar(&f.evalsPath, "evals", "", "eval cases: a JSONL file path, langsmith:<dataset-name>, langfuse:<dataset-name>, or braintrust:<dataset-name> (required)")
-	flags.StringVar(&f.agentRef, "agent", "fake:", "agent to measure")
+	flags.StringVar(&f.agentRef, "agent", "fake:", "agent to measure: fake:, openai:<model>, anthropic:<model>, bedrock:<model-id>, vertex:<model-id>, exec:<command>")
 	flags.StringVar(&f.goalName, "goal", "exact-match", "goal to score against")
 	flags.StringVar(&f.dbPath, "db", "kno.db", "where runs and traces are stored")
 	flags.StringVar(&f.runID, "run-id", "", "identifier for this run (generated if empty)")

@@ -1,0 +1,16 @@
+# Hand-authored Converse fixture
+
+This exchange is HAND-AUTHORED, not recorded: Bedrock refuses recording
+without live credentials, and this fixture exists so the replay path runs in
+CI with no network and no spend.
+
+`make record-fixtures` is the only way to replace it. The record target
+refuses to run unless `KNO_LIVE_TESTS=1` AND `KNO_RECORD_FIXTURES=1` are both
+set AND `KNO_MAX_COST_USD` is set to a cap the target actually reads. Without
+all three it skips — it never dials a live endpoint by accident.
+
+The usage figures are chosen so the settlement arithmetic is exact: 1000
+input + 100 cache writes + 500 cache reads = 1600 billed input tokens, 200
+output. The request body must match what the replay test configures: model
+`anthropic.claude-sonnet-4-5-20250929-v1:0`, system prompt "S", maxTokens
+1024, input "hello".

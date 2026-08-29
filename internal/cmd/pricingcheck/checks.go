@@ -63,9 +63,10 @@ func (r *checkResult) add(v verdict, detail string) {
 func (r *checkResult) fail(detail string)   { r.add(verdictFail, detail) }
 func (r *checkResult) report(detail string) { r.add(verdictReport, detail) }
 
-// checkInput is everything the six checks read.
+// checkInput is everything the checks read.
 type checkInput struct {
 	sources      map[string]sourceData
+	regionPrices map[string]bedrockRegions
 	tableVersion string
 	maxAgeDays   int
 }

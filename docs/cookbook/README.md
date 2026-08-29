@@ -9,6 +9,8 @@ Task-shaped recipes. Each one is a thing you might actually want to do, start to
 | [Score your agent for the first time](first-baseline.md) | Getting from an eval file to a baseline, and reading what comes back |
 | [Point Kno at your own provider](your-own-provider.md) | Keys, cost caps, local model servers, and the first run that can bill you |
 | [Score your agent against Claude](anthropic.md) | The Anthropic agent — `ANTHROPIC_API_KEY`, the priced models, and a complete baseline-to-report run |
+| [Score your agent on Bedrock](bedrock.md) | The AWS agent — env-only credentials, regional pricing, and the cross-region profile refusal |
+| [Score your agent on Vertex](vertex.md) | The Google Cloud agent — service-account JWT exchange, regional pricing, and the cross-region profile refusal |
 | [Gate a deploy on Kno in CI](ci-gate.md) | Exit codes, `--json`, and what to fail the build on |
 | [Choose a portfolio under budget](select-a-portfolio.md) | Which assets earn their place, what the corrected intervals mean, and why the rejection log is a deliverable |
 | [Export a tuning set](export-a-tuning-set.md) | The destination grammar, the overwrite refusal, and the byte-identical re-export contract |

@@ -24,6 +24,9 @@
 //	5  gate+  prefix-resolving variants Lookup refuses; committed pending
 //	          exclusions (docs/debt.md#46) are reported every run; an
 //	          exclusion whose model is now priced fails
+//	6  gate   the regional +10% multiplier (docs/debt.md#41(d)) is confirmed
+//	          by AWS's Bedrock price list; vertex has no machine-readable
+//	          source and is reported every run
 //
 // Output contract. The text report is one CHECK summary line per check, plus
 // one detail line per finding. Detail lines begin with exactly one of two
@@ -149,7 +152,12 @@ func run(c cfg) int {
 			}
 		}
 	}
-	in := checkInput{sources: sourceMap, tableVersion: c.tableVersion, maxAgeDays: c.maxAgeDays}
+	in := checkInput{
+		sources:      sourceMap,
+		regionPrices: regionPricesOf(sourceMap),
+		tableVersion: c.tableVersion,
+		maxAgeDays:   c.maxAgeDays,
+	}
 	results := []checkResult{
 		checkTableVersion(in),
 		checkAgreement(in),
@@ -157,6 +165,7 @@ func run(c cfg) int {
 		checkRatios(in),
 		checkDiscovery(in),
 		checkPrefixCollisions(in),
+		checkRegionalMultiplier(in),
 	}
 	rep := buildReport(results, sourceMap, in)
 	var err error
@@ -192,27 +201,35 @@ func loadSources(c cfg) map[string]sourceData {
 			out[s.name] = sourceData{name: s.name, err: fmt.Errorf("%w: %v", errShape, err)}
 			continue
 		}
-		rows, perr := parseSource(s.name, body)
+		rows, regions, perr := parseSource(s.name, body)
 		if perr != nil {
 			out[s.name] = sourceData{name: s.name, err: perr}
 			continue
 		}
-		out[s.name] = sourceData{name: s.name, rows: rows}
+		out[s.name] = sourceData{name: s.name, rows: rows, regions: regions}
 	}
 	return out
 }
 
-// parseSource dispatches a fixture body to its parser.
-func parseSource(name string, body []byte) ([]row, error) {
+// parseSource dispatches a fixture body to its parser. The bedrock source
+// parses to regional prices instead of rows — its checks read the spread
+// across regions, not the per-model table.
+func parseSource(name string, body []byte) ([]row, bedrockRegions, error) {
 	switch name {
 	case "openrouter":
-		return parseOpenRouter(body)
+		rows, err := parseOpenRouter(body)
+		return rows, nil, err
 	case "anthropic":
-		return parseAnthropic(body)
+		rows, err := parseAnthropic(body)
+		return rows, nil, err
 	case "openai":
-		return parseOpenAI(body)
+		rows, err := parseOpenAI(body)
+		return rows, nil, err
+	case "bedrock":
+		regions, err := parseBedrock(body)
+		return nil, regions, err
 	}
-	return nil, fmt.Errorf("%w: unknown source %q", errShape, name)
+	return nil, nil, fmt.Errorf("%w: unknown source %q", errShape, name)
 }
 
 // defaultFixturesDir is the package's own testdata directory, resolved from

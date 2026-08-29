@@ -1,0 +1,14 @@
+# gitleaks allowlist for the repo's deliberate test keys.
+#
+# The Bedrock/Vertex workstream pins its JWT signing to a KNOWN-ANSWER vector
+# (RFC 7515 A.2.2) and to a generated 2048-bit RSA key embedded in the vertex
+# adapter's tests. The key is created at test time from a constant, signs
+# nothing a real service would accept, and the adapter's error paths redact
+# credential material — the default `private-key` rule would otherwise block
+# the very test that pins the JWT exchange, which is the security
+# enforcement, not the artifact.
+[allowlist]
+paths = [
+    '''adapters/agent/vertex/auth_test.go''',
+    '''adapters/agent/vertex/harness_test.go''',
+]

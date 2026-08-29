@@ -1,0 +1,14 @@
+Hand-authored fixture for the Vertex :rawPredict adapter, replayable without
+any network. The response is a valid Messages-format 200; the request is the
+exact compact body the adapter sends for model claude-sonnet-4-5, system
+prompt "S", max_tokens 1024, and input "hello".
+
+Settlement this fixture pins:
+  - billed input 1600 = 1000 fresh + 100 cache writes + 500 cache reads
+  - output 200
+  - cost 7178 micro-USD = 6525 base (3525 input + 3000 output) + 653 regional
+    (the docs/debt.md#41(d) 10% multiplier, rounded up)
+
+Recorded against a live API? No. KNO_LIVE_TESTS=1 recording is refused for
+this fixture: a recorded request body would need a real service-account key,
+and the key is exactly what fixtures must not carry.

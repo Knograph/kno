@@ -32,7 +32,7 @@ func captureRun(c cfg) (int, string, string) {
 func fixtureSet(t *testing.T, replace map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()
-	for _, f := range []string{"openrouter.json", "anthropic.html", "openai.html"} {
+	for _, f := range []string{"openrouter.json", "anthropic.html", "openai.html", "bedrock.json"} {
 		body, err := os.ReadFile(filepath.Join("testdata", f))
 		if err != nil {
 			t.Fatal(err)
@@ -70,6 +70,7 @@ func TestRunFixturesClean(t *testing.T) {
 		"CHECK 3: cache ratios — PASS",
 		"CHECK 4: discovery — PASS",
 		"CHECK 5: prefix collisions — PASS",
+		"CHECK 6: regional multiplier — REPORT",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q\n%s", want, out)
@@ -91,10 +92,11 @@ func TestRunFixturesClean(t *testing.T) {
 			t.Errorf("line begins with a forbidden word or shape: %q", line)
 		}
 	}
-	// docs/debt.md#46 repaid: no pending exclusions remain, so a clean run
-	// carries no report-only findings at all.
-	if reportLines != 0 {
-		t.Errorf("expected 0 report detail lines, got %d\n%s", reportLines, out)
+	// docs/debt.md#46 repaid: no pending exclusions remain, so the only
+	// report-only finding a clean run carries is check 6's standing vertex
+	// line — a scheme whose regional multiplier nothing live-guards.
+	if reportLines != 1 {
+		t.Errorf("expected 1 report detail line (the vertex standing line), got %d\n%s", reportLines, out)
 	}
 }
 
@@ -157,19 +159,21 @@ func TestRunJSONShape(t *testing.T) {
 	if rep.TableVersion != "2026-08-21" || rep.MaxAgeDays != 90 {
 		t.Errorf("table_version/max_age_days = %s/%d", rep.TableVersion, rep.MaxAgeDays)
 	}
-	for _, s := range []string{"anthropic", "openai", "openrouter"} {
+	for _, s := range []string{"anthropic", "openai", "openrouter", "bedrock"} {
 		if rep.Sources[s] != "ok" {
 			t.Errorf("sources[%s] = %q, want ok", s, rep.Sources[s])
 		}
 	}
-	if len(rep.Checks) != 6 {
-		t.Errorf("got %d checks, want 6", len(rep.Checks))
+	if len(rep.Checks) != 7 {
+		t.Errorf("got %d checks, want 7", len(rep.Checks))
 	}
 	if len(rep.FailedGated) != 0 {
 		t.Errorf("failed_gated = %v, want none", rep.FailedGated)
 	}
-	if len(rep.Reported) != 0 {
-		t.Errorf("reported = %d findings, want 0 — docs/debt.md#46 is repaid and no report-only findings remain on a clean run", len(rep.Reported))
+	// The one standing report finding is check 6's vertex line: a scheme
+	// whose regional multiplier no machine-readable source guards.
+	if len(rep.Reported) != 1 {
+		t.Errorf("reported = %d findings, want 1 (the standing vertex line)", len(rep.Reported))
 	}
 }
 
@@ -239,6 +243,9 @@ func TestRunRecord(t *testing.T) {
 		if strings.Contains(url, "platform.claude.com") {
 			return []byte(`<html><body><script>var x=1;</script><table><thead><tr><th>Model</th><th>Base Input Tokens</th><th>5m Cache Writes</th><th>1h Cache Writes</th><th>Cache Hits &amp; Refreshes</th><th>Output Tokens</th></tr></thead><tbody><tr><td>Claude Opus 5</td><td>$5 / MTok</td><td>$6.25 / MTok</td><td>$10 / MTok</td><td>$0.50 / MTok</td><td>$25 / MTok</td></tr></tbody></table><table><thead><tr><th>Model</th><th>Input</th><th>Output</th></tr></thead><tbody><tr><td>Claude Opus 5 / Claude Opus 4.8</td><td>$10 / MTok</td><td>$50 / MTok</td></tr></tbody></table></body></html>`), nil
 		}
+		if strings.Contains(url, "amazonaws.com") {
+			return []byte(`{"products":{"sku-a":{"attributes":{"region":"us-east-1","locationType":"AWS Region","usagetype":"AnthropicClaude-Sonnet45InputTokens"}}},"terms":{"OnDemand":{"sku-a":{"code-a":{"priceDimensions":{"code-a":{"pricePerUnit":{"USD":"0.0030000000"}}}}}}}}`), nil
+		}
 		// The header row and the section content are siblings inside one
 		// wrapper; the label rows are the content container's direct children.
 		return []byte(`<html><body><a href="/api/docs/models/gpt-5.6-sol"></a><div><div><div>Pricing</div><div>Per 1M tokens</div></div><div><div><div>Input</div><div>$4.00</div></div><div><div>Cached Input</div><div>$0.40</div></div><div><div>Output</div><div>$20.00</div></div></div></div></body></html>`), nil
@@ -252,7 +259,7 @@ func TestRunRecord(t *testing.T) {
 	if exit != 0 {
 		t.Fatalf("record must exit 0, got %d: %s", exit, errOut)
 	}
-	for _, f := range []string{"openrouter.json", "anthropic.html", "openai.html", "note.txt"} {
+	for _, f := range []string{"openrouter.json", "anthropic.html", "openai.html", "bedrock.json", "note.txt"} {
 		if _, err := os.Stat(filepath.Join(c.fixturesDir, f)); err != nil {
 			t.Errorf("fixture %s not written: %v", f, err)
 		}
@@ -272,8 +279,8 @@ func TestRunRecord(t *testing.T) {
 		}
 	}
 	// sha256 hex of the untrimmed captures: 64 hex chars per file.
-	if got := regexp.MustCompile(`sha256: [0-9a-f]{64}`).FindAllString(noteStr, -1); len(got) != 3 {
-		t.Errorf("note.txt must carry 3 sha256 digests, got %v", got)
+	if got := regexp.MustCompile(`sha256: [0-9a-f]{64}`).FindAllString(noteStr, -1); len(got) != 4 {
+		t.Errorf("note.txt must carry 4 sha256 digests, got %v", got)
 	}
 	// The recorded fixtures must parse.
 	if _, err := parseOpenRouter(readFixture(t, filepath.Join(c.fixturesDir, "openrouter.json"))); err != nil {

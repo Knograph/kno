@@ -104,6 +104,50 @@ var table = map[string]map[string]*knov1.Price{
 		"gpt-5.6-terra": price(usd(2), usd(0.20), nil, usd(12)),
 		"gpt-5.6-luna":  price(usd(0.20), usd(0.02), nil, usd(1.20)),
 	},
+	// The two partner-cloud schemes carry the SAME base rates as `anthropic`,
+	// asserted rather than assumed: both providers publish Claude on their
+	// platforms at the vendor's own per-token rates. The REGIONAL add-on is
+	// the difference, and it is not a row: docs/debt.md#41(d) applies a +10%
+	// multiplier keyed off the model id at Estimate, WorstCase, and Settle
+	// (pricing.RegionalMultiplierPct, enforced by the pricing drift detector's
+	// check 6 against AWS's machine-readable price list). Cross-region
+	// inference profiles — `us.`- and `eu.`-prefixed ids — are REFUSED until
+	// a row exists: they bill at the destination region's price, which no row
+	// here claims to be.
+	//
+	// Bedrock spells ids with a vendor prefix and a version suffix
+	// ("anthropic.claude-sonnet-4-5-20250929-v1:0"); Vertex spells plain ids
+	// with an @ pin ("claude-3-5-sonnet@20240620"). Both inherit their base
+	// row through Lookup's version-suffix rule, which is written to accept
+	// exactly these forms.
+	"bedrock": {
+		"anthropic.claude-opus-5":        price(usd(5), usd(0.50), usd(6.25), usd(25)),
+		"anthropic.claude-opus-4-8":      price(usd(5), usd(0.50), usd(6.25), usd(25)),
+		"anthropic.claude-opus-4-7":      price(usd(5), usd(0.50), usd(6.25), usd(25)),
+		"anthropic.claude-opus-4-6":      price(usd(5), usd(0.50), usd(6.25), usd(25)),
+		"anthropic.claude-opus-4-5":      price(usd(5), usd(0.50), usd(6.25), usd(25)),
+		"anthropic.claude-sonnet-5":      price(usd(2), usd(0.20), usd(2.50), usd(10)),
+		"anthropic.claude-sonnet-4-6":    price(usd(3), usd(0.30), usd(3.75), usd(15)),
+		"anthropic.claude-sonnet-4-5":    price(usd(3), usd(0.30), usd(3.75), usd(15)),
+		"anthropic.claude-haiku-4-5":     price(usd(1), usd(0.10), usd(1.25), usd(5)),
+		"anthropic.claude-fable-5":       price(usd(10), usd(1), usd(12.50), usd(50)),
+		"anthropic.claude-opus-5-fast":   price(usd(10), nil, nil, usd(50)),
+		"anthropic.claude-opus-4-8-fast": price(usd(10), nil, nil, usd(50)),
+	},
+	"vertex": {
+		"claude-opus-5":        price(usd(5), usd(0.50), usd(6.25), usd(25)),
+		"claude-opus-4-8":      price(usd(5), usd(0.50), usd(6.25), usd(25)),
+		"claude-opus-4-7":      price(usd(5), usd(0.50), usd(6.25), usd(25)),
+		"claude-opus-4-6":      price(usd(5), usd(0.50), usd(6.25), usd(25)),
+		"claude-opus-4-5":      price(usd(5), usd(0.50), usd(6.25), usd(25)),
+		"claude-sonnet-5":      price(usd(2), usd(0.20), usd(2.50), usd(10)),
+		"claude-sonnet-4-6":    price(usd(3), usd(0.30), usd(3.75), usd(15)),
+		"claude-sonnet-4-5":    price(usd(3), usd(0.30), usd(3.75), usd(15)),
+		"claude-haiku-4-5":     price(usd(1), usd(0.10), usd(1.25), usd(5)),
+		"claude-fable-5":       price(usd(10), usd(1), usd(12.50), usd(50)),
+		"claude-opus-5-fast":   price(usd(10), nil, nil, usd(50)),
+		"claude-opus-4-8-fast": price(usd(10), nil, nil, usd(50)),
+	},
 }
 
 // Lookup returns the price for a model.

@@ -174,7 +174,7 @@ kno value --evals cases.jsonl --pool pool.jsonl --baseline-run-id <run id> --age
 
 Keys come from the environment, never from a flag. Kno prices each Case from its own table, so the cap binds *before* the call rather than at settlement. `kno doctor` prints which providers, models, and goals this build supports — it contacts nothing.
 
-Full walkthrough: **[Score your agent for the first time](docs/cookbook/first-baseline.md)**, then **[Point Kno at your own provider](docs/cookbook/your-own-provider.md)** — or **[Score your agent against Claude](docs/cookbook/anthropic.md)** for the Anthropic API. Got a support stack already? **[Value your Zendesk knowledge](docs/cookbook/zendesk.md)** shows the whole recipe against real vendor data. Every recipe in one place: **[the cookbook index](docs/cookbook/README.md)**.
+Full walkthrough: **[Score your agent for the first time](docs/cookbook/first-baseline.md)**, then **[Point Kno at your own provider](docs/cookbook/your-own-provider.md)** — or **[Score your agent against Claude](docs/cookbook/anthropic.md)** for the Anthropic API, **[on Bedrock](docs/cookbook/bedrock.md)** for AWS, and **[on Vertex](docs/cookbook/vertex.md)** for Google Cloud. Got a support stack already? **[Value your Zendesk knowledge](docs/cookbook/zendesk.md)** shows the whole recipe against real vendor data. Every recipe in one place: **[the cookbook index](docs/cookbook/README.md)**.
 
 ## How it works
 
@@ -207,6 +207,8 @@ Kno is deliberately opinionated about experimentation:
 
 - `openai:` — any OpenAI-compatible endpoint via `--base-url` (vLLM, Ollama, llama.cpp need no key)
 - `anthropic:`
+- `bedrock:` — Claude models on AWS Bedrock (Converse, SigV4-signed, env-only credentials)
+- `vertex:` — Claude models on Google Vertex AI (`:rawPredict`, stdlib JWT exchange, env-only credentials)
 - `fake:` — the local agent that costs nothing
 - `exec:` and `tuned:` arrive with the stages that need them
 

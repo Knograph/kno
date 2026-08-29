@@ -8,9 +8,11 @@ import (
 
 	"github.com/knograph/kno/adapters/agent/agentref"
 	"github.com/knograph/kno/adapters/agent/anthropic"
+	"github.com/knograph/kno/adapters/agent/bedrock"
 	"github.com/knograph/kno/adapters/agent/exec"
 	"github.com/knograph/kno/adapters/agent/fake"
 	"github.com/knograph/kno/adapters/agent/openaicompat"
+	"github.com/knograph/kno/adapters/agent/vertex"
 	"github.com/knograph/kno/core"
 	"github.com/knograph/kno/core/errs"
 	knov1 "github.com/knograph/kno/gen/kno/v1"
@@ -164,7 +166,8 @@ func resolveAgent(f baselineFlags) (core.Agent, *knov1.AgentRef, error) {
 	if err != nil {
 		return nil, nil, errs.ErrInvalidInput.WithFix(
 			"write the reference as scheme:target — openai:gpt-4.1, " +
-				"anthropic:claude-opus-5, exec:my-agent-command, or fake: for " +
+				"anthropic:claude-opus-5, bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0, " +
+				"vertex:claude-sonnet-4-5, exec:my-agent-command, or fake: for " +
 				"the local agent that costs nothing",
 		).Wrap(err)
 	}
@@ -178,13 +181,20 @@ func resolveAgent(f baselineFlags) (core.Agent, *knov1.AgentRef, error) {
 	case agentref.SchemeAnthropic:
 		a, err := newAnthropic(f, parsed)
 		return a, parsed, err
+	case agentref.SchemeBedrock:
+		a, err := newBedrock(f, parsed)
+		return a, parsed, err
+	case agentref.SchemeVertex:
+		a, err := newVertex(f, parsed)
+		return a, parsed, err
 	case agentref.SchemeExec:
 		a, err := newExec(f, parsed)
 		return a, parsed, err
 	}
 
 	return nil, nil, errs.ErrCapabilityUnsupported.WithFix(
-		"use openai:, anthropic:, fake:, or exec:; tuned: lands with the tuner",
+		"use openai:, anthropic:, bedrock:, vertex:, fake:, or exec:; tuned: " +
+			"lands with the tuner",
 	).
 		Wrap(fmt.Errorf("no adapter for agent ref %q", parsed.GetRef()))
 }
@@ -267,6 +277,94 @@ func newAnthropic(f baselineFlags, ref *knov1.AgentRef) (core.Agent, error) {
 		AllowInsecureBaseURL: f.allowInsecureURL,
 		AllowPrivateAddress:  f.allowPrivateAddress,
 		Timeout:              f.timeout,
+	})
+}
+
+// checkFixedEndpointFlags refuses the flags that exist for user-configured
+// endpoints.
+//
+// The partner-cloud adapters have no BaseURL, no KeyEnv, and no endpoint
+// bypass: the endpoint is fixed by the region, the credential is the
+// environment chain, and the opt-out flags that exist for openai-compat
+// endpoints have no legitimate spelling here. Refused at the CLI rather than
+// silently dropped, because a flag that parses but does nothing is a run that
+// measures the wrong thing — and a --key-env carrying a key VALUE is the leak
+// this file exists to prevent.
+//
+// --base-url is NOT refused here: agentref.Parse owns that refusal, so there
+// is exactly one place that decides whether a scheme takes an endpoint.
+func checkFixedEndpointFlags(f baselineFlags, scheme string) error {
+	if len(f.keyEnv) > 0 {
+		return errs.ErrInvalidInput.WithFix(
+			"drop --key-env; " + scheme + " authenticates with the environment " +
+				"credential chain, not a key binding",
+		).
+			Wrap(fmt.Errorf("--key-env does not apply to the %s scheme", scheme))
+	}
+	if f.allowInsecureURL || f.allowPrivateAddress {
+		return errs.ErrInvalidInput.WithFix(
+			"drop --allow-insecure-base-url and --allow-private-address; the " +
+				scheme + " endpoint is a fixed cloud endpoint with no legitimate " +
+				"private or plain-HTTP spelling",
+		).
+			Wrap(fmt.Errorf("the endpoint bypass flags do not apply to the %s scheme", scheme))
+	}
+	if f.seedSet {
+		return errs.ErrInvalidInput.WithFix(
+			"drop --seed; " + scheme + " has no seed parameter on its wire formats, " +
+				"and sending one would fail every Case",
+		).
+			Wrap(fmt.Errorf("--seed does not apply to the %s scheme", scheme))
+	}
+	return nil
+}
+
+// newBedrock builds the Converse adapter.
+//
+// The model id is the ref target VERBATIM — on Bedrock a model id is a full
+// resource path, never a vendor name. The endpoint is fixed by AWS_REGION; the
+// flags that point an endpoint elsewhere are refused above.
+func newBedrock(f baselineFlags, ref *knov1.AgentRef) (core.Agent, error) {
+	if err := checkFixedEndpointFlags(f, agentref.SchemeBedrock); err != nil {
+		return nil, err
+	}
+	price, err := priceOverride(f)
+	if err != nil {
+		return nil, err
+	}
+	return bedrock.New(bedrock.Options{
+		Model:           ref.GetTarget(),
+		MaxOutputTokens: f.maxOutputTokens,
+		System:          f.system,
+		Temperature:     optionalFloat(f.temperature),
+		Price:           price,
+		MaxPromptBytes:  f.maxPromptBytes,
+		Timeout:         f.timeout,
+	})
+}
+
+// newVertex builds the :rawPredict adapter.
+//
+// The model id is the ref target verbatim — "claude-3-5-sonnet@20240620" and
+// plain "claude-sonnet-4-5" both exist and are both accepted. The project and
+// region come from the credential chain, never from flags: the endpoint path
+// and the signature must agree about who pays.
+func newVertex(f baselineFlags, ref *knov1.AgentRef) (core.Agent, error) {
+	if err := checkFixedEndpointFlags(f, agentref.SchemeVertex); err != nil {
+		return nil, err
+	}
+	price, err := priceOverride(f)
+	if err != nil {
+		return nil, err
+	}
+	return vertex.New(vertex.Options{
+		Model:           ref.GetTarget(),
+		MaxOutputTokens: f.maxOutputTokens,
+		System:          f.system,
+		Temperature:     optionalFloat(f.temperature),
+		Price:           price,
+		MaxPromptBytes:  f.maxPromptBytes,
+		Timeout:         f.timeout,
 	})
 }
 

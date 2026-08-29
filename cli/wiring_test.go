@@ -317,7 +317,7 @@ func TestDoctorPrintsTheMatrixWithoutSpendingOrReadingACredential(t *testing.T) 
 		t.Fatalf("exit = %d:\n%s", code, stdout)
 	}
 
-	for _, want := range []string{"openai:", "anthropic:", "fake:", "exec:", "tuned:"} {
+	for _, want := range []string{"openai:", "anthropic:", "bedrock:", "vertex:", "fake:", "exec:", "tuned:"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("the matrix omits %q:\n%s", want, stdout)
 		}
@@ -763,5 +763,123 @@ func TestTracingIsOffByDefault(t *testing.T) {
 	}
 	if strings.Contains(stderr, "kno.baseline") || strings.Contains(stderr, "kno.case") {
 		t.Errorf("spans were exported without --trace-spans:\n%s", stderr)
+	}
+}
+
+// TestTheCloudSchemesAreReachableAndSayWhatTheyNeed, mirroring the anthropic
+// scheme's test: the partner-cloud adapters refuse a run with no output
+// ceiling and a run with no credential, naming the flag and the variables.
+func TestTheCloudSchemesAreReachableAndSayWhatTheyNeed(t *testing.T) {
+	t.Parallel()
+
+	cases := writeCases(t, 30)
+	tests := []struct {
+		name    string
+		scheme  string
+		model   string
+		envName string // a credential variable the refusal must name
+	}{
+		{"bedrock", "bedrock", "anthropic.claude-sonnet-4-5-20250929-v1:0", "AWS_REGION"},
+		{"vertex", "vertex", "claude-sonnet-4-5", "GOOGLE_CLOUD_PROJECT"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name+" no output ceiling", func(t *testing.T) {
+			t.Parallel()
+			_, stderr, code := run(t, "baseline", "--evals", cases,
+				"--agent", tt.scheme+":"+tt.model, "--db", filepath.Join(t.TempDir(), "kno.db"))
+			if code == errs.ExitOK {
+				t.Fatal("a run with no output ceiling started")
+			}
+			if !strings.Contains(stderr, "--max-output-tokens") {
+				t.Errorf("the fix does not name the flag:\n%s", stderr)
+			}
+		})
+
+		t.Run(tt.name+" no credential", func(t *testing.T) {
+			// Serial: absence is manufactured in the process env the in-process
+			// CLI reads.
+			for _, v := range []string{
+				"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_REGION",
+				"GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_REGION",
+			} {
+				withoutEnv(t, v)
+			}
+			_, stderr, code := run(t, "baseline", "--evals", cases,
+				"--agent", tt.scheme+":"+tt.model, "--max-output-tokens", "256",
+				"--db", filepath.Join(t.TempDir(), "kno.db"))
+			if code == errs.ExitOK {
+				t.Fatal("a provider run with no credential started")
+			}
+			if !strings.Contains(stderr, tt.envName) {
+				t.Errorf("the fix does not name %s:\n%s", tt.envName, stderr)
+			}
+		})
+	}
+}
+
+// TestTheCloudFixedEndpointFlagsAreRefused: the flags that exist for
+// user-configured endpoints have no legitimate spelling for a fixed cloud
+// endpoint. Each is refused with a fix naming the flag to drop, and every
+// refusal happens before any credential is read or any network call is made.
+func TestTheCloudFixedEndpointFlagsAreRefused(t *testing.T) {
+	t.Parallel()
+
+	cases := writeCases(t, 30)
+	tests := []struct {
+		name   string
+		scheme string
+		flag   string
+	}{
+		{"base-url", "bedrock", "https://x.example.com/v1"},
+		{"base-url", "vertex", "https://x.example.com/v1"},
+		{"key-env", "bedrock", "example.com=MY_VAR"},
+		{"key-env", "vertex", "example.com=MY_VAR"},
+		{"allow-insecure-base-url", "bedrock", ""},
+		{"allow-insecure-base-url", "vertex", ""},
+		{"allow-private-address", "bedrock", ""},
+		{"allow-private-address", "vertex", ""},
+		{"seed", "bedrock", "42"},
+		{"seed", "vertex", "42"},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name+" "+tt.scheme, func(t *testing.T) {
+			t.Parallel()
+			args := []string{
+				"baseline", "--evals", cases,
+				"--agent", tt.scheme + ":claude-sonnet-4-5",
+				"--db", filepath.Join(t.TempDir(), "kno.db"),
+			}
+			switch tt.name {
+			case "base-url":
+				args = append(args, "--base-url", tt.flag)
+			case "key-env":
+				args = append(args, "--key-env", tt.flag)
+			case "allow-insecure-base-url":
+				args = append(args, "--allow-insecure-base-url")
+			case "allow-private-address":
+				args = append(args, "--allow-private-address")
+			case "seed":
+				args = append(args, "--seed", tt.flag)
+			}
+			_, stderr, code := run(t, args...)
+			if code == errs.ExitOK {
+				t.Fatalf("--%s was accepted on the %s scheme", tt.name, tt.scheme)
+			}
+			if tt.name == "base-url" {
+				// agentref.Parse owns this refusal (the one-parser rule), and it
+				// names the scheme rather than the flag.
+				if !strings.Contains(stderr, tt.scheme) {
+					t.Errorf("the refusal does not name the %s scheme:\n%s", tt.scheme, stderr)
+				}
+				return
+			}
+			if !strings.Contains(stderr, "--"+tt.name) {
+				t.Errorf("the refusal does not name the flag:\n%s", stderr)
+			}
+		})
 	}
 }
