@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
+	"go.yaml.in/yaml/v3"
 
 	"github.com/knograph/kno/adapters/evals/jsonl"
 	"github.com/knograph/kno/core/errs"
@@ -478,4 +480,189 @@ func TestConfigAwareFix(t *testing.T) {
 			t.Errorf("configAwareFix(nil) = %v, want nil", err)
 		}
 	})
+}
+
+// TestApplyFileAndEnvCoversEveryKey drives every spec's set closure at least
+// once — the file layer with every key present. A set closure that never runs
+// is a key that silently never arrives from the file.
+func TestApplyFileAndEnvCoversEveryKey(t *testing.T) {
+	// The environment is scrubbed to an allowlist by TestMain (see
+	// scrubEnvironment), so no KNO_* mirror can leak in and pre-empt the
+	// file layer this test exists to exercise.
+	cfg := &configFile{values: map[string]any{}, has: map[string]bool{}}
+	for key, v := range map[string]any{
+		"agent":                 "fake:",
+		"goal":                  "exact-match",
+		"db":                    "kno.db",
+		"concurrency":           4,
+		"holdout_frac":          0.2,
+		"split_seed":            "42",
+		"max_cost_usd":          5.0,
+		"max_calls":             int64(10),
+		"cost_per_call_usd":     0.5,
+		"base_url":              "https://example.com/v1",
+		"key_env":               []string{"openai=KNO_KEY"},
+		"exec_env":              []string{"PATH"},
+		"max_output_tokens":     int64(1024),
+		"max_prompt_bytes":      int64(4096),
+		"temperature":           0.7,
+		"seed":                  int64(42),
+		"system":                "grade strictly",
+		"generation_params":     "auto",
+		"use_legacy_max_tokens": true,
+		"timeout":               30 * time.Second,
+		"price_input_per_mtok":  3.0,
+		"price_output_per_mtok": 15.0,
+	} {
+		cfg.set(key, v)
+	}
+
+	var f baselineFlags
+	cmd := newFlagsCmd(&f)
+	sources, err := f.applyFileAndEnv(cmd, cfg)
+	if err != nil {
+		t.Fatalf("applyFileAndEnv: %v", err)
+	}
+
+	if f.agentRef != "fake:" || f.goalName != "exact-match" || f.dbPath != "kno.db" {
+		t.Errorf("string keys not applied: %+v", f)
+	}
+	if f.concurrency != 4 || f.holdoutFrac != 0.2 {
+		t.Errorf("numeric keys not applied: %+v", f)
+	}
+	if f.splitSeed != "42" || f.maxCostUSD != 5 || f.maxCalls != 10 {
+		t.Errorf("cap keys not applied: %+v", f)
+	}
+	if f.costPerCall != 0.5 || !f.costPerCallSet {
+		t.Errorf("cost_per_call not applied as an explicit claim: %+v", f)
+	}
+	if f.baseURL != "https://example.com/v1" {
+		t.Errorf("base_url not applied: %+v", f)
+	}
+	if len(f.keyEnv) != 1 || f.keyEnv[0] != "openai=KNO_KEY" || len(f.execEnv) != 1 || f.execEnv[0] != "PATH" {
+		t.Errorf("list keys not applied: %+v", f)
+	}
+	if f.maxOutputTokens != 1024 || f.maxPromptBytes != 4096 {
+		t.Errorf("byte/token ceilings not applied: %+v", f)
+	}
+	if f.temperature != 0.7 || f.seed != 42 || !f.seedSet {
+		t.Errorf("sampling keys not applied: %+v", f)
+	}
+	if f.system != "grade strictly" || f.generationParams != "auto" {
+		t.Errorf("prompt keys not applied: %+v", f)
+	}
+	if !f.useLegacyMaxTokens || f.timeout != 30*time.Second {
+		t.Errorf("legacy/timeout keys not applied: %+v", f)
+	}
+	if f.priceInPerMTok != 3 || f.priceOutPerMTok != 15 {
+		t.Errorf("price keys not applied: %+v", f)
+	}
+	for key := range cfg.values {
+		if got := sources[specByKey[key].flag]; got != "file" {
+			t.Errorf("source of %q = %q, want file", key, got)
+		}
+	}
+}
+
+// TestSpecKindNameCoversEveryKey pins the type-error wording for every key
+// the file accepts, so a schema refusal never names a bare kind number.
+func TestSpecKindNameCoversEveryKey(t *testing.T) {
+	t.Parallel()
+	tests := map[string]string{
+		"key_env":               "list",
+		"exec_env":              "list",
+		"use_legacy_max_tokens": "true or false",
+		"timeout":               "duration like 30s",
+		"concurrency":           "whole number",
+		"max_calls":             "whole number",
+		"max_output_tokens":     "whole number",
+		"max_prompt_bytes":      "whole number",
+		"seed":                  "whole number",
+		"holdout_frac":          "number",
+		"max_cost_usd":          "number",
+		"cost_per_call_usd":     "number",
+		"temperature":           "number",
+		"price_input_per_mtok":  "number",
+		"price_output_per_mtok": "number",
+		"agent":                 "string",
+		"goal":                  "string",
+		"db":                    "string",
+		"split_seed":            "string",
+		"base_url":              "string",
+		"system":                "string",
+		"generation_params":     "string",
+	}
+	for key, want := range tests {
+		if got := specKindName(specByKey[key]); got != want {
+			t.Errorf("specKindName(%q) = %q, want %q", key, got, want)
+		}
+	}
+}
+
+// TestParseScalarValueRefusesNonScalars pins that a list or null where a
+// scalar belongs is refused at the node layer, before any type conversion.
+func TestParseScalarValueRefusesNonScalars(t *testing.T) {
+	t.Parallel()
+	for _, n := range []*yaml.Node{
+		{Kind: yaml.SequenceNode},
+		{Kind: yaml.ScalarNode, Tag: "!!null"},
+	} {
+		if _, err := parseScalarValue(n, func(string) (any, error) { return nil, nil }); err == nil {
+			t.Errorf("parseScalarValue(%v) = nil error, want a refusal", n)
+		}
+	}
+}
+
+// TestValidateListEntryRows pins that only key_env speaks the credential
+// grammar — exec_env entries pass through untouched.
+func TestValidateListEntryRows(t *testing.T) {
+	t.Parallel()
+	if err := validateListEntry(specByKey["exec_env"], "anything"); err != nil {
+		t.Errorf("exec_env entry refused: %v", err)
+	}
+	err := validateListEntry(specByKey["key_env"], "not-a-binding")
+	var a *errs.Actionable
+	if !errors.As(err, &a) {
+		t.Fatalf("key_env refusal = %T, want an Actionable", err)
+	}
+	if !strings.Contains(a.Fix, "host=VAR") {
+		t.Errorf("fix = %q, want the host=VAR credential grammar", a.Fix)
+	}
+}
+
+// TestValidateAgentRefRows pins the file-key re-wrap: agentref's plain
+// errors and composeRef's Actionables both land with the file fix, never a
+// flag fix.
+func TestValidateAgentRefRows(t *testing.T) {
+	t.Parallel()
+	refErr := func(cfg *configFile) {
+		err := validateAgentRef(cfg)
+		var a *errs.Actionable
+		if !errors.As(err, &a) {
+			t.Fatalf("validateAgentRef = %T, want an Actionable", err)
+		}
+		if !strings.Contains(a.Fix, "fix agent or base_url in kno.yaml") {
+			t.Errorf("fix = %q, want the kno.yaml fix", a.Fix)
+		}
+	}
+	refErr(&configFile{values: map[string]any{"agent": "not-a-ref"}})
+	refErr(&configFile{values: map[string]any{"agent": "openai:m@https://a/v1", "base_url": "https://b/v1"}})
+	if err := validateAgentRef(&configFile{values: map[string]any{}}); err != nil {
+		t.Errorf("no agent and no base_url refused: %v", err)
+	}
+}
+
+// TestParseSpecValueRows covers the parse dispatcher's per-kind rows beyond
+// what the loader exercises: duration, boolean, and the raw passthrough.
+func TestParseSpecValueRows(t *testing.T) {
+	t.Parallel()
+	if v, err := parseSpecValue(specByKey["timeout"], "90s"); err != nil || v != 90*time.Second {
+		t.Errorf("timeout parse = %v, %v", v, err)
+	}
+	if v, err := parseSpecValue(specByKey["use_legacy_max_tokens"], "true"); err != nil || v != true {
+		t.Errorf("bool parse = %v, %v", v, err)
+	}
+	if v, err := parseSpecValue(specByKey["agent"], "fake:"); err != nil || v != "fake:" {
+		t.Errorf("passthrough parse = %v, %v", v, err)
+	}
 }

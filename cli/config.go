@@ -616,7 +616,7 @@ func (f *baselineFlags) applyFileAndEnv(cmd *cobra.Command, cfg *configFile) (ma
 		}
 		raw, ok := os.LookupEnv(spec.env)
 		if ok {
-			v, err := spec.parseEnv(raw)
+			v, err := envRawValue(spec, raw)
 			if err != nil {
 				return nil, envParseErr(spec, raw, err)
 			}
@@ -647,6 +647,19 @@ func envParseErr(spec configSpec, raw string, err error) error {
 	return errs.ErrInvalidInput.
 		WithFix(fmt.Sprintf("fix %s, the environment mirror of --%s", spec.env, spec.flag)).
 		Wrap(fmt.Errorf("%s=%q could not be read: %w", spec.env, raw, err))
+}
+
+// envRawValue converts an env var's raw text to the spec's type.
+//
+// The passthrough specs (agent, goal, db, ...) have no parseEnv: their raw
+// string IS the value, and a set-but-empty variable is still a value — the
+// guard exists because KNO_AGENT= would otherwise nil-deref. The string specs
+// keep the raw text untrimmed, exactly like a file value.
+func envRawValue(spec configSpec, raw string) (any, error) {
+	if spec.parseEnv == nil {
+		return raw, nil
+	}
+	return spec.parseEnv(raw)
 }
 
 // configAwareFix rewrites the two stale fix lines (#62) to name FLAGS when no
