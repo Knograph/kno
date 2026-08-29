@@ -46,6 +46,19 @@ func (o BaselineOptions) closeRun(
 	run.ScoredCaseCount = int32(scored)       //nolint:gosec // bounded by the eval set
 	run.ErroredCaseCount = int32(errored)     //nolint:gosec // bounded by the eval set
 
+	// The weak-label count, written when nonzero. It describes the EVAL SET,
+	// not the outcomes, and it cannot be recomputed from durable rows — the
+	// store has no per-Case provenance — so the caller's ingestion pass is its
+	// only source. Written only when nonzero for the same reason Concurrency
+	// is: a resume whose caller passes zero must not erase the first process's
+	// record, and a fingerprint-checked resume has the same eval content and
+	// therefore the same count anyway. Zero stays absent rather than
+	// over-written, and a hand-authored eval set keeps a zero exactly where a
+	// reader expects it.
+	if o.WeakLabelCases > 0 {
+		run.WeakLabelCaseCount = int32(o.WeakLabelCases) //nolint:gosec // bounded by the eval set
+	}
+
 	// Both fields are derived entirely from state recomputed here over the
 	// WHOLE run, so both are cleared before recomputing. A resumed run
 	// otherwise inherits the verdict of the process that stopped: one that

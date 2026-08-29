@@ -223,6 +223,17 @@ func countTokens(sizeBytes int, model string) int64 {
 	return int64(math.Ceil(n * safetyMargin))
 }
 
+// CountTokens is the exported form of countTokens.
+//
+// `kno mine` uses it as the cap counter for mined questions — the same
+// deterministic approximation reservations run on, so a mined set's
+// question-size cap is consistent with every other number Kno computes.
+// Pass an empty model to count on the plain bytes-divisor ratio, which is the
+// model-independent reading mine wants.
+func CountTokens(sizeBytes int, model string) int64 {
+	return countTokens(sizeBytes, model)
+}
+
 // bytesPerToken is the divisor before the safety margin. See countTokens.
 const bytesPerToken = 2.0
 

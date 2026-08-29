@@ -124,6 +124,7 @@ runs; the rest arrive milestone by milestone.`,
 	}
 
 	root.AddCommand(newBaselineCmd())
+	root.AddCommand(newMineCmd())
 	root.AddCommand(newValueCmd())
 	root.AddCommand(newDoctorCmd())
 	root.AddCommand(newPurgeCmd())
@@ -134,8 +135,10 @@ runs; the rest arrive milestone by milestone.`,
 //
 // It returns the code rather than calling os.Exit so that main stays a
 // one-liner and every path here is testable — an Execute that exited could
-// only be tested by spawning a subprocess.
-func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+// only be tested by spawning a subprocess. stdin is the consent prompt's and
+// the wizard's input: a terminal in an interactive run, whatever the caller
+// provides otherwise.
+func Execute(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	// Ctrl-C cancels the context rather than killing the process, so a run
 	// checkpoints what it finished instead of losing it.
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
@@ -157,6 +160,7 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 	root := NewRootCmd()
 	root.SetArgs(args)
+	root.SetIn(stdin)
 	root.SetOut(stdout)
 	root.SetErr(stderr)
 

@@ -1,0 +1,9 @@
+{"id":"m1","role":"user","content":"Where is my refund?","timestamp":"2026-01-02T15:04:05Z","thread_id":"t1"}
+{"id":"m2","role":"assistant","content":"Your refund is processing."}
+{"id":"m3","role":"user","content":"No, it should have arrived yesterday, and also can you check invoice #42?"}
+{"id":"m4","role":"user","content":"Where is my refund?","timestamp":"2026-01-02T15:09:00Z","thread_id":"t2"}
+{"id":"m5","role":"agent","content":"It shipped Tuesday."}
+{"id":"m6","role":"human","content":"Thanks, that worked!"}
+{"id":"m7","role":"user","content":"Why is my invoice wrong?","timestamp":"2026-01-02T15:12:00Z","thread_id":"t3"}
+{"id":"m8","role":"agent","content":"It is not wrong."}
+{"id":"m9","role":"human","content":"No, invoice #42 should be $12, not $120."}

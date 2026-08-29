@@ -168,6 +168,17 @@ type BaselineOptions struct {
 	DevCases     int
 	HoldoutCases int
 
+	// WeakLabelCases is how many Cases in the eval set carry derived
+	// provenance — weak labels mined from transcripts rather than authored
+	// expectations.
+	//
+	// Recorded on the Run at close so the report can say "weak-label eval" and
+	// the number travels with the other case counts. The same DEBT(docs/debt.md#28)
+	// caveat applies: the caller owns this number; the stage records it as
+	// given. A mined eval set passes the count through its own ingestion pass,
+	// so for the shipped path the two are the same computation.
+	WeakLabelCases int
+
 	// NOT SET BY ANYTHING. No caller populates this, so checkResumable's model
 	// comparison is inert — see docs/debt.md#42. Filling it needs the check
 	// moved to first-response time, because a resolved model is a property of

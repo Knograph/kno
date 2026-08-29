@@ -73,6 +73,15 @@ type Counts struct {
 	// Holdout is the number held back for Validate.
 	Holdout int
 
+	// WeakLabelCases is how many Cases carry derived provenance — weak labels
+	// mined from transcripts (`kno mine`) rather than authored expectations.
+	//
+	// Not a split fact: it rides in this struct because the same ingestion
+	// pass computes both, and the Run records it at close so a weak-label
+	// eval cannot pass for a hand-authored one. Zero for a source whose
+	// records carry no provenance.
+	WeakLabelCases int
+
 	// HoldoutFrac is the fraction that produced this division.
 	//
 	// Carried so that guidance can be computed against the fraction the user

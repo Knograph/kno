@@ -1,0 +1,2 @@
+{"id":"0000000000E7221SFHTT3TR67Y","input":"Where is my refund?","expected":"It should have arrived yesterday.","derived":true,"derivation_note":"mined from testdata/transcript.csv; mode=csv","source_ref":"testdata/transcript.csv"}
+{"id":"0000000000BBPCPW19QG1WZZK7","input":"Why is my invoice wrong?","expected":"Invoice #42 should be $12.","derived":true,"derivation_note":"mined from testdata/transcript.csv; mode=csv","source_ref":"testdata/transcript.csv"}

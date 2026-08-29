@@ -1,0 +1,2 @@
+{"id":"0000000000C5XYYZ6H6EZXD6MG","input":"Where is my refund?","expected":"it should have arrived yesterday","derived":true,"derivation_note":"mined from testdata/transcript.jsonl; mode=resolution","source_ref":"testdata/transcript.jsonl"}
+{"id":"0000000000S5JFDKA6GEHGCVRH","input":"Why is my invoice wrong?","expected":"invoice #42 should be $12, not $120","derived":true,"derivation_note":"mined from testdata/transcript.jsonl; mode=resolution","source_ref":"testdata/transcript.jsonl"}

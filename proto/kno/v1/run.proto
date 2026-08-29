@@ -176,6 +176,18 @@ message Run {
   // in whichever unit the stage counts.
   int32 errored_case_count = 18;
 
+  // Cases in this run's eval set whose provenance marks them DERIVED — weak
+  // labels mined from transcripts where a human corrected the agent (`kno
+  // mine`), rather than expectations someone authored.
+  //
+  // Written at run close. Zero for an eval set with no derived Cases.
+  // Recorded separately so a weak-label eval cannot pass for a hand-authored
+  // one: exact-match scores over mined Cases are honest only within the
+  // goal-mode declaration mine makes (judge goals generally; exact-match only
+  // where resolution mode shaped the expected to a short answer), and a reader
+  // can apply that caveat only when the number is on the record.
+  int32 weak_label_case_count = 31;
+
   // Set when the holdout is too small to support a meaningful confidence
   // interval. The Run still executes; the number is reported with the caveat
   // attached rather than presented as if it meant the same thing.
