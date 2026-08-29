@@ -9,7 +9,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/knograph/kno/adapters/evals/jsonl"
-	pooljsonl "github.com/knograph/kno/adapters/pool/jsonl"
 	"github.com/knograph/kno/core"
 	"github.com/knograph/kno/core/errs"
 	"github.com/knograph/kno/core/value"
@@ -24,6 +23,10 @@ type valueFlags struct {
 	baselineFlags
 
 	poolPath string
+
+	// SplitSections makes an md: pool yield its `## ` sections as Assets
+	// instead of whole files.
+	splitSections bool
 
 	// BaselineRunID is the run whose recorded scores this one pairs against.
 	// Required: a delta without a reference is not a delta.
@@ -76,7 +79,10 @@ Interrupting is safe: measurements are checkpointed as they complete, and
 
 	flags := cmd.Flags()
 	flags.StringVar(&f.evalsPath, "evals", "", "eval cases: a JSONL file path, or langsmith:<dataset-name> (required)")
-	flags.StringVar(&f.poolPath, "pool", "", "path to a JSONL file of assets (required)")
+	flags.StringVar(&f.poolPath, "pool", "",
+		"assets to value: a JSONL file path, csv:<file>, or md:<file-or-dir> (required)")
+	flags.BoolVar(&f.splitSections, "split-sections", false,
+		"split an md: pool into its ## sections, one asset per section")
 	flags.StringVar(&f.baselineRunID, "baseline-run-id", "",
 		"run ID of the recorded baseline to pair against (required; run `kno baseline` first)")
 	flags.StringVar(&f.agentRef, "agent", "fake:", "agent to measure")
@@ -203,9 +209,9 @@ func runValue(ctx context.Context, out, errOut io.Writer, f valueFlags) error {
 		return errs.ErrInvalidInput.WithFix(countsSplitFix(evals)).Wrap(err)
 	}
 
-	pool, err := pooljsonl.New(pooljsonl.Options{Path: f.poolPath})
+	pool, err := resolvePool(f.poolPath, f.splitSections)
 	if err != nil {
-		return errs.ErrInvalidInput.WithFix("check --pool").Wrap(err)
+		return err
 	}
 
 	if err := f.validateCaps(); err != nil {
