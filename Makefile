@@ -571,6 +571,13 @@ help: ## List targets
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-26s\033[0m %s\n", $$1, $$2}' \
 		|| true
 
+
+# The changelog gate, before the push instead of after: mirrors the CI check
+# so a branch that would go red on the PR is refused here, where the fix is
+# one commit or one --label at creation time.
+.PHONY: pr-ready
+pr-ready:
+	@./scripts/pr-ready.sh origin/main
 .PHONY: tape
 tape: ## Re-record the README quickstart GIF. Requires vhs
 	@$(SAFE) if ! command -v vhs >/dev/null 2>&1; then \
