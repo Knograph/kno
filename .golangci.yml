@@ -71,6 +71,7 @@ linters:
             # adapters/**/format.go), and neither touches a kno.v1 type. Scoped
             # to the one directory so it cannot spread to engine code.
             - "!**/internal/cmd/pricingcheck/**"
+
             # core/export.go renders the tuning-set grammar: OpenAI chat format
             # JSONL, a downstream wire format Tuner adapters parse. Hand-built
             # structs, not kno.v1 types, and the pinned line shape is part of
@@ -85,7 +86,17 @@ linters:
             # adapters/**/format.go, the only difference being the format
             # arrives over HTTP rather than from a file. Scoped to the one
             # directory so it cannot spread to code that touches kno.v1 types.
+
+            # The LangSmith and Langfuse adapters are wire-format parsers:
+            # they decode the vendor REST envelopes into plain Go structs, a
+            # kno.v1 type is never involved, and protojson would force the
+            # wire format to mirror proto field names and presence rules.
+            # Same contract as adapters/**/format.go, the only difference
+            # being the format arrives over HTTP rather than from a file.
+            # Scoped to the two directories so it cannot spread to code that
+            # touches kno.v1 types.
             - "!**/adapters/evals/langsmith/**"
+            - "!**/adapters/evals/langfuse/**"
           deny:
             - pkg: encoding/json
               desc: >-

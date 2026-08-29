@@ -1,0 +1,14 @@
+{
+  "data": [
+    {
+      "id": "it-null-0001",
+      "datasetId": "ds-null-001",
+      "input": null,
+      "expectedOutput": {"answer": "never reached"},
+      "status": "ACTIVE",
+      "createdAt": "2026-07-02T06:00:01Z",
+      "updatedAt": "2026-07-02T06:00:01Z"
+    }
+  ],
+  "meta": {"page": 1, "limit": 100, "totalItems": 1, "totalPages": 1}
+}

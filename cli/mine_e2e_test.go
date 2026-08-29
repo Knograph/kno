@@ -78,7 +78,7 @@ func TestMineToBaselineCarriesTheWeakLabelCount(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("baseline exit %d\n%s", code, stderr)
 	}
-	if !strings.Contains(stdout, "weak-label 30 of these Cases are derived from transcripts") {
+	if !strings.Contains(stdout, "weak-label 30 of these Cases carry derived provenance") {
 		t.Errorf("the human report does not name the weak-label count:\n%s", stdout)
 	}
 	if got := readRun(t, db, runID).GetWeakLabelCaseCount(); got != n {

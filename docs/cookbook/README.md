@@ -21,7 +21,7 @@ Every vendor recipe is the same shape — candidate content as Assets, real ques
 |---|---|
 | Support | [Zendesk](zendesk.md) · [HubSpot](hubspot.md) · [Salesforce](salesforce.md) |
 | Coding agent | [GitHub](github.md) · [Jira + Confluence](jira.md) · [Confluence](confluence.md) |
-| Eval platforms | [LangSmith](langsmith.md) — datasets as first-class Evals, no export step |
+| Eval platforms | [LangSmith](langsmith.md) · [Langfuse](langfuse.md) — datasets as first-class Evals, no export step |
 | E-commerce | [Shopify](shopify.md) |
 | Payments | [Stripe](stripe.md) |
 | Internal knowledge | [Notion](notion.md) |

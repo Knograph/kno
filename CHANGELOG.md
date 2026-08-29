@@ -147,6 +147,25 @@ covenants — breaking any of them requires a major version.
   pairing-scheme recording paid, measurement design re-dated to the first
   writable Destination adapter. Plan: `docs/plans/2026-08-29-select-export.md`.
 
+
+- **Langfuse datasets are a third `core.Evals` source.** `kno baseline --evals
+  langfuse:my-dataset` measures against a Langfuse dataset directly, alongside JSONL and
+  LangSmith. The adapter resolves the dataset by name first (a typo is refused loudly
+  before anything is fetched), streams items with page-numbered pagination (100/page,
+  Retry-After-aware 429 backoff, page cap), keeps prompts and expectations as canonical
+  JSON (key-sorted, numbers preserved literally — golden-pinned), filters ARCHIVED items
+  client-side, and marks trace-harvested items derived per item
+  (`sourceObservationId`/`sourceTraceId`), so the run's weak-label count reflects the
+  Langfuse dataset's actual mix rather than LangSmith's wholesale marking. Credentials
+  are the documented basic-auth pair, `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY`,
+  environment-only; the endpoint security checks (scheme, userinfo, private/link-local
+  refusal, dial-time recheck, redirect refusal) are ported verbatim from the LangSmith
+  adapter, deliberately unshared. Fixtures are hand-authored against the documented
+  schema with provenance notes (no live key on the build machine;
+  `KNO_RECORD_FIXTURES=1` re-records when one exists). Plan:
+  `docs/plans/2026-08-29-langfuse-evals-adapter.md`.
+ (feat: Langfuse Evals adapter — third core.Evals source)
+
 - **LangSmith datasets are first-class Evals.** `kno baseline --evals
   langsmith:my-dataset` measures against a LangSmith dataset directly — no manual export,
   no snapshot rot. The adapter streams examples with cursor pagination (page 100,

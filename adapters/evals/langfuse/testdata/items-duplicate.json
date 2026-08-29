@@ -1,0 +1,23 @@
+{
+  "data": [
+    {
+      "id": "it-dup-0001",
+      "datasetId": "ds-dup-001",
+      "input": {"question": "First row with this id"},
+      "expectedOutput": {"answer": "first"},
+      "status": "ACTIVE",
+      "createdAt": "2026-05-01T06:00:01Z",
+      "updatedAt": "2026-05-01T06:00:01Z"
+    },
+    {
+      "id": "it-dup-0001",
+      "datasetId": "ds-dup-001",
+      "input": {"question": "Second row with this id"},
+      "expectedOutput": {"answer": "second"},
+      "status": "ACTIVE",
+      "createdAt": "2026-05-01T06:00:02Z",
+      "updatedAt": "2026-05-01T06:00:02Z"
+    }
+  ],
+  "meta": {"page": 1, "limit": 100, "totalItems": 2, "totalPages": 1}
+}
