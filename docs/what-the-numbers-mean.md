@@ -70,6 +70,18 @@ Exclusion has its own hazard: if the errors aren't random — if hard Cases are 
 - Marks a run whose error rate exceeds a threshold (5% by default) as **not a usable baseline**, so later stages refuse to treat it as a clean reference.
 - Requires that any delta be computed over the intersection of Cases scored in both runs, so a provider outage in one run can't silently change the population being compared.
 
+## Weak labels are expectations nobody wrote
+
+A run over a mined or harvested eval set reports how many of its Cases carry **derived provenance** — expectations that come from a transcript or a trace rather than a human author. The number is printed with the run and recorded on it, so a weak-label eval set cannot pass for a hand-authored one.
+
+The mark means different things per source, and the number says which:
+
+- The `mine` command (and a jsonl file of its output) marks **every** Case derived: the whole set came from transcripts, wholesale.
+- The LangSmith adapter does the same — a LangSmith dataset has no per-row signal, so the adapter cannot distinguish harvested rows, and marks the set wholesale.
+- The Langfuse adapter marks **per item**: an item carrying `sourceObservationId` or `sourceTraceId` (harvested from a trace) is derived; an item with neither is hand-authored and stays unmarked.
+
+So the same `weak-label N` line means "the whole set is derived" for a mined or LangSmith run, and "exactly N of these Cases are trace-harvested" for a Langfuse run. The expectation of an exact-match goal is an exact string a human wrote, checked against the agent's answer; a derived expectation is weaker evidence — it is what the trace *recorded*, not what someone *judged* — and the weak-label count is how the run tells you how much of its denominator rests on that weaker ground.
+
 ## A purged run has no baseline score
 
 `kno purge` erases stored conversation content. It preserves the numbers — the score of

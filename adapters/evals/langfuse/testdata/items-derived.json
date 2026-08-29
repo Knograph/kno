@@ -1,0 +1,34 @@
+{
+  "data": [
+    {
+      "id": "it-der-0001",
+      "datasetId": "ds-der-001",
+      "input": {"question": "Where is my refund?"},
+      "expectedOutput": {"answer": "It is being processed."},
+      "sourceObservationId": "obs-123",
+      "status": "ACTIVE",
+      "createdAt": "2026-07-01T06:00:01Z",
+      "updatedAt": "2026-07-01T06:00:01Z"
+    },
+    {
+      "id": "it-der-0002",
+      "datasetId": "ds-der-001",
+      "input": {"question": "Can I cancel?"},
+      "expectedOutput": {"answer": "Yes, in Settings."},
+      "sourceTraceId": "trace-456",
+      "status": "ACTIVE",
+      "createdAt": "2026-07-01T06:00:02Z",
+      "updatedAt": "2026-07-01T06:00:02Z"
+    },
+    {
+      "id": "it-auth-0003",
+      "datasetId": "ds-der-001",
+      "input": {"question": "Hand-authored?"},
+      "expectedOutput": {"answer": "Yes."},
+      "status": "ACTIVE",
+      "createdAt": "2026-07-01T06:00:03Z",
+      "updatedAt": "2026-07-01T06:00:03Z"
+    }
+  ],
+  "meta": {"page": 1, "limit": 100, "totalItems": 3, "totalPages": 1}
+}

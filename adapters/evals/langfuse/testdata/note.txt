@@ -1,0 +1,58 @@
+HAND-AUTHORED, NOT RECORDED. Read this before trusting these files.
+
+No LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY exists on the machine that
+created this package, so no live exchange produced these files. They are
+hand-authored against the documented Langfuse REST schema as of 2026-08-29
+(the generated OpenAPI at https://api.langfuse.com/swagger.json):
+
+  - Dataset resolution: GET {host}/api/public/v2/datasets/{datasetName},
+    response is the dataset object itself: id, name, projectId, createdAt,
+    updatedAt. An unknown name is 404.
+  - Dataset items:     GET {host}/api/public/dataset-items?datasetName=
+    <name>&page=<n>&limit=100, response envelope {data: [...], meta:
+    {page, limit, totalItems, totalPages}} — page-numbered, not cursor-based.
+    Each item carries id, datasetId, input (JSON, nullable), expectedOutput
+    (JSON, nullable), metadata, sourceObservationId, sourceTraceId, status
+    (ACTIVE | ARCHIVED), createdAt, updatedAt.
+  - Auth: HTTP basic auth, public key as user and secret key as password,
+    per Langfuse's API documentation.
+
+The schemas are versioned and can change — that is the adapter's accepted
+drift risk, recorded in docs/plans/2026-08-29-langfuse-evals-adapter.md.
+
+Until a real exchange replaces them, the adapter rests on a documentation
+claim rather than on evidence. When LANGFUSE keys exist, re-record:
+
+  make record-fixtures
+
+(or directly: KNO_LIVE_TESTS=1 KNO_RECORD_FIXTURES=1 go test -tags=integration
+  ./adapters/evals/langfuse/ -run TestRecordLiveFixtures)
+
+which captures the live dataset and its first items page into testdata/live/
+(and refuses to record a response that echoes a key). Those captures are the
+evidence to review against these files. The malformed, empty, duplicate,
+null-input, and archived fixtures cannot be recorded — no live dataset is
+malformed — so they stay hand-authored and are judged against the captures.
+
+What each fixture is for:
+
+  dataset-support-llm.json   name resolution; one dataset, updatedAt
+                            "2026-08-01T12:00:00Z", 4 items across 2 pages
+  items-llm-page1.json      first page (2 rows: an escape/unicode row and a
+                            nested-key-order row), meta totalPages 2
+  items-llm-page2.json      page 2 (a key-unsorted input whose canonical JSON
+                            the goldens pin, and a null expectedOutput ->
+                            empty Expected); last page
+  items-empty.json          a dataset that exists with no items -> zero Cases
+  items-duplicate.json      the same item id twice -> fatal naming the id
+                            (the torn-page story: a dataset edited under the
+                            pagination)
+  items-archived.json       one ARCHIVED row (client-side filter) and one
+                            ACTIVE row
+  items-derived.json        sourceObservationId and sourceTraceId rows ->
+                            Provenance.Derived; one authored row -> not
+  items-null-input.json     an item whose input is null -> fatal
+  items-message-array.json  an item whose input is a messages array -> raw
+                            canonical JSON as the prompt (plan F7)
+  golden/canonical.json     the pinned canonical-JSON encoding: key order,
+                            HTML escaping, and unicode behavior

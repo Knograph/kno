@@ -1,0 +1,22 @@
+{
+  "it-llm-0001": {
+    "input": "{\"question\":\"\\u003ccafé\\u003e \\u0026 \\\"quoted\\\"\"}",
+    "expected": "{\"answer\":\"Go to Billing \\u003e Refunds and confirm.\"}"
+  },
+  "it-llm-0002": {
+    "input": "{\"meta\":{\"n\":2,\"tag\":\"billing\"},\"question\":\"Why was I charged twice?\"}",
+    "expected": "{\"answer\":\"Charges can overlap at month boundaries.\"}"
+  },
+  "it-llm-0003": {
+    "input": "{\"a\":{\"b\":2,\"y\":\"x\"},\"big\":12345678901234567890,\"z\":1}",
+    "expected": "{\"answer\":\"Plan cancelled effective immediately.\"}"
+  },
+  "it-llm-0004": {
+    "input": "{\"question\":\"Do you store my data?\"}",
+    "expected": ""
+  },
+  "it-msg-0001": {
+    "input": "[{\"content\":\"hi\",\"role\":\"user\"},{\"content\":\"hello\",\"role\":\"assistant\"}]",
+    "expected": "{\"answer\":\"hello\"}"
+  }
+}

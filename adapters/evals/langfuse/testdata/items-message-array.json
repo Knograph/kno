@@ -1,0 +1,14 @@
+{
+  "data": [
+    {
+      "id": "it-msg-0001",
+      "datasetId": "ds-msg-001",
+      "input": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}],
+      "expectedOutput": {"answer": "hello"},
+      "status": "ACTIVE",
+      "createdAt": "2026-07-03T06:00:01Z",
+      "updatedAt": "2026-07-03T06:00:01Z"
+    }
+  ],
+  "meta": {"page": 1, "limit": 100, "totalItems": 1, "totalPages": 1}
+}

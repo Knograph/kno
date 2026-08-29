@@ -1,0 +1,23 @@
+{
+  "data": [
+    {
+      "id": "it-llm-0001",
+      "datasetId": "ds-llm-001",
+      "input": {"question": "<café> & \"quoted\""},
+      "expectedOutput": {"answer": "Go to Billing > Refunds and confirm."},
+      "status": "ACTIVE",
+      "createdAt": "2026-01-15T10:00:01Z",
+      "updatedAt": "2026-01-15T10:00:01Z"
+    },
+    {
+      "id": "it-llm-0002",
+      "datasetId": "ds-llm-001",
+      "input": {"question": "Why was I charged twice?", "meta": {"tag": "billing", "n": 2}},
+      "expectedOutput": {"answer": "Charges can overlap at month boundaries."},
+      "status": "ACTIVE",
+      "createdAt": "2026-01-15T10:00:02Z",
+      "updatedAt": "2026-01-15T10:00:02Z"
+    }
+  ],
+  "meta": {"page": 1, "limit": 100, "totalItems": 4, "totalPages": 2}
+}

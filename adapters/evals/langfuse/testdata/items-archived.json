@@ -1,0 +1,23 @@
+{
+  "data": [
+    {
+      "id": "it-arc-0001",
+      "datasetId": "ds-arc-001",
+      "input": {"question": "This row is archived and must be filtered out"},
+      "expectedOutput": {"answer": "never seen"},
+      "status": "ARCHIVED",
+      "createdAt": "2026-06-01T06:00:01Z",
+      "updatedAt": "2026-06-01T06:00:01Z"
+    },
+    {
+      "id": "it-act-0002",
+      "datasetId": "ds-arc-001",
+      "input": {"question": "This row is active and must survive"},
+      "expectedOutput": {"answer": "seen"},
+      "status": "ACTIVE",
+      "createdAt": "2026-06-01T06:00:02Z",
+      "updatedAt": "2026-06-01T06:00:02Z"
+    }
+  ],
+  "meta": {"page": 1, "limit": 100, "totalItems": 2, "totalPages": 1}
+}

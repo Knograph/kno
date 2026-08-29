@@ -431,9 +431,10 @@ func TestHelpIsSnapshotted(t *testing.T) {
 		// people: it is why the tool's numbers mean anything.
 		"untouched until validate",
 		"without paying for anything twice",
-		// The eval-source grammar: a bare path is a JSONL file, the prefix
-		// is a LangSmith dataset. Both commands promise the same grammar.
+		// The eval-source grammar: a bare path is a JSONL file, the prefixes
+		// are dataset names. Both commands promise the same grammar.
 		"langsmith:<dataset-name>",
+		"langfuse:<dataset-name>",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("help text no longer mentions %q:\n%s", want, stdout)
@@ -444,8 +445,10 @@ func TestHelpIsSnapshotted(t *testing.T) {
 	if code != errs.ExitOK {
 		t.Fatalf("value --help exit = %d", code)
 	}
-	if !strings.Contains(valueOut, "langsmith:<dataset-name>") {
-		t.Errorf("value help no longer mentions the LangSmith grammar:\n%s", valueOut)
+	for _, want := range []string{"langsmith:<dataset-name>", "langfuse:<dataset-name>"} {
+		if !strings.Contains(valueOut, want) {
+			t.Errorf("value help no longer mentions the %s grammar:\n%s", want, valueOut)
+		}
 	}
 }
 
@@ -466,6 +469,29 @@ func TestEvalsLangsmithGrammarAtTheCLI(t *testing.T) {
 	}
 	if strings.Contains(stderr, "insecure or private endpoints") {
 		t.Errorf("stderr advises endpoint opt-outs when only the key is missing:\n%s", stderr)
+	}
+}
+
+// TestEvalsLangfuseGrammarAtTheCLI: the langfuse: prefix is refused at the
+// command boundary when the key pair is absent, with the fix naming both
+// environment variables rather than a flag — and only that, because missing
+// keys are not an endpoint problem.
+func TestEvalsLangfuseGrammarAtTheCLI(t *testing.T) {
+	withoutEnv(t, "LANGFUSE_PUBLIC_KEY")
+	withoutEnv(t, "LANGFUSE_SECRET_KEY")
+	withoutEnv(t, "LANGFUSE_HOST")
+
+	_, stderr, code := run(t, "baseline", "--evals", "langfuse:support-llm", "--agent", "fake:")
+	if code == errs.ExitOK {
+		t.Fatal("a keyless Langfuse eval source was accepted")
+	}
+	for _, name := range []string{"LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"} {
+		if !strings.Contains(stderr, name) {
+			t.Errorf("stderr does not name the missing credential %s:\n%s", name, stderr)
+		}
+	}
+	if strings.Contains(stderr, "insecure or private endpoints") {
+		t.Errorf("stderr advises endpoint opt-outs when only the keys are missing:\n%s", stderr)
 	}
 }
 
