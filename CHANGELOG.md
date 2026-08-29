@@ -28,6 +28,57 @@ covenants — breaking any of them requires a major version.
      At release time the hand-written heading is renamed from [Unreleased] to
      the version. See docs/debt.md#76 for why that is still a manual step. -->
 
+## [0.1.0](https://github.com/Knograph/kno/compare/v0.0.4...v0.1.0) (2026-08-29)
+
+
+### ⚠ BREAKING CHANGES
+
+* kno v0.1.0 — the measurement loop is complete ([#118](https://github.com/Knograph/kno/issues/118))
+
+### Features
+
+* csv and markdown pool adapters ([#100](https://github.com/Knograph/kno/issues/100)) ([5203566](https://github.com/Knograph/kno/commit/5203566ed94ba6401f9643a48667b24e6cdd97fd))
+* exec agent adapter — any executable as an agent ([#99](https://github.com/Knograph/kno/issues/99)) ([2b97685](https://github.com/Knograph/kno/commit/2b97685220f5079509e5d912d4ceb5dd7821cb03))
+* kno init, the kno.yaml config layer, and the interactive consent prompt ([#102](https://github.com/Knograph/kno/issues/102)) ([603053b](https://github.com/Knograph/kno/commit/603053bb0f5d55388ede04a2a1d6819981cb22d0))
+* kno mine — turn production transcripts into a weak-label eval set ([#103](https://github.com/Knograph/kno/issues/103)) ([957ba8f](https://github.com/Knograph/kno/commit/957ba8fe9d05d45a37db5a007758620a04c2dc03))
+* kno report — the one-page verdict across stages ([#115](https://github.com/Knograph/kno/issues/115)) ([bfee4a2](https://github.com/Knograph/kno/commit/bfee4a268740334fe65a556a629e8a38b5024330))
+* kno v0.1.0 — the measurement loop is complete ([#118](https://github.com/Knograph/kno/issues/118)) ([0d2b21a](https://github.com/Knograph/kno/commit/0d2b21a43462019bb6c5475df869333dd9ad9b3d))
+* Langfuse Evals adapter — third core.Evals source ([#109](https://github.com/Knograph/kno/issues/109)) ([a0d1151](https://github.com/Knograph/kno/commit/a0d11513e8be9cd4950137c9822367ea9a8e5289))
+* LangSmith Evals adapter — datasets as first-class Cases ([#98](https://github.com/Knograph/kno/issues/98)) ([d568a82](https://github.com/Knograph/kno/commit/d568a823858d5975fac910f61aa6bf7f008cae5a))
+* persist the gaps statistic at export — report plan Step 0 ([#111](https://github.com/Knograph/kno/issues/111)) ([d1900eb](https://github.com/Knograph/kno/commit/d1900ebb9d8a28e78b4956badbe3d8a1a7531a3b))
+* populate Valuation.delta_per_cost in the Value stage ([#101](https://github.com/Knograph/kno/issues/101)) ([417cf03](https://github.com/Knograph/kno/commit/417cf0389436ff11ba84d5b1abfeb91cdfd0734d))
+* price the fast-mode variants; dispose the rest of debt [#46](https://github.com/Knograph/kno/issues/46) with reasons ([#91](https://github.com/Knograph/kno/issues/91)) ([a67ccbb](https://github.com/Knograph/kno/commit/a67ccbb98e54108db858b3ef8160daf0d28fa577))
+* pricing drift detector — watch the table for staleness, repricing, and unpriced variants ([#87](https://github.com/Knograph/kno/issues/87)) ([eb5dcd0](https://github.com/Knograph/kno/commit/eb5dcd095bb2de17633cd8e9c7c71757903c245d))
+* select and export — portfolio construction and destinations ([#107](https://github.com/Knograph/kno/issues/107)) ([e6b8038](https://github.com/Knograph/kno/commit/e6b803816fecbb3c978c83bff531d02c665d9ef3))
+
+
+### Bug Fixes
+
+* cli wiring tests manufacture credential absence instead of relying on the scrub ([#90](https://github.com/Knograph/kno/issues/90)) ([0dcad28](https://github.com/Knograph/kno/commit/0dcad2895e60302ec93f52d5c7b5cf6b224dfa9a))
+* pricing-check workflow bootstraps its own label ([#92](https://github.com/Knograph/kno/issues/92)) ([66d55c5](https://github.com/Knograph/kno/commit/66d55c51316ae47d7c82934b4f9258d6c842f9bb))
+* **value:** inline the routing shuffle so a recorded seed outlives the binary ([#108](https://github.com/Knograph/kno/issues/108)) ([0987d96](https://github.com/Knograph/kno/commit/0987d964a2430bd63443c4ce4559b37a005f3115))
+
+
+### Documentation
+
+* extend the quickstart tape through select, export, and report ([#116](https://github.com/Knograph/kno/issues/116)) ([9aaf1f9](https://github.com/Knograph/kno/commit/9aaf1f99ff5913e3dc04af2d381a31a666f23a86))
+* ledger the parquet deferral with a trigger that can lapse ([#104](https://github.com/Knograph/kno/issues/104)) ([9b084ed](https://github.com/Knograph/kno/commit/9b084ed22f483703ce3b6d12005dffcc7181a781))
+* n8n cookbook entry — scheduled valuation with alerts ([#97](https://github.com/Knograph/kno/issues/97)) ([13ab363](https://github.com/Knograph/kno/commit/13ab3636477c1e4d21933e101ea7e84234bcc389))
+* plan the Braintrust, Hugging Face, and Bedrock/Vertex adapters ([#119](https://github.com/Knograph/kno/issues/119)) ([5423116](https://github.com/Knograph/kno/commit/542311608a4159222a7b58de06bfafd08365685c))
+* plan the Langfuse Evals adapter ([#106](https://github.com/Knograph/kno/issues/106)) ([9775b16](https://github.com/Knograph/kno/commit/9775b161673dc8fbe4362e6396730c432dd23113))
+* plan the report page and minimal TUI dashboard ([#105](https://github.com/Knograph/kno/issues/105)) ([f03c8a8](https://github.com/Knograph/kno/commit/f03c8a8bb74795a364f55b3d8c2940f79c4ae448))
+* record the v0.1 bump-policy decision — feat: keeps bumping patch ([#113](https://github.com/Knograph/kno/issues/113)) ([2cf3b72](https://github.com/Knograph/kno/commit/2cf3b72ac61d025599d2b0c8ae5e538921bc36d1))
+* rework the README around the data-valuation pitch ([#94](https://github.com/Knograph/kno/issues/94)) ([4144be6](https://github.com/Knograph/kno/commit/4144be63eb7d70c905682f4dc5a4a9eb2ccc7a94))
+* sweep the cookbook against the v0.1 CLI; add the Anthropic entry ([#117](https://github.com/Knograph/kno/issues/117)) ([60d7608](https://github.com/Knograph/kno/commit/60d7608e0eac7a2c8ae06e553257e25d5f2735a3))
+* the v0.1 ledger review — dispose four lapses, amend stale rows ([#114](https://github.com/Knograph/kno/issues/114)) ([b63079d](https://github.com/Knograph/kno/commit/b63079d262617a441384ba85d5bff0e36b0f5c63))
+* vendor cookbook entries — GitHub, Salesforce, HubSpot, Shopify, Stripe, Jira, Confluence, Notion ([#96](https://github.com/Knograph/kno/issues/96)) ([b2fcd98](https://github.com/Knograph/kno/commit/b2fcd982c3499d50aeea055a22075ee87f5392ac))
+* Zendesk cookbook recipe and the vendor-swap reference table ([#95](https://github.com/Knograph/kno/issues/95)) ([83a5c91](https://github.com/Knograph/kno/commit/83a5c918f479d645c65d2a43b4364158d26844d3))
+
+
+### Build & Dependencies
+
+* **release:** re-enable the Homebrew brews block — tap and token are live ([#112](https://github.com/Knograph/kno/issues/112)) ([121440d](https://github.com/Knograph/kno/commit/121440de23545a42decd09eff2b9a6cfd454815e))
+
 ## [0.0.2](https://github.com/Knograph/kno/compare/v0.0.1...v0.0.2) (2026-08-27)
 
 
