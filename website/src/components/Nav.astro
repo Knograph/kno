@@ -1,0 +1,233 @@
+---
+/**
+ * Site navigation. Horizontal lockup in the header, per the brand system.
+ * Mobile menu uses native <details> — keyboard accessible, zero JS.
+ */
+import { getEntry } from 'astro:content';
+import { normalizePath } from '../lib/utils';
+
+const siteEntry = await getEntry('site', 'site');
+const siteData = siteEntry?.data;
+const currentPath = normalizePath(Astro.url.pathname);
+
+const navLinks = (siteData?.navigation ?? []).map((item) => ({
+  ...item,
+  isExternal: /^https?:\/\//.test(item.url),
+  isActive:
+    !/^https?:\/\//.test(item.url) &&
+    item.url !== '' &&
+    normalizePath(item.url) === currentPath,
+}));
+
+// "#quickstart" only resolves on the homepage; from anywhere else the
+// quickstart lives at /#quickstart.
+const getStartedUrl = currentPath === '/' ? '#quickstart' : '/#quickstart';
+---
+
+<header class="site-header">
+  <div class="container site-header__inner">
+    <a class="site-logo" href="/" aria-label={`${siteData?.title ?? 'Kno'} home`}>
+      <img src="/images/brand/kno_lockup_vector.svg" alt="" width="232" height="89" />
+    </a>
+
+    <nav class="site-nav" aria-label="Primary">
+      <ul class="site-nav__list">
+        {
+          navLinks.map((link) => (
+            <li>
+              <a
+                href={link.url}
+                class:list={['site-nav__link', { 'is-active': link.isActive }]}
+                {...(link.isExternal
+                  ? { target: '_blank', rel: 'noopener noreferrer' }
+                  : {})}
+              >
+                {link.label}
+              </a>
+            </li>
+          ))
+        }
+        <li class="site-nav__cta">
+          <a class="btn btn--primary" href={getStartedUrl}>Get started</a>
+        </li>
+      </ul>
+    </nav>
+
+    <details class="nav-menu">
+      <summary class="nav-menu__summary" aria-label="Open menu">
+        <span class="nav-menu__label">Menu</span>
+        <span class="nav-menu__icon" aria-hidden="true"></span>
+      </summary>
+      <nav class="nav-menu__panel" aria-label="Mobile">
+        <ul>
+          {
+            navLinks.map((link) => (
+              <li>
+                <a
+                  href={link.url}
+                  class:list={['nav-menu__link', { 'is-active': link.isActive }]}
+                  {...(link.isExternal
+                    ? { target: '_blank', rel: 'noopener noreferrer' }
+                    : {})}
+                >
+                  {link.label}
+                </a>
+              </li>
+            ))
+          }
+          <li class="nav-menu__cta">
+            <a class="btn btn--primary" href={getStartedUrl}>Get started</a>
+          </li>
+        </ul>
+      </nav>
+    </details>
+  </div>
+</header>
+
+<style>
+  .site-header {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: var(--white);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .site-header__inner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-4);
+    height: 4.25rem;
+  }
+
+  .site-logo {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+  }
+
+  .site-logo img {
+    height: 1.625rem;
+    width: auto;
+    display: block;
+  }
+
+  .site-nav {
+    margin-left: auto;
+  }
+
+  .site-nav__list {
+    display: flex;
+    align-items: center;
+    gap: var(--space-5);
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .site-nav__link {
+    color: var(--ink-soft);
+    text-decoration: none;
+    font-size: var(--text-sm);
+    font-weight: 550;
+  }
+
+  .site-nav__link:hover,
+  .site-nav__link.is-active {
+    color: var(--ink);
+  }
+
+  .site-nav__link.is-active {
+    text-decoration: underline;
+    text-decoration-thickness: 2px;
+    text-underline-offset: 0.35em;
+  }
+
+  /* Mobile menu — native details, no JS */
+  .nav-menu {
+    display: none;
+    position: relative;
+  }
+
+  .nav-menu__summary {
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2);
+    border: 1px solid var(--ink);
+    cursor: pointer;
+    color: var(--ink);
+    font-size: var(--text-sm);
+  }
+
+  .nav-menu__summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .nav-menu__icon {
+    width: 14px;
+    height: 10px;
+    border-top: 2px solid currentColor;
+    border-bottom: 2px solid currentColor;
+    position: relative;
+  }
+
+  .nav-menu__icon::after {
+    content: '';
+    position: absolute;
+    top: 4px;
+    left: 0;
+    width: 100%;
+    border-top: 2px solid currentColor;
+  }
+
+  .nav-menu[open] .nav-menu__icon::after {
+    display: none;
+  }
+
+  .nav-menu__panel {
+    position: absolute;
+    right: 0;
+    top: calc(100% + var(--space-2));
+    width: 16rem;
+    background: var(--white);
+    border: 1px solid var(--ink);
+    padding: var(--space-3);
+  }
+
+  .nav-menu__panel ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: var(--space-1);
+  }
+
+  .nav-menu__link {
+    display: block;
+    padding: var(--space-2) var(--space-3);
+    color: var(--ink);
+    text-decoration: none;
+  }
+
+  .nav-menu__link:hover,
+  .nav-menu__link.is-active {
+    background: var(--paper);
+  }
+
+  .nav-menu__cta {
+    margin-top: var(--space-2);
+    padding: 0 var(--space-3);
+  }
+
+  @media (max-width: 56rem) {
+    .site-nav {
+      display: none;
+    }
+    .nav-menu {
+      display: block;
+    }
+  }
+</style>

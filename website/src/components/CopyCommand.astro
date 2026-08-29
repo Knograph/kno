@@ -1,0 +1,87 @@
+---
+/**
+ * A copyable command. One small shared script powers every copy button on
+ * the site; the button carries the command text in a data attribute so
+ * multi-line commands copy exactly.
+ */
+interface Props {
+  command: string;
+  /** Analytics event name emitted on copy, e.g. "hero_install_copy". */
+  eventName?: string;
+  /** Where on the page the command lives, for analytics properties. */
+  location?: string;
+  label?: string;
+}
+
+const { command, eventName, location = 'page', label = 'Copy' } = Astro.props;
+---
+
+<div class="copycmd" data-copycmd>
+  <code class="copycmd__code" aria-label="Command">{command}</code>
+  <button
+    class="copycmd__btn"
+    type="button"
+    data-copy-target={command}
+    data-copied-label="Copied"
+    data-analytics-event={eventName}
+    data-analytics-location={location}
+    data-analytics-command={command}
+  >
+    {label}
+  </button>
+</div>
+
+<script>
+  function copyText(text: string): Promise<void> {
+    if (navigator.clipboard?.writeText) {
+      return navigator.clipboard.writeText(text);
+    }
+    // Fallback for older browsers / non-secure contexts.
+    const el = document.createElement('textarea');
+    el.value = text;
+    el.setAttribute('readonly', '');
+    el.style.position = 'fixed';
+    el.style.opacity = '0';
+    document.body.appendChild(el);
+    el.select();
+    const ok = document.execCommand('copy');
+    el.remove();
+    return ok ? Promise.resolve() : Promise.reject(new Error('copy failed'));
+  }
+
+  document.querySelectorAll<HTMLElement>('[data-copycmd]').forEach((wrap) => {
+    const button = wrap.querySelector<HTMLButtonElement>('[data-copy-target]');
+    if (!button) return;
+    button.addEventListener('click', () => {
+      const text = button.dataset.copyTarget ?? '';
+      const eventName = button.dataset.analyticsEvent;
+      void copyText(text)
+        .then(() => {
+          const original = button.textContent ?? 'Copy';
+          button.textContent = button.dataset.copiedLabel ?? 'Copied';
+          button.setAttribute('aria-pressed', 'true');
+          window.setTimeout(() => {
+            button.textContent = original;
+            button.removeAttribute('aria-pressed');
+          }, 2000);
+          if (eventName) {
+            document.dispatchEvent(
+              new CustomEvent('kno:track', {
+                detail: {
+                  name: eventName,
+                  props: {
+                    page: location.pathname,
+                    location: button.dataset.analyticsLocation ?? '',
+                    command: button.dataset.analyticsCommand ?? '',
+                  },
+                },
+              }),
+            );
+          }
+        })
+        .catch(() => {
+          button.textContent = 'Select manually';
+        });
+    });
+  });
+</script>

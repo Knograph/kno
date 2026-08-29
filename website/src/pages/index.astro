@@ -1,0 +1,1272 @@
+---
+import { getCollection, getEntry } from 'astro:content';
+import BaseLayout from '../layouts/BaseLayout.astro';
+import CopyCommand from '../components/CopyCommand.astro';
+import Terminal from '../components/Terminal.astro';
+import SectionHead from '../components/SectionHead.astro';
+import { deltaClass } from '../lib/utils';
+
+const siteEntry = await getEntry('site', 'site');
+const siteData = siteEntry?.data;
+const homeEntry = await getEntry('home', 'home');
+const home = homeEntry!.data;
+
+const useCases = (await getCollection('use-cases')).sort((a, b) =>
+  a.data.title.localeCompare(b.data.title),
+);
+
+const comparisonCell = (value: 'yes' | 'no' | 'uses') =>
+  value === 'yes' ? '✓' : value === 'uses' ? 'uses' : '—';
+
+const escapeHtml = (s: string) =>
+  s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+
+const impactClass = (impact: string) => {
+  const parsed = parseFloat(impact);
+  const cls = deltaClass(Number.isFinite(parsed) ? parsed : 0);
+  return cls === 'pos' ? 't-pos' : cls === 'neg' ? 't-neg' : 't-dim';
+};
+
+const valuationHtml = [
+  '<span class="t-dim">ASSET                  IMPACT    DECISION</span>',
+  ...home.valuation.rows.map((row) => {
+    const decisionClass = row.decision.startsWith('keep')
+      ? 't-pos'
+      : row.decision.startsWith('reject')
+        ? 't-neg'
+        : '';
+    return `<span class="t-dim">${escapeHtml(row.asset.padEnd(22))}</span>  <span class="${impactClass(row.impact)}">${escapeHtml(row.impact)}</span>    <span class="${decisionClass}">${escapeHtml(row.decision)}</span>`;
+  }),
+].join('\n');
+
+// Real quickstart value output (from the README) — verbatim shape.
+const realValueHtml = [
+  '<span class="t-dim">ASSET              DELTA (95% CI, positive = goal dir)  CONTROL     NOTE</span>',
+  '<span class="t-dim">brand-guide        </span><span class="t-pos">+0.0000</span><span class="t-dim">  [-0.1260, +0.1260]  low -0.1938 (underpowered)</span>',
+  '<span class="t-dim">refund-example-17  </span><span class="t-pos">+0.0000</span><span class="t-dim">  [-0.1260, +0.1260]  low -0.1938 (underpowered)</span>',
+  '<span class="t-dim">refund-policy-v3   </span><span class="t-pos">+0.0000</span><span class="t-dim">  [-0.1260, +0.1260]  low -0.1938 (underpowered)</span>',
+].join('\n');
+
+const outcomeMetrics: Record<string, string> = {
+  'Know what helps': '+18.4%\nrefund-policy.md',
+  'Know what hurts': '-8.9%\nold-policy.md → REJECT',
+  'Know what it costs': 'Δ / $\nrank per dollar',
+  'Know where it belongs': 'context\nknowledge_base\ntuning_set',
+  "Know what's missing": 'GAP\nUNKNOWN',
+};
+
+const softwareJsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'SoftwareApplication',
+  name: 'Kno',
+  description: siteData?.shortDescription,
+  applicationCategory: 'DeveloperApplication',
+  operatingSystem: 'macOS, Linux, Windows',
+  license: 'https://www.apache.org/licenses/LICENSE-2.0',
+  url: siteData?.githubUrl,
+  codeRepository: siteData?.githubUrl,
+  offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
+};
+---
+
+<BaseLayout jsonLd={softwareJsonLd}>
+  <!-- ============================================================ HERO -->
+  <section class="hero" aria-labelledby="hero-heading">
+    <div class="container hero__grid">
+      <div class="hero__main">
+        <p class="hero__meta">
+          KNO / OPEN SOURCE
+          <span aria-hidden="true"> · </span>
+          LICENSE / APACHE-2.0
+        </p>
+        <h1 id="hero-heading" class="hero__title">
+          Know which data actually makes your AI better.
+        </h1>
+        <p class="hero__sub">{home.hero.subheadline}</p>
+
+        <div class="hero__actions">
+          <a
+            class="btn btn--primary btn--lg"
+            href={home.hero.primaryCtaUrl}
+            data-analytics-event="hero_get_started"
+            data-analytics-location="hero"
+          >
+            {home.hero.primaryCtaLabel}
+          </a>
+          <a
+            class="link-arrow"
+            href={home.hero.secondaryCtaUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            data-analytics-event="hero_github_click"
+            data-analytics-location="hero"
+          >
+            {home.hero.secondaryCtaLabel} ↗
+          </a>
+        </div>
+
+        <div class="hero__install">
+          <CopyCommand
+            command={home.hero.installCommand}
+            eventName="hero_install_copy"
+            location="hero"
+          />
+        </div>
+
+        <ul class="hero__trust" aria-label="What Kno is">
+          {home.trustStrip.map((claim) => <li class="hero__trust-item">{claim}</li>)}
+        </ul>
+      </div>
+
+      <div class="hero__mark" aria-hidden="true">
+        <img src="/images/brand/kno_symbol_white.svg" alt="" width="508" height="844" />
+      </div>
+    </div>
+
+    <div class="container hero__result">
+      <Terminal title="KNO / VALUE" run="RUN 0142">
+        <span set:html={valuationHtml} />
+      </Terminal>
+      <p class="hero__result-note">{home.valuation.note}</p>
+    </div>
+  </section>
+
+  <!-- ========================================================== PROBLEM -->
+  <section class="section section--white" aria-labelledby="problem-heading">
+    <div class="container">
+      <SectionHead
+        index="01"
+        label="Problem"
+        heading={home.problem.heading}
+        lede={home.problem.body}
+      />
+      <div class="problem__visual">
+        <div class="problem__side">
+          <span class="problem__label">WITHOUT KNO</span>
+          <ul class="problem__flow">
+            <li>
+              <span>Documents</span><span class="problem__arrow">────────►</span><span
+                >RAG</span
+              >
+            </li>
+            <li>
+              <span>Examples</span><span class="problem__arrow">────────►</span><span
+                >Context</span
+              >
+            </li>
+            <li>
+              <span>Conversations</span><span class="problem__arrow">─────►</span><span
+                >Fine-tuning</span
+              >
+            </li>
+            <li>
+              <span>Policies</span><span class="problem__arrow">──────────►</span><span
+                class="problem__unknown">???</span
+              >
+            </li>
+          </ul>
+          <p class="problem__method">DECISION METHOD / INTUITION</p>
+        </div>
+        <div class="problem__side problem__side--dark">
+          <span class="problem__label">WITH KNO</span>
+          <ul class="problem__flow">
+            <li>
+              <span>Data</span><span class="problem__arrow">─────►</span><span
+                class="problem__kno">KNO</span
+              ><span class="problem__arrow">─────►</span><span>impact</span>
+            </li>
+            <li class="problem__indent">
+              <span class="problem__arrow">├──►</span><span>confidence</span>
+            </li>
+            <li class="problem__indent">
+              <span class="problem__arrow">├──►</span><span>cost</span>
+            </li>
+            <li class="problem__indent">
+              <span class="problem__arrow">├──►</span><span>destination</span>
+            </li>
+            <li class="problem__indent">
+              <span class="problem__arrow">└──►</span><span class="problem__keep"
+                >keep</span
+              ><span class="problem__sep"> / </span><span class="problem__reject"
+                >reject</span
+              >
+            </li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========================================================= OUTCOMES -->
+  <section class="section" aria-labelledby="outcomes-heading">
+    <div class="container">
+      <SectionHead
+        index="02"
+        label="Outcomes"
+        heading="Know what helps. Know what hurts. Know what it costs."
+      />
+      <ol class="outcomes">
+        {
+          home.outcomes.map((outcome, i) => (
+            <li class="outcome reveal">
+              <span class="outcome__index">{String(i + 1).padStart(2, '0')}</span>
+              <div class="outcome__body">
+                <h3>{outcome.title}</h3>
+                <p class="muted">{outcome.description}</p>
+              </div>
+              <pre class="outcome__metric" aria-hidden="true">
+                {outcomeMetrics[outcome.title] ?? outcome.icon}
+              </pre>
+            </li>
+          ))
+        }
+      </ol>
+      <p class="muted outcomes__note">
+        Metric samples are illustrative; real runs report each delta with its 95%
+        confidence interval.
+      </p>
+    </div>
+  </section>
+
+  <!-- =========================================================== PROOF -->
+  <section class="section section--white" aria-labelledby="proof-heading">
+    <div class="container proof">
+      <div class="proof__head">
+        <SectionHead
+          index="03"
+          label="Evidence"
+          heading={home.valuation.heading}
+          lede={home.valuation.intro}
+        />
+      </div>
+      <div class="proof__panel">
+        <Terminal title="kno value — the free fake agent" run="real output">
+          <span set:html={realValueHtml} />
+        </Terminal>
+        <p class="muted proof__note">
+          The deltas read 0.0000 because the free local agent answers every case with what
+          the case expects — the point is proving the loop: routing, injection, fresh
+          controls, intervals. Point it at a real provider and the numbers start meaning
+          something.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================================================== HOW IT WORKS -->
+  <section class="section section--dark" aria-labelledby="how-heading">
+    <div class="container container--narrow">
+      <div class="section-head">
+        <span class="section-head__index">[04 / MECHANISM]</span>
+        <h2>{home.howItWorks.heading}</h2>
+        <p class="lede">{home.howItWorks.intro}</p>
+      </div>
+
+      <ol class="stages">
+        {
+          home.howItWorks.stages.map((stage, i) => (
+            <li class="stage reveal">
+              <details open={i === 0}>
+                <summary class="stage__summary">
+                  <span class="stage__index">{String(i + 1).padStart(2, '0')}</span>
+                  <span class="stage__name">{stage.name}</span>
+                  <span
+                    class:list={[
+                      'badge',
+                      stage.status === 'shipped'
+                        ? 'badge--shipped badge--invert'
+                        : 'badge--planned',
+                    ]}
+                  >
+                    {stage.status}
+                  </span>
+                  <span class="stage__question">{stage.question}</span>
+                </summary>
+                <p class="stage__body">{stage.description}</p>
+              </details>
+            </li>
+          ))
+        }
+      </ol>
+    </div>
+  </section>
+
+  <!-- ======================================================= USE CASES -->
+  <section class="section section--white" aria-labelledby="usecases-heading">
+    <div class="container container--narrow">
+      <SectionHead
+        index="05"
+        label="Use cases"
+        heading="Answers to questions you already have"
+      />
+      <ol class="usecase-list">
+        {
+          useCases.map((uc, i) => (
+            <li class="usecase-list__item reveal">
+              <a
+                href={`/use-cases/${uc.id}/`}
+                data-analytics-event="use_case_click"
+                data-analytics-location="home"
+              >
+                <span class="usecase-list__index">{String(i + 1).padStart(2, '0')}</span>
+                <span class="usecase-list__question">{uc.data.question}</span>
+                <span class="usecase-list__arrow" aria-hidden="true">
+                  →
+                </span>
+              </a>
+            </li>
+          ))
+        }
+      </ol>
+    </div>
+  </section>
+
+  <!-- ===================================================== COMPARISON -->
+  <section class="section" aria-labelledby="comparison-heading">
+    <div class="container container--narrow">
+      <SectionHead
+        index="06"
+        label="Differentiation"
+        heading={home.comparison.heading}
+        lede={home.comparison.intro}
+      />
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Capability</th>
+              <th scope="col">Eval framework</th>
+              <th scope="col">Kno</th>
+            </tr>
+          </thead>
+          <tbody>
+            {
+              home.comparison.rows.map((row) => (
+                <tr>
+                  <th scope="row">{row.capability}</th>
+                  <td
+                    class:list={{
+                      'cell-uses': row.evalFrameworks === 'uses',
+                      'check-yes': row.evalFrameworks === 'yes',
+                      'cell-muted': row.evalFrameworks === 'no',
+                    }}
+                  >
+                    {comparisonCell(row.evalFrameworks)}
+                  </td>
+                  <td
+                    class:list={{
+                      'cell-uses': row.kno === 'uses',
+                      'check-yes': row.kno === 'yes',
+                      'cell-muted': row.kno === 'no',
+                    }}
+                  >
+                    {comparisonCell(row.kno)}
+                  </td>
+                </tr>
+              ))
+            }
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ====================================================== QUICKSTART -->
+  <section
+    class="section section--white"
+    id="quickstart"
+    aria-labelledby="quickstart-heading"
+  >
+    <div class="container container--narrow">
+      <SectionHead
+        index="07"
+        label="Quickstart"
+        heading={home.quickstart.heading}
+        lede={home.quickstart.intro}
+      />
+
+      <ol class="quickstart__steps">
+        {
+          home.quickstart.steps.map((step, i) => (
+            <li class="quickstart__step reveal">
+              <h3>
+                <span class="quickstart__num" aria-hidden="true">
+                  {String(i + 1).padStart(2, '0')}
+                </span>
+                {step.title}
+              </h3>
+              <p>{step.explanation}</p>
+              {step.command && (
+                <CopyCommand
+                  command={step.command}
+                  eventName="quickstart_command_copy"
+                  location={`quickstart-step-${i + 1}`}
+                />
+              )}
+              {step.output && (
+                <Terminal title={`kno — ${step.title.toLowerCase()}`} run="output">
+                  {step.output}
+                </Terminal>
+              )}
+            </li>
+          ))
+        }
+      </ol>
+
+      <p class="quickstart__note">{home.quickstart.freeNote}</p>
+
+      <figure class="quickstart__gif">
+        <img
+          src="/images/quickstart.gif"
+          alt="Terminal recording of the Kno quickstart: baseline, value, select, export, and report against the free fake agent"
+          width="1280"
+          height="800"
+          loading="lazy"
+        />
+        <figcaption class="muted">
+          The whole loop against the free fake agent — no API keys, no spend.
+        </figcaption>
+      </figure>
+
+      <p class="quickstart__docs">
+        <a
+          class="link-arrow"
+          href={home.quickstart.docsUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          data-analytics-event="docs_click"
+          data-analytics-location="quickstart"
+        >
+          {home.quickstart.docsLabel} →
+        </a>
+      </p>
+    </div>
+  </section>
+
+  <!-- ============================================================ TRUST -->
+  <section class="section" aria-labelledby="trust-heading">
+    <div class="container container--narrow">
+      <SectionHead
+        index="08"
+        label="Objections"
+        heading={home.trust.heading}
+        lede={home.trust.intro}
+      />
+      <div class="faq">
+        {
+          home.trust.items.map((item) => (
+            <details class="faq__item">
+              <summary>{item.question}</summary>
+              <div class="faq__answer" set:html={item.answer} />
+            </details>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
+  <!-- ========================================================= COMMUNITY -->
+  <section class="section section--white" aria-labelledby="community-heading">
+    <div class="container">
+      <SectionHead
+        index="09"
+        label="Open source"
+        heading={home.community.heading}
+        lede={home.community.description}
+      />
+
+      <div class="community__grid">
+        {
+          home.community.categories.map((cat, i) => (
+            <div class="community__item reveal">
+              <span class="community__index">{String(i + 1).padStart(2, '0')}</span>
+              <h3>{cat.title}</h3>
+              <p class="muted">{cat.description}</p>
+            </div>
+          ))
+        }
+      </div>
+
+      <div class="community__ctas">
+        {
+          home.community.ctas.map((cta, i) => (
+            <a
+              class:list={['btn', i === 0 && 'btn--primary']}
+              href={cta.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              data-analytics-event={
+                i === 0 ? 'good_first_issue_click' : 'contributing_click'
+              }
+              data-analytics-location="community"
+            >
+              {cta.label}
+            </a>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
+  <!-- ========================================================== ROADMAP -->
+  <section class="section" aria-labelledby="roadmap-heading">
+    <div class="container container--narrow">
+      <SectionHead
+        index="10"
+        label="Status"
+        heading={home.roadmap.heading}
+        lede={home.roadmap.intro}
+      />
+      <div class="roadmap">
+        <div class="roadmap__head">
+          <span>PROJECT STATUS</span>
+          <span>v0.1.0</span>
+        </div>
+        <ul>
+          {
+            home.roadmap.stages.map((stage) => (
+              <li class="roadmap__item">
+                <code class="roadmap__name">{stage.name}</code>
+                <span
+                  class:list={[
+                    'roadmap__state',
+                    stage.status === 'shipped'
+                      ? 'roadmap__state--done'
+                      : 'roadmap__state--todo',
+                  ]}
+                >
+                  {stage.status === 'shipped' ? '✓ SHIPPED' : '○ PLANNED'}
+                </span>
+              </li>
+            ))
+          }
+        </ul>
+        <p class="roadmap__cta">
+          <a
+            class="link-arrow"
+            href={home.roadmap.ctaUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            data-analytics-event="docs_click"
+            data-analytics-location="roadmap"
+          >
+            {home.roadmap.ctaLabel} →
+          </a>
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================================================= FINAL CTA -->
+  <section class="final-cta" aria-labelledby="final-heading">
+    <div class="container final-cta__grid">
+      <div class="final-cta__mark" aria-hidden="true">
+        <img
+          src="/images/brand/kno_symbol_white.svg"
+          alt=""
+          width="508"
+          height="844"
+          loading="lazy"
+        />
+      </div>
+      <div class="final-cta__main">
+        <h2 id="final-heading">{home.finalCta.heading}</h2>
+        <p>{home.finalCta.body}</p>
+        <div class="final-cta__install">
+          <CopyCommand
+            command={home.finalCta.installCommand}
+            eventName="quickstart_install_copy"
+            location="final-cta"
+          />
+        </div>
+        <div class="final-cta__actions">
+          {
+            home.finalCta.ctas.map((cta, i) => (
+              <a
+                class:list={['btn', 'btn--lg', i === 0 && 'btn--primary']}
+                href={cta.url}
+                {...(/^https?:\/\//.test(cta.url)
+                  ? { target: '_blank', rel: 'noopener noreferrer' }
+                  : {})}
+              >
+                {cta.label}
+              </a>
+            ))
+          }
+        </div>
+      </div>
+    </div>
+  </section>
+</BaseLayout>
+
+<style>
+  /* Hero — black mass, white type, oversized cropped symbol */
+  .hero {
+    background: #0a0a0a; /* literal: LH cannot resolve var() backgrounds */
+    color: var(--dark-ink);
+    padding-block: var(--space-8) var(--space-7);
+  }
+
+  .hero__grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.35fr) minmax(0, 0.65fr);
+    gap: var(--space-7);
+    align-items: center;
+  }
+
+  .hero__meta {
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--dark-muted);
+    margin: 0 0 var(--space-5);
+  }
+
+  .hero__title {
+    color: var(--dark-ink);
+    font-size: var(--text-5xl);
+    letter-spacing: -0.03em;
+    margin-bottom: var(--space-5);
+    max-width: 15ch;
+  }
+
+  .hero__sub {
+    font-size: var(--text-lg);
+    color: var(--dark-muted);
+    max-width: 34rem;
+    margin-bottom: var(--space-6);
+  }
+
+  .hero__actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-5);
+    flex-wrap: wrap;
+    margin-bottom: var(--space-5);
+  }
+
+  .hero__install {
+    max-width: 44rem;
+    margin-bottom: var(--space-7);
+  }
+
+  .hero__trust {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-4);
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--dark-muted);
+    /* Own opaque ground: visually identical to the hero, but the
+       background-color walk Lighthouse uses resolves locally. */
+    background: #0a0a0a;
+  }
+
+  .hero__trust-item + .hero__trust-item::before {
+    content: '/';
+    margin-right: var(--space-4);
+    color: var(--dark-muted);
+  }
+
+  .hero__mark {
+    position: relative;
+    height: 100%;
+    min-height: 22rem;
+    overflow: hidden;
+  }
+
+  .hero__mark img {
+    position: absolute;
+    right: -18%;
+    bottom: -22%;
+    width: 130%;
+    height: auto;
+    opacity: 0.92;
+  }
+
+  /* Valuation result below hero content */
+  .hero__result {
+    margin-top: var(--space-8);
+  }
+
+  .hero__result-note {
+    margin-top: var(--space-3);
+    font-size: var(--text-sm);
+    color: var(--dark-muted);
+    max-width: 44rem;
+  }
+
+  @media (max-width: 56rem) {
+    .hero__grid {
+      grid-template-columns: 1fr;
+    }
+    .hero__mark {
+      display: none;
+    }
+  }
+
+  /* Problem — before/after measurement panels */
+  .problem__visual {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-5);
+    margin-top: var(--space-7);
+  }
+
+  .problem__side {
+    border: 1px solid var(--ink);
+    padding: var(--space-5);
+  }
+
+  .problem__side--dark {
+    background: #0a0a0a; /* literal, see above */
+    border-color: var(--black);
+    color: var(--dark-ink);
+  }
+
+  .problem__label {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    letter-spacing: 0.12em;
+    margin-bottom: var(--space-4);
+    color: var(--muted);
+  }
+
+  .problem__side--dark .problem__label {
+    color: var(--dark-muted);
+  }
+
+  .problem__flow {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .problem__flow li {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    flex-wrap: nowrap;
+  }
+
+  .problem__arrow {
+    color: var(--faint);
+    white-space: nowrap;
+    overflow: hidden;
+  }
+
+  .problem__side--dark .problem__arrow {
+    color: var(--dark-line-strong);
+  }
+
+  .problem__unknown {
+    border-bottom: 2px dotted var(--faint);
+    padding-bottom: 2px;
+  }
+
+  .problem__kno {
+    color: var(--ink);
+    font-weight: 700;
+  }
+
+  .problem__side--dark .problem__kno {
+    color: var(--term-green);
+  }
+
+  .problem__indent {
+    margin-left: 9.5rem;
+  }
+
+  .problem__keep {
+    color: var(--pos);
+    font-weight: 700;
+  }
+
+  .problem__reject {
+    color: var(--neg);
+    font-weight: 700;
+  }
+
+  /* Semantic colors need brighter variants on black for AA contrast. */
+  .problem__side--dark .problem__keep {
+    color: var(--term-green);
+  }
+
+  .problem__side--dark .problem__reject {
+    color: var(--term-red);
+  }
+
+  .problem__method {
+    margin-top: var(--space-4);
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    letter-spacing: 0.12em;
+    color: var(--warn);
+  }
+
+  @media (max-width: 48rem) {
+    .problem__visual {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  /* Outcomes — numbered editorial rows, not cards */
+  .outcomes {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid var(--ink);
+  }
+
+  .outcome {
+    display: grid;
+    grid-template-columns: 4rem 1fr auto;
+    gap: var(--space-5);
+    align-items: start;
+    padding: var(--space-5) 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .outcome__index {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    color: var(--muted);
+    padding-top: 0.25em;
+  }
+
+  .outcome__body h3 {
+    margin-bottom: var(--space-2);
+  }
+
+  .outcome__body p {
+    margin: 0;
+    max-width: 34rem;
+  }
+
+  .outcome__metric {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    color: var(--ink-soft);
+    border: 1px solid var(--line);
+    padding: var(--space-3) var(--space-4);
+    text-align: right;
+    white-space: pre;
+    margin: 0;
+  }
+
+  .outcomes__note {
+    margin-top: var(--space-4);
+    font-size: var(--text-sm);
+  }
+
+  @media (max-width: 48rem) {
+    .outcome {
+      grid-template-columns: 3rem 1fr;
+    }
+    .outcome__metric {
+      grid-column: 2;
+      text-align: left;
+      justify-self: start;
+    }
+  }
+
+  /* Proof — asymmetric: head left, evidence right */
+  .proof {
+    display: grid;
+    grid-template-columns: 1fr 1.2fr;
+    gap: var(--space-7);
+    align-items: start;
+  }
+
+  .proof__note {
+    margin-top: var(--space-3);
+    font-size: var(--text-sm);
+  }
+
+  @media (max-width: 56rem) {
+    .proof {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  /* How it works — dark measurement panel */
+  .stages {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .stage {
+    border: 1px solid var(--dark-line);
+    background: var(--dark-panel);
+  }
+
+  .stage__summary {
+    display: grid;
+    grid-template-columns: 3rem auto auto 1fr;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-4) var(--space-5);
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .stage__summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .stage__index {
+    font-family: var(--font-mono);
+    color: var(--dark-muted);
+    font-size: var(--text-xs);
+  }
+
+  .stage__name {
+    font-weight: 700;
+    font-size: var(--text-lg);
+    font-family: var(--font-display);
+  }
+
+  .stage__question {
+    color: var(--dark-muted);
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    text-align: right;
+  }
+
+  .stage__body {
+    padding: 0 var(--space-5) var(--space-4);
+    margin: 0;
+    color: var(--dark-muted);
+    max-width: 40rem;
+  }
+
+  @media (max-width: 40rem) {
+    .stage__summary {
+      grid-template-columns: 2.5rem auto 1fr;
+    }
+    .stage__question {
+      grid-column: 1 / -1;
+      text-align: left;
+    }
+  }
+
+  /* Use cases — numbered question rows */
+  .usecase-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid var(--ink);
+  }
+
+  .usecase-list__item {
+    border-bottom: 1px solid var(--line);
+  }
+
+  .usecase-list__item a {
+    display: grid;
+    grid-template-columns: 3rem 1fr auto;
+    align-items: baseline;
+    gap: var(--space-4);
+    padding: var(--space-4) 0;
+    color: var(--ink);
+    text-decoration: none;
+  }
+
+  .usecase-list__item a:hover .usecase-list__question {
+    text-decoration: underline;
+    text-underline-offset: 0.2em;
+  }
+
+  .usecase-list__index {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    color: var(--muted);
+  }
+
+  .usecase-list__question {
+    font-family: var(--font-display);
+    font-weight: 650;
+    font-size: var(--text-xl);
+  }
+
+  .usecase-list__arrow {
+    font-family: var(--font-mono);
+    color: var(--faint);
+    flex-shrink: 0;
+  }
+
+  /* Quickstart */
+  .quickstart__steps {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: var(--space-7);
+  }
+
+  .quickstart__step {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .quickstart__step h3 {
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
+  .quickstart__num {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    color: var(--muted);
+  }
+
+  .quickstart__step p {
+    margin: 0;
+    color: var(--muted);
+  }
+
+  .quickstart__note {
+    margin-top: var(--space-7);
+    padding: var(--space-4) var(--space-5);
+    border-left: 3px solid var(--pos);
+    background: var(--pos-bg);
+  }
+
+  .quickstart__gif {
+    margin: var(--space-7) 0 0;
+  }
+
+  .quickstart__gif img {
+    max-width: 100%;
+    height: auto;
+    border: 1px solid var(--line);
+  }
+
+  .quickstart__gif figcaption {
+    font-size: var(--text-sm);
+    margin-top: var(--space-2);
+  }
+
+  .quickstart__docs {
+    margin-top: var(--space-5);
+    font-size: var(--text-lg);
+  }
+
+  /* FAQ */
+  .faq {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .faq__item {
+    border: 1px solid var(--line);
+    background: var(--white);
+  }
+
+  .faq__item summary {
+    padding: var(--space-4) var(--space-5);
+    cursor: pointer;
+    font-weight: 650;
+    list-style: none;
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+
+  .faq__item summary::after {
+    content: '+';
+    font-family: var(--font-mono);
+    color: var(--muted);
+    flex-shrink: 0;
+  }
+
+  .faq__item[open] summary::after {
+    content: '−';
+  }
+
+  .faq__item summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .faq__answer {
+    padding: 0 var(--space-5) var(--space-4);
+    color: var(--muted);
+    max-width: 40rem;
+  }
+
+  /* Community */
+  .community__grid {
+    display: grid;
+    gap: 0;
+    border-top: 1px solid var(--ink);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .community__item {
+    display: grid;
+    grid-template-columns: 4rem 12rem 1fr;
+    gap: var(--space-5);
+    padding: var(--space-5) 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .community__item:last-child {
+    border-bottom: 0;
+  }
+
+  .community__index {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    color: var(--muted);
+    padding-top: 0.25em;
+  }
+
+  .community__item h3 {
+    margin: 0;
+    font-size: var(--text-lg);
+  }
+
+  .community__item p {
+    margin: 0;
+  }
+
+  .community__ctas {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    margin-top: var(--space-6);
+  }
+
+  @media (max-width: 48rem) {
+    .community__item {
+      grid-template-columns: 3rem 1fr;
+    }
+    .community__item p {
+      grid-column: 2;
+    }
+  }
+
+  /* Roadmap — instrument status panel */
+  .roadmap {
+    border: 1px solid var(--ink);
+    background: var(--white);
+  }
+
+  .roadmap__head {
+    display: flex;
+    justify-content: space-between;
+    padding: var(--space-3) var(--space-5);
+    background: #0a0a0a; /* literal, see above */
+    color: var(--dark-ink);
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    letter-spacing: 0.12em;
+  }
+
+  .roadmap ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .roadmap__item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--space-4);
+    padding: var(--space-3) var(--space-5);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .roadmap__item:last-child {
+    border-bottom: 0;
+  }
+
+  .roadmap__name {
+    font-size: var(--text-base);
+  }
+
+  .roadmap__state {
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    letter-spacing: 0.08em;
+  }
+
+  .roadmap__state--done {
+    color: var(--pos);
+  }
+
+  .roadmap__state--todo {
+    color: var(--warn);
+  }
+
+  .roadmap__cta {
+    margin: var(--space-5) 0 0;
+  }
+
+  /* Final CTA — back to black and the symbol */
+  .final-cta {
+    background: #0a0a0a; /* literal, see above */
+    color: var(--dark-ink);
+    padding-block: var(--space-9);
+  }
+
+  .final-cta__grid {
+    display: grid;
+    grid-template-columns: minmax(0, 0.55fr) minmax(0, 1.45fr);
+    gap: var(--space-8);
+    align-items: center;
+  }
+
+  .final-cta__mark img {
+    width: 100%;
+    max-width: 15rem;
+    height: auto;
+  }
+
+  .final-cta__main h2 {
+    color: var(--dark-ink);
+    margin-bottom: var(--space-4);
+  }
+
+  .final-cta__main p {
+    color: var(--dark-muted);
+    max-width: 34rem;
+  }
+
+  .final-cta__install {
+    max-width: 44rem;
+    margin-block: var(--space-5);
+  }
+
+  .final-cta__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+  }
+
+  @media (max-width: 56rem) {
+    .final-cta__grid {
+      grid-template-columns: 1fr;
+    }
+    .final-cta__mark {
+      display: none;
+    }
+  }
+</style>

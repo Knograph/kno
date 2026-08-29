@@ -253,3 +253,32 @@ none ever goes into telemetry.
 pointers, and a test to make pass. The natural on-ramps are **Ring-1 adapters** (a new
 OpenAI-compatible endpoint, a pool format) and **judge prompts**. Several entries in
 [the Debt Ledger](docs/debt.md) are also well-scoped starting points.
+
+## The website
+
+The marketing site in `website/` is part of this repository. It is Astro +
+TypeScript, static-first, content Git-backed, and edited through Sveltia
+CMS (`/admin`). No Cloudflare credentials are needed to contribute.
+
+```bash
+cd website
+pnpm install
+pnpm dev          # http://localhost:4321 (+ /admin for the CMS)
+```
+
+Content lives in `website/src/content/` (typed by
+`website/src/content.config.ts`); edit it by hand or through the CMS —
+every change is a normal Git commit or PR, with an editorial workflow in
+production. The quickest wins: fixing stale copy, adding a use case
+(`src/content/use-cases/`), or a cookbook-linked blog post
+(`src/content/blog/`). Layout and design are developer-owned; see
+`website/docs/BRAND.md` for the visual system and
+`website/README.md` for architecture and testing:
+
+```bash
+pnpm format:check && pnpm lint && pnpm check
+pnpm test && pnpm build && pnpm test:e2e
+```
+
+Website CI runs on paths under `website/` and leaves the Go pipeline
+alone. Deployment details: `website/docs/DEPLOYMENT.md`.

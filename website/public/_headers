@@ -1,0 +1,24 @@
+# Security headers for Cloudflare Pages.
+#
+# CSP notes:
+# - script-src/style-src allow 'unsafe-inline': the site ships inline JSON-LD
+#   structured data and inline styles. Everything else is same-origin.
+# - Sveltia CMS (/admin) is a self-hosted static app; it makes no
+#   cross-origin requests except the OAuth redirect (a navigation, not a
+#   fetch). connect-src 'self' does not affect it.
+# - Keep frame-ancestors 'none' — the CMS UI is not intended to be framed.
+
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), interest-cohort=()
+  X-Frame-Options: DENY
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'
+  Strict-Transport-Security: max-age=31536000
+
+# Long-lived static assets
+/images/*
+  Cache-Control: public, max-age=604800, immutable
+
+/_astro/*
+  Cache-Control: public, max-age=31536000, immutable

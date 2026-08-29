@@ -1,0 +1,99 @@
+---
+/**
+ * Base layout: head (SEO), skip link, nav, footer, analytics bridge,
+ * and the tiny progressive-enhancement script (html.js + scroll reveal).
+ */
+import '../styles/fonts.css';
+import '../styles/tokens.css';
+import '../styles/global.css';
+// Preload the display font — the hero headline is the LCP element.
+import spaceGroteskWoff2 from '@fontsource-variable/space-grotesk/files/space-grotesk-latin-wght-normal.woff2?url';
+import jetbrainsMonoWoff2 from '@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2?url';
+import Seo from '../components/Seo.astro';
+import Nav from '../components/Nav.astro';
+import Footer from '../components/Footer.astro';
+import Analytics from '../components/Analytics.astro';
+
+interface Props {
+  title?: string;
+  description?: string;
+  canonicalPath?: string;
+  image?: string;
+  ogType?: 'website' | 'article';
+  jsonLd?: Record<string, unknown>;
+}
+
+const {
+  title,
+  description,
+  canonicalPath,
+  image,
+  ogType = 'website',
+  jsonLd,
+} = Astro.props;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0a0a0a" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link
+      rel="preload"
+      href={spaceGroteskWoff2}
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <link
+      rel="preload"
+      href={jetbrainsMonoWoff2}
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <Seo
+      title={title}
+      description={description}
+      canonicalPath={canonicalPath}
+      image={image}
+      type={ogType}
+      jsonLd={jsonLd}
+    />
+    <script>
+      // Progressive enhancement marker + scroll reveal. Runs before paint;
+      // content is fully visible without JS.
+      document.documentElement.classList.add('js');
+      document.addEventListener('DOMContentLoaded', () => {
+        const els = document.querySelectorAll('.reveal');
+        if (!('IntersectionObserver' in window)) {
+          els.forEach((el) => el.classList.add('is-visible'));
+          return;
+        }
+        const io = new IntersectionObserver(
+          (entries) => {
+            for (const entry of entries) {
+              if (entry.isIntersecting) {
+                entry.target.classList.add('is-visible');
+                io.unobserve(entry.target);
+              }
+            }
+          },
+          { rootMargin: '0px 0px -8% 0px' },
+        );
+        els.forEach((el) => io.observe(el));
+      });
+    </script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <Nav />
+    <main id="main">
+      <slot />
+    </main>
+    <Footer />
+    <Analytics />
+  </body>
+</html>

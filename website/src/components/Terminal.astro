@@ -1,0 +1,33 @@
+---
+/**
+ * Terminal — the site's primary visual motif, styled as a scientific
+ * output panel rather than a desktop window: mono uppercase header with
+ * context + run id, hairline rules, square corners.
+ *
+ * Slot content is raw text; wrap spans with .t-cmd / .t-dim / .t-pos /
+ * .t-neg / .t-amber for semantic coloring. Content scrolls horizontally
+ * on small screens; the page never does.
+ */
+interface Props {
+  title?: string;
+  run?: string;
+}
+
+const { title = 'kno', run } = Astro.props;
+---
+
+<figure class="terminal">
+  <figcaption class="terminal__chrome">
+    <span class="terminal__title">{title}</span>
+    {run && <span class="terminal__run">{run}</span>}
+  </figcaption>
+  <div class="terminal__body">
+    <pre tabindex="0"><code><slot /></code></pre>
+  </div>
+</figure>
+
+<style>
+  figure {
+    margin: 0;
+  }
+</style>

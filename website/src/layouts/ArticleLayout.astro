@@ -1,0 +1,37 @@
+---
+/**
+ * Narrow reading layout for blog posts, use-case pages, and content pages.
+ */
+import BaseLayout from './BaseLayout.astro';
+
+interface Props {
+  title?: string;
+  description?: string;
+  canonicalPath?: string;
+  image?: string;
+  ogType?: 'website' | 'article';
+  jsonLd?: Record<string, unknown>;
+}
+
+const {
+  title,
+  description,
+  canonicalPath,
+  image,
+  ogType = 'article',
+  jsonLd,
+} = Astro.props;
+---
+
+<BaseLayout
+  title={title}
+  description={description}
+  canonicalPath={canonicalPath}
+  image={image}
+  ogType={ogType}
+  jsonLd={jsonLd}
+>
+  <div class="container container--narrow section">
+    <slot />
+  </div>
+</BaseLayout>

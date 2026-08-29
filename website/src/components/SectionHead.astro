@@ -1,0 +1,25 @@
+---
+/**
+ * Numbered editorial section head:
+ *
+ *   [01 / MEASURE]
+ *   Every piece of agent data should earn its place.
+ *   (lede)
+ */
+interface Props {
+  index: string;
+  label: string;
+  heading: string;
+  lede?: string;
+}
+
+const { index, label, heading, lede } = Astro.props;
+---
+
+<div class="section-head">
+  <span class="section-head__index">
+    [{index} / {label}]
+  </span>
+  <h2>{heading}</h2>
+  {lede && <p class="lede">{lede}</p>}
+</div>

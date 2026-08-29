@@ -1,0 +1,91 @@
+---
+import { getCollection } from 'astro:content';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+
+const posts = (await getCollection('blog'))
+  .filter((post) => !post.data.draft)
+  .sort((a, b) => b.data.pubDate.valueOf() - a.data.pubDate.valueOf());
+
+const fmt = (d: Date) =>
+  d.toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+  });
+---
+
+<BaseLayout
+  title="Blog"
+  description="Notes on measuring agent data — releases, methodology, and what the numbers mean."
+  canonicalPath="/blog/"
+>
+  <section class="section">
+    <div class="container container--narrow">
+      <p class="eyebrow">Blog</p>
+      <h1>Notes from the lab</h1>
+      <p class="lede">
+        Releases, methodology, and honest status. Subscribe via{' '}
+        <a href="/rss.xml">RSS</a>.
+      </p>
+
+      <ul class="post-list">
+        {
+          posts.map((post) => (
+            <li class="post-list__item">
+              <article>
+                <h2>
+                  <a href={`/blog/${post.id}/`}>{post.data.title}</a>
+                </h2>
+                <p class="post-list__meta">
+                  <time datetime={post.data.pubDate.toISOString()}>
+                    {fmt(post.data.pubDate)}
+                  </time>
+                  {' · '}
+                  {post.data.author}
+                </p>
+                <p class="muted">{post.data.description}</p>
+              </article>
+            </li>
+          ))
+        }
+      </ul>
+    </div>
+  </section>
+</BaseLayout>
+
+<style>
+  .post-list {
+    list-style: none;
+    margin: var(--space-6) 0 0;
+    padding: 0;
+    display: grid;
+    gap: var(--space-5);
+  }
+
+  .post-list__item {
+    border-bottom: 1px solid var(--line);
+    padding-bottom: var(--space-5);
+  }
+
+  .post-list__item h2 {
+    font-size: var(--text-xl);
+    margin-bottom: var(--space-1);
+  }
+
+  .post-list__item h2 a {
+    color: var(--ink);
+    text-decoration: none;
+  }
+
+  .post-list__item h2 a:hover {
+    text-decoration: underline;
+  }
+
+  .post-list__meta {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--faint);
+    letter-spacing: 0.03em;
+  }
+</style>

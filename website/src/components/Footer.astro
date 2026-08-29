@@ -1,0 +1,130 @@
+---
+import { getEntry } from 'astro:content';
+
+const siteEntry = await getEntry('site', 'site');
+const siteData = siteEntry?.data;
+const links = siteData?.footerLinks ?? [];
+---
+
+<footer class="site-footer">
+  <div class="container site-footer__inner">
+    <div class="site-footer__brand">
+      <img
+        class="site-footer__lockup"
+        src="/images/brand/kno_lockup_white.svg"
+        alt=""
+        width="232"
+        height="89"
+        loading="lazy"
+      />
+      <p class="site-footer__tagline">{siteData?.shortDescription}</p>
+      <p class="site-footer__edit">
+        Wrong or stale on this page?{' '}
+        <a href="/admin/" data-analytics-event="cms_content_contribution_click"
+          >Edit it through the CMS</a
+        >{' '}
+        — every change is a normal GitHub PR.
+      </p>
+    </div>
+    <nav class="site-footer__links" aria-label="Footer">
+      <ul>
+        {
+          links.map((link) => (
+            <li>
+              <a
+                href={link.url}
+                {...(/^https?:\/\//.test(link.url)
+                  ? { target: '_blank', rel: 'noopener noreferrer' }
+                  : {})}
+              >
+                {link.label}
+              </a>
+            </li>
+          ))
+        }
+      </ul>
+    </nav>
+  </div>
+  <div class="container site-footer__rule">
+    <span>KNO / OPEN SOURCE</span>
+    <span>LICENSE / APACHE-2.0</span>
+  </div>
+</footer>
+
+<style>
+  .site-footer {
+    background: var(--black);
+    color: var(--dark-ink);
+    padding-block: var(--space-8) var(--space-5);
+    margin-top: 0;
+  }
+
+  .site-footer__inner {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-7);
+    flex-wrap: wrap;
+  }
+
+  .site-footer__brand {
+    max-width: 26rem;
+  }
+
+  .site-footer__lockup {
+    height: 1.75rem;
+    width: auto;
+    display: block;
+    margin-bottom: var(--space-4);
+  }
+
+  .site-footer__tagline,
+  .site-footer__edit {
+    color: var(--dark-muted);
+    font-size: var(--text-sm);
+    margin-top: var(--space-2);
+  }
+
+  .site-footer__edit a {
+    color: var(--dark-ink);
+  }
+
+  .site-footer__links ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(9rem, 1fr));
+    gap: var(--space-2) var(--space-6);
+  }
+
+  .site-footer__links a {
+    color: var(--dark-muted);
+    text-decoration: none;
+    font-size: var(--text-sm);
+  }
+
+  .site-footer__links a:hover {
+    color: var(--dark-ink);
+    text-decoration: underline;
+  }
+
+  .site-footer__rule {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-4);
+    margin-top: var(--space-7);
+    padding-top: var(--space-4);
+    border-top: 1px solid var(--dark-line);
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    letter-spacing: 0.12em;
+    color: var(--dark-muted);
+    text-transform: uppercase;
+  }
+
+  @media (max-width: 40rem) {
+    .site-footer__links ul {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

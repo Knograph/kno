@@ -1,0 +1,94 @@
+---
+import { getCollection } from 'astro:content';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+
+const useCases = (await getCollection('use-cases')).sort((a, b) =>
+  a.data.title.localeCompare(b.data.title),
+);
+---
+
+<BaseLayout
+  title="Use cases"
+  description="Which documents should go into RAG? Which examples earn context? Kno answers data questions with measurement, not intuition."
+  canonicalPath="/use-cases/"
+>
+  <section class="section">
+    <div class="container container--narrow">
+      <p class="eyebrow">Use cases</p>
+      <h1>Data questions, answered with measurement</h1>
+      <p class="lede">
+        Each use case is a question you can hand to Kno today — with the stages that
+        answer it and a recipe to follow.
+      </p>
+
+      <div class="usecase-grid">
+        {
+          useCases.map((uc) => (
+            <a
+              class="usecase-card"
+              href={`/use-cases/${uc.id}/`}
+              data-analytics-event="use_case_click"
+              data-analytics-location="use-cases-index"
+            >
+              <h2 class="usecase-card__title">{uc.data.question}</h2>
+              <p>{uc.data.summary}</p>
+              <span class="usecase-card__more" aria-hidden="true">
+                →
+              </span>
+            </a>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+</BaseLayout>
+
+<style>
+  .usecase-grid {
+    display: grid;
+    gap: var(--space-4);
+    margin-top: var(--space-6);
+  }
+
+  @media (min-width: 48rem) {
+    .usecase-grid {
+      grid-template-columns: repeat(2, 1fr);
+    }
+  }
+
+  .usecase-card {
+    display: block;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--paper-raised);
+    padding: var(--space-5);
+    color: var(--ink);
+    text-decoration: none;
+  }
+
+  .usecase-card:hover {
+    border-color: var(--line-strong);
+  }
+
+  .usecase-card:hover .usecase-card__title {
+    text-decoration: underline;
+    text-underline-offset: 0.2em;
+  }
+
+  .usecase-card__title {
+    font-size: var(--text-xl);
+    margin-bottom: var(--space-3);
+  }
+
+  .usecase-card p {
+    color: var(--muted);
+    margin: 0;
+  }
+
+  .usecase-card__more {
+    display: block;
+    margin-top: var(--space-3);
+    font-family: var(--font-mono);
+    color: var(--faint);
+  }
+</style>

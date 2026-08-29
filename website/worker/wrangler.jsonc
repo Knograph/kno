@@ -1,0 +1,32 @@
+{
+  // Reference configuration for deploying the official Sveltia CMS
+  // Authenticator (https://github.com/sveltia/sveltia-cms-auth) on
+  // Cloudflare Workers.
+  //
+  // The authenticator is a maintained project — do not reimplement OAuth.
+  // Steps:
+  //   1. git clone https://github.com/sveltia/sveltia-cms-auth
+  //   2. Copy this file next to its wrangler config (or deploy from there)
+  //   3. npx wrangler deploy
+  //   4. Set secrets (never in this file):
+  //        npx wrangler secret put GITHUB_CLIENT_ID
+  //        npx wrangler secret put GITHUB_CLIENT_SECRET
+  //   5. Register the GitHub OAuth app with callback
+  //      <worker-url>/callback — see ../docs/DEPLOYMENT.md
+  //
+  // This file contains NO secrets and is safe to commit.
+
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "sveltia-cms-auth",
+  "main": "src/index.js",
+  "compatibility_date": "2025-04-01",
+
+  "vars": {
+    // Optional but strongly recommended (anti-abuse + token security).
+    // Comma-separated hostnames; supports *.example.com wildcards.
+    "ALLOWED_DOMAINS": "kno.example.com",
+  },
+
+  // Secrets — configure via `wrangler secret put`, NEVER here:
+  //   GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET
+}

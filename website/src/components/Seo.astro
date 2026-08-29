@@ -1,0 +1,61 @@
+---
+/**
+ * SEO head tags: canonical, OpenGraph, Twitter cards, and optional
+ * structured data. Everything is static — no client JS involved.
+ */
+interface Props {
+  title?: string;
+  description?: string;
+  /** Path this page is canonical at, e.g. `/blog/` (defaults to current). */
+  canonicalPath?: string;
+  image?: string;
+  type?: 'website' | 'article';
+  jsonLd?: Record<string, unknown>;
+}
+
+import { getEntry } from 'astro:content';
+import { absoluteUrl } from '../lib/utils';
+
+const {
+  title = '',
+  description = '',
+  canonicalPath = Astro.url.pathname,
+  image,
+  type = 'website',
+  jsonLd,
+} = Astro.props;
+
+const siteEntry = await getEntry('site', 'site');
+const siteData = siteEntry?.data;
+
+const fullTitle = title
+  ? `${title} | ${siteData?.title ?? 'Kno'}`
+  : (siteData?.seoTitle ?? 'Kno');
+const fullDescription =
+  description || siteData?.seoDescription || siteData?.shortDescription || '';
+const canonical = absoluteUrl(canonicalPath, Astro.site);
+const ogImage = absoluteUrl(image || siteData?.ogImage || '/images/og.png', Astro.site);
+const twitterImage = absoluteUrl(
+  image || siteData?.ogImage || '/images/og.png',
+  Astro.site,
+);
+---
+
+<title>{fullTitle}</title>
+<meta name="description" content={fullDescription} />
+<link rel="canonical" href={canonical} />
+<meta name="generator" content={Astro.generator} />
+
+<meta property="og:type" content={type} />
+<meta property="og:site_name" content={siteData?.title ?? 'Kno'} />
+<meta property="og:title" content={fullTitle} />
+<meta property="og:description" content={fullDescription} />
+<meta property="og:url" content={canonical} />
+<meta property="og:image" content={ogImage} />
+
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content={fullTitle} />
+<meta name="twitter:description" content={fullDescription} />
+<meta name="twitter:image" content={twitterImage} />
+
+{jsonLd && <script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />}

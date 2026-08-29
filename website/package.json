@@ -1,0 +1,51 @@
+{
+  "name": "kno-website",
+  "type": "module",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Marketing website for Kno — know which data actually makes your AI better.",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "node --env-file-if-exists=.env scripts/generate-cms-config.mjs && astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro",
+    "prebuild": "node --env-file-if-exists=.env scripts/generate-cms-config.mjs",
+    "postbuild": "node scripts/prune-dev-routes.mjs",
+    "cms:generate": "node --env-file-if-exists=.env scripts/generate-cms-config.mjs",
+    "og:generate": "node scripts/generate-og.mjs",
+    "check": "astro check",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:unit": "vitest run",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@astrojs/rss": "^4.0.13",
+    "@astrojs/sitemap": "^3.5.1",
+    "@fontsource-variable/inter": "^5.3.0",
+    "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "@fontsource-variable/space-grotesk": "^5.3.0",
+    "astro": "^7.2.9"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.4",
+    "@playwright/test": "^1.57.0",
+    "@typescript-eslint/parser": "^8.45.0",
+    "eslint": "^9.31.0",
+    "eslint-plugin-astro": "^1.5.0",
+    "lighthouse": "^13.4.1",
+    "prettier": "^3.6.2",
+    "prettier-plugin-astro": "^0.14.1",
+    "sharp": "^0.35.4",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  },
+  "allowScripts": {
+    "esbuild": true
+  }
+}

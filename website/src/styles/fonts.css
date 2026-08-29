@@ -1,0 +1,9 @@
+/* Self-hosted variable fonts (bundled by Vite at build time — no CDN,
+   no render-blocking third-party requests).
+   - Space Grotesk: display
+   - Inter: editorial body
+   - JetBrains Mono: terminals, labels, measurements
+*/
+@import '@fontsource-variable/space-grotesk';
+@import '@fontsource-variable/inter';
+@import '@fontsource-variable/jetbrains-mono';

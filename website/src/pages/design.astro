@@ -1,0 +1,300 @@
+---
+/**
+ * Design primitives gallery — DEVELOPMENT ONLY.
+ * `getStaticPaths` returns nothing in production, so this route does not
+ * exist in the deployed site. Run `pnpm dev` and open /design/.
+ * See docs/BRAND.md for the system this page demonstrates.
+ */
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Terminal from '../components/Terminal.astro';
+import CopyCommand from '../components/CopyCommand.astro';
+
+export function getStaticPaths() {
+  if (process.env.NODE_ENV === 'production') return [];
+  return [{ params: {} }];
+}
+
+const typeSpecimen = {
+  display: 'Know which data actually makes your AI better.',
+  editorial:
+    'Kno measures the marginal contribution of the data feeding your agent — each document, example, and policy scored against your own evals.',
+  mono: 'ASSET  DELTA (95% CI)  DECISION',
+};
+---
+
+<BaseLayout title="Design primitives" description="Kno design system gallery">
+  <div class="container section design-gallery">
+    <h1>Design primitives</h1>
+    <p class="lede">
+      The Kno visual system: mass + measurement. Development only — never linked from
+      production.
+    </p>
+
+    <section class="design-block">
+      <h2>01 / Logo</h2>
+      <div class="row">
+        <div class="swatch swatch--light">
+          <img
+            src="/images/brand/kno_lockup_vector.svg"
+            alt="Kno lockup, black"
+            width="232"
+            height="89"
+          />
+        </div>
+        <div class="swatch swatch--dark">
+          <img
+            src="/images/brand/kno_lockup_white.svg"
+            alt="Kno lockup, white"
+            width="232"
+            height="89"
+          />
+        </div>
+        <div class="swatch swatch--light">
+          <img
+            src="/images/brand/kno_symbol_vector.svg"
+            alt="Kno symbol, black"
+            width="60"
+            height="100"
+          />
+        </div>
+      </div>
+    </section>
+
+    <section class="design-block">
+      <h2>02 / Typography</h2>
+      <p class="type-display">{typeSpecimen.display}</p>
+      <p class="type-editorial">{typeSpecimen.editorial}</p>
+      <p class="type-mono">{typeSpecimen.mono}</p>
+      <p class="type-label">
+        [07 / QUICKSTART] · KNO / OPEN SOURCE · LICENSE / APACHE-2.0
+      </p>
+    </section>
+
+    <section class="design-block">
+      <h2>03 / Color</h2>
+      <div class="row">
+        <div class="chip chip--black">black</div>
+        <div class="chip chip--graphite">graphite</div>
+        <div class="chip chip--paper">paper</div>
+        <div class="chip chip--white">white</div>
+        <div class="chip chip--pos">pos +18%</div>
+        <div class="chip chip--neg">neg -9%</div>
+        <div class="chip chip--warn">warn PLANNED</div>
+        <div class="chip chip--info">info SELECT</div>
+      </div>
+    </section>
+
+    <section class="design-block">
+      <h2>04 / Buttons and links</h2>
+      <div class="row row--baseline">
+        <a class="btn btn--primary" href="#">Run Kno</a>
+        <a class="btn" href="#">View on GitHub</a>
+        <a class="btn btn--primary btn--lg" href="#">Run Kno</a>
+        <a class="link-arrow" href="#">Read the docs →</a>
+      </div>
+    </section>
+
+    <section class="design-block">
+      <h2>05 / Labels</h2>
+      <div class="row">
+        <span class="badge">openai-compatible</span>
+        <span class="badge badge--shipped">shipped</span>
+        <span class="badge badge--planned">planned</span>
+        <span class="badge badge--pos">keep</span>
+        <span class="badge badge--neg">reject</span>
+      </div>
+    </section>
+
+    <section class="design-block">
+      <h2>06 / Terminal</h2>
+      <Terminal title="KNO / VALUE" run="RUN 0142">
+        <span
+          set:html={[
+            '<span class="t-dim">ASSET                  IMPACT    DECISION</span>',
+            '<span class="t-dim">new_refund_policy.md   </span><span class="t-pos">+18.4%</span><span class="t-dim">    </span><span class="t-pos">KEEP</span>',
+            '<span class="t-dim">old_refund_policy.md   </span><span class="t-neg">-8.9%</span><span class="t-dim">     </span><span class="t-neg">REJECT</span>',
+          ].join('\n')}
+        />
+      </Terminal>
+    </section>
+
+    <section class="design-block">
+      <h2>07 / Copy command</h2>
+      <CopyCommand command="kno baseline --evals cases.jsonl" />
+    </section>
+
+    <section class="design-block">
+      <h2>08 / Table</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Capability</th>
+              <th scope="col">Eval framework</th>
+              <th scope="col">Kno</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">Model performance</th>
+              <td class="check-yes">✓</td>
+              <td class="cell-uses">uses</td>
+            </tr>
+            <tr>
+              <th scope="row">Asset-level impact</th>
+              <td class="cell-muted">—</td>
+              <td class="check-yes">✓</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="design-block">
+      <h2>09 / Data visualization</h2>
+      <pre
+        class="viz">{`refund-policy.md        +18.4%  █████████████████
+example-42.json          +7.1%  ███████
+brand-guide.md           +0.2%  ▏
+old-policy.md            -8.9%  █████████
+
+confidence interval
+──────────●──────
+       12.1  18.4  21.7`}</pre>
+    </section>
+  </div>
+</BaseLayout>
+
+<style>
+  .design-gallery h2 {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-top: var(--space-7);
+    border-top: 1px solid var(--line);
+    padding-top: var(--space-4);
+  }
+
+  .design-block {
+    margin-bottom: var(--space-7);
+  }
+
+  .row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-4);
+    align-items: stretch;
+  }
+
+  .row--baseline {
+    align-items: baseline;
+  }
+
+  .swatch {
+    padding: var(--space-5);
+    border: 1px solid var(--line);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 12rem;
+    min-height: 7rem;
+  }
+
+  .swatch--light {
+    background: var(--white);
+  }
+
+  .swatch--dark {
+    background: var(--black);
+  }
+
+  .swatch img {
+    display: block;
+  }
+
+  .chip {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--line-strong);
+    color: var(--ink);
+  }
+
+  .chip--black {
+    background: var(--black);
+    color: var(--dark-ink);
+    border-color: var(--black);
+  }
+
+  .chip--graphite {
+    background: var(--graphite);
+    color: var(--dark-ink);
+    border-color: var(--graphite);
+  }
+
+  .chip--paper {
+    background: var(--paper);
+  }
+
+  .chip--white {
+    background: var(--white);
+  }
+
+  .chip--pos {
+    color: var(--pos);
+    border-color: var(--pos);
+  }
+
+  .chip--neg {
+    color: var(--neg);
+    border-color: var(--neg);
+  }
+
+  .chip--warn {
+    color: var(--warn);
+    border-color: var(--warn);
+  }
+
+  .chip--info {
+    color: var(--info);
+    border-color: var(--info);
+  }
+
+  .type-display {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: var(--text-4xl);
+    letter-spacing: -0.02em;
+    line-height: 1.05;
+    max-width: 24ch;
+  }
+
+  .type-editorial {
+    font-size: var(--text-lg);
+    color: var(--ink-soft);
+    max-width: 40rem;
+  }
+
+  .type-mono {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+  }
+
+  .type-label {
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .viz {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    border: 1px solid var(--line);
+    padding: var(--space-5);
+    overflow-x: auto;
+  }
+</style>

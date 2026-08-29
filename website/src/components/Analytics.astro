@@ -1,0 +1,45 @@
+---
+/**
+ * Analytics bridge. Components dispatch a `kno:track` CustomEvent; this
+ * tiny listener forwards it into the vendor-neutral tracker. With no
+ * provider configured this whole path is inert.
+ */
+import { track, ANALYTICS_EVENTS, type AnalyticsEventName } from '../lib/analytics';
+---
+
+<script>
+  import { track, ANALYTICS_EVENTS } from '../lib/analytics';
+  import type { AnalyticsEventName } from '../lib/analytics';
+
+  declare global {
+    interface DocumentEventMap {
+      'kno:track': CustomEvent<{
+        name: string;
+        props: Record<string, string | undefined>;
+      }>;
+    }
+  }
+
+  const known = new Set<string>(ANALYTICS_EVENTS);
+
+  document.addEventListener('kno:track', (event) => {
+    const { name, props } = event.detail;
+    if (!known.has(name)) return;
+    track(name as AnalyticsEventName, props);
+  });
+
+  // Elements that do not use the copy-button pattern (plain links/buttons)
+  // opt in with data-analytics-event; clicking dispatches the same event.
+  document.addEventListener('click', (event) => {
+    const target = (event.target as HTMLElement | null)?.closest?.(
+      '[data-analytics-event]',
+    ) as HTMLElement | null;
+    if (!target) return;
+    const name = target.dataset.analyticsEvent ?? '';
+    if (!known.has(name)) return;
+    track(name as AnalyticsEventName, {
+      page: location.pathname,
+      location: target.dataset.analyticsLocation ?? '',
+    });
+  });
+</script>

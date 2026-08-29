@@ -1,0 +1,319 @@
+hero:
+  eyebrow: Open-source agent data evaluation
+  headline: Know which data actually makes your AI better.
+  subheadline: >-
+    Measure which documents, examples, policies, and conversations improve
+    your agent. Rank them by impact and cost, then put each where it belongs.
+  primaryCtaLabel: Run Kno
+  primaryCtaUrl: '#quickstart'
+  secondaryCtaLabel: View on GitHub
+  secondaryCtaUrl: https://github.com/knograph/kno
+  installCommand: curl -sSfL https://raw.githubusercontent.com/knograph/kno/main/install.sh | sh
+
+trustStrip:
+  - Single Go binary
+  - No infrastructure
+  - Works with your existing evals
+  - OpenAI-compatible endpoints
+  - Anthropic
+  - 'exec: your own agent'
+  - Local fake agent — free
+  - Budget guarded
+  - Apache-2.0
+
+valuation:
+  eyebrow: The output
+  heading: Every piece of agent data should earn its place.
+  intro: >-
+    A valuation answers one question per asset: keep it, drop it, or move it —
+    with the measured delta that justifies the decision.
+  rows:
+    - asset: new_refund_policy.md
+      impact: +18%
+      decision: keep → knowledge base
+    - asset: example_42.json
+      impact: +7%
+      decision: keep → context
+    - asset: example_91.json
+      impact: +1%
+      decision: reject
+    - asset: old_refund_policy.md
+      impact: -9%
+      decision: reject → harmful
+  note: >-
+    Illustrative example. Real runs report the same shape — ASSET, DELTA,
+    decision — with each delta carrying its 95% confidence interval, a control
+    reading, and a rejection reason.
+
+problem:
+  heading: You're measuring your models. Why aren't you measuring your data?
+  body: >-
+    Agent teams route data constantly — put it in RAG, add it to context,
+    fine-tune on it — with intuition as the decision method. Product docs,
+    support conversations, policies, examples: lots of data, very little
+    evidence about which of it actually helps. Kno treats data as an
+    experimental variable and turns each of those decisions into a measured
+    experiment.
+
+outcomes:
+  - icon: '+Δ'
+    title: Know what helps
+    description: >-
+      Measure the marginal impact of each candidate asset against your own
+      evals.
+  - icon: '-Δ'
+    title: Know what hurts
+    description: >-
+      Find contradictory and harmful data — and regressions other tools
+      miss — before they reach production.
+  - icon: '$'
+    title: Know what it costs
+    description: >-
+      Compare improvement against inference cost. Ranking is per dollar, not
+      per point.
+  - icon: '→'
+    title: Know where it belongs
+    description: >-
+      Context, knowledge base, or tuning set — every selected asset gets a
+      destination, not just a score.
+  - icon: '∅'
+    title: Know what's missing
+    description: >-
+      Export reports the gaps: cases your current data cannot move, measured
+      as GAP / UNKNOWN.
+
+howItWorks:
+  heading: Five stages. One question each.
+  intro: >-
+    Kno treats data as an experimental variable. Each stage answers a single
+    question about your agent and the assets you feed it — and each stage is
+    recorded so the report can show its work.
+  stages:
+    - name: Baseline
+      question: How good is the agent now?
+      description: >-
+        Run the agent over your dev cases, score against your goal, persist
+        every result. A holdout is sealed here; nothing reads it until
+        validate.
+      status: shipped
+    - name: Value
+      question: Which assets improve it?
+      description: >-
+        Route each asset to the slices it could affect, inject it, re-measure
+        against fresh controls, record the delta with a confidence interval.
+      status: shipped
+    - name: Select
+      question: Which combination should I keep?
+      description: >-
+        Build a portfolio under budget with a rejection log; every keep/reject
+        decision at a Bonferroni-corrected interval.
+      status: shipped
+    - name: Validate
+      question: Does the combination still work on untouched evals?
+      description: >-
+        Measure the portfolio as a set against the sealed holdout.
+      status: planned
+    - name: Export
+      question: Where should each asset go?
+      description: >-
+        Render selected assets into the destination grammar: context pack,
+        knowledge-base manifest, or tuning-set JSONL.
+      status: shipped
+
+comparison:
+  heading: Your eval framework measures the agent. Kno measures the data feeding it.
+  intro: >-
+    Kno does not replace your evals — it uses them. Existing evals tell you
+    whether your agent got better or worse. Kno uses those evals to determine
+    why a particular data asset changes the outcome, and whether that asset is
+    worth keeping.
+  rows:
+    - capability: Model performance
+      evalFrameworks: 'yes'
+      kno: uses
+    - capability: Prompt performance
+      evalFrameworks: 'yes'
+      kno: uses
+    - capability: Asset-level impact
+      evalFrameworks: 'no'
+      kno: 'yes'
+    - capability: Marginal data value
+      evalFrameworks: 'no'
+      kno: 'yes'
+    - capability: Data cost
+      evalFrameworks: 'no'
+      kno: 'yes'
+    - capability: Destination selection
+      evalFrameworks: 'no'
+      kno: 'yes'
+    - capability: Portfolio validation
+      evalFrameworks: 'no'
+      kno: 'yes'
+
+quickstart:
+  heading: From zero to your first valuation
+  intro: >-
+    Four steps, no API keys, no spend. The default agent is a local fake that
+    costs nothing, so you can see the whole loop work — routing, injection,
+    controls, intervals — before pointing Kno at anything that bills you.
+  steps:
+    - title: Write some cases
+      command: |-
+        printf '{"id":"refund-01","input":"How do I get a refund?","expected":"Refunds are processed within 5 business days."}\n' > cases.jsonl
+      explanation: One scoreable interaction per line, each with a stable id.
+    - title: Measure the agent as it is today
+      command: kno baseline --evals cases.jsonl
+      output: |-
+        Baseline 20260821T091515-ffc3097d49da
+          cases      44 scored, 0 errored (of 44 dev; 6 held back)
+          score      1.000
+          spent      $0.00 over 44 call(s)
+          status     completed
+      explanation: >-
+        The reference every later number is compared against. Kno seals a
+        holdout here — nothing reads it until validate.
+    - title: Write a pool of candidate assets
+      command: |-
+        printf '{"id":"refund-policy-v3","content":"Refunds are processed within 5 business days.","kind":"knowledge"}\n' > pool.jsonl
+      explanation: The documents, examples, and policies you are considering adding.
+    - title: Value them
+      command: kno value --evals cases.jsonl --pool pool.jsonl --baseline-run-id <run id>
+      output: |-
+        Planning 150 measurements over 3 assets against baseline 20260821T091515-ffc3097d49da.
+        Value run 20260828T233124-05cda2dcdac6 (RUN_STATUS_COMPLETED)
+
+        ASSET              DELTA (95% CI)              CONTROL     NOTE
+        brand-guide        +0.0000 [-0.1260, +0.1260]  low -0.1938 (underpowered)
+        refund-example-17  +0.0000 [-0.1260, +0.1260]  low -0.1938 (underpowered)
+        refund-policy-v3   +0.0000 [-0.1260, +0.1260]  low -0.1938 (underpowered)
+      explanation: >-
+        Each asset is injected into the slices it could affect, re-measured
+        against controls, and reported with an interval. The deltas read zero
+        because the fake agent answers every case with what the case expects —
+        the point is proving the loop, not the asset.
+  docsLabel: Read the full walkthrough
+  docsUrl: https://github.com/knograph/kno/blob/main/docs/cookbook/first-baseline.md
+  freeNote: >-
+    The quickstart costs nothing. Point Kno at a real provider — any
+    OpenAI-compatible endpoint or Anthropic — with --agent and a budget cap,
+    and the numbers start meaning something.
+
+trust:
+  heading: Questions engineers actually ask
+  intro: >-
+    Kno is deliberately opinionated about experimentation. The short answers,
+    from the source.
+  items:
+    - question: Does Kno replace my eval framework?
+      answer: >-
+        No — it uses it. Your evals tell you whether your agent is getting
+        better or worse. Kno re-scores the agent with each candidate asset to
+        measure why a particular asset changes the outcome, and whether that
+        asset is worth keeping.
+    - question: Does Kno send my data somewhere?
+      answer: >-
+        Runs are stored locally in SQLite — including agent output, which may
+        be conversation content. Kno itself sends nothing anywhere: there is
+        no telemetry of content, ever. Your cases go only to the provider you
+        point Kno at, and that provider's retention is theirs.
+    - question: What happens to traces?
+      answer: >-
+        They stay on your disk until you delete them, and nothing expires on
+        its own. `kno purge` removes trace content when you no longer need it,
+        keeping the scores and costs so the run stays resumable.
+    - question: Can it accidentally spend unlimited API money?
+      answer: >-
+        No. Every path that can call a provider goes through a budget guard:
+        estimate, confirm, checkpoint — and caps are enforced before the call,
+        not discovered at settlement. A cap whose cost cannot be estimated is
+        refused up front. `--max-cost-usd` with `--yes` makes a run
+        unattended-safe, and an interrupted run resumes without paying twice.
+    - question: Are the results statistically meaningful?
+      answer: >-
+        Kno reports confidence intervals, never naked point estimates — a
+        delta without its interval is not reported at all. Controls measure
+        regression separately, selection decisions are made at
+        Bonferroni-corrected intervals, and small samples are flagged
+        underpowered instead of dressed up as answers. The honest number is
+        the holdout number.
+    - question: What providers work?
+      answer: >-
+        `openai:` for any OpenAI-compatible endpoint (vLLM, Ollama, llama.cpp
+        need no key), `anthropic:` for the Anthropic API, `exec:` for your own
+        agent behind a shell command, and `fake:` for the local agent that
+        costs nothing. `tuned:` arrives with the stages that need it. Keys
+        come from the environment, never from a flag — `kno doctor` prints
+        what this build supports and contacts nothing.
+    - question: Do I need infrastructure?
+      answer: >-
+        No. Kno is a single Go binary. State is one local SQLite file, work
+        checkpoints as each case completes, and CI can gate on real exit
+        codes.
+
+community:
+  heading: Kno is designed to be extended
+  description: >-
+    Adapters bring new data sources, judges add evaluation logic, goals add
+    optimization targets, providers connect agent runtimes — and the core
+    measurement loop itself is open. Pick the surface that matches how deep
+    you want to go.
+  categories:
+    - title: Adapters
+      description: >-
+        Bring another data source. Langfuse and LangSmith eval adapters, CSV
+        and Markdown pools, and a full Zendesk recipe already ship — the
+        pattern transfers to any stack that can export data.
+    - title: Judges
+      description: Add evaluation logic so Kno can score a new kind of case.
+    - title: Goals
+      description: Add an optimization target for the select stage.
+    - title: Providers
+      description: Connect a new agent runtime.
+    - title: Core
+      description: >-
+        Improve the valuation engine itself — plan first, review
+        adversarially, then code.
+  ctas:
+    - label: Find good first issues
+      url: https://github.com/knograph/kno/blob/main/CONTRIBUTING.md#where-to-start
+    - label: Read CONTRIBUTING.md
+      url: https://github.com/knograph/kno/blob/main/CONTRIBUTING.md
+    - label: Ask in Discussions
+      url: https://github.com/knograph/kno/discussions
+    - label: Open an issue
+      url: https://github.com/knograph/kno/issues/new/choose
+
+roadmap:
+  heading: Kno is early. Help define what comes next.
+  intro: >-
+    The measurement loop ships — baseline, value, select, export, and report
+    are real, as is kno mine for building evals from production transcripts.
+    Validate is next. Everything here is transparent on purpose, including
+    the debt.
+  stages:
+    - name: baseline
+      status: shipped
+    - name: value
+      status: shipped
+    - name: select
+      status: shipped
+    - name: validate
+      status: planned
+    - name: export
+      status: shipped
+    - name: report
+      status: shipped
+  ctaLabel: See the full status table
+  ctaUrl: https://github.com/knograph/kno#status
+
+finalCta:
+  heading: Stop guessing which data makes your agent better.
+  body: >-
+    Install the binary, run the quickstart, and get your first valuation in
+    minutes — without spending API money.
+  installCommand: curl -sSfL https://raw.githubusercontent.com/knograph/kno/main/install.sh | sh
+  ctas:
+    - label: Run the quickstart
+      url: '#quickstart'
+    - label: View on GitHub
+      url: https://github.com/knograph/kno

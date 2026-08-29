@@ -1,0 +1,45 @@
+---
+import { getCollection, render } from 'astro:content';
+import ArticleLayout from '../layouts/ArticleLayout.astro';
+
+export async function getStaticPaths() {
+  const pages = await getCollection('pages');
+  return pages.map((page) => ({ params: { slug: page.id }, props: { page } }));
+}
+
+const { page } = Astro.props;
+const { Content } = await render(page);
+---
+
+<ArticleLayout
+  title={page.data.seoTitle ?? page.data.title}
+  description={page.data.seoDescription ?? page.data.description}
+  canonicalPath={`/${page.id}/`}
+>
+  <h1>{page.data.title}</h1>
+  <p class="lede">{page.data.description}</p>
+  <div class="prose">
+    <Content />
+  </div>
+</ArticleLayout>
+
+<style>
+  .prose :global(h2) {
+    margin-top: var(--space-7);
+  }
+
+  .prose :global(table) {
+    min-width: 0;
+  }
+
+  .prose :global(.table-wrap) {
+    margin-bottom: var(--space-5);
+  }
+
+  .prose :global(blockquote) {
+    margin: 0 0 var(--space-4);
+    padding-left: var(--space-4);
+    border-left: 3px solid var(--line-strong);
+    color: var(--ink-soft);
+  }
+</style>

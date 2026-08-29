@@ -1,0 +1,105 @@
+---
+import { getCollection, render } from 'astro:content';
+import ArticleLayout from '../../layouts/ArticleLayout.astro';
+import Terminal from '../../components/Terminal.astro';
+
+export async function getStaticPaths() {
+  const useCases = await getCollection('use-cases');
+  return useCases.map((uc) => ({ params: { slug: uc.id }, props: { uc } }));
+}
+
+const { uc } = Astro.props;
+const { Content } = await render(uc);
+
+// In-page anchors only resolve on the homepage.
+const ctaUrl = uc.data.ctaUrl.startsWith('#') ? `/${uc.data.ctaUrl}` : uc.data.ctaUrl;
+---
+
+<ArticleLayout
+  title={uc.data.seoTitle ?? uc.data.title}
+  description={uc.data.seoDescription ?? uc.data.summary}
+  canonicalPath={`/use-cases/${uc.id}/`}
+>
+  <p class="eyebrow">Use case</p>
+  <h1>{uc.data.question}</h1>
+  <p class="lede">{uc.data.summary}</p>
+
+  <h2>The problem</h2>
+  <p>{uc.data.problem}</p>
+
+  <h2>The workflow</h2>
+  <ol class="workflow">
+    {
+      uc.data.workflow.map((step) => (
+        <li>
+          <h3>{step.step}</h3>
+          <p class="muted">{step.detail}</p>
+        </li>
+      ))
+    }
+  </ol>
+
+  {
+    uc.data.example && (
+      <>
+        <h2>What it looks like</h2>
+        <Terminal title="kno">{uc.data.example}</Terminal>
+      </>
+    )
+  }
+
+  <Content />
+
+  {
+    uc.data.stages.length > 0 && (
+      <>
+        <h2>Stages involved</h2>
+        <ul class="stages-inline">
+          {uc.data.stages.map((stage) => (
+            <li class="badge">{stage}</li>
+          ))}
+        </ul>
+      </>
+    )
+  }
+
+  <a class="btn btn--primary btn--lg" href={ctaUrl}>
+    {uc.data.ctaLabel} →
+  </a>
+</ArticleLayout>
+
+<style>
+  .workflow {
+    list-style: none;
+    margin: 0 0 var(--space-5);
+    padding: 0;
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .workflow li {
+    border-left: 3px solid var(--line-strong);
+    padding-left: var(--space-4);
+  }
+
+  .workflow h3 {
+    margin-bottom: var(--space-1);
+    font-family: var(--font-mono);
+    font-size: var(--text-base);
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+
+  .stages-inline {
+    list-style: none;
+    margin: 0 0 var(--space-6);
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  h2 {
+    margin-top: var(--space-7);
+  }
+</style>

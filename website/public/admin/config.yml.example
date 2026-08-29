@@ -1,0 +1,386 @@
+# Sveltia CMS configuration — GENERATED at build time.
+# Template: scripts/cms-config.template.yml. Do not edit the generated
+# public/admin/config.yml directly; edit this template.
+#
+# Placeholders:
+#   https://api.github.com  — Sveltia CMS Authenticator Worker URL, or
+#                            https://api.github.com for local token use.
+#   http://localhost:4321    — canonical origin of the deployed site.
+#
+# This file is public by design. No secrets live here, ever.
+
+backend:
+  name: github
+  repo: knograph/kno
+  branch: main
+  base_url: 'https://api.github.com'
+  auth_scope: public_repo
+  squash_merges: true
+  open_authoring: true
+
+publish_mode: editorial_workflow
+
+site_url: 'http://localhost:4321'
+display_url: 'http://localhost:4321'
+logo_url: /favicon.svg
+
+media_folder: website/public/images/uploads
+public_folder: /images/uploads
+
+collections:
+  - name: site
+    label: Site settings
+    icon: settings
+    files:
+      - name: site
+        label: Settings
+        file: website/src/content/site/site.yaml
+        fields:
+          - label: Site title
+            name: title
+            widget: string
+          - label: Short description
+            name: shortDescription
+            widget: text
+          - label: GitHub repository URL
+            name: githubUrl
+            widget: string
+          - label: Docs URL
+            name: docsUrl
+            widget: string
+          - label: Install command
+            name: installCommand
+            widget: text
+          - label: Navigation
+            name: navigation
+            widget: list
+            summary: '{{label}} — {{url}}'
+            fields:
+              - { label: Label, name: label, widget: string }
+              - { label: URL, name: url, widget: string }
+          - label: Social links
+            name: socialLinks
+            widget: list
+            summary: '{{label}}'
+            fields:
+              - { label: Label, name: label, widget: string }
+              - { label: URL, name: url, widget: string }
+          - label: Default SEO title
+            name: seoTitle
+            widget: string
+          - label: Default SEO description
+            name: seoDescription
+            widget: text
+          - label: Default OpenGraph image
+            name: ogImage
+            widget: string
+            hint: Path under the website's public/ directory, e.g. /images/og.png
+          - label: Footer links
+            name: footerLinks
+            widget: list
+            summary: '{{label}}'
+            fields:
+              - { label: Label, name: label, widget: string }
+              - { label: URL, name: url, widget: string }
+
+  - name: home
+    label: Homepage
+    icon: home
+    files:
+      - name: home
+        label: Homepage
+        file: website/src/content/home/home.yaml
+        fields:
+          - label: Hero
+            name: hero
+            widget: object
+            fields:
+              - { label: Eyebrow, name: eyebrow, widget: string }
+              - { label: Headline, name: headline, widget: string }
+              - { label: Subheadline, name: subheadline, widget: text }
+              - { label: Primary CTA label, name: primaryCtaLabel, widget: string }
+              - { label: Primary CTA URL, name: primaryCtaUrl, widget: string }
+              - { label: Secondary CTA label, name: secondaryCtaLabel, widget: string }
+              - { label: Secondary CTA URL, name: secondaryCtaUrl, widget: string }
+              - label: Install command
+                name: installCommand
+                widget: text
+                hint: Shown with a copy button. Keep it a single command.
+          - label: Trust strip
+            name: trustStrip
+            widget: list
+            summary: '{{fields.claim}}'
+            field: { label: Claim, name: claim, widget: string }
+          - label: Example valuation
+            name: valuation
+            widget: object
+            fields:
+              - { label: Eyebrow, name: eyebrow, widget: string }
+              - { label: Heading, name: heading, widget: string }
+              - { label: Intro, name: intro, widget: text }
+              - label: Rows
+                name: rows
+                widget: list
+                summary: '{{asset}} {{impact}}'
+                fields:
+                  - { label: Asset, name: asset, widget: string }
+                  - { label: Impact, name: impact, widget: string }
+                  - { label: Decision, name: decision, widget: string }
+              - label: Note
+                name: note
+                widget: text
+                hint: Label illustrative numbers as illustrative here.
+          - label: Problem section
+            name: problem
+            widget: object
+            fields:
+              - { label: Heading, name: heading, widget: string }
+              - { label: Body, name: body, widget: text }
+          - label: Outcomes
+            name: outcomes
+            widget: list
+            summary: '{{title}}'
+            fields:
+              - label: Icon identifier
+                name: icon
+                widget: string
+                hint: Short monospace glyph, e.g. +Δ, $, →, ∅
+              - { label: Title, name: title, widget: string }
+              - { label: Description, name: description, widget: text }
+          - label: How it works
+            name: howItWorks
+            widget: object
+            fields:
+              - { label: Heading, name: heading, widget: string }
+              - { label: Intro, name: intro, widget: text }
+              - label: Stages
+                name: stages
+                widget: list
+                summary: '{{name}} — {{status}}'
+                fields:
+                  - { label: Name, name: name, widget: string }
+                  - { label: Question, name: question, widget: string }
+                  - { label: Description, name: description, widget: text }
+                  - label: Status
+                    name: status
+                    widget: select
+                    options: [shipped, planned]
+                    default: shipped
+          - label: Comparison section
+            name: comparison
+            widget: object
+            fields:
+              - { label: Heading, name: heading, widget: string }
+              - { label: Intro, name: intro, widget: text }
+              - label: Rows
+                name: rows
+                widget: list
+                summary: '{{capability}}'
+                fields:
+                  - { label: Capability, name: capability, widget: string }
+                  - label: Eval frameworks
+                    name: evalFrameworks
+                    widget: select
+                    options: [yes, 'no', uses]
+                    default: 'no'
+                  - label: Kno
+                    name: kno
+                    widget: select
+                    options: [yes, 'no', uses]
+                    default: 'yes'
+          - label: Quickstart
+            name: quickstart
+            widget: object
+            fields:
+              - { label: Heading, name: heading, widget: string }
+              - { label: Intro, name: intro, widget: text }
+              - label: Steps
+                name: steps
+                widget: list
+                summary: '{{title}}'
+                fields:
+                  - { label: Title, name: title, widget: string }
+                  - label: Command
+                    name: command
+                    widget: text
+                    required: false
+                  - label: Terminal output
+                    name: output
+                    widget: text
+                    required: false
+                  - { label: Explanation, name: explanation, widget: text }
+              - { label: Docs link label, name: docsLabel, widget: string }
+              - { label: Docs link URL, name: docsUrl, widget: string }
+              - label: Free-path note
+                name: freeNote
+                widget: text
+                hint: Explains the zero-cost fake-agent path.
+          - label: Trust (objections, answered)
+            name: trust
+            widget: object
+            fields:
+              - { label: Heading, name: heading, widget: string }
+              - { label: Intro, name: intro, widget: text }
+              - label: Items
+                name: items
+                widget: list
+                summary: '{{question}}'
+                fields:
+                  - { label: Question, name: question, widget: string }
+                  - label: Answer
+                    name: answer
+                    widget: text
+                    hint: Plain text; backticks and links are rendered.
+          - label: Community
+            name: community
+            widget: object
+            fields:
+              - { label: Heading, name: heading, widget: string }
+              - { label: Description, name: description, widget: text }
+              - label: Categories
+                name: categories
+                widget: list
+                summary: '{{title}}'
+                fields:
+                  - { label: Title, name: title, widget: string }
+                  - { label: Description, name: description, widget: text }
+              - label: CTAs
+                name: ctas
+                widget: list
+                summary: '{{label}}'
+                fields:
+                  - { label: Label, name: label, widget: string }
+                  - { label: URL, name: url, widget: string }
+          - label: Roadmap
+            name: roadmap
+            widget: object
+            fields:
+              - { label: Heading, name: heading, widget: string }
+              - { label: Intro, name: intro, widget: text }
+              - label: Stages
+                name: stages
+                widget: list
+                summary: '{{name}} — {{status}}'
+                fields:
+                  - { label: Name, name: name, widget: string }
+                  - label: Status
+                    name: status
+                    widget: select
+                    options: [shipped, planned]
+                    default: shipped
+              - { label: CTA label, name: ctaLabel, widget: string }
+              - { label: CTA URL, name: ctaUrl, widget: string }
+          - label: Final CTA
+            name: finalCta
+            widget: object
+            fields:
+              - { label: Heading, name: heading, widget: string }
+              - { label: Body, name: body, widget: text }
+              - label: Install command
+                name: installCommand
+                widget: text
+              - label: CTAs
+                name: ctas
+                widget: list
+                summary: '{{label}}'
+                fields:
+                  - { label: Label, name: label, widget: string }
+                  - { label: URL, name: url, widget: string }
+
+  - name: blog
+    label: Blog
+    label_singular: Blog post
+    folder: website/src/content/blog
+    create: true
+    slug: '{{year}}-{{month}}-{{day}}-{{slug}}'
+    icon: article
+    fields:
+      - { label: Title, name: title, widget: string }
+      - { label: Description, name: description, widget: text }
+      - label: Publication date
+        name: pubDate
+        widget: datetime
+        date_format: YYYY-MM-DD
+        time_format: false
+      - label: Updated date
+        name: updatedDate
+        widget: datetime
+        date_format: YYYY-MM-DD
+        time_format: false
+        required: false
+      - { label: Author, name: author, widget: string, default: Kno }
+      - label: Tags
+        name: tags
+        widget: list
+        required: false
+      - label: Image
+        name: image
+        widget: image
+        required: false
+      - label: Draft
+        name: draft
+        widget: boolean
+        default: true
+        hint: Drafts are not published by the site build.
+      - { label: SEO title, name: seoTitle, widget: string, required: false }
+      - { label: SEO description, name: seoDescription, widget: text, required: false }
+      - { label: Body, name: body, widget: markdown }
+
+  - name: use-cases
+    label: Use cases
+    label_singular: Use case
+    folder: website/src/content/use-cases
+    create: true
+    slug: '{{slug}}'
+    icon: quiz
+    fields:
+      - { label: Title, name: title, widget: string }
+      - label: Question
+        name: question
+        widget: string
+        hint: The developer question the page answers.
+      - { label: Summary, name: summary, widget: text }
+      - { label: Problem, name: problem, widget: text }
+      - label: Workflow
+        name: workflow
+        widget: list
+        summary: '{{step}}'
+        fields:
+          - { label: Step, name: step, widget: string }
+          - { label: Detail, name: detail, widget: text }
+      - label: Example
+        name: example
+        widget: text
+        required: false
+        hint: Plain text rendered in a terminal block.
+      - label: Relevant Kno stages
+        name: stages
+        widget: list
+        field: { label: Stage, name: stage, widget: string }
+      - { label: CTA label, name: ctaLabel, widget: string, default: Try it }
+      - label: CTA URL
+        name: ctaUrl
+        widget: string
+        default: '#quickstart'
+      - { label: SEO title, name: seoTitle, widget: string, required: false }
+      - { label: SEO description, name: seoDescription, widget: text, required: false }
+      - { label: Body, name: body, widget: markdown, required: false }
+
+  - name: pages
+    label: Pages
+    label_singular: Page
+    folder: website/src/content/pages
+    create: true
+    slug: '{{slug}}'
+    icon: page
+    fields:
+      - { label: Title, name: title, widget: string }
+      - { label: Description, name: description, widget: text }
+      - label: Order
+        name: order
+        widget: number
+        default: 0
+        hint: Lower numbers sort earlier (unused by most layouts).
+      - { label: SEO title, name: seoTitle, widget: string, required: false }
+      - { label: SEO description, name: seoDescription, widget: text, required: false }
+      - { label: Body, name: body, widget: markdown }
