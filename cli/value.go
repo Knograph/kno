@@ -73,7 +73,18 @@ Interrupting is safe: measurements are checkpointed as they complete, and
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			f.costPerCallSet = cmd.Flags().Changed("cost-per-call-usd")
 			f.seedSet = cmd.Flags().Changed("seed")
-			return runValue(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), f)
+			cfg, err := loadConfigFile(cmd)
+			if err != nil {
+				return err
+			}
+			if _, err := f.applyFileAndEnv(cmd, cfg); err != nil {
+				return err
+			}
+			err = runValue(cmd.Context(), cmd.InOrStdin(),
+				cmd.OutOrStdout(), cmd.ErrOrStderr(), f)
+			// The #62 fix lines: when a kno.yaml exists the sentinel text is
+			// true; when it does not, the fix must name the flag instead.
+			return configAwareFix(err, cfg.path)
 		},
 	}
 
@@ -143,6 +154,10 @@ Interrupting is safe: measurements are checkpointed as they complete, and
 	flags.BoolVar(&f.traceSpans, "trace-spans", false,
 		"write OpenTelemetry spans for this run to stderr")
 
+	// The kno.yaml layer (docs/debt.md#62): the same surface as baseline,
+	// applied after flag parsing with precedence flag > env > file > default.
+	addConfigFlag(cmd, defaultConfigPath)
+
 	if err := cmd.MarkFlagRequired("evals"); err != nil {
 		panic(fmt.Sprintf("cli: marking --evals required: %v", err))
 	}
@@ -153,6 +168,18 @@ Interrupting is safe: measurements are checkpointed as they complete, and
 		panic(fmt.Sprintf("cli: marking --baseline-run-id required: %v", err))
 	}
 	return cmd
+}
+
+// valuePlanningCostPerCall is what one measurement may cost, mirroring core's
+// planningCostPerCall for the ValueOptions surface: an Estimator prices each
+// Case from the Case, so its worst case wins over the caller's scalar.
+func valuePlanningCostPerCall(opts core.ValueOptions) int64 {
+	if e, ok := opts.Agent.(core.Estimator); ok {
+		if w := e.WorstCase(); w.CostUSDMicros > 0 {
+			return w.CostUSDMicros
+		}
+	}
+	return opts.EstCostPerCallUSDMicros
 }
 
 // routingOptions resolves the routing knobs, refusing combinations the plan
@@ -189,7 +216,7 @@ func (f valueFlags) routingOptions() (value.Options, error) {
 	return opts, nil
 }
 
-func runValue(ctx context.Context, out, errOut io.Writer, f valueFlags) error {
+func runValue(ctx context.Context, in io.Reader, out, errOut io.Writer, f valueFlags) error {
 	stopTracing, err := startTracing(ctx, errOut, f.traceSpans)
 	if err != nil {
 		return err
@@ -242,12 +269,13 @@ func runValue(ctx context.Context, out, errOut io.Writer, f valueFlags) error {
 		return errs.ErrInvalidInput.Wrap(err)
 	}
 
+	recorder := &consentRecorder{}
 	guard := budget.New(
 		budget.Limits{
 			MaxCostUSDMicros: usdToMicros(f.maxCostUSD),
 			MaxLLMCalls:      f.maxCalls,
 		},
-		confirmFunc(out, f.yes, f.jsonOut),
+		confirmFunc(out, f.yes, f.jsonOut, recorder),
 		usdToMicros(confirmThresholdUSD),
 	)
 
@@ -272,6 +300,41 @@ func runValue(ctx context.Context, out, errOut io.Writer, f valueFlags) error {
 		InputFingerprint:        fingerprint,
 		EstCostPerCallUSDMicros: usdToMicros(f.costPerCall),
 		Routing:                 routing,
+	}
+
+	// The pre-run consent dialog, baseline-style: yes / no /
+	// yes-with-adjusted-cap on the bounded spend figure. Value has no
+	// engine-side PreConfirm — its guard prompts per operation — so the
+	// recorded decision is what the per-operation prompt returns, and nothing
+	// prompts twice.
+	if !f.yes && !f.jsonOut && shouldPrompt(in, out) {
+		plan, quoteErr := opts.Quote(ctx, pool)
+		if quoteErr != nil {
+			return quoteErr
+		}
+		var settled budget.Spend
+		if f.resume {
+			sp, err := db.SettledSpend(ctx, runID)
+			if err != nil {
+				return errs.ErrInvalidInput.WithFix("check --db is readable").
+					Wrap(fmt.Errorf("reading settled spend for %s: %w", runID, err))
+			}
+			settled = sp
+		}
+		intent := budget.Estimate{
+			Calls:         int64(plan.Measurements()),
+			CostUSDMicros: saturatingMul(int64(plan.Measurements()), valuePlanningCostPerCall(opts)),
+		}
+		decision, err := consentDialog(ctx, in, out, intent, guard.Limits(), settled, recorder)
+		if err != nil {
+			return err
+		}
+		if decision.limits != guard.Limits() {
+			guard = budget.New(decision.limits,
+				confirmFunc(out, f.yes, f.jsonOut, recorder),
+				usdToMicros(confirmThresholdUSD))
+			opts.Guard = guard
+		}
 	}
 
 	// The consent figure, printed BEFORE the run in --yes human mode: the

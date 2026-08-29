@@ -141,6 +141,15 @@ type BaselineOptions struct {
 	// had not been made yet.
 	concurrency *knov1.ConcurrencyDecision
 
+	// width carries checkFeasible's concurrency decision into confirmRun's
+	// estimate, so the confirmation quote can say the run was narrowed.
+	//
+	// Unexported for the same reason concurrency is: it is an OUTPUT of the
+	// feasibility check, and it exists only because budget.Estimate cannot
+	// import proto. checkFeasible sets it when it narrows; confirmRun copies it
+	// into the estimate PreConfirm quotes.
+	width *budget.WidthDecision
+
 	// Resume continues an existing run rather than starting one.
 	Resume bool
 

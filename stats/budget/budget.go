@@ -49,6 +49,31 @@ type Estimate struct {
 	// Tokens is the expected token consumption. Recorded and reported, never
 	// capped: DESIGN.md's budget config caps dollars and calls.
 	Tokens int64
+
+	// Width is the concurrency decision the engine made for this run, when it
+	// narrowed the width from what was asked. Nil when the width was not
+	// reduced.
+	//
+	// A plain struct, deliberately: stats/budget imports no proto, and the
+	// confirmation quote only needs the numbers and a word for why. The future
+	// API caller can ignore it — the field is additive, and the ConfirmFunc
+	// signature is unchanged.
+	Width *WidthDecision
+}
+
+// WidthDecision is the engine's concurrency decision, quoted to a human at
+// confirmation time (docs/debt.md#44's prompt half).
+type WidthDecision struct {
+	// Requested is the width the run asked for; 0 means no particular width
+	// was requested.
+	Requested int
+
+	// Effective is the width the run will actually execute at.
+	Effective int
+
+	// ReducedReason names why the width was narrowed, e.g. "cost-cap". Empty
+	// means the width was not reduced.
+	ReducedReason string
 }
 
 // Spend is what an operation actually consumed.
@@ -220,7 +245,8 @@ func (g *Guard) Authorize(ctx context.Context, est Estimate) (*Reservation, erro
 	}
 	if !ok {
 		return nil, errs.ErrBudgetExceeded.WithFix(
-			"the run was declined at the confirmation prompt; re-run with --yes to skip it")
+			"the run was declined at the confirmation prompt; re-run with --yes to skip it",
+		)
 	}
 
 	// Retry under the lock. Budget may have been consumed by other workers
@@ -353,7 +379,8 @@ func (g *Guard) denied(est Estimate, rem Remaining) error {
 		return errs.ErrBudgetExceeded.Wrap(fmt.Errorf(
 			"the next operation needs %s and %d call(s), but only %s and %d call(s) remain",
 			formatUSD(est.CostUSDMicros), est.Calls,
-			formatUSD(rem.CostUSDMicros), rem.LLMCalls))
+			formatUSD(rem.CostUSDMicros), rem.LLMCalls,
+		))
 	case callBinds:
 		return errs.ErrBudgetExceeded.
 			WithFix("raise --max-calls, or re-run with --resume to continue where it stopped").
