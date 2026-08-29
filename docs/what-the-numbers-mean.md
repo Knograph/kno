@@ -79,8 +79,9 @@ The mark means different things per source, and the number says which:
 - The `mine` command (and a jsonl file of its output) marks **every** Case derived: the whole set came from transcripts, wholesale.
 - The LangSmith adapter does the same — a LangSmith dataset has no per-row signal, so the adapter cannot distinguish harvested rows, and marks the set wholesale.
 - The Langfuse adapter marks **per item**: an item carrying `sourceObservationId` or `sourceTraceId` (harvested from a trace) is derived; an item with neither is hand-authored and stays unmarked.
+- The Braintrust adapter marks **per event**: an event carrying an `origin` object (Braintrust's record of "copied from another object") is derived; an event with none is hand-authored and stays unmarked. The origin's `object_type` — an experiment, a span, or an eval result — names the derivation note; it is the *presence* of the copy, not its kind, that marks the label weak.
 
-So the same `weak-label N` line means "the whole set is derived" for a mined or LangSmith run, and "exactly N of these Cases are trace-harvested" for a Langfuse run. The expectation of an exact-match goal is an exact string a human wrote, checked against the agent's answer; a derived expectation is weaker evidence — it is what the trace *recorded*, not what someone *judged* — and the weak-label count is how the run tells you how much of its denominator rests on that weaker ground.
+So the same `weak-label N` line means "the whole set is derived" for a mined or LangSmith run, and "exactly N of these Cases are trace-harvested or copied" for a Langfuse or Braintrust run. The expectation of an exact-match goal is an exact string a human wrote, checked against the agent's answer; a derived expectation is weaker evidence — it is what the trace *recorded* or another object *copied*, not what someone *judged* — and the weak-label count is how the run tells you how much of its denominator rests on that weaker ground.
 
 ## A purged run has no baseline score
 

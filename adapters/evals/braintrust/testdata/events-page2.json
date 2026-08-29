@@ -1,0 +1,25 @@
+{
+  "events": [
+    {
+      "id": "3e2a3d8f-4f5a-4c3b-9c7e-2f4a8b3d6c5e",
+      "input": { "z": 1, "a": { "y": 2, "b": 3 } },
+      "expected": { "z": "x", "a": "y" },
+      "metadata": null,
+      "tags": [],
+      "created_at": "2026-08-01T12:00:03Z",
+      "updated_at": "2026-08-01T12:00:03Z",
+      "_xact_id": "98"
+    },
+    {
+      "id": "4f3b4e9a-5a6b-4d4c-9d8f-3a5b9c4e7d6f",
+      "input": { "question": "a case with no recorded expectation" },
+      "expected": null,
+      "metadata": {},
+      "tags": ["curiosity"],
+      "created_at": "2026-08-01T12:00:04Z",
+      "updated_at": "2026-08-01T12:00:04Z",
+      "_xact_id": "97"
+    }
+  ],
+  "cursor": ""
+}

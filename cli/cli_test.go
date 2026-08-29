@@ -435,6 +435,7 @@ func TestHelpIsSnapshotted(t *testing.T) {
 		// are dataset names. Both commands promise the same grammar.
 		"langsmith:<dataset-name>",
 		"langfuse:<dataset-name>",
+		"braintrust:<dataset-name>",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("help text no longer mentions %q:\n%s", want, stdout)
@@ -445,7 +446,11 @@ func TestHelpIsSnapshotted(t *testing.T) {
 	if code != errs.ExitOK {
 		t.Fatalf("value --help exit = %d", code)
 	}
-	for _, want := range []string{"langsmith:<dataset-name>", "langfuse:<dataset-name>"} {
+	for _, want := range []string{
+		"langsmith:<dataset-name>",
+		"langfuse:<dataset-name>",
+		"braintrust:<dataset-name>",
+	} {
 		if !strings.Contains(valueOut, want) {
 			t.Errorf("value help no longer mentions the %s grammar:\n%s", want, valueOut)
 		}

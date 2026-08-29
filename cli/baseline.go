@@ -93,9 +93,10 @@ continues without paying for anything twice.`,
   kno baseline --evals cases.jsonl --agent fake: --max-cost-usd 5.00
   kno baseline --evals cases.jsonl --agent fake: --resume
 
-  # Score against a LangSmith or Langfuse dataset instead of a file
-  kno baseline --evals langsmith:support-llm --agent fake:   # LANGSMITH_API_KEY
-  kno baseline --evals langfuse:support-llm --agent fake:    # LANGFUSE_PUBLIC_KEY + LANGFUSE_SECRET_KEY`,
+  # Score against a LangSmith, Langfuse, or Braintrust dataset instead of a file
+  kno baseline --evals langsmith:support-llm --agent fake:    # LANGSMITH_API_KEY
+  kno baseline --evals langfuse:support-llm --agent fake:     # LANGFUSE_PUBLIC_KEY + LANGFUSE_SECRET_KEY
+  kno baseline --evals braintrust:support-llm --agent fake:   # BRAINTRUST_API_KEY`,
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		// Errors are rendered by the top-level runner in the CLI's grammar, so
@@ -120,7 +121,7 @@ continues without paying for anything twice.`,
 	}
 
 	flags := cmd.Flags()
-	flags.StringVar(&f.evalsPath, "evals", "", "eval cases: a JSONL file path, langsmith:<dataset-name>, or langfuse:<dataset-name> (required)")
+	flags.StringVar(&f.evalsPath, "evals", "", "eval cases: a JSONL file path, langsmith:<dataset-name>, langfuse:<dataset-name>, or braintrust:<dataset-name> (required)")
 	flags.StringVar(&f.agentRef, "agent", "fake:", "agent to measure")
 	flags.StringVar(&f.goalName, "goal", "exact-match", "goal to score against")
 	flags.StringVar(&f.dbPath, "db", "kno.db", "where runs and traces are stored")

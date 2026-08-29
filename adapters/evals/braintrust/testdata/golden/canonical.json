@@ -1,0 +1,18 @@
+{
+  "1f0e0e6d-2d3e-4a1f-9a5c-0d2f6e1b4a3c": {
+    "input": "{\"question\":\"what do you do with a broken token?\"}",
+    "expected": "{\"answer\":\"rotate it\"}"
+  },
+  "2d1f2f7e-3e4f-4b2a-9b6d-1e3f7a2c5b4d": {
+    "input": "{\"emoji\":\"ok ✓\",\"question\":\"“quoted” and a \\\"b\\\\c\\\" backslash\"}",
+    "expected": "{\"answer\":\"keep the literal text\"}"
+  },
+  "3e2a3d8f-4f5a-4c3b-9c7e-2f4a8b3d6c5e": {
+    "input": "{\"a\":{\"b\":3,\"y\":2},\"z\":1}",
+    "expected": "{\"a\":\"y\",\"z\":\"x\"}"
+  },
+  "4f3b4e9a-5a6b-4d4c-9d8f-3a5b9c4e7d6f": {
+    "input": "{\"question\":\"a case with no recorded expectation\"}",
+    "expected": ""
+  }
+}
