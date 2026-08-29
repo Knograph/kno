@@ -185,6 +185,13 @@ func (o ValueOptions) Value(ctx context.Context, pool Pool) (*ValueResult, error
 	if err != nil {
 		return nil, err
 	}
+	// The pool's Assets carry the carrying-cost CostVector that
+	// delta_per_cost's denominator reads; the measurement loop needs the real
+	// Asset, not an ID-only stand-in.
+	assetsByID := make(map[string]*Asset, len(assets))
+	for _, a := range assets {
+		assetsByID[a.GetId()] = a
+	}
 
 	plan, err := value.Route(refs, assetRefs(assets), o.Routing)
 	if err != nil {
@@ -240,7 +247,7 @@ func (o ValueOptions) Value(ctx context.Context, pool Pool) (*ValueResult, error
 			stopReason.Store(int32(knov1.RunStatus_RUN_STATUS_INTERRUPTED))
 			break
 		}
-		if err := o.measureAsset(ctx, em, gate, routing, plan, baseline, cases, completed, result, counts, &stopReason); err != nil {
+		if err := o.measureAsset(ctx, em, gate, routing, plan, baseline, cases, assetsByID[routing.AssetID], completed, result, counts, &stopReason); err != nil {
 			return nil, err
 		}
 		if stopReason.Load() != 0 {
@@ -469,18 +476,25 @@ func (o ValueOptions) measureAsset(
 	plan *value.Plan,
 	baseline map[string]store.CaseScore,
 	cases []*Case,
+	asset *Asset,
 	completed map[store.MeasurementKey]struct{},
 	result *ValueResult,
 	counts *valueCounts,
 	stopReason *atomic.Int32,
 ) error {
+	// The pool's Asset carries the carrying-cost CostVector delta_per_cost's
+	// denominator reads. Routing cannot name an Asset the pool lacks, but a
+	// nil here must not silently empty the Valuation's asset_id either.
+	if asset == nil {
+		asset = &Asset{Id: routing.AssetID}
+	}
 	// A zero-routed Asset costs nothing and its Valuation is the passthrough
 	// reason — a real answer, not an omission.
 	if len(routing.CaseIDs) == 0 {
 		if err := o.emitAssetRouted(ctx, em, routing, plan); err != nil {
 			return err
 		}
-		v, err := o.valuationFor(ctx, &Asset{Id: routing.AssetID}, routing, plan, baseline)
+		v, err := o.valuationFor(ctx, asset, routing, plan, baseline)
 		if err != nil {
 			return err
 		}
@@ -551,7 +565,6 @@ func (o ValueOptions) measureAsset(
 		}
 	}
 
-	asset := &Asset{Id: routing.AssetID}
 	if truncated {
 		// Q12's truncation marker: a binding cap cut this Asset mid-measurement,
 		// and presenting the partial set as a Valuation would rank "whatever got

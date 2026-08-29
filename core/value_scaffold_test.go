@@ -114,6 +114,99 @@ func TestValuationOmitsDeltaWithoutInterval(t *testing.T) {
 	}
 }
 
+// TestDeltaPerCostIsDeltaGoalOverContextTokens pins Step 1 of the select/export
+// plan (docs/plans/2026-08-29-select-export.md): delta_per_cost is the ranking
+// metric, delta_goal divided by the Asset's carrying cost in context_tokens,
+// and it is UNSET — never a division by zero, never a zero written as if it
+// were measured — whenever the denominator is absent or non-positive, or when
+// no delta was measured at all. The quotient is compared with the suite's
+// 1e-12 float tolerance.
+func TestDeltaPerCostIsDeltaGoalOverContextTokens(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		cost    *knov1.CostVector
+		caseIDs []string
+		want    float64
+		wantSet bool
+	}{
+		{
+			name:    "measured delta over the carrying token count",
+			cost:    &knov1.CostVector{ContextTokens: 1000},
+			caseIDs: []string{"c1", "c2"},
+			want:    0.4 / 1000,
+			wantSet: true,
+		},
+		{
+			name:    "an eight-thousand-token asset earns less per token",
+			cost:    &knov1.CostVector{ContextTokens: 8000},
+			caseIDs: []string{"c1", "c2"},
+			want:    0.4 / 8000,
+			wantSet: true,
+		},
+		{
+			name:    "no CostVector leaves the field unset",
+			caseIDs: []string{"c1", "c2"},
+		},
+		{
+			name:    "zero context tokens leave the field unset",
+			cost:    &knov1.CostVector{ContextTokens: 0},
+			caseIDs: []string{"c1", "c2"},
+		},
+		{
+			name:    "negative context tokens leave the field unset",
+			cost:    &knov1.CostVector{ContextTokens: -100},
+			caseIDs: []string{"c1", "c2"},
+		},
+		{
+			name:    "no interval means no delta_per_cost even with a denominator",
+			cost:    &knov1.CostVector{ContextTokens: 1000},
+			caseIDs: []string{"c1"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			st := openTestStore(t)
+			opts := ValueOptions{
+				RunID: "run-1",
+				Store: st,
+				Goal:  fixedDirectionGoal{dir: knov1.Direction_DIRECTION_MAXIMIZE, domain: knov1.ScoreDomain_SCORE_DOMAIN_BINARY},
+			}
+			baseline := make(map[string]store.CaseScore, len(tc.caseIDs))
+			for _, id := range tc.caseIDs {
+				writeMeasurement(t, st, "run-1", "a", id, store.ArmTreatment, 1, 0.9)
+				baseline[id] = store.CaseScore{Value: 0.5}
+			}
+
+			v, err := opts.valuationFor(context.Background(),
+				&Asset{Id: "a", Cost: tc.cost},
+				value.AssetRouting{AssetID: "a", CaseIDs: tc.caseIDs},
+				&value.Plan{Trials: 1, EligibleCases: len(tc.caseIDs)},
+				baseline,
+			)
+			if err != nil {
+				t.Fatalf("valuationFor: %v", err)
+			}
+			if !tc.wantSet {
+				if v.DeltaPerCost != 0 {
+					t.Errorf("DeltaPerCost = %v, want unset (0): the field must not "+
+						"carry a computed number this Valuation cannot support", v.DeltaPerCost)
+				}
+				return
+			}
+			if v.DeltaInterval == nil {
+				t.Fatal("the fixture must produce an interval for the delta to exist")
+			}
+			if math.Abs(v.DeltaPerCost-tc.want) > 1e-12 {
+				t.Errorf("DeltaPerCost = %v, want %v (delta_goal / context_tokens)", v.DeltaPerCost, tc.want)
+			}
+		})
+	}
+}
+
 // TestRaggedAttritionReportsUnderpoweredNotAShrunkenDelta pins the other half
 // of P0-2: ragged per-Case vectors (one Case measured twice, another once) are
 // refused by the interval package, and the fallback is the named reason — not

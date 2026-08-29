@@ -137,6 +137,10 @@ Every cost figure Kno reports claims exactly this: **reported usage at rates as 
 The table is hand-entered and dated, so it can go stale — and a stale table is refused loudly, not silently wrong. When the table is older than 90 days the pricing check fails and files a `pricing-drift` issue, because a cost cap's ceiling is only as good as the rates it was computed from. The thing watching the date is the pricing drift detector: a weekly scheduled job, and `make pricing-check` locally, that fetches the providers' published rates and compares them against the table. Each open issue closes itself with a verification comment on the first run whose report
 no longer carries its finding; findings still present keep their issue open and updated.
 
+## `delta_per_cost` carries the tokenizer's bias
+
+The ranking metric divides Δgoal by the Asset's `context_tokens` — the carrying cost pool adapters estimate from bytes. That estimate is deliberately pessimistic: it reserves roughly 3x what English prose actually uses, which is the right direction for reserving money and the wrong one for ranking. Two Assets of equal real token cost can differ **~2.4x in `delta_per_cost` by content type alone**, and `Select` — when it lands — ranks on this number, so the bias travels into the portfolio. It is acknowledged here and on the field itself rather than argued away; the fix (a real tokenizer) is [ledgered](debt.md#68) as debt rather than shipped silently.
+
 ## If you only remember one thing
 
 **The holdout number is the one you may put in a slide.** Everything else is a measurement in service of producing it.

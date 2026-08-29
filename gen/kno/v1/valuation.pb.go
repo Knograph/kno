@@ -358,6 +358,18 @@ type Valuation struct {
 	Cost *CostVector `protobuf:"bytes,10,opt,name=cost,proto3" json:"cost,omitempty"`
 	// Improvement per unit cost — the actual ranking metric. Raw delta_goal is
 	// not the ranking metric and never has been.
+	//
+	// Denominator: the Asset's carrying `cost.context_tokens` — the count pool
+	// adapters estimate from bytes, which carries the tokenizer bias debt #68
+	// names (docs/debt.md#68): the estimate reserves ~3x what English prose
+	// uses, correct for reserving money, wrong for ranking. Two Assets of equal
+	// real token cost can differ ~2.4x in this number by content type alone.
+	// The bias is acknowledged here and in what-the-numbers-mean.md, not argued
+	// away.
+	//
+	// Set only beside delta_goal and only when context_tokens is present and
+	// positive. An absent or zero denominator leaves this field unset — never a
+	// division by zero, and never a zero written as if it were measured.
 	DeltaPerCost float64 `protobuf:"fixed64,11,opt,name=delta_per_cost,json=deltaPerCost,proto3" json:"delta_per_cost,omitempty"`
 	// Kind as judged by mechanism routing.
 	Kind Kind `protobuf:"varint,12,opt,name=kind,proto3,enum=kno.v1.Kind" json:"kind,omitempty"`

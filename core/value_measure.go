@@ -124,6 +124,19 @@ func (o ValueOptions) valuationFor(
 		under := true
 		v.ControlUnderpowered = &under
 	}
+	// delta_per_cost is the ranking metric, and its denominator is the
+	// Asset's carrying cost in context_tokens — the tokenizer-biased count
+	// docs/debt.md#68 names: the estimate reserves ~3x what English prose
+	// uses, correct for reserving money, wrong for ranking. The bias is
+	// acknowledged here and in what-the-numbers-mean.md, not argued away.
+	// Set only beside a measured delta and only for a present, positive
+	// denominator; anything else leaves the field UNSET — never a division by
+	// zero, and never a zero written as if it were measured.
+	if goalIv != nil {
+		if c := asset.GetCost(); c != nil && c.GetContextTokens() > 0 {
+			v.DeltaPerCost = v.DeltaGoal / float64(c.GetContextTokens())
+		}
+	}
 	return v, nil
 }
 
