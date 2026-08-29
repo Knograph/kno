@@ -474,7 +474,7 @@ func runWizardPTY(t *testing.T, chunks []string) wizardAnswers {
 
 	m, s := ptyPair(t)
 	rendered := make(chan struct{})
-	frames := make(chan struct{}, 16)
+	ticks := make(chan struct{}, 64)
 	go func() {
 		var one [64]byte
 		if _, err := m.Read(one[:]); err == nil {
@@ -485,7 +485,7 @@ func runWizardPTY(t *testing.T, chunks []string) wizardAnswers {
 			n, err := m.Read(buf)
 			if n > 0 {
 				select {
-				case frames <- struct{}{}:
+				case ticks <- struct{}{}:
 				default:
 				}
 			}
@@ -513,11 +513,32 @@ func runWizardPTY(t *testing.T, chunks []string) wizardAnswers {
 		if _, err := m.Write([]byte(chunk)); err != nil {
 			t.Fatalf("feeding the wizard %q: %v", chunk, err)
 		}
-		select {
-		case <-frames:
-		case <-time.After(10 * time.Second):
-			t.Fatalf("the wizard stopped rendering after %q", chunk)
+		// The form renders the key batch, then moves focus (nextFieldMsg) and
+		// renders again — one frame can trail the other by a cycle, so a
+		// single frame is not enough. Wait until the pty is quiet: the form
+		// is settled and the next chunk lands on the field it should.
+		quiet := time.NewTimer(250 * time.Millisecond)
+		hard := time.NewTimer(10 * time.Second)
+		settled := false
+		for !settled {
+			select {
+			case <-ticks:
+				if !quiet.Stop() {
+					select {
+					case <-quiet.C:
+					default:
+					}
+				}
+				quiet.Reset(250 * time.Millisecond)
+			case <-quiet.C:
+				settled = true
+			case <-hard.C:
+				quiet.Stop()
+				t.Fatalf("the wizard never settled after %q", chunk)
+			}
 		}
+		quiet.Stop()
+		hard.Stop()
 	}
 	select {
 	case <-done:
