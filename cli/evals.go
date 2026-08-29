@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/knograph/kno/adapters/evals/braintrust"
 	"github.com/knograph/kno/adapters/evals/jsonl"
 	"github.com/knograph/kno/adapters/evals/langfuse"
 	"github.com/knograph/kno/adapters/evals/langsmith"
@@ -27,8 +28,9 @@ type evalSource interface {
 // dataset literally named "langsmith:..." or "langfuse:..." cannot be
 // addressed — a name that looks like the grammar is the grammar.
 const (
-	evalsLangsmithPrefix = "langsmith:"
-	evalsLangfusePrefix  = "langfuse:"
+	evalsLangsmithPrefix  = "langsmith:"
+	evalsLangfusePrefix   = "langfuse:"
+	evalsBraintrustPrefix = "braintrust:"
 )
 
 // resolveEvals turns the --evals flag into an eval source.
@@ -39,16 +41,32 @@ const (
 // process listing is a credential lost) and its endpoint from
 // LANGSMITH_ENDPOINT. The langfuse: prefix selects the Langfuse adapter,
 // which reads its credential pair from LANGFUSE_PUBLIC_KEY and
-// LANGFUSE_SECRET_KEY and its host from LANGFUSE_HOST. The endpoint
+// LANGFUSE_SECRET_KEY and its host from LANGFUSE_HOST. The braintrust:
+// prefix selects the Braintrust adapter, which reads its key from
+// BRAINTRUST_API_KEY and its host from BRAINTRUST_API_BASE_URL. The endpoint
 // security opt-outs mirror the agent transport's --allow-insecure-base-url
 // and --allow-private-address, so a self-hosted deployment is reachable
 // with the same two flags a self-hosted model endpoint needs.
 //
 // The error fix is per source, because the failure modes are: for JSONL, the
-// path is wrong; for LangSmith or Langfuse, the keys, the dataset name, or
+// path is wrong; for the dataset adapters, the keys, the dataset name, or
 // the endpoint are. WithFix replaces, so this is the only wrapper — callers
 // must not wrap again.
 func resolveEvals(f *baselineFlags) (evalSource, error) {
+	if strings.HasPrefix(f.evalsPath, evalsBraintrustPrefix) {
+		ev, err := braintrust.New(braintrust.Options{
+			Dataset:              strings.TrimPrefix(f.evalsPath, evalsBraintrustPrefix),
+			HoldoutFrac:          f.holdoutFrac,
+			SplitSeed:            f.splitSeed,
+			AllowInsecureBaseURL: f.allowInsecureURL,
+			AllowPrivateAddress:  f.allowPrivateAddress,
+		})
+		if err != nil {
+			return nil, errs.ErrInvalidInput.WithFix(braintrustNewFix(err)).Wrap(err)
+		}
+		return ev, nil
+	}
+
 	if strings.HasPrefix(f.evalsPath, evalsLangsmithPrefix) {
 		ev, err := langsmith.New(langsmith.Options{
 			Dataset:              strings.TrimPrefix(f.evalsPath, evalsLangsmithPrefix),
@@ -132,6 +150,27 @@ func langfuseNewFix(err error) string {
 	}
 }
 
+// braintrustNewFix is the braintrust.New counterpart to langsmithNewFix: the
+// same failure classes under Braintrust's environment names. The endpoint
+// defaults to the hosted API, so a refusal in that class names the opt-in
+// flags rather than a variable the user may never have set.
+func braintrustNewFix(err error) string {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, braintrust.KeyEnv):
+		return "set " + braintrust.KeyEnv
+	case strings.Contains(msg, "no dataset name"):
+		return "name the dataset in --evals, as braintrust:<dataset-name>"
+	case strings.Contains(msg, "holdout fraction"):
+		return "check --holdout-frac: it must be in [0, 1)"
+	default:
+		// The endpoint refusals: parse, scheme, host, plain HTTP, and the
+		// private/link-local address families.
+		return "check BRAINTRUST_API_BASE_URL, and opt into insecure or private " +
+			"endpoints only when the deployment is self-hosted"
+	}
+}
+
 // countsSplitFix picks the fix for a CountSplits failure, per source.
 // jsonl's failures point at a line in a file; the dataset adapters have no
 // line — their failures name a dataset, an endpoint, or an item, and telling
@@ -139,7 +178,7 @@ func langfuseNewFix(err error) string {
 // that does not exist.
 func countsSplitFix(src evalSource) string {
 	switch src.(type) {
-	case *langsmith.Evals, *langfuse.Evals:
+	case *langsmith.Evals, *langfuse.Evals, *braintrust.Evals:
 		return "fix the reported dataset, endpoint, or example, then re-run"
 	}
 	return "fix the reported line, then re-run"

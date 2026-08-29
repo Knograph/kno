@@ -128,6 +128,24 @@ covenants — breaking any of them requires a major version.
 
 ## v0.1.0 — in detail
 
+### Features
+
+- **The Braintrust Evals adapter — the fourth `core.Evals` source.**
+  `--evals braintrust:<dataset-name>` reads a Braintrust dataset with the
+  same split, fingerprint, and weak-label machinery the other sources use.
+  Name resolution is the `dataset_name` filter endpoint (a miss is a loud
+  refusal naming the dataset, never an empty run); events stream paged with
+  the opaque cursor; duplicate ids from the version-history walk are merged,
+  keeping the newest `_xact_id`, not fatal; the resume fingerprint folds in
+  the dataset id, name, and the newest event's `_xact_id` (Braintrust
+  carries no dataset-level revision). An event copied from another object
+  (`origin` set) is marked derived per item, matching Langfuse's per-item
+  weak-label semantics. Credentials are environment-only:
+  `BRAINTRUST_API_KEY`, with `BRAINTRUST_API_BASE_URL` and
+  `BRAINTRUST_ORG_NAME` as the self-hosted/org selectors, and the same
+  endpoint-security refusals and opt-in flags as the other dataset adapters.
+  [docs/plans/2026-08-29-braintrust-evals-adapter.md](docs/plans/2026-08-29-braintrust-evals-adapter.md)
+
 ### Changed
 
 - **The routing shuffle is inlined, and the seed's meaning is now specified.**

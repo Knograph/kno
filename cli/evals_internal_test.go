@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/knograph/kno/adapters/evals/braintrust"
 	"github.com/knograph/kno/adapters/evals/jsonl"
 	"github.com/knograph/kno/adapters/evals/langfuse"
 	"github.com/knograph/kno/adapters/evals/langsmith"
@@ -287,6 +288,146 @@ func newLangfuseEvalsServer(t *testing.T, notFound bool) *httptest.Server {
 			http.NotFound(w, nil)
 		})
 	}
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestEvalsGrammarBraintrustPrefix: the braintrust: prefix selects the
+// Braintrust adapter, and the endpoint-security opt-out flags reach it: the
+// resolver's own result must CountSplits against a plain-HTTP loopback
+// endpoint, which the adapter refuses without both flags.
+//
+// Serial: the endpoint and key come from the environment, as they do for the
+// shipped CLI.
+func TestEvalsGrammarBraintrustPrefix(t *testing.T) {
+	srv := newBraintrustEvalsServer(t, false)
+	t.Setenv(braintrust.HostEnv, srv.URL)
+	t.Setenv(braintrust.KeyEnv, "test-key")
+	f := &baselineFlags{
+		evalsPath:           "braintrust:support-llm",
+		holdoutFrac:         0.3,
+		splitSeed:           "seed-1",
+		allowInsecureURL:    true,
+		allowPrivateAddress: true,
+	}
+	ev, err := resolveEvals(f)
+	if err != nil {
+		t.Fatalf("resolveEvals: %v", err)
+	}
+	bt, ok := ev.(*braintrust.Evals)
+	if !ok {
+		t.Fatalf("resolveEvals(braintrust:) = %T, want *braintrust.Evals", ev)
+	}
+	counts, err := bt.CountSplits(context.Background())
+	if err != nil {
+		t.Fatalf("CountSplits: %v", err)
+	}
+	if counts.Total() != 2 {
+		t.Errorf("Total() = %d, want 2", counts.Total())
+	}
+}
+
+// TestEvalsBraintrustCountsAgainstEndpoint drives a real resolveEvals result
+// through CountSplits against a fake Braintrust API, and refuses the unknown
+// dataset with an actionable error before any page is fetched.
+//
+// Serial: the endpoint and key come from the environment.
+func TestEvalsBraintrustCountsAgainstEndpoint(t *testing.T) {
+	srv := newBraintrustEvalsServer(t, false)
+	t.Setenv(braintrust.HostEnv, srv.URL)
+	t.Setenv(braintrust.KeyEnv, "test-key")
+	f := &baselineFlags{
+		evalsPath:           "braintrust:support-llm",
+		allowInsecureURL:    true,
+		allowPrivateAddress: true,
+	}
+	ev, err := resolveEvals(f)
+	if err != nil {
+		t.Fatalf("resolveEvals: %v", err)
+	}
+	counts, err := ev.CountSplits(context.Background())
+	if err != nil {
+		t.Fatalf("CountSplits: %v", err)
+	}
+	if counts.Total() != 2 {
+		t.Errorf("Total() = %d, want 2", counts.Total())
+	}
+	if err := counts.Validate(); err == nil {
+		t.Error("a 2-case eval set must not validate")
+	}
+
+	// The miss path: a typo'd dataset name is answered 200 with an empty
+	// array (Braintrust's filter endpoint never 404s), so the refusal must
+	// come from the resolution pass, at CountSplits — naming the dataset, not
+	// answered with an empty page.
+	srvUnknown := newBraintrustEvalsServer(t, true)
+	t.Setenv(braintrust.HostEnv, srvUnknown.URL)
+	f = &baselineFlags{
+		evalsPath:           "braintrust:no-such-dataset",
+		allowInsecureURL:    true,
+		allowPrivateAddress: true,
+	}
+	ev, err = resolveEvals(f)
+	if err != nil {
+		t.Fatalf("resolveEvals must not resolve the dataset: %v", err)
+	}
+	if _, err := ev.CountSplits(context.Background()); err == nil {
+		t.Fatal("an unknown dataset was accepted")
+	} else if !strings.Contains(err.Error(), "no dataset named") {
+		t.Errorf("error %q does not say the dataset is missing", err)
+	}
+}
+
+// TestEvalsBraintrustMissingKeyIsRefused: the key is environment-only, and a
+// missing one is refused at resolve time with the variable named.
+//
+// Serial: binds the environment.
+func TestEvalsBraintrustMissingKeyIsRefused(t *testing.T) {
+	t.Setenv(braintrust.HostEnv, "")
+	t.Setenv(braintrust.KeyEnv, "")
+	f := &baselineFlags{evalsPath: "braintrust:support-llm"}
+	_, err := resolveEvals(f)
+	if err == nil {
+		t.Fatal("a missing key was accepted")
+	}
+	if !strings.Contains(err.Error(), braintrust.KeyEnv) {
+		t.Errorf("error %q does not name %s", err, braintrust.KeyEnv)
+	}
+}
+
+// TestEvalsBraintrustEmptyNameIsRefused: the grammar demands a name after
+// the prefix.
+func TestEvalsBraintrustEmptyNameIsRefused(t *testing.T) {
+	t.Setenv(braintrust.KeyEnv, "test-key")
+	f := &baselineFlags{evalsPath: "braintrust:"}
+	_, err := resolveEvals(f)
+	if err == nil {
+		t.Fatal("an empty dataset name was accepted")
+	}
+}
+
+// newBraintrustEvalsServer serves the two Braintrust API shapes a CountSplits
+// pass needs — the bare dataset array and the {events, cursor} fetch
+// envelope — over plain HTTP on loopback (hence the opt-in flags
+// everywhere). When miss, the datasets endpoint answers an empty array, as
+// the real filter endpoint does for an unknown name.
+func newBraintrustEvalsServer(t *testing.T, miss bool) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/dataset", func(w http.ResponseWriter, _ *http.Request) {
+		if miss {
+			_, _ = io.WriteString(w, `[]`)
+			return
+		}
+		_, _ = io.WriteString(w, `[{"id":"ds-1","name":"support-llm","project_id":"p-1"}]`)
+	})
+	mux.HandleFunc("/v1/dataset/ds-1/fetch", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"events":[`+
+			`{"id":"ev-1","input":{"question":"q1"},"expected":{"answer":"a1"},"_xact_id":"1"},`+
+			`{"id":"ev-2","input":{"question":"q2"},"expected":{"answer":"a2"},"_xact_id":"2"}`+
+			`],"cursor":""}`)
+	})
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv

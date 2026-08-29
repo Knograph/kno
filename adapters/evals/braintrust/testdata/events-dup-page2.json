@@ -1,0 +1,25 @@
+{
+  "events": [
+    {
+      "id": "5a4c5f0b-6b7c-4e5d-8e0a-4b6c0d5f8e7a",
+      "input": { "question": "edited while the run read" },
+      "expected": { "answer": "the OLD version" },
+      "metadata": {},
+      "tags": [],
+      "created_at": "2026-08-01T12:00:10Z",
+      "updated_at": "2026-08-01T12:00:10Z",
+      "_xact_id": "150"
+    },
+    {
+      "id": "7c6e7b2d-8d9e-4a7f-8a2c-6d8e2f7b0a9c",
+      "input": { "question": "a third row" },
+      "expected": { "answer": "three" },
+      "metadata": {},
+      "tags": [],
+      "created_at": "2026-08-01T12:00:12Z",
+      "updated_at": "2026-08-01T12:00:12Z",
+      "_xact_id": "198"
+    }
+  ],
+  "cursor": ""
+}

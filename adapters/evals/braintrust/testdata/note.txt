@@ -1,0 +1,94 @@
+HAND-AUTHORED, NOT RECORDED. Read this before trusting these files.
+
+No BRAINTRUST_API_KEY exists on the machine that created this package, so no
+live exchange produced these files. They are hand-authored against the
+documented Braintrust REST schema as of 2026-08-29 (the vendor's API docs at
+https://www.braintrust.dev/docs/reference/api):
+
+  - Dataset resolution: GET {host}/v1/dataset?dataset_name=<name>
+    [&org_name=<org>]. This is a FILTER endpoint, not a lookup: an unknown
+    name is answered 200 with an EMPTY array, never a 404. Each dataset
+    object carries id (a uuid), name, project_id, created_at, metadata,
+    deleted_at, version.
+  - Dataset events:    GET {host}/v1/dataset/{dataset_id}/fetch?limit=100
+    [&cursor=<opaque>] [&org_name=<org>], response envelope {events: [...],
+    cursor: <opaque string>}. The fetch limit counts TRACES, not rows, so a
+    response can legally exceed limit events — the row and page byte caps
+    are the real bounds. An absent or empty cursor field is the last page.
+    Each event carries id (a uuid), input (JSON, nullable), expected (JSON,
+    nullable), metadata, tags, created_at, updated_at, _xact_id, and
+    optionally origin. _xact_id is the version counter: the dataset object
+    has NO updatedAt or revision field, so the fingerprint leans on the
+    newest event's _xact_id instead.
+  - Origin: an event whose row carries origin {object_type, object_id,
+    _xact_id} was copied from another object ("expected output from a
+    span..."). The object_type values recorded in these fixtures at
+    hand-author time: "experiment", "span", "eval_result". They are NOT
+    enumerated in the adapter: the PRESENCE of origin is the derived signal,
+    whatever the object type, so a new object type needs no code change —
+    but the fixtures are re-judged against live captures when they exist.
+  - Auth: Authorization: Bearer <BRAINTRUST_API_KEY>, per Braintrust's API
+    documentation.
+  - Base URL: the vendor SDKs default to https://api.braintrust.dev and
+    honor a BRAINTRUST_API_BASE_URL override; this adapter mirrors both.
+    That claim is a documentation claim like the rest of this note, subject
+    to the same re-record review.
+
+The schemas are versioned and can change — that is the adapter's accepted
+drift risk, recorded in docs/plans/2026-08-29-braintrust-evals-adapter.md.
+
+Until a real exchange replaces them, the adapter rests on a documentation
+claim rather than on evidence. When BRAINTRUST_API_KEY exists, re-record:
+
+  make record-fixtures
+
+(or directly: KNO_LIVE_TESTS=1 KNO_RECORD_FIXTURES=1 go test -tags=integration
+  ./adapters/evals/braintrust/ -run TestRecordLiveFixtures)
+
+which captures the live dataset list response and its first fetch page into
+testdata/live/ (and refuses to record a response that echoes a key). Those
+captures are the evidence to review against these files. The malformed,
+empty, duplicate, null-input, and origin fixtures cannot be recorded — no
+live dataset is malformed — so they stay hand-authored and are judged
+against the captures.
+
+What each fixture is for:
+
+  dataset-list.json              name resolution; one dataset, id
+                                 8f1c4b2e-5d6a-4f8e-9c2d-1a3b5c7d9e0f, name
+                                 support-llm
+  dataset-list-miss.json         the FILTER-endpoint miss: an EMPTY array
+                                 (never a 404) -> "no dataset named" refusal
+  dataset-list-two.json          two datasets with the same name -> the
+                                 multi-match refusal
+  dataset-list-wrong-name.json   one dataset with a different name -> the
+                                 filter-ignored refusal
+  events-page1.json              first fetch page (2 rows: an escape/unicode
+                                 row and a nested-key-order row), cursor
+                                 "cur-2"; _xact_ids 100 and 99
+  events-page2.json              page 2 (a key-unsorted input whose canonical
+                                 JSON the goldens pin, and a null expected ->
+                                 empty Expected); last page (empty cursor);
+                                 _xact_ids 98 and 97
+  events-empty.json              a dataset that exists with no events ->
+                                 zero Cases
+  events-dup-page1.json          the merge rule, first half: ev-dup-0001 at
+                                 _xact_id 200 (the newest version, served
+                                 first by the newest-first walk) plus
+                                 ev-dup-0002 at 199
+  events-dup-page2.json          the merge rule, second half: ev-dup-0001
+                                 AGAIN at _xact_id 150 — the same row's
+                                 pre-edit version re-exposed by the version
+                                 history, exactly the duplicate the vendor
+                                 documents on later pages — plus
+                                 ev-dup-0003 at 198. One ev-dup-0001 is
+                                 yielded (the newest), never twice, never
+                                 fatal (plan P0-2). An edit mid-pagination
+                                 produces exactly this shape.
+  events-null-input.json         an event whose input is null -> fatal
+  events-origin.json             origin object_type values experiment, span,
+                                 and eval_result -> Provenance.Derived with
+                                 the object named; one authored row -> not
+  events-null-expected.json      a null expected -> empty Expected, named
+  golden/canonical.json          the pinned canonical-JSON encoding: key
+                                 order, HTML escaping, and unicode behavior

@@ -11,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/knograph/kno/adapters/evals/braintrust"
 	"github.com/knograph/kno/adapters/evals/jsonl"
+	"github.com/knograph/kno/adapters/evals/langfuse"
 	"github.com/knograph/kno/adapters/evals/langsmith"
 	knov1 "github.com/knograph/kno/gen/kno/v1"
 )
@@ -187,8 +189,31 @@ func TestLangsmithNewFixRows(t *testing.T) {
 	}
 }
 
-// TestCountsSplitFixRows names the fix by source: langsmith has no line
-// numbers, jsonl does.
+// TestBraintrustNewFixRows pins each refusal class to its own fix line.
+func TestBraintrustNewFixRows(t *testing.T) {
+	t.Parallel()
+	rows := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"missing key", errors.New("no " + braintrust.KeyEnv + " set"), "set " + braintrust.KeyEnv},
+		{"unnamed dataset", errors.New("no dataset name"), "name the dataset in --evals, as braintrust:<dataset-name>"},
+		{"holdout out of range", errors.New("holdout fraction"), "check --holdout-frac: it must be in [0, 1)"},
+		{"endpoint refusal", errors.New("parse error"), "check BRAINTRUST_API_BASE_URL"},
+	}
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			got := braintrustNewFix(row.err)
+			if !strings.Contains(got, row.want) {
+				t.Errorf("braintrustNewFix(%q) = %q, want substring %q", row.err, got, row.want)
+			}
+		})
+	}
+}
+
+// TestCountsSplitFixRows names the fix by source: the dataset adapters have
+// no line numbers, jsonl does.
 func TestCountsSplitFixRows(t *testing.T) {
 	t.Parallel()
 	rows := []struct {
@@ -197,6 +222,8 @@ func TestCountsSplitFixRows(t *testing.T) {
 		want string
 	}{
 		{"langsmith", &langsmith.Evals{}, "dataset, endpoint, or example"},
+		{"langfuse", &langfuse.Evals{}, "dataset, endpoint, or example"},
+		{"braintrust", &braintrust.Evals{}, "dataset, endpoint, or example"},
 		{"jsonl", &jsonl.Evals{}, "reported line"},
 	}
 	for _, row := range rows {

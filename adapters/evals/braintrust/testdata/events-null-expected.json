@@ -1,0 +1,15 @@
+{
+  "events": [
+    {
+      "id": "d3c2e18d-e3f5-4a3f-8a8c-cd4e8f3b6a5c",
+      "input": { "question": "no expectation recorded" },
+      "expected": null,
+      "metadata": {},
+      "tags": [],
+      "created_at": "2026-08-01T12:00:40Z",
+      "updated_at": "2026-08-01T12:00:40Z",
+      "_xact_id": "600"
+    }
+  ],
+  "cursor": ""
+}

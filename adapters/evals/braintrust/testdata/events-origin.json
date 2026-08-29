@@ -1,0 +1,48 @@
+{
+  "events": [
+    {
+      "id": "9e8a9d4f-afb1-4c9b-8c4e-8f0a4b9d2c1e",
+      "input": { "question": "copied from an experiment" },
+      "expected": { "answer": "exp answer" },
+      "metadata": {},
+      "tags": [],
+      "created_at": "2026-08-01T12:00:30Z",
+      "updated_at": "2026-08-01T12:00:30Z",
+      "origin": { "object_type": "experiment", "object_id": "exp-1", "_xact_id": "501" },
+      "_xact_id": "400"
+    },
+    {
+      "id": "a0f9be5a-b0c2-4d0c-9d5f-9a1b5c0e3d2f",
+      "input": { "question": "copied from a span" },
+      "expected": { "answer": "span answer" },
+      "metadata": {},
+      "tags": [],
+      "created_at": "2026-08-01T12:00:31Z",
+      "updated_at": "2026-08-01T12:00:31Z",
+      "origin": { "object_type": "span", "object_id": "span-9", "_xact_id": "502" },
+      "_xact_id": "399"
+    },
+    {
+      "id": "b1a0cf6b-c1d3-4e1d-8e6a-ab2c6d1f4e3a",
+      "input": { "question": "copied from an eval result" },
+      "expected": { "answer": "eval answer" },
+      "metadata": {},
+      "tags": [],
+      "created_at": "2026-08-01T12:00:32Z",
+      "updated_at": "2026-08-01T12:00:32Z",
+      "origin": { "object_type": "eval_result", "object_id": "eval-3", "_xact_id": "503" },
+      "_xact_id": "398"
+    },
+    {
+      "id": "c2b1d07c-d2e4-4f2e-9f7b-bc3d7e2a5f4b",
+      "input": { "question": "authored by hand" },
+      "expected": { "answer": "hand answer" },
+      "metadata": {},
+      "tags": [],
+      "created_at": "2026-08-01T12:00:33Z",
+      "updated_at": "2026-08-01T12:00:33Z",
+      "_xact_id": "397"
+    }
+  ],
+  "cursor": ""
+}
