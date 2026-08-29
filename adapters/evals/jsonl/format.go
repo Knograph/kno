@@ -33,6 +33,19 @@ type record struct {
 	Expected string   `json:"expected,omitempty"`
 	Rubric   string   `json:"rubric,omitempty"`
 	Tags     []string `json:"tags,omitempty"`
+
+	// The additive provenance fields. All three are optional, so files
+	// written before they existed decode identically; a mined file (`kno
+	// mine`) sets all three, and the reader round-trips them into
+	// Case.Provenance instead of clobbering them.
+	//
+	// Derived is a *bool rather than a bool so that presence survives the
+	// wire: absent means "not marked", which is not the same as a deliberate
+	// false, and it keeps files that never heard of the field byte-identical
+	// through a decode-encode cycle.
+	Derived        *bool  `json:"derived,omitempty"`
+	DerivationNote string `json:"derivation_note,omitempty"`
+	SourceRef      string `json:"source_ref,omitempty"`
 }
 
 // decode parses one line into a record.

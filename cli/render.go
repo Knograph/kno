@@ -224,6 +224,12 @@ func renderHuman(
 	fmt.Fprintf(&b, "\nBaseline %s\n", runID)
 	fmt.Fprintf(&b, "  cases      %d scored, %d errored (of %d dev; %d held back)\n",
 		scoredOf(run), erroredOf(run), counts.Dev, counts.Holdout)
+	if n := run.GetWeakLabelCaseCount(); n > 0 {
+		// The weak-label marker, printed when nonzero. A mined eval set cannot
+		// pass for a hand-authored one: the exact-match caveat that applies to
+		// derived expectations travels with the number.
+		fmt.Fprintf(&b, "  weak-label %d of these Cases are derived from transcripts (mined, not authored)\n", n)
+	}
 
 	if res.AggregateScore != nil {
 		fmt.Fprintf(&b, "  score      %.3f\n", *res.AggregateScore)

@@ -153,6 +153,17 @@ func (e *Evals) Cases(ctx context.Context) (iter.Seq2[*core.Case, error], error)
 			}
 			seen[rec.ID] = struct{}{}
 
+			// The record's own provenance fields win over the positional
+			// default. A mined record (`kno mine`) carries its transcript
+			// source_ref and its derivation note, and clobbering them with
+			// path:line would destroy exactly the audit trail Provenance
+			// exists to carry. Files written before the fields existed keep
+			// the old behavior byte-for-byte.
+			sourceRef := rec.SourceRef
+			if sourceRef == "" {
+				sourceRef = e.opts.Path + ":" + strconv.Itoa(line)
+			}
+
 			c := &core.Case{
 				Id:       rec.ID,
 				Input:    rec.Input,
@@ -161,8 +172,10 @@ func (e *Evals) Cases(ctx context.Context) (iter.Seq2[*core.Case, error], error)
 				Tags:     rec.Tags,
 				Split:    split.AssignSplit(rec.ID, seed, frac),
 				Provenance: &knov1.Provenance{
-					Source:    "jsonl",
-					SourceRef: e.opts.Path + ":" + strconv.Itoa(line),
+					Source:         "jsonl",
+					SourceRef:      sourceRef,
+					Derived:        rec.Derived != nil && *rec.Derived,
+					DerivationNote: rec.DerivationNote,
 				},
 			}
 			if !yield(c, nil) {
@@ -194,6 +207,12 @@ func (e *Evals) CountSplits(ctx context.Context) (SplitCounts, error) {
 	for c, err := range seq {
 		if err != nil {
 			return SplitCounts{}, err
+		}
+		if c.GetProvenance().GetDerived() {
+			// The weak-label count rides the same ingestion pass the split
+			// counts do, so the Run can record it at close and a
+			// weak-label eval cannot pass for a hand-authored one.
+			counts.WeakLabelCases++
 		}
 		if c.GetSplit() == knov1.Split_SPLIT_HOLDOUT {
 			counts.Holdout++

@@ -125,6 +125,7 @@ runs; the rest arrive milestone by milestone.`,
 
 	root.AddCommand(newInitCmd())
 	root.AddCommand(newBaselineCmd())
+	root.AddCommand(newMineCmd())
 	root.AddCommand(newValueCmd())
 	root.AddCommand(newDoctorCmd())
 	root.AddCommand(newPurgeCmd())

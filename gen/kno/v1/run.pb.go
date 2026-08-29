@@ -316,6 +316,17 @@ type Run struct {
 	// on the same terms as the two above, so attempted = scored + errored holds
 	// in whichever unit the stage counts.
 	ErroredCaseCount int32 `protobuf:"varint,18,opt,name=errored_case_count,json=erroredCaseCount,proto3" json:"errored_case_count,omitempty"`
+	// Cases in this run's eval set whose provenance marks them DERIVED — weak
+	// labels mined from transcripts where a human corrected the agent (`kno
+	// mine`), rather than expectations someone authored.
+	//
+	// Written at run close. Zero for an eval set with no derived Cases.
+	// Recorded separately so a weak-label eval cannot pass for a hand-authored
+	// one: exact-match scores over mined Cases are honest only within the
+	// goal-mode declaration mine makes (judge goals generally; exact-match only
+	// where resolution mode shaped the expected to a short answer), and a reader
+	// can apply that caveat only when the number is on the record.
+	WeakLabelCaseCount int32 `protobuf:"varint,31,opt,name=weak_label_case_count,json=weakLabelCaseCount,proto3" json:"weak_label_case_count,omitempty"`
 	// Set when the holdout is too small to support a meaningful confidence
 	// interval. The Run still executes; the number is reported with the caveat
 	// attached rather than presented as if it meant the same thing.
@@ -587,6 +598,13 @@ func (x *Run) GetScoredCaseCount() int32 {
 func (x *Run) GetErroredCaseCount() int32 {
 	if x != nil {
 		return x.ErroredCaseCount
+	}
+	return 0
+}
+
+func (x *Run) GetWeakLabelCaseCount() int32 {
+	if x != nil {
+		return x.WeakLabelCaseCount
 	}
 	return 0
 }
@@ -970,8 +988,7 @@ var File_kno_v1_run_proto protoreflect.FileDescriptor
 
 const file_kno_v1_run_proto_rawDesc = "" +
 	"\n" +
-	"\x10kno/v1/run.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/portfolio.proto\"\xfe\n" +
-	"\n" +
+	"\x10kno/v1/run.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/portfolio.proto\"\xb1\v\n" +
 	"\x03Run\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12#\n" +
 	"\x05stage\x18\x02 \x01(\x0e2\r.kno.v1.StageR\x05stage\x12\x1d\n" +
@@ -1000,6 +1017,7 @@ const file_kno_v1_run_proto_rawDesc = "" +
 	"\x14attempted_case_count\x18\x10 \x01(\x05R\x12attemptedCaseCount\x12*\n" +
 	"\x11scored_case_count\x18\x11 \x01(\x05R\x0fscoredCaseCount\x12,\n" +
 	"\x12errored_case_count\x18\x12 \x01(\x05R\x10erroredCaseCount\x121\n" +
+	"\x15weak_label_case_count\x18\x1f \x01(\x05R\x12weakLabelCaseCount\x121\n" +
 	"\x14holdout_underpowered\x18\x13 \x01(\bR\x13holdoutUnderpowered\x12.\n" +
 	"\x13error_rate_exceeded\x18\x14 \x01(\bR\x11errorRateExceeded\x12A\n" +
 	"\x0ecase_execution\x18\x16 \x01(\v2\x15.kno.v1.CaseExecutionH\x02R\rcaseExecution\x88\x01\x01\x127\n" +

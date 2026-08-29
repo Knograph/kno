@@ -333,6 +333,7 @@ func runBaseline(ctx context.Context, in io.Reader, out, errOut io.Writer, f bas
 		DevCases:                counts.Dev,
 		HoldoutCases:            counts.Holdout,
 		HoldoutUnderpowered:     counts.Underpowered(),
+		WeakLabelCases:          counts.WeakLabelCases,
 		EstCostPerCallUSDMicros: usdToMicros(f.costPerCall),
 		// An EXPLICIT --cost-per-call-usd 0 is an assertion that the calls are
 		// free, which is the only thing a local model server can honestly say.
