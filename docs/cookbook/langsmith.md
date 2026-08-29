@@ -25,8 +25,10 @@ The key comes from the environment, never from a flag or a config file. A plain-
 ## 2. Baseline against the dataset
 
 ```bash
-kno baseline --evals langsmith:my-support-dataset --agent openai:gpt-4.1 --max-cost-usd 5.00
+kno baseline --evals langsmith:my-support-dataset --agent openai:gpt-4.1 --max-cost-usd 5.00 --yes
 ```
+
+`--yes` answers the spend confirmation — above a $1.00 estimate Kno asks on a terminal, and a non-TTY run exits `2` without it.
 
 Kno streams the examples (paged), maps each row to a Case, assigns the dev/holdout split with the same hash every other source uses, and seals the holdout. The same run records the dataset identity, so a resume against a different version refuses rather than mixes populations.
 
@@ -34,10 +36,13 @@ Kno streams the examples (paged), maps each row to a Case, assigns the dev/holdo
 
 ```bash
 kno value --evals langsmith:my-support-dataset --pool pool.jsonl \
-  --baseline-run-id <the run id from step 2> --max-cost-usd 10.00
+  --baseline-run-id <the run id from step 2> \
+  --agent openai:gpt-4.1 --max-cost-usd 10.00 --yes
 ```
 
-The recipe from there is the [Zendesk one](zendesk.md#5-read-it-back-into-zendesk-decisions): read the table, act on the rows.
+Value must name the same `--agent` as the baseline — it defaults to `fake:` otherwise, and the deltas would be about a different agent than the one you ship.
+
+The recipe from there is the [Zendesk one](zendesk.md#5-read-it-back-into-zendesk-decisions): read the table, act on the rows. Once `select` and `export` have run, [read the whole story](read-the-whole-story.md).
 
 ## What the mapping does, exactly
 

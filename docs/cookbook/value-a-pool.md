@@ -27,9 +27,12 @@ The run routes each asset to the Cases it could plausibly affect (by tag overlap
 ## Read the report
 
 ```
-ASSET          DELTA (95% CI)                CONTROL           NOTE
-refund-faq     +0.2123  [+0.08, +0.34]       low -0.03         —
-pricing-tier   —                               —                 routed to nothing
+Planning 76 measurements over 4 assets against baseline <id-from-baseline>.
+Value run 20260828T233124-05cda2dcdac6 (RUN_STATUS_COMPLETED)
+
+ASSET         DELTA (95% CI, positive = goal dir)  CONTROL             NOTE
+refund-faq    +0.2123  [+0.0800, +0.3400]   low -0.0300          —
+pricing-tier  —                                —                 routed to nothing
 ```
 
 - **DELTA** is the mean change on the Cases the asset was routed to, with its interval. A delta without an interval is never printed — if the sample is too small or too ragged to form one, the row says so.
@@ -39,7 +42,7 @@ pricing-tier   —                               —                 routed to n
 
 ## When the budget stops the run
 
-A run that hits `--max-cost-usd` stops resumably: everything measured stays recorded, the unfinished asset is marked `budget exhausted mid-measurement`, and
+A run that hits `--max-cost-usd` stops resumably: everything measured stays recorded, the unfinished asset is marked `budget exhausted mid-measurement; --resume continues`, and
 
 ```sh
 kno value --evals cases.jsonl --pool assets.jsonl \
@@ -52,3 +55,10 @@ continues from exactly where it stopped — without paying for anything twice.
 
 - **The dropped-pairs count.** A Case whose treatment arm errored is dropped, and dropped Cases are exactly the ones where the asset was most harmful (a long injected context that times out). The delta drifts upward when this happens, and the report says how many pairs went missing.
 - **Your own conditioning.** If you tagged Cases or wrote assets after reading the baseline's failures, Kno cannot see that — and the deltas can be biased by how often the agent gets those Cases right on a re-run. [ADR-0005](../adr/0005-value-cannot-see-user-side-conditioning.md) says why, and `validate` is the stage that catches it.
+
+## Next
+
+- [Choose a portfolio under budget](select-a-portfolio.md) — `kno select` turns the recorded Valuations into the Portfolio.
+- [Read the whole story with `kno report`](read-the-whole-story.md) — the value page and its refusals, composed with the other stages.
+
+Anything you repeat on every run can live in `kno.yaml` instead of the command line: `kno init` writes one, and the file can carry `agent`, `goal`, `max_cost_usd`, `max_calls`, and `key_env`. `--yes` is deliberately flags-only.

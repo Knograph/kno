@@ -56,11 +56,15 @@ Two caps, and they bound different things:
 
 A run that hits either stops **resumably**: `--resume` continues where it left off without paying for anything twice. The exit code is `2`, not `1` — a budget stop is the run doing what it was told, not a failure.
 
-Above **$1.00** estimated, Kno asks before starting. There is no interactive prompt yet, so it prints the figure and declines; pass `--yes` to proceed. `--yes` still prints what it is agreeing to, so the number is in your scrollback and in your CI log.
+What you repeat on every run can live in `kno.yaml` instead of the command line — `kno init` writes one, and it can carry `agent`, `base_url`, `key_env`, `goal`, `max_cost_usd`, and `max_calls`. The consent booleans (`--yes`, `--accept-unknown-cost`, the security waivers) are deliberately flags-only: a committed `yes: true` would be a silent consent waiver shared with every teammate.
+
+Above **$1.00** estimated, Kno asks before starting. On a terminal the dialog prints the bounded figure and takes one of three answers: `[y]es`, `[n]o`, or `[c]hange the cap` — changing the cap re-quotes the same figure against the new headroom, and agreeing to it is the consent. On a non-TTY run there is nobody to ask: it prints the figure and `Re-run with --yes to proceed.`, then exits `2` with nothing spent. In `--json` mode it refuses the same way at exit `1` (`--json cannot prompt; pass --yes to proceed`). A scheduled run needs `--yes` up front — a machine-readable run has nobody to answer a prompt.
+
+`--yes` still prints what it is agreeing to (`Proceeding with --yes: this run would spend about $5.00 across 13 Cases.`), so the number is in your scrollback and in your CI log.
 
 ### If your model has no price
 
-Kno's price table does not cover every model, and it deliberately refuses to guess: a longest-prefix match once resolved `claude-opus-5-fast` to `claude-opus-5` and authorized a run at the base rate, when fast mode is priced well above it.
+Kno's price table does not cover every model, and it deliberately refuses to guess. The rule behind the table: **a version suffix inherits, a variant does not.** `claude-opus-5-20260821` resolves to the `claude-opus-5` row (a dated pin prices like its base), but `claude-opus-5-fast` is its own product with its own published rate — before fast mode had table rows, a prefix match silently authorized it at the base rate, and that failure is why variant words never inherit (the fast rows exist now; `kno doctor` shows them).
 
 Under a cost cap, an unpriced model is refused **once**, before any Case runs. Supply the rates yourself:
 
@@ -70,7 +74,7 @@ Under a cost cap, an unpriced model is refused **once**, before any Case runs. S
 
 Both are required. Half a price produces an estimate that is wrong in the direction that under-reserves, which is a cap that does not bind.
 
-`kno doctor` prints which models the table covers.
+`kno doctor` prints which models the table covers and the date the table was taken.
 
 ## A local model server
 
@@ -103,6 +107,8 @@ kno baseline --evals cases.jsonl \
 ```
 
 `--max-output-tokens` is **required** here: the Messages API requires `max_tokens`, and a cost cap cannot bound an output term that has no ceiling.
+
+The full Anthropic recipe — the priced models and their rates, the `--accept-unknown-cost` path, and a complete baseline→value→select→export→report example — is [its own page](anthropic.md).
 
 ## Naming the endpoint
 
