@@ -37,7 +37,7 @@ Baseline 20260821T083017-d2dfc5377255
 
   warning: the holdout has only 6 cases, too few for a meaningful confidence interval at validate
 
-Next: `kno value` to measure which of your assets earn their place.
+Scores and traces are recorded. `kno purge` removes trace content when you no longer need it.
 ```
 
 - **`6 held back`** — never scored, and nothing will read them until `validate`. This is what makes the eventual number honest.
@@ -53,11 +53,13 @@ kno baseline --evals cases.jsonl --run-id nightly-2026-08-21
 
 Runs are the correlation key for every trace, score, and event. Naming them yourself makes a resume — and later, a comparison — straightforward.
 
+Anything you repeat on every run can live in `kno.yaml` instead of the command line: `kno init` writes one, and the file can carry `agent`, `goal`, `max_cost_usd`, `max_calls`, `concurrency`, `holdout_frac`, and `key_env`. A committed file is a per-team default; `--yes` and the security booleans are deliberately flags-only.
+
 ## Common problems
 
 **"case has no id"** — every Case needs one. See step 1.
 
-**"all N Cases landed in dev, leaving no holdout"** — your eval set is too small for the configured fraction. Add Cases, or raise `--holdout-frac`. Kno refuses here rather than at `validate`, so you find out before spending anything.
+**"all N Cases landed in dev, leaving no holdout"** — your eval set is too small for the configured fraction. Kno refuses here rather than at `validate`, so you find out before spending anything. Add Cases — the refusal's own fix is "add more cases, or lower `--holdout-frac`", but on a tiny set no fraction produces a usable split: below ~6 Cases the holdout collapses to one half or the other.
 
 **"duplicate case id"** — two Cases share an id. Since the split is keyed on id they'd land in the same half and be indistinguishable in every later report, so this is fatal rather than tolerated.
 
@@ -65,5 +67,7 @@ Runs are the correlation key for every trace, score, and event. Naming them your
 
 ## Next
 
+- [Value a pool of assets](value-a-pool.md) — measure which of your assets earn their place.
 - [What the numbers mean](../what-the-numbers-mean.md) — before you act on a score.
 - [Gate a deploy on Kno in CI](ci-gate.md).
+- [Read the whole story with `kno report`](read-the-whole-story.md) — one page across all the stages.

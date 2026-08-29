@@ -24,7 +24,7 @@ kno select --value-run-id <id-from-value> \
 ## Read the report
 
 ```
-Select run <id> (completed)
+Select run 20260828T233415-8f3a1b2c4d5e (RUN_STATUS_COMPLETED)
   source    20260828T091515-ffc3097d49da (completed)
   budget    context ≤ 10000 tokens; cost ≤ $5.00
 
@@ -54,10 +54,11 @@ Rejected 1
 The Portfolio is recorded under the Select run ID, and `kno export` is the next step:
 
 ```sh
-kno select --json   # machine-readable: run_id, budget, selected, rejected, total_cost
+kno select --json   # machine-readable: run_id, status, source_run_id, budget, selected, rejected, total_cost
 kno export --select-run-id <id-from-select> ...
 ```
 
 ## Next
 
 - [Export a tuning set](export-a-tuning-set.md) — turn the Portfolio into a file the Tuner adapters will parse.
+- [Read the whole story with `kno report`](read-the-whole-story.md) — the Portfolio, the rejection log, and the holdout caveat on one page.

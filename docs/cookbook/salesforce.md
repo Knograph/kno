@@ -40,10 +40,13 @@ Then curate the `expected` answers — the resolution notes tell you what *was* 
 ## 3. Baseline, then value
 
 ```bash
-kno baseline --evals cases.jsonl --agent openai:gpt-4.1 --max-cost-usd 2.00
+kno baseline --evals cases.jsonl --agent openai:gpt-4.1 --max-cost-usd 2.00 --yes
 kno value --evals cases.jsonl --pool pool.jsonl \
-  --baseline-run-id <the run id from the baseline> --max-cost-usd 10.00
+  --baseline-run-id <the run id from the baseline> \
+  --agent openai:gpt-4.1 --max-cost-usd 10.00 --yes
 ```
+
+`--yes` answers the spend confirmation (above $1.00 Kno asks; a non-TTY run exits 2 without it), and value must name the same `--agent` as the baseline — it defaults to `fake:`. Once `select` and `export` have run, [read the whole story](read-the-whole-story.md).
 
 ## 4. Read it back into Salesforce decisions
 

@@ -52,4 +52,5 @@ prints `run_id`, `select_run_id`, `destination`, `asset_count`, `bytes_written`,
 ## Next
 
 - [Choose a portfolio under budget](select-a-portfolio.md) — the step before this one.
+- [Read the whole story with `kno report`](read-the-whole-story.md) — the export page folds the gaps record into the report.
 - Validate (upcoming) measures the Portfolio as a set against the untouched holdout — the honest number that selection-time estimates point at.

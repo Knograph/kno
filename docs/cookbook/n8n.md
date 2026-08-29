@@ -31,10 +31,12 @@ One command, environment credentials, nothing on the command line:
 ```
 kno value --evals cases.jsonl --pool pool.jsonl \
   --baseline-run-id 2026-08-21-baseline \
-  --agent openai:gpt-4.1 --max-cost-usd 10.00 --json
+  --agent openai:gpt-4.1 --max-cost-usd 10.00 --yes --json
 ```
 
 n8n's Execute Command node runs a shell; give it `OPENAI_API_KEY` from an n8n credential field, mapped into the node's environment — keys come from the environment, never from a flag, and never into the n8n workflow JSON, which is what gets exported and shared.
+
+`--yes` is required here, not optional: the Execute Command node is not a terminal, and a run whose estimate crosses the $1.00 confirmation threshold refuses at exit `2` (or `1` with `--json`) rather than prompting a human who is not there.
 
 The `--json` flag makes the report machine-readable; the Code node parses it instead of scraping the human output.
 
@@ -79,6 +81,6 @@ The Code node's output is already filtered — harmful assets and clear winners 
 
 ## Why this is the right integration boundary
 
-n8n orchestrates; Kno measures; the exit codes are the contract. No plugin, no SDK, nothing to maintain — the workflow is a shell command plus a parse, and every Kno upgrade that matters announces itself in the CHANGELOG. When `select` and `validate` land, the same workflow grows two more nodes: run `kno select` before the alert, and gate the deploy on `kno validate`'s exit code.
+n8n orchestrates; Kno measures; the exit codes are the contract. No plugin, no SDK, nothing to maintain — the workflow is a shell command plus a parse, and every Kno upgrade that matters announces itself in the CHANGELOG. `kno select` and `kno export` already exist, so the workflow can grow the next nodes now: run `kno select --value-run-id <id> --max-cost-usd <budget>` after value and branch on the Portfolio, then `kno export` when you want the artifact written. When `validate` lands, gate the deploy on its exit code the same way.
 
 *The measurement side — building the Cases and the Pool in the first place: [Value your Zendesk knowledge](zendesk.md), or any other vendor recipe.*

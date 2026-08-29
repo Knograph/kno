@@ -46,17 +46,22 @@ The curated version (better numbers): pick 50–200 tickets yourself, and write 
 ## 3. Baseline the agent as it is today
 
 ```bash
-kno baseline --evals cases.jsonl --agent openai:gpt-4.1 --max-cost-usd 2.00
+kno baseline --evals cases.jsonl --agent openai:gpt-4.1 --max-cost-usd 2.00 --yes
 ```
 
 Note the run ID in the output — the next step references it. This baseline is the reference every delta is measured against, and it seals a holdout that nothing reads until `validate`.
+
+`--yes` answers the spend confirmation in advance: above a $1.00 estimate Kno asks (`[y]es / [n]o / [c]hange the cap`) on a terminal, and a non-TTY run exits `2` rather than hang — so a pasted or scheduled copy needs it. It still prints the figure it is agreeing to. Your repeatable settings — `agent`, `max_cost_usd`, `key_env` — can live in `kno.yaml` instead (`kno init` writes one).
 
 ## 4. Value the pool
 
 ```bash
 kno value --evals cases.jsonl --pool pool.jsonl \
-  --baseline-run-id <the run id from step 3> --max-cost-usd 10.00
+  --baseline-run-id <the run id from step 3> \
+  --agent openai:gpt-4.1 --max-cost-usd 10.00 --yes
 ```
+
+The `--agent` matters as much here as the baseline: `kno value` defaults to `fake:` when you do not name one, and measuring the pool with the fake agent against a gpt-4.1 baseline would report deltas about a different agent than the one you ship. Same agent, same caps, same `--yes`.
 
 Kno routes each Asset to the Cases it could plausibly affect, injects it, re-measures against fresh controls, and reports one line per Asset:
 
@@ -81,7 +86,7 @@ macro-0031    +0.0009  [-0.0401, +0.0419]
 | CONTROL bound below zero on an otherwise-positive Asset | It helps its own slice and hurts a neighboring one — fix the content or narrow its scope |
 | `sample too small or ragged to form an interval` | The asset routed to too few Cases to measure. More tickets in that area, or a larger eval set |
 
-**Which decisions can be automated later:** promotion and retirement land with `select`; the untouched-holdout check lands with `validate`. Until then, treat the value table as the evidence, and the human as the decision-maker.
+**Which decisions can be automated now:** promotion and retirement land with `kno select` — it reads the recorded Valuations, makes no LLM calls, and records the Portfolio with a rejection log. See [Choose a portfolio under budget](select-a-portfolio.md). The untouched-holdout check lands with `validate`. And when you have run the stages, [read the whole story](read-the-whole-story.md) — `kno report` composes the Baseline, Value, Select, and Export pages into one page.
 
 ## The numbers only mean what the Cases mean
 

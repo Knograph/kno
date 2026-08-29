@@ -76,6 +76,8 @@ You don't need it for a provider that prices its own calls — `openai:` and `an
 
 `--yes` proceeds without asking, and prints the figure it's proceeding with — so the number your job agreed to is in the log. In `--json` mode Kno **refuses to spend past the threshold without it**, because a machine-readable run has nobody to answer a prompt and proceeding would spend money with no one watching.
 
+The refusal itself has a code, and it is not `2`. A pre-run consent refusal is a *failure to start*, distinct from a mid-run budget stop: with `--json` it exits `1` (`--json cannot prompt; pass --yes to proceed`), and on a plain non-TTY run it exits `2` (`Re-run with --yes to proceed.`). Either way nothing is spent, and the fix is the same — pass `--yes`. Your job should not need to branch on this: a scheduled run that may cross the threshold gets `--yes`.
+
 ## Real spend changes what a red build means
 
 Everything above holds for `fake:`, which costs nothing. Once the agent is a real provider, three things are worth knowing before you schedule it:

@@ -6,7 +6,7 @@ What you're asking: **what did the stages conclude, in one place?** `kno report`
 
 You need the run IDs from the report lines of the stages you ran:
 
-- **`kno baseline`** prints `Baseline <id> (completed)`.
+- **`kno baseline`** prints `Baseline <id>`. This one is required — the report composes around the Value run, which pairs against a Baseline.
 - **`kno value`** prints `Value run <id> (...)`. This one is required.
 - **`kno select`** prints `Select run <id> (...)`. Optional.
 - **`kno export`** prints `Export run <id> (...)`. Optional.
