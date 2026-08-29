@@ -104,9 +104,9 @@ func adapterFacts() []adapterFact {
 			Note: "requires --max-output-tokens",
 		},
 		{
-			Scheme: agentref.SchemeExec, Available: false,
-			GenerationParams: "n/a",
-			Note:             "agents behind a shell command land in a later milestone",
+			Scheme: agentref.SchemeExec, Available: true,
+			GenerationParams: "n/a", TokenCounts: false, Spends: false,
+			Note: "runs a local command per Case; free unless --cost-per-call-usd is set",
 		},
 		{
 			Scheme: agentref.SchemeTuned, Available: false,

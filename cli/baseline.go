@@ -47,6 +47,7 @@ type baselineFlags struct {
 	// flag table. Tracked as docs/debt.md#62.
 	baseURL             string
 	keyEnv              []string
+	execEnv             []string
 	allowInsecureURL    bool
 	allowPrivateAddress bool
 	maxOutputTokens     int64
@@ -137,6 +138,12 @@ continues without paying for anything twice.`,
 	// line lands in shell history, in ps output, and in CI logs.
 	flags.StringArrayVar(&f.keyEnv, "key-env", nil,
 		"bind a host to the NAME of an environment variable holding its key, as host=VAR (repeatable)")
+	// --exec-env is the one flag in this block that reaches no endpoint: the
+	// exec: child gets exactly the allowlist (PATH, HOME, TMPDIR) plus these
+	// grants, and a parent-exported key must not be visible to the child —
+	// the plugin posture this adapter is the ancestor of.
+	flags.StringArrayVar(&f.execEnv, "exec-env", nil,
+		"grant KEY=VALUE to the exec: child's environment (repeatable); the child otherwise gets only PATH, HOME, and TMPDIR")
 	flags.BoolVar(&f.allowInsecureURL, "allow-insecure-base-url", false,
 		"permit a plain-http base URL")
 	flags.BoolVar(&f.allowPrivateAddress, "allow-private-address", false,

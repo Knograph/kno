@@ -8,6 +8,7 @@ import (
 
 	"github.com/knograph/kno/adapters/agent/agentref"
 	"github.com/knograph/kno/adapters/agent/anthropic"
+	"github.com/knograph/kno/adapters/agent/exec"
 	"github.com/knograph/kno/adapters/agent/fake"
 	"github.com/knograph/kno/adapters/agent/openaicompat"
 	"github.com/knograph/kno/core"
@@ -143,6 +144,17 @@ func checkAbsoluteHTTP(raw string) error {
 // unsupported provider produce the same message, and the user cannot tell which
 // one they have.
 func resolveAgent(f baselineFlags) (core.Agent, *knov1.AgentRef, error) {
+	// Refused before composeRef: exec: has no endpoint, so composing --base-url
+	// into the ref would silently absorb the URL into the COMMAND and the
+	// failure would be a confusing "command not found" — the silent-ignore
+	// shape this file exists to refuse.
+	if f.baseURL != "" && hasExecScheme(f.agentRef) {
+		return nil, nil, errs.ErrInvalidInput.WithFix(
+			"drop --base-url; exec: runs a local command and has no endpoint",
+		).
+			Wrap(fmt.Errorf("--agent names the exec scheme and --base-url names an endpoint"))
+	}
+
 	composed, err := composeRef(f.agentRef, f.baseURL)
 	if err != nil {
 		return nil, nil, err
@@ -166,12 +178,37 @@ func resolveAgent(f baselineFlags) (core.Agent, *knov1.AgentRef, error) {
 	case agentref.SchemeAnthropic:
 		a, err := newAnthropic(f, parsed)
 		return a, parsed, err
+	case agentref.SchemeExec:
+		a, err := newExec(f, parsed)
+		return a, parsed, err
 	}
 
 	return nil, nil, errs.ErrCapabilityUnsupported.WithFix(
-		"use openai:, anthropic:, or fake:; exec: and tuned: land in a later milestone",
+		"use openai:, anthropic:, fake:, or exec:; tuned: lands with the tuner",
 	).
 		Wrap(fmt.Errorf("no adapter for agent ref %q", parsed.GetRef()))
+}
+
+// hasExecScheme reports whether the agent ref names the exec scheme, using
+// the same first-colon rule agentref does.
+func hasExecScheme(ref string) bool {
+	before, _, ok := strings.Cut(ref, ":")
+	return ok && strings.TrimSpace(before) == agentref.SchemeExec
+}
+
+// newExec builds the shell-command adapter.
+//
+// The command is the ref target, the string after "exec:". Grants and the
+// per-call deadline pass through; the cost override is the price of one
+// invocation (zero declares the command free, which is what makes the
+// consent path ask nothing of an exec run).
+func newExec(f baselineFlags, ref *knov1.AgentRef) (core.Agent, error) {
+	return exec.New(exec.Options{
+		Command:              ref.GetTarget(),
+		Env:                  f.execEnv,
+		Timeout:              f.timeout,
+		CostPerCallUSDMicros: usdToMicros(f.costPerCall),
+	})
 }
 
 // newOpenAICompat builds the OpenAI-shaped adapter.
