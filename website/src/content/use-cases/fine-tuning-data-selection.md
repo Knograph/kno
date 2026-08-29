@@ -44,7 +44,7 @@ seoDescription: >-
 ## The recipe
 
 Turn production transcripts into an eval set with
-[`kno mine`](https://github.com/knograph/kno/blob/main/docs/plans/2026-08-29-mine.md),
+[`kno mine`](https://github.com/uknoAI/kno/blob/main/docs/plans/2026-08-29-mine.md),
 then value candidate training examples against it the same way as any other
 asset.
 
@@ -56,4 +56,4 @@ training pipeline consumes it.
 
 ## Related reading
 
-- [Export a tuning set](https://github.com/knograph/kno/blob/main/docs/cookbook/export-a-tuning-set.md)
+- [Export a tuning set](https://github.com/uknoAI/kno/blob/main/docs/cookbook/export-a-tuning-set.md)

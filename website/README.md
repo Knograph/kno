@@ -1,6 +1,6 @@
 # Kno website
 
-Marketing website for [Kno](https://github.com/knograph/kno) — built with
+Marketing website for [Kno](https://github.com/uknoAI/kno) — built with
 Astro, served from Cloudflare Pages, edited through Sveltia CMS.
 
 **Requires Node 22.12+ and pnpm.**

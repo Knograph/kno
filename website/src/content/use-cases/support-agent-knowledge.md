@@ -48,6 +48,6 @@ seoDescription: >-
 ## The recipe
 
 There is a full walkthrough in the cookbook:
-[Value your Zendesk knowledge](https://github.com/knograph/kno/blob/main/docs/cookbook/zendesk.md) —
+[Value your Zendesk knowledge](https://github.com/uknoAI/kno/blob/main/docs/cookbook/zendesk.md) —
 the pattern works for any support stack that can export transcripts and
 help-center content.

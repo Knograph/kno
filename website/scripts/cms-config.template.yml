@@ -11,7 +11,7 @@
 
 backend:
   name: github
-  repo: knograph/kno
+  repo: uknoAI/kno
   branch: main
   base_url: '{{CMS_AUTH_BASE_URL}}'
   auth_scope: public_repo

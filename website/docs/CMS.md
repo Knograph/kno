@@ -27,7 +27,7 @@ deployed site points at the Sveltia CMS Authenticator Worker.
 ```yaml
 backend:
   name: github
-  repo: knograph/kno
+  repo: uknoAI/kno
   branch: main
   base_url: https://api.github.com # ← replaced at build time
   auth_scope: public_repo

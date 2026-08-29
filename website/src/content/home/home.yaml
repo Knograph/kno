@@ -7,8 +7,8 @@ hero:
   primaryCtaLabel: Run Kno
   primaryCtaUrl: '#quickstart'
   secondaryCtaLabel: View on GitHub
-  secondaryCtaUrl: https://github.com/knograph/kno
-  installCommand: curl -sSfL https://raw.githubusercontent.com/knograph/kno/main/install.sh | sh
+  secondaryCtaUrl: https://github.com/uknoAI/kno
+  installCommand: curl -sSfL https://raw.githubusercontent.com/uknoAI/kno/main/install.sh | sh
 
 trustStrip:
   - Single Go binary
@@ -192,7 +192,7 @@ quickstart:
         because the fake agent answers every case with what the case expects —
         the point is proving the loop, not the asset.
   docsLabel: Read the full walkthrough
-  docsUrl: https://github.com/knograph/kno/blob/main/docs/cookbook/first-baseline.md
+  docsUrl: https://github.com/uknoAI/kno/blob/main/docs/cookbook/first-baseline.md
   freeNote: >-
     The quickstart costs nothing. Point Kno at a real provider — any
     OpenAI-compatible endpoint or Anthropic — with --agent and a budget cap,
@@ -275,13 +275,13 @@ community:
         adversarially, then code.
   ctas:
     - label: Find good first issues
-      url: https://github.com/knograph/kno/blob/main/CONTRIBUTING.md#where-to-start
+      url: https://github.com/uknoAI/kno/blob/main/CONTRIBUTING.md#where-to-start
     - label: Read CONTRIBUTING.md
-      url: https://github.com/knograph/kno/blob/main/CONTRIBUTING.md
+      url: https://github.com/uknoAI/kno/blob/main/CONTRIBUTING.md
     - label: Ask in Discussions
-      url: https://github.com/knograph/kno/discussions
+      url: https://github.com/uknoAI/kno/discussions
     - label: Open an issue
-      url: https://github.com/knograph/kno/issues/new/choose
+      url: https://github.com/uknoAI/kno/issues/new/choose
 
 roadmap:
   heading: Kno is early. Help define what comes next.
@@ -304,16 +304,16 @@ roadmap:
     - name: report
       status: shipped
   ctaLabel: See the full status table
-  ctaUrl: https://github.com/knograph/kno#status
+  ctaUrl: https://github.com/uknoAI/kno#status
 
 finalCta:
   heading: Stop guessing which data makes your agent better.
   body: >-
     Install the binary, run the quickstart, and get your first valuation in
     minutes — without spending API money.
-  installCommand: curl -sSfL https://raw.githubusercontent.com/knograph/kno/main/install.sh | sh
+  installCommand: curl -sSfL https://raw.githubusercontent.com/uknoAI/kno/main/install.sh | sh
   ctas:
     - label: Run the quickstart
       url: '#quickstart'
     - label: View on GitHub
-      url: https://github.com/knograph/kno
+      url: https://github.com/uknoAI/kno

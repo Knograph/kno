@@ -9,7 +9,7 @@ Two moving parts:
    GitHub OAuth for `/admin` only.
 
 ```text
-GitHub (knograph/kno, main)
+GitHub (uknoAI/kno, main)
    │  push / PR merge
    ▼
 Cloudflare Pages ──► kno website (static, /website root)
@@ -68,7 +68,7 @@ Wrangler. A reference `wrangler.jsonc` lives in `website/worker/`.
 git clone https://github.com/sveltia/sveltia-cms-auth
 cd sveltia-cms-auth
 npx wrangler deploy        # note the worker URL, e.g.
-                           # https://sveltia-cms-auth.knograph.workers.dev
+                           # https://sveltia-cms-auth.uknoAI.workers.dev
 ```
 
 ### 2b. Register a GitHub OAuth app
@@ -78,7 +78,7 @@ GitHub → Settings → Developer settings → OAuth Apps → New OAuth App:
 | Field                      | Value                             |
 | -------------------------- | --------------------------------- |
 | Application name           | `Kno CMS`                         |
-| Homepage URL               | `https://github.com/knograph/kno` |
+| Homepage URL               | `https://github.com/uknoAI/kno` |
 | Authorization callback URL | `<WORKER_URL>/callback`           |
 
 Generate a client secret after registering.
@@ -111,7 +111,7 @@ Set `CMS_AUTH_BASE_URL` in the Pages environment (step 1). At build time
 1. Open `https://<domain>/admin/` — "Sign In with GitHub" appears.
 2. Sign in — you land in the CMS with the Kno collections listed.
 3. Edit a use case, save as draft → a PR appears on
-   `knograph/kno` (editorial workflow).
+   `uknoAI/kno` (editorial workflow).
 4. From a second GitHub account without repo access, open `/admin`, sign
    in, propose an edit → a fork-based PR appears (open authoring).
 5. Merge → Pages build → content live.

@@ -45,7 +45,7 @@ seoDescription: >-
 
 Feed the pool from the documents you already have — or from a source you want
 to test, like a help center, with the
-[Zendesk cookbook recipe](https://github.com/knograph/kno/blob/main/docs/cookbook/zendesk.md).
+[Zendesk cookbook recipe](https://github.com/uknoAI/kno/blob/main/docs/cookbook/zendesk.md).
 The pool adapter reads JSONL, CSV, or Markdown, so exporting from any system
 is enough to start.
 
@@ -57,5 +57,5 @@ ingestion pipeline can consume directly.
 
 ## Related reading
 
-- [The mental model](https://github.com/knograph/kno/blob/main/docs/mental-model.md)
-- [What the numbers mean](https://github.com/knograph/kno/blob/main/docs/what-the-numbers-mean.md)
+- [The mental model](https://github.com/uknoAI/kno/blob/main/docs/mental-model.md)
+- [What the numbers mean](https://github.com/uknoAI/kno/blob/main/docs/what-the-numbers-mean.md)

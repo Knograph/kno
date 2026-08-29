@@ -37,4 +37,4 @@ portfolio interval is still inflated by the selection effect. The honest
 number is the validate report's holdout gain.
 
 The full treatment — what each number claims and what it does not — is in
-[What the numbers mean](https://github.com/knograph/kno/blob/main/docs/what-the-numbers-mean.md).
+[What the numbers mean](https://github.com/uknoAI/kno/blob/main/docs/what-the-numbers-mean.md).

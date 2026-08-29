@@ -32,15 +32,15 @@ are not reported. Holdouts stay sealed. Cost is part of value. Interrupting
 is boring — nothing spends your money silently, and nothing pays twice.
 
 The full argument is in
-[DESIGN.md](https://github.com/knograph/kno/blob/main/DESIGN.md) and the
-[mental model](https://github.com/knograph/kno/blob/main/docs/mental-model.md).
+[DESIGN.md](https://github.com/uknoAI/kno/blob/main/DESIGN.md) and the
+[mental model](https://github.com/uknoAI/kno/blob/main/docs/mental-model.md).
 
 ## Status
 
 Kno is early. `baseline`, `value`, `select`, `export`, `report`, and
 `mine` ship; `validate` is next. The full status table lives in the
-[README](https://github.com/knograph/kno#status).
+[README](https://github.com/uknoAI/kno#status).
 
 ## License
 
-Apache-2.0. [Full text](https://github.com/knograph/kno/blob/main/LICENSE).
+Apache-2.0. [Full text](https://github.com/uknoAI/kno/blob/main/LICENSE).

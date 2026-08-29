@@ -18,23 +18,23 @@ const siteCollection = defineCollection({
     shortDescription: z
       .string()
       .default('Know which data actually makes your AI better.'),
-    githubUrl: z.string().url().default('https://github.com/knograph/kno'),
-    docsUrl: z.string().url().default('https://github.com/knograph/kno#documentation'),
+    githubUrl: z.string().url().default('https://github.com/uknoAI/kno'),
+    docsUrl: z.string().url().default('https://github.com/uknoAI/kno#documentation'),
     installCommand: z
       .string()
       .default(
-        'curl -sSfL https://raw.githubusercontent.com/knograph/kno/main/install.sh | sh',
+        'curl -sSfL https://raw.githubusercontent.com/uknoAI/kno/main/install.sh | sh',
       ),
     navigation: z.array(z.object({ label: z.string(), url: z.string() })).default([
       { label: 'Docs', url: '' },
       { label: 'Use Cases', url: '/use-cases/' },
       { label: 'Blog', url: '/blog/' },
       { label: 'Community', url: '/community/' },
-      { label: 'GitHub', url: 'https://github.com/knograph/kno' },
+      { label: 'GitHub', url: 'https://github.com/uknoAI/kno' },
     ]),
     socialLinks: z
       .array(z.object({ label: z.string(), url: z.string() }))
-      .default([{ label: 'GitHub', url: 'https://github.com/knograph/kno' }]),
+      .default([{ label: 'GitHub', url: 'https://github.com/uknoAI/kno' }]),
     seoTitle: z.string().default('Kno — know which data actually makes your AI better'),
     seoDescription: z
       .string()
@@ -43,9 +43,9 @@ const siteCollection = defineCollection({
       ),
     ogImage: z.string().default('/images/og.png'),
     footerLinks: z.array(z.object({ label: z.string(), url: z.string() })).default([
-      { label: 'GitHub', url: 'https://github.com/knograph/kno' },
-      { label: 'Docs', url: 'https://github.com/knograph/kno#documentation' },
-      { label: 'Apache-2.0', url: 'https://github.com/knograph/kno/blob/main/LICENSE' },
+      { label: 'GitHub', url: 'https://github.com/uknoAI/kno' },
+      { label: 'Docs', url: 'https://github.com/uknoAI/kno#documentation' },
+      { label: 'Apache-2.0', url: 'https://github.com/uknoAI/kno/blob/main/LICENSE' },
       { label: 'Blog', url: '/blog/' },
       { label: 'Edit this site', url: '/admin/' },
     ]),
@@ -68,11 +68,11 @@ const homeCollection = defineCollection({
       primaryCtaLabel: z.string().default('Run Kno'),
       primaryCtaUrl: z.string().default('#quickstart'),
       secondaryCtaLabel: z.string().default('View on GitHub'),
-      secondaryCtaUrl: z.string().default('https://github.com/knograph/kno'),
+      secondaryCtaUrl: z.string().default('https://github.com/uknoAI/kno'),
       installCommand: z
         .string()
         .default(
-          'curl -sSfL https://raw.githubusercontent.com/knograph/kno/main/install.sh | sh',
+          'curl -sSfL https://raw.githubusercontent.com/uknoAI/kno/main/install.sh | sh',
         ),
     }),
     trustStrip: z
@@ -299,7 +299,7 @@ const homeCollection = defineCollection({
       docsUrl: z
         .string()
         .default(
-          'https://github.com/knograph/kno/blob/main/docs/cookbook/first-baseline.md',
+          'https://github.com/uknoAI/kno/blob/main/docs/cookbook/first-baseline.md',
         ),
       freeNote: z
         .string()
@@ -387,15 +387,15 @@ const homeCollection = defineCollection({
       ctas: z.array(z.object({ label: z.string(), url: z.string() })).default([
         {
           label: 'Browse good first issues',
-          url: 'https://github.com/knograph/kno/contribute',
+          url: 'https://github.com/uknoAI/kno/contribute',
         },
         {
           label: 'Read CONTRIBUTING.md',
-          url: 'https://github.com/knograph/kno/blob/main/CONTRIBUTING.md',
+          url: 'https://github.com/uknoAI/kno/blob/main/CONTRIBUTING.md',
         },
         {
           label: 'Open an issue',
-          url: 'https://github.com/knograph/kno/issues/new/choose',
+          url: 'https://github.com/uknoAI/kno/issues/new/choose',
         },
       ]),
     }),
@@ -417,7 +417,7 @@ const homeCollection = defineCollection({
           { name: 'report', status: 'shipped' },
         ]),
       ctaLabel: z.string().default('See the full status table'),
-      ctaUrl: z.string().default('https://github.com/knograph/kno#status'),
+      ctaUrl: z.string().default('https://github.com/uknoAI/kno#status'),
     }),
     finalCta: z.object({
       heading: z.string().default('Stop guessing which data makes your agent better.'),
@@ -429,13 +429,13 @@ const homeCollection = defineCollection({
       installCommand: z
         .string()
         .default(
-          'curl -sSfL https://raw.githubusercontent.com/knograph/kno/main/install.sh | sh',
+          'curl -sSfL https://raw.githubusercontent.com/uknoAI/kno/main/install.sh | sh',
         ),
       ctas: z.array(z.object({ label: z.string(), url: z.string() })).default([
         { label: 'Run the quickstart', url: '#quickstart' },
         {
           label: 'View on GitHub',
-          url: 'https://github.com/knograph/kno',
+          url: 'https://github.com/uknoAI/kno',
         },
       ]),
     }),

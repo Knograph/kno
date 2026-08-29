@@ -11,7 +11,7 @@ test('homepage loads with headline and primary CTA', async ({ page }) => {
   await expect(runKno).toHaveAttribute('href', '#quickstart');
   await expect(
     page.getByRole('link', { name: 'View on GitHub' }).first(),
-  ).toHaveAttribute('href', 'https://github.com/knograph/kno');
+  ).toHaveAttribute('href', 'https://github.com/uknoAI/kno');
 });
 
 test('navigation works', async ({ page }) => {
