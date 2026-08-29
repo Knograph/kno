@@ -333,6 +333,23 @@ func quantileFor(level float64, side knov1.Sidedness) float64 {
 	return 1 - tail
 }
 
+// Quantile returns the quantile a bound at the given level and sidedness
+// would use: the student-t quantile with df degrees of freedom when df >= 1,
+// else the normal quantile.
+//
+// Exported for the multiplicity correction in stats/portfolio. Correcting an
+// interval for multiple comparisons scales its recorded half-width by the
+// ratio of the corrected quantile to the recorded one, and that ratio must
+// come from the same distribution family the interval was built with — the
+// caller cannot derive it from the recorded numbers alone.
+func Quantile(level float64, side knov1.Sidedness, df int) float64 {
+	p := quantileFor(level, side)
+	if df >= 1 {
+		return studentTQuantile(p, float64(df))
+	}
+	return normalQuantile(p)
+}
+
 // zFor returns the normal quantile for the level and sidedness.
 //
 // A one-sided bound at level L uses the same quantile a two-sided interval

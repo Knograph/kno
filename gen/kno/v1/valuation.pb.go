@@ -283,7 +283,8 @@ type Interval struct {
 	// one-sided 0.95 as a two-sided 0.95 overstates confidence.
 	Level float64 `protobuf:"fixed64,3,opt,name=level,proto3" json:"level,omitempty"`
 	// How the interval was computed: "bootstrap", "t", "wilson", "tango",
-	// "agresti-min", "adjusted-wald", "mover-wilson", "sign". Recorded because the method is
+	// "agresti-min", "adjusted-wald", "mover-wilson", "sign", "net-loss-shared",
+	// "net-loss-indep". Recorded because the method is
 	// part of the claim, and because a delta whose method changed between two
 	// runs did not become more precise — it was measured differently.
 	Method string `protobuf:"bytes,4,opt,name=method,proto3" json:"method,omitempty"`
