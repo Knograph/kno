@@ -1,0 +1,49 @@
+HAND-AUTHORED, NOT RECORDED. Read this before trusting these files.
+
+No LANGSMITH_API_KEY exists on the machine that created this package, so no
+live exchange produced these files. They are hand-authored against the
+documented LangSmith REST schema as of 2026-08-28:
+
+  - Datasets:  GET {endpoint}/datasets?name=<name>&limit=100, response
+    envelope {items, next_cursor}; each dataset object carries id, name,
+    data_type, created_at, modified_at, example_count.
+  - Examples:  GET {endpoint}/examples?dataset_id=<id>&limit=100[&cursor=...],
+    response envelope {items, next_cursor}; each example object carries id,
+    dataset_id, inputs, outputs (nullable), created_at, modified_at.
+  - Auth:      the x-api-key header, per LangSmith's API documentation.
+
+The classic REST paths and the {items, next_cursor} envelope are the ones the
+langsmith-sdk (github.com/langchain-ai/langsmith-sdk) uses today via its
+_get_paginated_list helper; the LangSmith API docs live at
+https://docs.langchain.com/langsmith. The schemas are versioned and can
+change — that is the adapter's accepted drift risk, recorded in
+docs/plans/2026-08-28-langsmith-evals-adapter.md.
+
+Until a real exchange replaces them, the adapter rests on a documentation
+claim rather than on evidence. When a LANGSMITH_API_KEY exists, re-record:
+
+  KNO_LIVE_TESTS=1 KNO_RECORD_FIXTURES=1 go test -tags=integration \
+    ./adapters/evals/langsmith/ -run TestRecordLiveFixtures
+
+which captures the live dataset and its first page into testdata/live/ (and
+refuses to record a response that echoes the key). Those captures are the
+evidence to review against these files. The malformed, empty, and duplicate
+fixtures cannot be recorded — no live dataset is malformed — so they stay
+hand-authored and are judged against the captures.
+
+What each fixture is for:
+
+  datasets-llm.json          name resolution; one dataset, 4 examples
+  examples-llm-page1.json    first page (2 rows), next_cursor "cursor-2"
+  examples-llm-page2.json    cursor continuation (2 rows: input/output keys,
+                             and a null outputs -> empty Expected); last page
+  datasets-chat.json         chat-format dataset
+  examples-chat.json         inputs.messages concatenation; Expected from
+                             outputs.answer, and from the last assistant
+                             message when outputs is null
+  datasets-malformed.json    a row that cannot map
+  examples-malformed.json    inputs is an array, not an object -> fatal
+  datasets-empty.json        a dataset with no examples -> zero Cases
+  examples-empty.json        items: [] -> zero Cases
+  datasets-duplicate.json    repeated example id
+  examples-duplicate.json    ex-dup-0001 twice -> fatal naming the id

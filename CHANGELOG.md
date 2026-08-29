@@ -76,6 +76,20 @@ covenants — breaking any of them requires a major version.
 
 ### Features
 
+- **LangSmith datasets are first-class Evals.** `kno baseline --evals
+  langsmith:my-dataset` measures against a LangSmith dataset directly — no manual export,
+  no snapshot rot. The adapter streams examples with cursor pagination (page 100,
+  Retry-After-aware backoff, page cap), maps rows deterministically (named keys first,
+  then document order — never Go's randomized map order), handles chat-format and
+  LLM-format datasets, refuses plain-HTTP and private-address self-hosted endpoints by
+  default, and redacts credentials from every error. Fixtures are hand-authored against
+  the documented schema with provenance notes (no live key on the build machine;
+  `KNO_RECORD_FIXTURES=1` re-records when one exists). The dev/holdout split moved to a
+  shared `adapters/evals/split` package, so the denominator math is compile-time
+  identical across sources, and `coretest` gained a duplicate-Case-ID conformance check
+  that makes the debt-45 invariant a core property. Plan:
+  `docs/plans/2026-08-28-langsmith-evals-adapter.md`.
+
 - **Fast-mode variants are priced, and the rest of the variant debt is disposed with
   reasons.** `claude-opus-5-fast` and `claude-opus-4-8-fast` have rows at the published
   $10/$50 per MTok, so a capped run on fast mode is authorized at its real rate instead of

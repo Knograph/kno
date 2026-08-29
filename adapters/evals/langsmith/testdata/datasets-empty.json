@@ -1,0 +1,14 @@
+{
+  "items": [
+    {
+      "id": "ds-empty-001",
+      "name": "empty-dataset",
+      "description": "A dataset with no examples (hand-authored fixture)",
+      "data_type": "kv",
+      "example_count": 0,
+      "created_at": "2026-04-01T07:00:00Z",
+      "modified_at": "2026-08-04T07:00:00Z"
+    }
+  ],
+  "next_cursor": ""
+}

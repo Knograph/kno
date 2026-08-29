@@ -1,0 +1,21 @@
+{
+  "items": [
+    {
+      "id": "ex-mal-0001",
+      "dataset_id": "ds-mal-001",
+      "inputs": {"question": "What is a widget?"},
+      "outputs": {"answer": "A thing."},
+      "created_at": "2026-03-01T08:00:01Z",
+      "modified_at": "2026-03-01T08:00:01Z"
+    },
+    {
+      "id": "ex-mal-0002",
+      "dataset_id": "ds-mal-001",
+      "inputs": ["not", "an", "object"],
+      "outputs": {"answer": "x"},
+      "created_at": "2026-03-01T08:00:02Z",
+      "modified_at": "2026-03-01T08:00:02Z"
+    }
+  ],
+  "next_cursor": ""
+}

@@ -91,7 +91,10 @@ continues without paying for anything twice.`,
 
   # Cap spend, and continue an interrupted run
   kno baseline --evals cases.jsonl --agent fake: --max-cost-usd 5.00
-  kno baseline --evals cases.jsonl --agent fake: --resume`,
+  kno baseline --evals cases.jsonl --agent fake: --resume
+
+  # Score against a LangSmith dataset instead of a file (LANGSMITH_API_KEY)
+  kno baseline --evals langsmith:support-llm --agent fake:`,
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		// Errors are rendered by the top-level runner in the CLI's grammar, so
@@ -105,7 +108,7 @@ continues without paying for anything twice.`,
 	}
 
 	flags := cmd.Flags()
-	flags.StringVar(&f.evalsPath, "evals", "", "path to a JSONL file of eval cases (required)")
+	flags.StringVar(&f.evalsPath, "evals", "", "eval cases: a JSONL file path, or langsmith:<dataset-name> (required)")
 	flags.StringVar(&f.agentRef, "agent", "fake:", "agent to measure")
 	flags.StringVar(&f.goalName, "goal", "exact-match", "goal to score against")
 	flags.StringVar(&f.dbPath, "db", "kno.db", "where runs and traces are stored")
@@ -226,15 +229,9 @@ func runBaseline(ctx context.Context, out, errOut io.Writer, f baselineFlags) er
 	}
 	defer stopTracing()
 
-	evals, err := jsonl.New(jsonl.Options{
-		Path:        f.evalsPath,
-		HoldoutFrac: f.holdoutFrac,
-		SplitSeed:   f.splitSeed,
-	})
+	evals, err := resolveEvals(&f)
 	if err != nil {
-		return errs.ErrInvalidInput.WithFix(
-			"check --evals and --holdout-frac",
-		).Wrap(err)
+		return err
 	}
 
 	// Count the split before anything is spent. A run that can never produce a
@@ -242,9 +239,7 @@ func runBaseline(ctx context.Context, out, errOut io.Writer, f baselineFlags) er
 	// the money is gone.
 	counts, err := evals.CountSplits(ctx)
 	if err != nil {
-		return errs.ErrInvalidInput.WithFix(
-			"fix the reported line, then re-run",
-		).Wrap(err)
+		return errs.ErrInvalidInput.WithFix(countsSplitFix(evals)).Wrap(err)
 	}
 	if err := counts.Validate(); err != nil {
 		return errs.ErrInvalidInput.WithFix(

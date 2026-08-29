@@ -71,6 +71,14 @@ linters:
             # adapters/**/format.go), and neither touches a kno.v1 type. Scoped
             # to the one directory so it cannot spread to engine code.
             - "!**/internal/cmd/pricingcheck/**"
+            # The LangSmith adapter is a wire-format parser: it decodes the
+            # LangSmith REST envelopes into plain Go structs, a kno.v1 type is
+            # never involved, and protojson would force the wire format to
+            # mirror proto field names and presence rules. Same contract as
+            # adapters/**/format.go, the only difference being the format
+            # arrives over HTTP rather than from a file. Scoped to the one
+            # directory so it cannot spread to code that touches kno.v1 types.
+            - "!**/adapters/evals/langsmith/**"
           deny:
             - pkg: encoding/json
               desc: >-

@@ -1,0 +1,21 @@
+{
+  "items": [
+    {
+      "id": "ex-llm-0001",
+      "dataset_id": "ds-llm-001",
+      "inputs": {"question": "How do I refund a subscription?"},
+      "outputs": {"answer": "Go to Billing > Refunds and confirm."},
+      "created_at": "2026-01-15T10:00:01Z",
+      "modified_at": "2026-01-15T10:00:01Z"
+    },
+    {
+      "id": "ex-llm-0002",
+      "dataset_id": "ds-llm-001",
+      "inputs": {"question": "Why was I charged twice?"},
+      "outputs": {"answer": "Charges can overlap at month boundaries."},
+      "created_at": "2026-01-15T10:00:02Z",
+      "modified_at": "2026-01-15T10:00:02Z"
+    }
+  ],
+  "next_cursor": "cursor-2"
+}

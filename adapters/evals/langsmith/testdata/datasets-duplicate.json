@@ -1,0 +1,14 @@
+{
+  "items": [
+    {
+      "id": "ds-dup-001",
+      "name": "duplicate-ids",
+      "description": "A dataset whose rows repeat an example id (hand-authored fixture)",
+      "data_type": "kv",
+      "example_count": 2,
+      "created_at": "2026-05-01T06:00:00Z",
+      "modified_at": "2026-08-05T06:00:00Z"
+    }
+  ],
+  "next_cursor": ""
+}

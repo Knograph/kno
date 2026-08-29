@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"strings"
 	"testing"
 
+	"github.com/knograph/kno/core"
 	"github.com/knograph/kno/coretest"
 )
 
@@ -182,6 +184,26 @@ func TestConformIteratorRejectsATrivialProducer(t *testing.T) {
 	}
 }
 
+// TestEvalsDuplicateIDsRejectsADuplicatingSource guards against a harness that
+// cannot see the failure it exists for: a producer yielding the same Case id
+// twice must produce a violation, or the check is vacuous (docs/debt.md#16).
+func TestEvalsDuplicateIDsRejectsADuplicatingSource(t *testing.T) {
+	t.Parallel()
+
+	duping := func(yield func(*core.Case, error) bool) {
+		for _, id := range []string{"dup", "dup"} {
+			if !yield(&core.Case{Id: id}, nil) {
+				return
+			}
+		}
+	}
+
+	got := coretest.CheckEvalsDuplicateIDs(duping)
+	if len(got) == 0 {
+		t.Error("the duplicate-ID check passed a source that yields the same id twice")
+	}
+}
+
 // TestErrProbeIsDistinguishable confirms the injected error is identifiable,
 // so a consumer under test cannot pass by swallowing it and returning some
 // other error.
@@ -196,5 +218,36 @@ func TestErrProbeIsDistinguishable(t *testing.T) {
 	}
 	if errors.Is(wrapped, errors.New("coretest: injected fatal error")) {
 		t.Error("ErrProbe matched an unrelated error with identical text")
+	}
+}
+
+// TestCheckEvalsDuplicateIDsStopsAtAFatalErrorAndSkipsNil pins the remaining
+// branches: a nil Case contributes no id, and a fatal error stops the walk —
+// the duplicate check must not report violations past the point the consumer
+// itself would stop.
+func TestCheckEvalsDuplicateIDsStopsAtAFatalErrorAndSkipsNil(t *testing.T) {
+	t.Parallel()
+
+	seq := func(yield func(*core.Case, error) bool) {
+		if !yield(&core.Case{Id: "a"}, nil) {
+			return
+		}
+		if !yield(nil, nil) {
+			return
+		}
+		if !yield(&core.Case{Id: "a"}, nil) {
+			return
+		}
+		yield(&core.Case{Id: "b"}, coretest.ErrProbe)
+		// Nothing past a fatal error is ever read — the check stops at it,
+		// which is what the single-violation assertion below pins.
+	}
+
+	got := coretest.CheckEvalsDuplicateIDs(seq)
+	if len(got) != 1 {
+		t.Fatalf("got %d violations, want exactly 1 (the a/a duplicate)", len(got))
+	}
+	if !strings.Contains(got[0], `"a"`) {
+		t.Errorf("violation does not name the duplicate id: %q", got[0])
 	}
 }

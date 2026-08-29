@@ -1,0 +1,14 @@
+{
+  "items": [
+    {
+      "id": "ds-chat-001",
+      "name": "support-chat",
+      "description": "Support conversations in chat form (hand-authored fixture)",
+      "data_type": "chat",
+      "example_count": 2,
+      "created_at": "2026-02-01T09:00:00Z",
+      "modified_at": "2026-08-02T09:00:00Z"
+    }
+  ],
+  "next_cursor": ""
+}

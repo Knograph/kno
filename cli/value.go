@@ -75,7 +75,7 @@ Interrupting is safe: measurements are checkpointed as they complete, and
 	}
 
 	flags := cmd.Flags()
-	flags.StringVar(&f.evalsPath, "evals", "", "path to a JSONL file of eval cases (required)")
+	flags.StringVar(&f.evalsPath, "evals", "", "eval cases: a JSONL file path, or langsmith:<dataset-name> (required)")
 	flags.StringVar(&f.poolPath, "pool", "", "path to a JSONL file of assets (required)")
 	flags.StringVar(&f.baselineRunID, "baseline-run-id", "",
 		"run ID of the recorded baseline to pair against (required; run `kno baseline` first)")
@@ -200,7 +200,7 @@ func runValue(ctx context.Context, out, errOut io.Writer, f valueFlags) error {
 	}
 	counts, err := evals.CountSplits(ctx)
 	if err != nil {
-		return errs.ErrInvalidInput.WithFix("fix the reported line, then re-run").Wrap(err)
+		return errs.ErrInvalidInput.WithFix(countsSplitFix(evals)).Wrap(err)
 	}
 
 	pool, err := pooljsonl.New(pooljsonl.Options{Path: f.poolPath})

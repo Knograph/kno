@@ -20,6 +20,8 @@ import (
 	"testing"
 
 	"go.uber.org/goleak"
+
+	"github.com/knograph/kno/core"
 )
 
 // ErrProbe is the fatal error the harness feeds through producers under test.
@@ -205,6 +207,44 @@ func CheckFatalErrorStops(consume func(iter.Seq2[int, error]) error) []string {
 func FatalErrorStopsIteration(t *testing.T, consume func(iter.Seq2[int, error]) error) {
 	t.Helper()
 	for _, v := range CheckFatalErrorStops(consume) {
+		t.Error(v)
+	}
+}
+
+// CheckEvalsDuplicateIDs returns one message per duplicate Case ID an Evals
+// iterator yields, empty when the source conforms.
+//
+// The invariant behind docs/debt.md#45: every Evals adapter deduplicates Case
+// IDs, so an in-run duplicate is fatal and named rather than counted twice.
+// Counted twice, the in-memory count and the store's INSERT OR IGNORE diverge —
+// a number and its denominator describing different populations. This check
+// turns the per-adapter convention into a core property: a future Evals
+// adapter that yields duplicates fails its conformance harness.
+func CheckEvalsDuplicateIDs(cases iter.Seq2[*core.Case, error]) []string {
+	var violations []string
+	seen := make(map[string]struct{})
+	for c, err := range cases {
+		if err != nil {
+			break
+		}
+		if c == nil {
+			continue
+		}
+		if _, dup := seen[c.GetId()]; dup {
+			violations = append(violations, fmt.Sprintf(
+				"the Evals source yielded Case id %q twice; an in-run duplicate must be fatal, "+
+					"or the in-memory counts and the store's dedup diverge", c.GetId()))
+		}
+		seen[c.GetId()] = struct{}{}
+	}
+	return violations
+}
+
+// EvalsDuplicateIDs asserts that an Evals iterator never yields a duplicate
+// Case ID.
+func EvalsDuplicateIDs(t *testing.T, cases iter.Seq2[*core.Case, error]) {
+	t.Helper()
+	for _, v := range CheckEvalsDuplicateIDs(cases) {
 		t.Error(v)
 	}
 }
