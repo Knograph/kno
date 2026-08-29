@@ -41,3 +41,17 @@ any feature PR.
 - The TUI dashboard beyond the consent prompt (deferred in the init plan).
 - Parquet pools (re-dated in the adapters plan).
 - Knowledge-injection mode, Tuner/Bridge, `validate` (v0.2).
+
+## The v0.1 ledger review (recorded 2026-08-29)
+
+Ledger reviewed in full for the v0.1 tag. Four lapses were disposed in this review, each with
+the lapse admitted and a re-dated trigger: #3 (benchmarks — re-dated to the first
+performance-claiming PR or 1.0), #43 (transport sentinel — re-dated to the next
+request/response-handling transport PR), #68 (tokenizer bias — re-dated to the second
+content-type pool or 1.0), #70 (jsonl probe — re-dated to the next jsonl PR, the port is the
+whole repayment). #33 gained a date leg (inbound-report trigger, per #46's precedent), #37's
+export half re-dated to v0.3 per DESIGN, #44's prompt half and #59 repaid with the init/consent
+PR (#102), #58 discharged as bookkeeping (already done by #69), #83 re-dated to the first Tuner
+PR. Before-1.0 entries (#12/#14/#15/#16, #6, #30, #32, #71, #72) stay open with written
+triggers, noted here as the release review requires. Known gap, recorded honestly: the CI lapse
+check (#15) is not built — this review is the hand-run substitute.
