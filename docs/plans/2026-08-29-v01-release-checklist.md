@@ -55,3 +55,14 @@ PR (#102), #58 discharged as bookkeeping (already done by #69), #83 re-dated to 
 PR. Before-1.0 entries (#12/#14/#15/#16, #6, #30, #32, #71, #72) stay open with written
 triggers, noted here as the release review requires. Known gap, recorded honestly: the CI lapse
 check (#15) is not built — this review is the hand-run substitute.
+
+## Disposition (2026-08-29)
+
+Released as **0.1.0**. The bump is a deliberate choice, not a default: the breaking marker on
+the release commit is what moves the version off the patch track under the #19 policy. The
+break it names is real — checkpointed Value runs recorded before this release cannot be
+resumed under it (the seed stream changed, CHANGELOG migration notes) — and the version bump
+is the covenant semver asks for in return. All checklist obligations disposed: ledger reviewed
+(#114), #19 recorded (#113), #73 verified (tap at 0.0.4; brews block re-enabled #112), tape
+re-recorded (#116), cookbook swept against the final CLI (#117). Post-tag watches: the
+release workflow's formula push to Knograph/homebrew-tap and the pricingcheck clean run.
