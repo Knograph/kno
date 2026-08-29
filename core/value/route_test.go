@@ -937,3 +937,101 @@ func TestRouteRefusesWhatItCannotHonestlyMeasure(t *testing.T) {
 		})
 	}
 }
+
+func TestPlanCarriesAClusterSnapshot(t *testing.T) {
+	t.Parallel()
+	plan, err := value.Route(devCases(60, 3, "refunds", "billing"),
+		[]value.AssetRef{{ID: "a", Tags: []string{"refunds"}}}, value.Options{Seed: 2})
+	if err != nil {
+		t.Fatalf("Route: %v", err)
+	}
+	if len(plan.Clusters) != 2 {
+		t.Fatalf("Clusters = %d entries, want 2", len(plan.Clusters))
+	}
+	// Deterministic snapshot order: the map order cluster() returns is not.
+	if plan.Clusters[0].Tag != "billing" || plan.Clusters[1].Tag != "refunds" {
+		t.Fatalf("cluster order = %q, want sorted tag order", []string{plan.Clusters[0].Tag, plan.Clusters[1].Tag})
+	}
+	// Every failed dev Case appears in exactly its tag's cluster.
+	failed := make(map[string]bool)
+	for _, c := range devCases(60, 3, "refunds", "billing") {
+		failed[c.ID] = c.Failed
+	}
+	for _, s := range plan.Clusters {
+		for _, id := range s.CaseIDs {
+			if !failed[id] {
+				t.Errorf("cluster %s contains %s, which did not fail", s.Tag, id)
+			}
+			if s.NDropped != 0 {
+				t.Errorf("cluster %s NDropped = %d, want 0", s.Tag, s.NDropped)
+			}
+		}
+	}
+}
+
+func TestSnapshotDedupsSameTagDuplicates(t *testing.T) {
+	t.Parallel()
+	// Every failed Case carries the SAME tag twice. Routing measures each of
+	// them once (candidatesFor dedups); the snapshot records each once and
+	// counts the dropped reference. Each Case belongs to its clusters exactly
+	// once, and the duplicate count proves the snapshot saw the duplicates.
+	var cases []value.CaseRef
+	for i := range 90 {
+		c := value.CaseRef{ID: fmt.Sprintf("f-%03d", i)}
+		if i%3 == 0 {
+			c.Failed = true
+			c.Tags = []string{"refunds", "refunds"}
+		} else {
+			c.Tags = []string{"refunds"}
+		}
+		cases = append(cases, c)
+	}
+	plan, err := value.Route(cases,
+		[]value.AssetRef{{ID: "a", Tags: []string{"refunds"}}}, value.Options{Seed: 1})
+	if err != nil {
+		t.Fatalf("Route: %v", err)
+	}
+	if len(plan.Clusters) != 1 {
+		t.Fatalf("Clusters = %d, want 1", len(plan.Clusters))
+	}
+	s := plan.Clusters[0]
+	if len(s.CaseIDs) != s.NDropped {
+		t.Fatalf("CaseIDs = %d entries but NDropped = %d: every failed Case in this "+
+			"fixture carries the tag twice, so the counts must match",
+			len(s.CaseIDs), s.NDropped)
+	}
+	seen := make(map[string]bool)
+	for _, id := range s.CaseIDs {
+		if seen[id] {
+			t.Errorf("Case %s appears twice in the snapshot", id)
+		}
+		seen[id] = true
+	}
+	if len(s.CaseIDs) == 0 {
+		t.Fatal("snapshot is empty; the fixture's failed Cases must be eligible")
+	}
+}
+
+func TestSnapshotIsEmptyWhenThereIsNoCluster(t *testing.T) {
+	t.Parallel()
+	// Nothing failed: ModeAllDev, and the snapshot must be empty — the
+	// report's "no cluster data for this run" for a run with no failures.
+	plan, err := value.Route(devCases(60, 0, "refunds"),
+		[]value.AssetRef{{ID: "a", Tags: []string{"refunds"}}}, value.Options{Seed: 2})
+	if err != nil {
+		t.Fatalf("Route: %v", err)
+	}
+	if plan.Clusters != nil {
+		t.Fatalf("Clusters = %v, want nil when nothing failed", plan.Clusters)
+	}
+	// Routing disabled is the same answer.
+	plan, err = value.Route(devCases(60, 3, "refunds"),
+		[]value.AssetRef{{ID: "a", Tags: []string{"refunds"}}},
+		value.Options{Seed: 2, DisableRouting: true})
+	if err != nil {
+		t.Fatalf("Route: %v", err)
+	}
+	if plan.Clusters != nil {
+		t.Fatalf("Clusters = %v, want nil when routing is disabled", plan.Clusters)
+	}
+}

@@ -53,7 +53,7 @@ Two of these are worth pausing on.
 
 **Validate** — the Portfolio ships as a set, so it is measured as a set, against the holdout. Two individually-helpful documents can be jointly contradictory. This produces the honest number.
 
-**Export** — write the selected assets into the destination grammar: `context` (a context-pack manifest plus the rendered pack), `knowledge_base` (a manifest plus an instruction list; writable knowledge-base adapters arrive with v0.2), or `tuning_set` (OpenAI chat format JSONL, the shape the Tuner adapters parse). Re-exporting the same Portfolio is byte-identical, and export never mutates a destination.
+**Export** — write the selected assets into the destination grammar: `context` (a context-pack manifest plus the rendered pack), `knowledge_base` (a manifest plus an instruction list; writable knowledge-base adapters arrive with v0.2), or `tuning_set` (OpenAI chat format JSONL, the shape the Tuner adapters parse). Re-exporting the same Portfolio is byte-identical, and export never mutates a destination. Export also computes the per-cluster gaps statistic from the source Value run's planning-time failure clusters and persists it with the run, so the report can render it.
 
 Today Baseline, Value, Select, and Export are implemented; Validate is next. The
 [README Status table](../README.md#status) is the canonical state.

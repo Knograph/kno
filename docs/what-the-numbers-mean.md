@@ -140,6 +140,31 @@ Stated plainly, because a tool that lists its limits is easier to trust than one
 
 - **The harm bound is a limit, not a score.** The run's Plan — recorded on the Run at close — reports `min_detectable_harm`: the smallest regression its control sample could have separated from zero, at the shipped confidence level, computed from the worst-case paired variance — it does not shrink because your observed variance happened to be small, and it uses the t distribution at small samples. Against a harm margin of 0.10 the honest threshold sits near 135 control Cases, so most real runs report a bound larger than the margin and carry the underpowered flag. That is information, not noise: a run reporting no regression while able to see only ±0.27 has not cleared an asset that costs 0.10, and the number says so. **A delta is reported only beside its interval** — if no interval could be formed (too few pairs, or ragged attrition), the Valuation reports `UNDERPOWERED` and no delta, never a bare number.
 
+## What a gaps verdict claims
+
+The gaps statistic is Export's per-cluster answer to "is anything we routed
+here actually improving these failures?" A failure cluster — the dev Cases
+that shared a tag and failed the baseline — is reported one of three ways,
+and each is a different claim:
+
+- **IMPROVED**: an Asset routed to at least 5 of the cluster's Cases has a
+  delta whose 95% CI excludes zero. The claim is about that Asset's
+  measurement, not about the cluster being fixed.
+- **GAP**: the cluster was well-covered and no covering measurement was
+  significant. This is a "we looked and found nothing" — it costs a cluster
+  its slot only when the look was real.
+- **UNKNOWN**: nothing routed to enough of the cluster's Cases, or the
+  covering measurement was underpowered. Non-significance is not absence:
+  a verdict you cannot distinguish from "we did not look" is labeled that
+  way, because the output is a spend recommendation and an UNKNOWN is a
+  recommendation to spend to find out.
+
+The reported number per cluster is the best covering Asset's delta and
+interval — never a cluster-level threshold, and multiple-testing is labeled
+when more than one cluster was evaluated. A run with no cluster data (it
+predates the snapshot, or nothing failed, or routing was off) reports "no
+cluster data for this run" rather than a guessed verdict.
+
 ## What a cost figure claims
 
 Every cost figure Kno reports claims exactly this: **reported usage at rates as published on `<date>`** — the token counts the provider reported, multiplied by the rates in the price table, where `<date>` is the day those rates were read, carried on the table as `pricing.Version`. The figure is an estimate, not an invoice: settlement reconciles against the provider's own reported usage, and the two can differ — discounts and committed-use pricing are things your provider knows and this table does not. If a price is wrong or missing for your model, you do not have to wait for a release: `--price-input-per-mtok` and `--price-output-per-mtok` state the rates for a run.

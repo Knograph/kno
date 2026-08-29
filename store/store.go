@@ -19,6 +19,10 @@ var (
 
 	// ErrPortfolioNotFound means no Portfolio is recorded for the given run.
 	ErrPortfolioNotFound = errors.New("store: portfolio not found")
+
+	// ErrGapsNotFound means no gaps record is recorded for the given run.
+	// Absence is an answer: the run predates cluster data.
+	ErrGapsNotFound = errors.New("store: gaps not found")
 )
 
 // Store is durable state for a run.
@@ -142,6 +146,16 @@ type Store interface {
 	// Portfolio loads a run's Portfolio. Returns ErrPortfolioNotFound when
 	// the run recorded none.
 	Portfolio(ctx context.Context, runID string) (*knov1.Portfolio, error)
+
+	// WriteGaps records the gaps verdicts one Export run computed, keyed by
+	// the Export run that produced them. One row per run; rewriting the same
+	// run replaces the row.
+	WriteGaps(ctx context.Context, runID string, g *knov1.Gaps) error
+
+	// Gaps loads the gaps record an Export run computed. Returns
+	// ErrGapsNotFound when the run recorded none — the report's "no cluster
+	// data for this run", never guessed.
+	Gaps(ctx context.Context, runID string) (*knov1.Gaps, error)
 
 	// CompletedCases returns the IDs of every Case with a terminal outcome.
 	//

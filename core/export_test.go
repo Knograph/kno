@@ -1,13 +1,16 @@
 package core
 
 import (
+	"bytes"
 	"context"
+	"encoding/gob"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/knograph/kno/core/value"
 	knov1 "github.com/knograph/kno/gen/kno/v1"
 	"github.com/knograph/kno/store"
 	"github.com/stretchr/testify/require"
@@ -589,4 +592,107 @@ func TestExportAppendFailsMidRun(t *testing.T) {
 			require.Contains(t, err.Error(), "boom")
 		})
 	}
+}
+
+// sourceRunWithClusters records a Value run whose gob plan carries one
+// failure cluster and one routed Asset covering it, plus its Valuation.
+func sourceRunWithClusters(t *testing.T, st store.Store) {
+	t.Helper()
+	plan := &value.Plan{
+		Clusters: []value.ClusterSnapshot{
+			{Tag: "billing", CaseIDs: []string{"c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8"}},
+		},
+		Routed: []value.AssetRouting{
+			{AssetID: "ctx-a", CaseIDs: []string{"c1", "c2", "c3", "c4", "c5", "c6"}},
+		},
+	}
+	var buf bytes.Buffer
+	require.NoError(t, gob.NewEncoder(&buf).Encode(plan))
+	run := &knov1.Run{
+		Id: "val-1", Stage: knov1.Stage_STAGE_VALUE,
+		Status:    knov1.RunStatus_RUN_STATUS_COMPLETED,
+		GoalName:  "test-goal",
+		ValuePlan: buf.Bytes(),
+	}
+	require.NoError(t, st.CreateRun(context.Background(), run))
+	require.NoError(t, st.WriteValuation(context.Background(), "val-1", &Valuation{
+		AssetId:   "ctx-a",
+		DeltaGoal: 0.5,
+		DeltaInterval: &Interval{
+			Low: 0.2, High: 0.8, Level: 0.95, Method: "t",
+			Sidedness: knov1.Sidedness_SIDEDNESS_TWO_SIDED, NPairs: int32Ptr(10),
+		},
+	}))
+}
+
+// TestExportRecordsGapsFromTheSourceRun is report plan Step 0 end to end:
+// Export computes the per-cluster verdicts from the source Value run's plan
+// and Valuations, and persists them keyed by the Export run the report will
+// ask about.
+func TestExportRecordsGapsFromTheSourceRun(t *testing.T) {
+	t.Parallel()
+
+	st := openTestStore(t)
+	_, pool := exportFixture(t, st)
+	sourceRunWithClusters(t, st)
+
+	path := filepath.Join(t.TempDir(), "ctx.md")
+	_, err := runExport(t, exportOpts(st, pool, knov1.Destination_DESTINATION_CONTEXT, path, false))
+	require.NoError(t, err)
+
+	got, err := st.Gaps(context.Background(), "exp-1")
+	require.NoError(t, err)
+	require.Equal(t, "exp-1", got.GetRunId())
+	require.Len(t, got.GetClusters(), 1)
+	c := got.GetClusters()[0]
+	require.Equal(t, "billing", c.GetTag())
+	require.Equal(t, knov1.GapStatus_GAP_STATUS_IMPROVED, c.GetStatus())
+	require.Equal(t, "ctx-a", c.GetBestAssetId())
+	require.Equal(t, 0.5, c.GetBestDelta())
+	require.Equal(t, 8, int(c.GetCaseCount()))
+	require.Equal(t, 6, int(c.GetCoveredCount()))
+}
+
+// TestExportSkipsGapsForAStarvedSource: a source Value run whose plan has no
+// cluster snapshot — predating the field, nothing failed, or routing
+// disabled — records NO gaps row. The report reads the absence.
+func TestExportSkipsGapsForAStarvedSource(t *testing.T) {
+	t.Parallel()
+
+	st := openTestStore(t)
+	_, pool := exportFixture(t, st)
+	// A valid plan blob without Clusters, exactly what a pre-field run holds.
+	plan := &value.Plan{Mode: value.ModeAllDev, Seed: 1}
+	var buf bytes.Buffer
+	require.NoError(t, gob.NewEncoder(&buf).Encode(plan))
+	require.NoError(t, st.CreateRun(context.Background(), &knov1.Run{
+		Id: "val-1", Stage: knov1.Stage_STAGE_VALUE,
+		Status:    knov1.RunStatus_RUN_STATUS_COMPLETED,
+		GoalName:  "test-goal",
+		ValuePlan: buf.Bytes(),
+	}))
+
+	path := filepath.Join(t.TempDir(), "ctx.md")
+	_, err := runExport(t, exportOpts(st, pool, knov1.Destination_DESTINATION_CONTEXT, path, false))
+	require.NoError(t, err)
+
+	_, err = st.Gaps(context.Background(), "exp-1")
+	require.ErrorIs(t, err, store.ErrGapsNotFound)
+}
+
+// TestExportSkipsGapsForAMissingSource: the source run the Portfolio names
+// is not in this store, so there is nothing to compute from — the same
+// absence answer, and Export still succeeds.
+func TestExportSkipsGapsForAMissingSource(t *testing.T) {
+	t.Parallel()
+
+	st := openTestStore(t)
+	_, pool := exportFixture(t, st)
+
+	path := filepath.Join(t.TempDir(), "ctx.md")
+	_, err := runExport(t, exportOpts(st, pool, knov1.Destination_DESTINATION_CONTEXT, path, false))
+	require.NoError(t, err)
+
+	_, err = st.Gaps(context.Background(), "exp-1")
+	require.ErrorIs(t, err, store.ErrGapsNotFound)
 }

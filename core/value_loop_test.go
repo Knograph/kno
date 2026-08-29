@@ -1,7 +1,9 @@
 package core_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/gob"
 	"errors"
 	"iter"
 	"path/filepath"
@@ -804,5 +806,58 @@ func TestResumeCatchesARepointedModel(t *testing.T) {
 	if _, err := h.opts.Value(context.Background(), poolOf("a1")); err == nil {
 		t.Fatal("a resumed run whose first response comes from a different model " +
 			"was accepted; the delta would mix two models into one measurement")
+	}
+}
+
+// TestTheClusterSnapshotNeverSeesTheHoldout pins the report plan's canary:
+// the holdout is dev-only by construction, so a holdout Case planted in the
+// source with a failed baseline and the same tag as the failing dev Cases
+// must reach neither the routing nor the plan's Clusters snapshot — the
+// snapshot is what the gaps statistic and the report read.
+func TestTheClusterSnapshotNeverSeesTheHoldout(t *testing.T) {
+	t.Parallel()
+
+	h := newValueHarness(t, fake.Options{})
+	cases := make([]*core.Case, 20)
+	for i := range cases {
+		cases[i] = &core.Case{
+			Id: loopCaseID(i), Input: "q", Expected: "a",
+			Split: knov1.Split_SPLIT_DEV,
+			Tags:  []string{"billing"},
+		}
+	}
+	src := &loopCases{cases: cases}
+	h.opts.Evals = core.Seal(src)
+	hold := &core.Case{Id: "holdout-00", Input: "q", Expected: "a", Split: knov1.Split_SPLIT_HOLDOUT, Tags: []string{"billing"}}
+	src.cases = append(src.cases, hold)
+
+	// Every third Case fails, and the holdout fails too — if the seal ever
+	// leaked it, it would join the billing cluster.
+	writeBaselineWithFailures(t, h, src.cases, 3)
+
+	if _, err := h.opts.Value(context.Background(), poolOf("a1")); err != nil {
+		t.Fatalf("Value: %v", err)
+	}
+
+	recorded, err := h.store.GetRun(context.Background(), "run-1")
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	if len(recorded.GetValuePlan()) == 0 {
+		t.Fatal("no plan recorded")
+	}
+	var plan value.Plan
+	if err := gob.NewDecoder(bytes.NewReader(recorded.GetValuePlan())).Decode(&plan); err != nil {
+		t.Fatalf("decoding plan: %v", err)
+	}
+	if len(plan.Clusters) == 0 {
+		t.Fatal("no clusters in the snapshot; the fixture must produce failed tagged Cases")
+	}
+	for _, s := range plan.Clusters {
+		for _, id := range s.CaseIDs {
+			if id == "holdout-00" {
+				t.Fatalf("holdout Case reached cluster %s; the snapshot must be dev-only", s.Tag)
+			}
+		}
 	}
 }
