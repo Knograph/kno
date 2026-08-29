@@ -24,7 +24,7 @@ import sys
 LEDGER = "docs/debt.md"
 
 # The dispositions the ledger rules permit.
-DISPOSITIONS = ("REPAID", "Re-dated", "re-dated", "won't fix", "WON'T FIX")
+DISPOSITIONS = ("REPAID", "Re-dated", "re-dated", "RE-DATED", "won't fix", "WON'T FIX")
 
 
 def main(argv):
