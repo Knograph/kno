@@ -43,6 +43,7 @@ const (
 	ModeImmediate
 )
 
+// String is the flag vocabulary for a resolution mode.
 func (m Mode) String() string {
 	switch m {
 	case ModeImmediate:

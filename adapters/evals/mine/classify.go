@@ -47,6 +47,7 @@ var filterNames = [...]string{
 	"counter-question", "retraction",
 }
 
+// String is the count-report vocabulary for a reply class, in class order.
 func (f FilterClass) String() string {
 	if int(f) >= 0 && int(f) < len(filterNames) {
 		return filterNames[f]
