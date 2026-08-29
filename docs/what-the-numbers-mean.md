@@ -26,6 +26,16 @@ Kno names this field `dev_estimated_gain` rather than `expected_gain` so that an
 
 **The holdout gain is the number that isn't inflated**, because nothing optimized against it.
 
+## What a corrected interval claims
+
+`select` decides under **Bonferroni correction**: every keep/reject interval is computed at level `1 − (1 − 0.95)/n_screened`, so the error budget is the family of decisions, not any one of them. An asset whose corrected interval crosses zero is rejected as `no-effect` — decisively, not advisory. The portfolio-level `dev_estimated_gain` interval is one corrected claim over the whole selection, combined under the shared-baseline covariance (the deltas are positively correlated through the shared draw, so its half-widths combine linearly, never as independent intervals), and its `method` is recorded as `portfolio-greedy-shared`.
+
+Two things follow. First, the reported 95% intervals on individual assets are *wider than they look*: each one was checked against the whole screened family before it was reported. Second, the portfolio interval is still winner's-curse inflated — correction removes the multiplicity illusion, not the selection effect — so the discipline here reduces the flattery, it does not remove it.
+
+## What a scaled delta claims
+
+A knowledge asset measured with `n_routed` cases of `n_dev` has its delta scaled by `n_routed / n_dev` before it is ranked and reported. That scaling is sound under exactly one model: **the effect is uniform on the routed slice and zero elsewhere.** Under a model where the effect varies by slice — the asset genuinely helps some cases and hurts others — the scaled number overstates the routed-slice effect. Kno records the factor per entry (`n_routed_scale`), and an asset whose `n_routed` is absent is never silently divided: it is flagged as unscaled. Read a scaled delta as "what the routed slice alone would contribute if the effect were uniform," and check the recorded factor before comparing two assets with different routing.
+
 ## What a confidence interval here is, and isn't
 
 Every reported delta carries an interval, or the delta is not reported at all. A `Valuation` with a delta and no interval is a bug, not a shortcut.
@@ -139,7 +149,7 @@ no longer carries its finding; findings still present keep their issue open and 
 
 ## `delta_per_cost` carries the tokenizer's bias
 
-The ranking metric divides Δgoal by the Asset's `context_tokens` — the carrying cost pool adapters estimate from bytes. That estimate is deliberately pessimistic: it reserves roughly 3x what English prose actually uses, which is the right direction for reserving money and the wrong one for ranking. Two Assets of equal real token cost can differ **~2.4x in `delta_per_cost` by content type alone**, and `Select` — when it lands — ranks on this number, so the bias travels into the portfolio. It is acknowledged here and on the field itself rather than argued away; the fix (a real tokenizer) is [ledgered](debt.md#68) as debt rather than shipped silently.
+The ranking metric divides Δgoal by the Asset's `context_tokens` — the carrying cost pool adapters estimate from bytes. That estimate is deliberately pessimistic: it reserves roughly 3x what English prose actually uses, which is the right direction for reserving money and the wrong one for ranking. Two Assets of equal real token cost can differ **~2.4x in `delta_per_cost` by content type alone**, and `select` ranks on this number, so the bias travels into the portfolio. It is acknowledged here and on the field itself rather than argued away; the fix (a real tokenizer) is [ledgered](debt.md#68) as debt rather than shipped silently.
 
 ## If you only remember one thing
 

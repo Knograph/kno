@@ -82,6 +82,27 @@ covenants — breaking any of them requires a major version.
 
 ### Features
 
+- **Select and Export close the measurement-to-destination loop.** `kno select`
+  builds a Portfolio from a recorded Value run: greedy on delta-per-cost,
+  honestly labeled (feasible, deterministic, reproducible — no approximation
+  guarantee), with every keep/reject decision at a Bonferroni-corrected
+  interval and the rejection log in precedence order (regression, no-effect,
+  redundant, cost-dominated, wrong-mechanism). The net-loss judgement
+  combines treatment and control deltas under the shared-baseline covariance
+  (`stats/portfolio`), and a regression verdict is gated on a powered control
+  arm. A budget-stopped source run is refused unless `--allow-partial`, and
+  the source's status travels with the Portfolio either way; "include nothing
+  new" is a legal, first-class outcome. The portfolio-level gain is one
+  corrected claim, winner's-curse inflation stated in the field's name and
+  godoc. `kno export` renders a Portfolio's selected assets into the
+  destination grammar — `context` (pack + manifest), `knowledge_base`
+  (manifest + instruction list), or `tuning_set` (OpenAI chat format JSONL,
+  the shape the Tuner adapters parse) — refusing an existing target unless
+  `--force`, writing temp-then-rename, and re-exporting byte-identically.
+  Export never mutates a destination. Debt #65/#66/#67 repaid; #78 split —
+  pairing-scheme recording paid, measurement design re-dated to the first
+  writable Destination adapter. Plan: `docs/plans/2026-08-29-select-export.md`.
+
 - **LangSmith datasets are first-class Evals.** `kno baseline --evals
   langsmith:my-dataset` measures against a LangSmith dataset directly — no manual export,
   no snapshot rot. The adapter streams examples with cursor pagination (page 100,

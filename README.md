@@ -8,7 +8,7 @@ Instead of evaluating only models and prompts, Kno treats **data as an experimen
 
 Single Go binary. No infra. Works with any OpenAI-compatible endpoint, Anthropic, or your own agent behind a shell command.
 
-> **Status: early.** `baseline` and `value` ship; `select`, `validate`, and `export` are planned. The default agent is a local fake that costs nothing, so you can see the whole loop work before pointing it at something that bills you. See [Status](#status) for what exists.
+> **Status: early.** `baseline`, `value`, `select`, and `export` ship; `validate` is next. The default agent is a local fake that costs nothing, so you can see the whole loop work before pointing it at something that bills you. See [Status](#status) for what exists.
 
 ## Why Kno?
 
@@ -230,9 +230,9 @@ A CI gate branches on these, so they're a contract rather than an afterthought.
 |---|---|---|
 | **Baseline** | Run the agent over the dev Cases, score against the Goal, persist every result | **Shipped** |
 | **Value** | Route each Asset to the slices it could affect, inject, re-run against controls, record Δ with an interval | **Shipped** |
-| **Select** | Build a Portfolio under budget, with a rejection log | Planned |
+| **Select** | Build a Portfolio under budget, with a rejection log; every decision at a Bonferroni-corrected interval | **Shipped** |
 | **Validate** | Measure the Portfolio as a set against the untouched holdout | Planned |
-| **Export** | Training set, report, and the gaps nothing in your pool could fix | Planned |
+| **Export** | Render the selected assets into the destination grammar: context pack, knowledge-base manifest, or tuning-set JSONL | **Shipped** |
 
 ## Verifying a download
 
