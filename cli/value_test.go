@@ -41,6 +41,11 @@ func TestValueHelpIsSnapshotted(t *testing.T) {
 		"--resume",
 		"without paying for anything twice",
 		"The control arm never carries the asset",
+		// The pool grammars, pinned here: a bare path is JSONL, the prefixes
+		// are the other adapters, and --split-sections is the markdown knob.
+		"csv:<file>",
+		"md:<file-or-dir>",
+		"--split-sections",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("help text no longer mentions %q:\n%s", want, stdout)
@@ -56,6 +61,136 @@ func TestValueRefusesMissingRequirements(t *testing.T) {
 	_, _, code := run(t, "value")
 	if code == errs.ExitOK {
 		t.Error("value ran without --evals, --pool, or --baseline-run-id")
+	}
+}
+
+// writeCSVPool writes an asset pool the value command can measure, in the
+// csv: grammar.
+func writeCSVPool(t *testing.T, n int) string {
+	t.Helper()
+
+	var b strings.Builder
+	b.WriteString("id,content\n")
+	for i := range n {
+		fmt.Fprintf(&b, "asset-%03d,knowledge %d\n", i, i)
+	}
+	path := filepath.Join(t.TempDir(), "assets.csv")
+	if err := os.WriteFile(path, []byte(b.String()), 0o600); err != nil {
+		t.Fatalf("writing pool: %v", err)
+	}
+	return path
+}
+
+// writeMDPool writes an asset pool the value command can measure, in the
+// md: grammar: one .md file per asset in a directory.
+func writeMDPool(t *testing.T, n int) (dir string, ids []string) {
+	t.Helper()
+
+	dir = t.TempDir()
+	for i := range n {
+		name := fmt.Sprintf("asset-%03d.md", i)
+		body := fmt.Sprintf("# Asset %d\n\nknowledge %d\n", i, i)
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatalf("writing pool: %v", err)
+		}
+		ids = append(ids, filepath.Join(dir, name))
+	}
+	return dir, ids
+}
+
+// TestValueCSVAndMarkdownPoolsEndToEnd: the csv: and md: grammars carry a
+// whole value run the same way a bare JSONL path does — baseline, then
+// value, and the report shows one delta row per asset, keyed by the id each
+// adapter produced.
+func TestValueCSVAndMarkdownPoolsEndToEnd(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		pool   func(t *testing.T, n int) (string, []string)
+		prefix string
+	}{
+		{"csv", func(t *testing.T, n int) (string, []string) {
+			path := writeCSVPool(t, n)
+			ids := make([]string, n)
+			for i := range n {
+				ids[i] = fmt.Sprintf("asset-%03d", i)
+			}
+			return "csv:" + path, ids
+		}, "csv:"},
+		{"markdown", func(t *testing.T, n int) (string, []string) {
+			dir, ids := writeMDPool(t, n)
+			return "md:" + dir, ids
+		}, "md:"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			casesPath := writeCases(t, 30)
+			poolRef, ids := tc.pool(t, 2)
+			dbPath := filepath.Join(t.TempDir(), "kno.db")
+
+			baseOut, baseErr, baseCode := run(
+				t, "baseline", "--evals", casesPath, "--agent", "fake:", "--db", dbPath, "--yes",
+			)
+			if baseCode != errs.ExitOK {
+				t.Fatalf("baseline exit = %d\nstdout: %s\nstderr: %s", baseCode, baseOut, baseErr)
+			}
+			var baseRunID string
+			for _, line := range strings.Split(baseOut, "\n") {
+				if after, ok := strings.CutPrefix(line, "Baseline "); ok {
+					baseRunID = strings.TrimSpace(after)
+				}
+			}
+			if baseRunID == "" {
+				t.Fatalf("could not read the baseline run ID from:\n%s", baseOut)
+			}
+
+			stdout, stderr, code := run(
+				t, "value",
+				"--evals", casesPath,
+				"--pool", poolRef,
+				"--baseline-run-id", baseRunID,
+				"--agent", "fake:",
+				"--db", dbPath,
+				"--yes",
+			)
+			if code != errs.ExitOK {
+				t.Fatalf("value exit = %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+			}
+			for _, id := range ids {
+				if !strings.Contains(stdout, id) {
+					t.Errorf("report missing the %s pool's asset row %q:\n%s", tc.prefix, id, stdout)
+				}
+			}
+			if !strings.Contains(stdout, "DELTA") {
+				t.Errorf("report missing the delta column:\n%s", stdout)
+			}
+		})
+	}
+}
+
+// TestValueRefusesSplitSectionsOnNonMarkdownPool: --split-sections with a
+// pool it cannot affect is refused at wiring, before anything is read.
+func TestValueRefusesSplitSectionsOnNonMarkdownPool(t *testing.T) {
+	t.Parallel()
+
+	casesPath := writeCases(t, 20)
+	poolPath := writeCSVPool(t, 1)
+
+	_, stderr, code := run(
+		t, "value",
+		"--evals", casesPath,
+		"--pool", "csv:"+poolPath,
+		"--baseline-run-id", "any",
+		"--agent", "fake:",
+		"--split-sections",
+	)
+	if code == errs.ExitOK {
+		t.Fatal("--split-sections with a csv: pool was accepted")
+	}
+	if !strings.Contains(stderr, "md:") {
+		t.Errorf("stderr does not name the only grammar --split-sections applies to:\n%s", stderr)
 	}
 }
 
