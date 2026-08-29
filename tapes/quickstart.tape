@@ -74,8 +74,27 @@ Type '{"id":"brand-guide","content":"Use sentence case everywhere.","kind":"know
 Type "JSONL" Enter
 Type "clear" Enter
 
-Type "kno value --evals cases.jsonl --pool pool.jsonl --baseline-run-id qs" Sleep 500ms Enter
+Type "kno value --evals cases.jsonl --pool pool.jsonl --baseline-run-id qs --run-id qs-value" Sleep 500ms Enter
 Sleep 5s
+
+# Select: the honest verdict. With fake: every delta is 0.0000, so the
+# corrected intervals all cross zero and the portfolio is empty — "include
+# nothing new" is a legal, first-class outcome, and the rejection log says
+# WHY for each asset. This is the tool doing its job: proving that these
+# three assets do not earn their place. Do not "improve" this tape by
+# choosing assets that make the numbers look earned.
+Type "kno select --value-run-id qs-value --pool pool.jsonl --max-context-tokens 5000 --max-training-examples 10 --max-cost-usd 1 --run-id qs-select" Sleep 500ms Enter
+Sleep 4s
+
+# Export the (empty, honestly empty) portfolio to the tuning-set grammar.
+Type "kno export --select-run-id qs-select --pool pool.jsonl --destination tuning_set --out tuning.jsonl" Sleep 500ms Enter
+Sleep 3s
+
+# Report: the one-page verdict across the recorded stages. The dev estimate
+# carries the "not yet validated on holdout" caveat, because at v0.1 honesty
+# is the feature.
+Type "kno report --value-run-id qs-value --select-run-id qs-select" Sleep 500ms Enter
+Sleep 4s
 
 # Held on the result, because this is the frame people screenshot.
 Sleep 3s
