@@ -262,7 +262,8 @@ func keyBindings(pairs []string) (map[string]string, error) {
 			// the flag exists to prevent.
 			return nil, errs.ErrInvalidInput.WithFix(
 				"write each binding as --key-env host=VAR, naming the " +
-					"environment VARIABLE rather than the key itself").
+					"environment VARIABLE rather than the key itself",
+			).
 				Wrap(fmt.Errorf("a --key-env binding is not in host=VAR form"))
 		}
 		out[host] = envVar

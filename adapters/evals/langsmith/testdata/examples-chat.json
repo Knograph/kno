@@ -1,0 +1,31 @@
+{
+  "items": [
+    {
+      "id": "ex-chat-0001",
+      "dataset_id": "ds-chat-001",
+      "inputs": {
+        "messages": [
+          {"role": "user", "content": "I need to export my data."},
+          {"role": "assistant", "content": "You can export from Settings > Data."}
+        ]
+      },
+      "outputs": {"answer": "You can export from Settings > Data."},
+      "created_at": "2026-02-01T09:00:01Z",
+      "modified_at": "2026-02-01T09:00:01Z"
+    },
+    {
+      "id": "ex-chat-0002",
+      "dataset_id": "ds-chat-001",
+      "inputs": {
+        "messages": [
+          {"role": "user", "content": "Where is my invoice?"},
+          {"role": "assistant", "content": "Invoices live in Billing > Documents."}
+        ]
+      },
+      "outputs": null,
+      "created_at": "2026-02-01T09:00:02Z",
+      "modified_at": "2026-02-01T09:00:02Z"
+    }
+  ],
+  "next_cursor": ""
+}

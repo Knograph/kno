@@ -76,6 +76,11 @@ func TestConformsToTheIteratorContract(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	coretest.ConformIterator(t, ev.Cases)
+	seq, err := ev.Cases(t.Context())
+	if err != nil {
+		t.Fatalf("Cases: %v", err)
+	}
+	coretest.EvalsDuplicateIDs(t, seq)
 }
 
 // TestEarlyBreakClosesTheFile proves cleanup is deferred INSIDE the iterator

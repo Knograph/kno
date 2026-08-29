@@ -12,6 +12,7 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/knograph/kno/adapters/evals/split"
 	"github.com/knograph/kno/core"
 	knov1 "github.com/knograph/kno/gen/kno/v1"
 )
@@ -158,7 +159,7 @@ func (e *Evals) Cases(ctx context.Context) (iter.Seq2[*core.Case, error], error)
 				Expected: rec.Expected,
 				Rubric:   rec.Rubric,
 				Tags:     rec.Tags,
-				Split:    assignSplit(rec.ID, seed, frac),
+				Split:    split.AssignSplit(rec.ID, seed, frac),
 				Provenance: &knov1.Provenance{
 					Source:    "jsonl",
 					SourceRef: e.opts.Path + ":" + strconv.Itoa(line),
@@ -222,7 +223,7 @@ func (e *Evals) ContentHash(ctx context.Context) (string, error) {
 	}
 	// The split configuration is part of the fingerprint, because changing
 	// either input reclassifies Cases without the file itself changing.
-	_, _ = h.Write(fingerprintSplit(e.opts.SplitSeed, e.opts.holdoutFrac()))
+	_, _ = h.Write(split.FingerprintSplit(e.opts.SplitSeed, e.opts.holdoutFrac()))
 	// The path too. Case IDs are now required, so a rename no longer changes
 	// any split — but a resume that silently switched to a different file of
 	// identical content would still be measuring a different run than it

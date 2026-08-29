@@ -422,10 +422,41 @@ func TestHelpIsSnapshotted(t *testing.T) {
 		// people: it is why the tool's numbers mean anything.
 		"untouched until validate",
 		"without paying for anything twice",
+		// The eval-source grammar: a bare path is a JSONL file, the prefix
+		// is a LangSmith dataset. Both commands promise the same grammar.
+		"langsmith:<dataset-name>",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("help text no longer mentions %q:\n%s", want, stdout)
 		}
+	}
+
+	valueOut, _, code := run(t, "value", "--help")
+	if code != errs.ExitOK {
+		t.Fatalf("value --help exit = %d", code)
+	}
+	if !strings.Contains(valueOut, "langsmith:<dataset-name>") {
+		t.Errorf("value help no longer mentions the LangSmith grammar:\n%s", valueOut)
+	}
+}
+
+// TestEvalsLangsmithGrammarAtTheCLI: the langsmith: prefix is refused at the
+// command boundary when the key is absent, with the fix naming the
+// environment variable rather than a flag — and only that, because a missing
+// key is not an endpoint problem.
+func TestEvalsLangsmithGrammarAtTheCLI(t *testing.T) {
+	withoutEnv(t, "LANGSMITH_API_KEY")
+	withoutEnv(t, "LANGSMITH_ENDPOINT")
+
+	_, stderr, code := run(t, "baseline", "--evals", "langsmith:support-llm", "--agent", "fake:")
+	if code == errs.ExitOK {
+		t.Fatal("a keyless LangSmith eval source was accepted")
+	}
+	if !strings.Contains(stderr, "LANGSMITH_API_KEY") {
+		t.Errorf("stderr does not name the missing credential:\n%s", stderr)
+	}
+	if strings.Contains(stderr, "insecure or private endpoints") {
+		t.Errorf("stderr advises endpoint opt-outs when only the key is missing:\n%s", stderr)
 	}
 }
 

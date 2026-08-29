@@ -68,7 +68,8 @@ func TestValueRunsEndToEnd(t *testing.T) {
 	poolPath := writePool(t, 2)
 	dbPath := filepath.Join(t.TempDir(), "kno.db")
 
-	baseOut, baseErr, baseCode := run(t,
+	baseOut, baseErr, baseCode := run(
+		t,
 		"baseline",
 		"--evals", casesPath,
 		"--agent", "fake:",
@@ -90,7 +91,8 @@ func TestValueRunsEndToEnd(t *testing.T) {
 		t.Fatalf("could not read the baseline run ID from:\n%s", baseOut)
 	}
 
-	stdout, stderr, code := run(t,
+	stdout, stderr, code := run(
+		t,
 		"value",
 		"--evals", casesPath,
 		"--pool", poolPath,
@@ -151,7 +153,8 @@ func TestValueRefusesUnreadableInputs(t *testing.T) {
 	t.Parallel()
 
 	poolPath := writePool(t, 1)
-	_, _, code := run(t, "value",
+	_, _, code := run(
+		t, "value",
 		"--evals", filepath.Join(t.TempDir(), "nope.jsonl"),
 		"--pool", poolPath,
 		"--baseline-run-id", "any",
@@ -162,7 +165,8 @@ func TestValueRefusesUnreadableInputs(t *testing.T) {
 	}
 
 	casesPath := writeCases(t, 20)
-	_, _, code = run(t, "value",
+	_, _, code = run(
+		t, "value",
 		"--evals", casesPath,
 		"--pool", filepath.Join(t.TempDir(), "nope.jsonl"),
 		"--baseline-run-id", "any",
@@ -194,7 +198,8 @@ func TestValueJSONOutput(t *testing.T) {
 		}
 	}
 
-	stdout, stderr, code := run(t, "value",
+	stdout, stderr, code := run(
+		t, "value",
 		"--evals", casesPath,
 		"--pool", poolPath,
 		"--baseline-run-id", baseRunID,

@@ -7,6 +7,7 @@ import (
 	"iter"
 	"testing"
 
+	"github.com/knograph/kno/core"
 	"github.com/knograph/kno/coretest"
 )
 
@@ -179,6 +180,26 @@ func TestConformIteratorRejectsATrivialProducer(t *testing.T) {
 	got := coretest.CheckIterator(empty)
 	if len(got) == 0 {
 		t.Error("the harness passed an empty producer; every check would be vacuous")
+	}
+}
+
+// TestEvalsDuplicateIDsRejectsADuplicatingSource guards against a harness that
+// cannot see the failure it exists for: a producer yielding the same Case id
+// twice must produce a violation, or the check is vacuous (docs/debt.md#16).
+func TestEvalsDuplicateIDsRejectsADuplicatingSource(t *testing.T) {
+	t.Parallel()
+
+	duping := func(yield func(*core.Case, error) bool) {
+		for _, id := range []string{"dup", "dup"} {
+			if !yield(&core.Case{Id: id}, nil) {
+				return
+			}
+		}
+	}
+
+	got := coretest.CheckEvalsDuplicateIDs(duping)
+	if len(got) == 0 {
+		t.Error("the duplicate-ID check passed a source that yields the same id twice")
 	}
 }
 
