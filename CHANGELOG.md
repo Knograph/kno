@@ -28,6 +28,13 @@ covenants — breaking any of them requires a major version.
      At release time the hand-written heading is renamed from [Unreleased] to
      the version. See docs/debt.md#76 for why that is still a manual step. -->
 
+## [0.1.1](https://github.com/Knograph/kno/compare/v0.1.0...v0.1.1) (2026-08-29)
+
+
+### Bug Fixes
+
+* **build:** the ledger gate accepts RE-DATED, the ledger's own spelling ([#126](https://github.com/Knograph/kno/issues/126)) ([5710fbf](https://github.com/Knograph/kno/commit/5710fbf9b236be3d48031729d6b95bca9babb73d))
+
 ## [0.1.0](https://github.com/Knograph/kno/compare/v0.0.4...v0.1.0) (2026-08-29)
 
 
