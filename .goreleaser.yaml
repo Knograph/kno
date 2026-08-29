@@ -172,19 +172,11 @@ release:
     toolchain pinned in this tag's `go.mod`. A different toolchain produces a
     different binary; that is a property of Go, not of this pipeline.
 
-# The Homebrew tap CLAUDE.md calls for.
-#
-# DISABLED, and it must stay disabled until a `knograph/homebrew-tap`
-# repository actually exists and this workflow's token can push to it. An
-# enabled block pointing at a missing repository fails the release at the
-# publish step — AFTER the binaries are built, signed and attested, which is
-# the most expensive possible place to discover a typo. Uncomment in the same
-# PR that creates the tap, not before. Tracked as docs/debt.md#73.
-#
-# Commented-out YAML is invisible to `goreleaser check`, so this block has never
-# been parsed by anything. The PR that enables it is the first run of
-# `make release-check` that covers it — expect to fix it there, not here.
-#
+# The Homebrew tap CLAUDE.md calls for. The tap repository
+# (Knograph/homebrew-tap) exists and carries Formula/kno.rb at 0.0.4 — the
+# 0.0.4 release pushed it through this block — and HOMEBREW_TAP_TOKEN is set
+# in the repo secrets, so the two preconditions the disabled comment named
+# are both met and the block is enabled again (docs/debt.md#73).
 brews:
   - name: kno
     ids: [kno]
