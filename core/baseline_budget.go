@@ -234,6 +234,10 @@ func (o BaselineOptions) confirmRun(ctx context.Context, alreadyDone int) error 
 	total := budget.Estimate{
 		Calls:         remaining,
 		CostUSDMicros: saturatingMul(remaining, perCall),
+		// The width checkFeasible made minutes before, if it narrowed. The
+		// prompt quotes it so the narrowed run does not read as the width that
+		// was asked for (#44's prompt half).
+		Width: o.width,
 	}
 	// NOT bounded here. PreConfirm bounds it against both caps under the same
 	// lock that produces the "remaining" figure shown beside it, so the two
@@ -390,6 +394,17 @@ func (o *BaselineOptions) checkFeasible(alreadyDone int) error {
 		o.concurrency.HeadroomUsdMicros = remaining
 		o.concurrency.PerCaseEstimateUsdMicros = perCall
 		o.Concurrency = affordable
+
+		// The same decision as a plain struct, for the confirmation quote
+		// (#44's prompt half): stats/budget imports no proto, so confirmRun
+		// quotes this instead of the ConcurrencyDecision. Requested is the
+		// width as asked — 0 means no particular width — and the word mirrors
+		// the reason name the report prints.
+		o.width = &budget.WidthDecision{
+			Requested:     int(o.concurrency.GetRequested()),
+			Effective:     affordable,
+			ReducedReason: "cost-cap",
+		}
 	}
 	return nil
 }

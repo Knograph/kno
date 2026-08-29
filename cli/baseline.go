@@ -40,11 +40,10 @@ type baselineFlags struct {
 	// Provider wiring. Every one of these reaches a real endpoint, which is
 	// what makes this command able to spend money for the first time.
 	//
-	// There is no KNO_* env mirror for any of them. DESIGN.md specifies three
-	// layers — flag, env var, kno.yaml — and NONE of the machinery exists:
-	// os.Getenv appears outside tests in exactly two places, both for API keys.
-	// Shipping a mirror column here would be specifying a config system in a
-	// flag table. Tracked as docs/debt.md#62.
+	// Each has a KNO_* env mirror and a kno.yaml key (cli/config.go), applied
+	// after flag parsing with precedence flag > env > file > default — the
+	// debt #62 this comment used to name. A key VALUE never rides any of the
+	// three layers: the flag and the file hold VARIABLE NAMES only.
 	baseURL             string
 	keyEnv              []string
 	execEnv             []string
@@ -104,7 +103,18 @@ continues without paying for anything twice.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			f.costPerCallSet = cmd.Flags().Changed("cost-per-call-usd")
 			f.seedSet = cmd.Flags().Changed("seed")
-			return runBaseline(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), f)
+			cfg, err := loadConfigFile(cmd)
+			if err != nil {
+				return err
+			}
+			if _, err := f.applyFileAndEnv(cmd, cfg); err != nil {
+				return err
+			}
+			err = runBaseline(cmd.Context(), cmd.InOrStdin(),
+				cmd.OutOrStdout(), cmd.ErrOrStderr(), f)
+			// The #62 fix lines: when a kno.yaml exists the sentinel text is
+			// true; when it does not, the fix must name the flag instead.
+			return configAwareFix(err, cfg.path)
 		},
 	}
 
@@ -174,6 +184,12 @@ continues without paying for anything twice.`,
 	flags.BoolVar(&f.traceSpans, "trace-spans", false,
 		"write OpenTelemetry spans for this run to stderr")
 
+	// The kno.yaml layer (docs/debt.md#62): flat snake_case mirrors of the
+	// run-shaping flags, applied after flag parsing with precedence
+	// flag > env > file > default. Secrets never live here — kno.yaml holds
+	// VARIABLE NAMES only.
+	addConfigFlag(cmd, defaultConfigPath)
+
 	if err := cmd.MarkFlagRequired("evals"); err != nil {
 		panic(fmt.Sprintf("cli: marking --evals required: %v", err))
 	}
@@ -221,7 +237,7 @@ func (f baselineFlags) validateCaps() error {
 	return nil
 }
 
-func runBaseline(ctx context.Context, out, errOut io.Writer, f baselineFlags) error {
+func runBaseline(ctx context.Context, in io.Reader, out, errOut io.Writer, f baselineFlags) error {
 	// Before anything that could emit a span. Spans written to stderr, never
 	// stdout: stdout is the report, and --json makes it a machine contract
 	// that a span document would corrupt — measured once already with a
@@ -282,12 +298,16 @@ func runBaseline(ctx context.Context, out, errOut io.Writer, f baselineFlags) er
 		return errs.ErrInvalidInput.Wrap(err)
 	}
 
+	// The consent recorder is the channel between the pre-run dialog and the
+	// guard: the dialog records the human's decision, the ConfirmFunc returns
+	// it, and PreConfirm's engine-side prompt never fires twice.
+	recorder := &consentRecorder{}
 	guard := budget.New(
 		budget.Limits{
 			MaxCostUSDMicros: usdToMicros(f.maxCostUSD),
 			MaxLLMCalls:      f.maxCalls,
 		},
-		confirmFunc(out, f.yes, f.jsonOut),
+		confirmFunc(out, f.yes, f.jsonOut, recorder),
 		usdToMicros(confirmThresholdUSD),
 	)
 
@@ -321,6 +341,58 @@ func runBaseline(ctx context.Context, out, errOut io.Writer, f baselineFlags) er
 		// local-server recipe passed --cost-per-call-usd 0 and was refused
 		// with a fix line naming the flag it had just passed.
 		AcceptUnknownCost: f.acceptUnknownCost || f.costPerCallSet,
+	}
+
+	// The pre-run consent dialog (#59): yes / no / yes-with-adjusted-cap,
+	// shown only when both ends of the prompt are terminals. Non-TTY keeps
+	// today's exact behavior — the fail-closed refusal with its printed
+	// message — and --yes/--json never reach the dialog. The quote is the
+	// BOUNDED figure: intent bounded by the caps, minus what a resume has
+	// already spent (read from the store, the same number PreConfirm shows —
+	// the two cannot disagree because both read the same persisted spend).
+	//
+	// The engine-side PreConfirm stays as the fail-closed backstop for
+	// callers that build a guard without this dialog in front of them; the
+	// ConfirmFunc here returns the recorded decision, so nothing prompts
+	// twice.
+	if !f.yes && !f.jsonOut && shouldPrompt(in, out) {
+		remaining := int64(counts.Dev)
+		var settled budget.Spend
+		if f.resume {
+			sp, err := db.SettledSpend(ctx, runID)
+			if err != nil {
+				return errs.ErrInvalidInput.WithFix("check --db is readable").
+					Wrap(fmt.Errorf("reading settled spend for %s: %w", runID, err))
+			}
+			settled = sp
+			scored, errored, err := db.OutcomeCounts(ctx, runID)
+			if err != nil {
+				return errs.ErrInvalidInput.WithFix("check --db is readable").
+					Wrap(fmt.Errorf("counting completed cases for %s: %w", runID, err))
+			}
+			remaining = int64(counts.Dev - int(scored) - int(errored))
+			if remaining < 0 {
+				remaining = 0
+			}
+		}
+		intent := budget.Estimate{
+			Calls:         remaining,
+			CostUSDMicros: saturatingMul(remaining, core.PlanningCostPerCall(opts)),
+		}
+		decision, err := consentDialog(ctx, in, out, intent, guard.Limits(), settled, recorder)
+		if err != nil {
+			return err
+		}
+		if decision.limits != guard.Limits() {
+			// yes-with-adjusted-cap: the guard is REBUILT pre-run with the
+			// new cap, so the run authorizes against what the human agreed
+			// to. core's own Restore (on resume) applies to this guard
+			// exactly once, so nothing double-counts.
+			guard = budget.New(decision.limits,
+				confirmFunc(out, f.yes, f.jsonOut, recorder),
+				usdToMicros(confirmThresholdUSD))
+			opts.Guard = guard
+		}
 	}
 
 	// Printed BEFORE the run, unconditionally, when the user waived the

@@ -40,11 +40,16 @@ func writeCases(t *testing.T, n int) string {
 }
 
 // run executes the CLI and returns stdout, stderr, and the exit code.
+//
+// stdin is a non-terminal bytes.Buffer, which is exactly the production
+// `kno baseline < /dev/null` shape: the consent dialog's shouldPrompt gate
+// sees a non-TTY and the run proceeds without asking. Tests that DRIVE the
+// dialog pass a pty slave as stdin and stdout instead (consent_test.go).
 func run(t *testing.T, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
 
 	var out, errOut bytes.Buffer
-	code = cli.Execute(context.Background(), args, &out, &errOut)
+	code = cli.Execute(context.Background(), args, bytes.NewReader(nil), &out, &errOut)
 	return out.String(), errOut.String(), code
 }
 

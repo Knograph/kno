@@ -51,7 +51,13 @@ func newRunID(now time.Time) string {
 }
 
 // confirmFunc asks before spending, unless --yes or --json.
-func confirmFunc(out io.Writer, yes, jsonOut bool) budget.ConfirmFunc {
+//
+// The recorder is the pre-run dialog's decision channel: the interactive
+// closure returns the recorded answer, so nothing prompts twice. A guard
+// driven without the dialog (a non-CLI caller, or a run whose threshold was
+// crossed mid-flight) fails closed here — the printed message and refusal
+// that were the whole surface before the dialog existed.
+func confirmFunc(out io.Writer, yes, jsonOut bool, recorder *consentRecorder) budget.ConfirmFunc {
 	if yes {
 		// The printing lives in runBaseline, NOT here.
 		//
@@ -67,21 +73,27 @@ func confirmFunc(out io.Writer, yes, jsonOut bool) budget.ConfirmFunc {
 	if jsonOut {
 		// A machine-readable run has nobody to answer a prompt. Refusing is the
 		// safe default: proceeding would spend money with no one watching.
-		return func(_ context.Context, est budget.Estimate, _ budget.Remaining) (bool, error) {
+		return func(_ context.Context, est budget.Estimate, rem budget.Remaining) (bool, error) {
 			return false, fmt.Errorf(
-				"this run would spend about %s and --json cannot prompt; pass --yes to proceed",
-				formatUSD(est.CostUSDMicros),
+				"%s\n--json cannot prompt; pass --yes to proceed",
+				quoteEstimate(est, rem),
 			)
 		}
 	}
 	return func(_ context.Context, est budget.Estimate, rem budget.Remaining) (bool, error) {
-		// Non-interactive by default in this build: the huh prompt lands with
-		// the TUI. Refusing is the honest behavior until then — a run that
-		// silently proceeded past the threshold would be the surprise bill
-		// DESIGN.md forbids.
-		msg := fmt.Sprintf("\nThis run would spend about %s (%s remaining).\n"+
-			"Re-run with --yes to proceed.\n",
-			formatUSD(est.CostUSDMicros), formatUSD(rem.CostUSDMicros))
+		// The recorded decision, when the pre-run dialog ran. On yes the
+		// guard records the agreement; on no the run was already refused in
+		// the dialog, so a declined decision should not be reachable here.
+		recorder.mu.Lock()
+		decided, yes := recorder.decided, recorder.yes
+		recorder.mu.Unlock()
+		if decided {
+			return yes, nil
+		}
+		// No decision was recorded: this guard has no dialog in front of it.
+		// Fail closed with the quote — which carries the width line when the
+		// engine narrowed the run (#44's prompt half) — and today's refusal.
+		msg := "\n" + quoteEstimate(est, rem) + "\nRe-run with --yes to proceed.\n"
 		if _, err := io.WriteString(out, msg); err != nil {
 			return false, fmt.Errorf("writing confirmation: %w", err)
 		}
