@@ -556,8 +556,8 @@ func reserve(cases []CaseRef, opts Options) (eligible, reserved []CaseRef) {
 
 	//nolint:gosec // G404: sampling, not cryptography. Reproducibility from a
 	// recorded seed is the requirement, and a CSPRNG cannot provide it. The
-	// stream is PCG (specified) and the bounded draw is inlined — see
-	// docs/debt.md#75 and shuffle.go.
+	// stream is PCG (specified) and the bounded draw is inlined — issue #110,
+	// docs/debt.md#75, shuffle.go.
 	rng := rand.New(rand.NewPCG(uint64(opts.Seed), uint64(opts.Seed)+0x9e3779b9))
 	shuffle(rng, len(order), func(i, j int) { order[i], order[j] = order[j], order[i] })
 
@@ -703,8 +703,8 @@ func sampleIDs(candidates []CaseRef, rate float64, minSample int, seed int64, la
 
 	//nolint:gosec // G404: sampling, not cryptography. Reproducibility from a
 	// recorded seed is the requirement, and a CSPRNG cannot provide it. The
-	// stream is PCG (specified) and the bounded draw is inlined — see
-	// docs/debt.md#75 and shuffle.go.
+	// stream is PCG (specified) and the bounded draw is inlined — issue #110,
+	// docs/debt.md#75, shuffle.go.
 	rng := rand.New(rand.NewPCG(uint64(seed), hashLabel(label)))
 	shuffle(rng, len(ids), func(i, j int) { ids[i], ids[j] = ids[j], ids[i] })
 	// Clipped: without it the returned slice keeps the full shuffle's capacity,

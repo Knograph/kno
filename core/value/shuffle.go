@@ -19,8 +19,8 @@ import "math/rand/v2"
 // math/rand/v2's Uint64N is deliberately not used: its rejection loop is
 // undocumented implementation, which is the exact dependency #75 removes.
 //
-// The bound: values at or above 2^64 mod n are rejected; the accepted range is
-// an exact multiple of n, so the modulo maps a uniform stream to a uniform
+// The bound: values below 2^64 mod n are rejected; the accepted range is an
+// exact multiple of n, so the modulo maps a uniform stream to a uniform
 // bounded draw with no bias.
 func uniformBelow(rng *rand.Rand, n uint64) uint64 {
 	if n <= 1 {
@@ -42,7 +42,7 @@ func shuffle(rng *rand.Rand, n int, swap func(i, j int)) {
 	for i := n - 1; i > 0; i-- {
 		//nolint:gosec // G115: the draw is bounded by i+1 ≤ n, and n arrived
 		// as an int, so the value cannot overflow int — the conversion is
-		// provably safe (docs/debt.md#75, the entry this file repays).
+		// provably safe (issue #110; docs/debt.md#75 records the stream).
 		j := int(uniformBelow(rng, uint64(i+1)))
 		swap(i, j)
 	}
