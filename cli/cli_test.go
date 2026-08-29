@@ -418,6 +418,10 @@ func TestHelpIsSnapshotted(t *testing.T) {
 		"--resume",
 		"--max-cost-usd",
 		"--json",
+		// The exec: grant grammar is a security surface of its own: it must
+		// stay visible in the help, because it is the only way to give the
+		// child something beyond PATH, HOME, and TMPDIR.
+		"--exec-env",
 		// The holdout explanation is the part most worth keeping in front of
 		// people: it is why the tool's numbers mean anything.
 		"untouched until validate",
