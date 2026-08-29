@@ -22,5 +22,6 @@ Every vendor recipe is the same shape — candidate content as Assets, real ques
 | E-commerce | [Shopify](shopify.md) |
 | Payments | [Stripe](stripe.md) |
 | Internal knowledge | [Notion](notion.md) |
+| Workflow automation | [n8n](n8n.md) — scheduled valuation with alerts, on the exit-code contract |
 
 More arrive with the stages that need them: selecting a Portfolio under budget, validating on the holdout, curating a fine-tuning set, bringing your own judge, and writing a pool plugin.
