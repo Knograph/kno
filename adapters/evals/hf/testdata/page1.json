@@ -1,0 +1,8 @@
+{"rows":[
+  {"row_idx":0,"row":{"question":"q0","answer":"a0","score":1}},
+  {"row_idx":1,"row":{"question":"q1","expected":"a1","notes":"n1"}},
+  {"row_idx":2,"row":{"question":"q2","completion":"a2","answer":"drop-me"}},
+  {"row_idx":3,"row":{"question":"q3","answer":"a3"}},
+  {"row_idx":4,"row":{"question":"q4","answer":"a4","score":null}},
+  {"row_idx":5,"row":{"question":"q5","answer":"a5"}}
+],"num_rows_total":6,"partial":false}

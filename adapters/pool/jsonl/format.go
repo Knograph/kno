@@ -95,7 +95,8 @@ func kindOf(s string) (knov1.Kind, error) {
 	default:
 		return knov1.Kind_KIND_UNSPECIFIED, fmt.Errorf(
 			`unknown kind %q; write "knowledge" or "behavior", or omit the field `+
-				`and let routing judge it`, s)
+				`and let routing judge it`, s,
+		)
 	}
 }
 

@@ -19,6 +19,7 @@ import (
 
 	"go.uber.org/goleak"
 
+	evalshf "github.com/knograph/kno/adapters/evals/hf"
 	"github.com/knograph/kno/adapters/evals/jsonl"
 	"github.com/knograph/kno/adapters/evals/langfuse"
 	"github.com/knograph/kno/adapters/evals/langsmith"
@@ -1062,6 +1063,74 @@ func TestSameSplitAsJSONLAndLangsmith(t *testing.T) {
 	}
 	if !splitsEqual(fromLangfuse, fromLangsmith) {
 		t.Errorf("splits differ by source:\nlangfuse: %v\nlangsmith: %v", fromLangfuse, fromLangsmith)
+	}
+
+	// The Hugging Face adapter reads row_idx as the Case id, so its
+	// comparison gets its own source pair: an hf split serving rows 0..5 and
+	// a jsonl file with ids "0".."5". Same claim, fourth source: the halves
+	// must not vary by where the ids came from.
+	rowBodies := make([]string, 6)
+	for i := 0; i < 6; i++ {
+		rowBodies[i] = fmt.Sprintf(`{"row_idx":%d,"row":{"question":"q%d","answer":"a"}}`, i, i)
+	}
+	rowBody := `{"rows":[` + strings.Join(rowBodies, ",") + `],"num_rows_total":6,"partial":false}`
+	splitBody := `{"splits":[{"config":"main","split":"train"}]}`
+	hsrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("x-revision", "umbrella-rev")
+		switch req.URL.Path {
+		case "/splits":
+			_, _ = fmt.Fprint(w, splitBody)
+		case "/rows":
+			if req.URL.Query().Get("offset") == "0" {
+				_, _ = fmt.Fprint(w, rowBody)
+			} else {
+				// The pagination terminator: an unknown offset is the
+				// empty page the iterator ends on.
+				_, _ = fmt.Fprint(w, `{"rows":[],"num_rows_total":0,"partial":false}`)
+			}
+		default:
+			http.NotFound(w, req)
+		}
+	}))
+	t.Cleanup(hsrv.Close)
+	hev, err := evalshf.New(evalshf.Options{
+		Dataset: "org/name",
+		Config:  "main",
+		Split:   "train",
+		Host:    hsrv.URL,
+		// httptest serves plain HTTP on loopback; the flags lift the refusals.
+		AllowInsecureBaseURL: true,
+		AllowPrivateAddress:  true,
+	})
+	if err != nil {
+		t.Fatalf("hf.New: %v", err)
+	}
+	seq, err = hev.Cases(context.Background())
+	if err != nil {
+		t.Fatalf("hf Cases: %v", err)
+	}
+	fromHF := collectSplits(t, seq)
+
+	hfPath := filepath.Join(t.TempDir(), "hf-cases.jsonl")
+	var hfLines strings.Builder
+	for i := 0; i < 6; i++ {
+		fmt.Fprintf(&hfLines, `{"id":"%d","input":"q%d","expected":"a"}`+"\n", i, i)
+	}
+	if err := os.WriteFile(hfPath, []byte(hfLines.String()), 0o600); err != nil {
+		t.Fatalf("writing the hf jsonl fixture: %v", err)
+	}
+	hfJSONL, err := jsonl.New(jsonl.Options{Path: hfPath})
+	if err != nil {
+		t.Fatalf("hf jsonl.New: %v", err)
+	}
+	seq, err = hfJSONL.Cases(context.Background())
+	if err != nil {
+		t.Fatalf("hf jsonl Cases: %v", err)
+	}
+	fromHFJSONL := collectSplits(t, seq)
+
+	if !splitsEqual(fromHF, fromHFJSONL) {
+		t.Errorf("splits differ by source:\nhf: %v\njsonl: %v", fromHF, fromHFJSONL)
 	}
 }
 

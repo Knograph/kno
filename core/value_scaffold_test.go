@@ -92,7 +92,8 @@ func TestValuationOmitsDeltaWithoutInterval(t *testing.T) {
 	}
 	writeMeasurement(t, st, "run-1", "a", "c1", store.ArmTreatment, 1, 0.9)
 
-	v, err := opts.valuationFor(context.Background(),
+	v, err := opts.valuationFor(
+		context.Background(),
 		&Asset{Id: "a"},
 		value.AssetRouting{AssetID: "a", CaseIDs: []string{"c1"}},
 		&value.Plan{Trials: 1, EligibleCases: 1},
@@ -181,7 +182,8 @@ func TestDeltaPerCostIsDeltaGoalOverContextTokens(t *testing.T) {
 				baseline[id] = store.CaseScore{Value: 0.5}
 			}
 
-			v, err := opts.valuationFor(context.Background(),
+			v, err := opts.valuationFor(
+				context.Background(),
 				&Asset{Id: "a", Cost: tc.cost},
 				value.AssetRouting{AssetID: "a", CaseIDs: tc.caseIDs},
 				&value.Plan{Trials: 1, EligibleCases: len(tc.caseIDs)},
@@ -224,7 +226,8 @@ func TestRaggedAttritionReportsUnderpoweredNotAShrunkenDelta(t *testing.T) {
 	writeMeasurement(t, st, "run-1", "a", "c2", store.ArmTreatment, 1, 0.8)
 	writeMeasurement(t, st, "run-1", "a", "c2", store.ArmTreatment, 2, 0.8)
 
-	v, err := opts.valuationFor(context.Background(),
+	v, err := opts.valuationFor(
+		context.Background(),
 		&Asset{Id: "a"},
 		value.AssetRouting{AssetID: "a", CaseIDs: []string{"c1", "c2"}},
 		&value.Plan{Trials: 2, EligibleCases: 2},
@@ -261,7 +264,8 @@ func TestHarmBoundConsumesPerCaseMeans(t *testing.T) {
 		}
 	}
 
-	v, err := opts.valuationFor(context.Background(),
+	v, err := opts.valuationFor(
+		context.Background(),
 		&Asset{Id: "a"},
 		value.AssetRouting{AssetID: "a", CaseIDs: []string{"c1", "c2"}},
 		&value.Plan{Trials: 3, EligibleCases: 2, ControlCaseIDs: []string{"c1", "c2"}},
@@ -322,7 +326,8 @@ func TestNDevIsTheEligiblePool(t *testing.T) {
 	}
 	writeMeasurement(t, st, "run-1", "a", "c1", store.ArmTreatment, 1, 0.9)
 
-	v, err := opts.valuationFor(context.Background(),
+	v, err := opts.valuationFor(
+		context.Background(),
 		&Asset{Id: "a"},
 		value.AssetRouting{AssetID: "a", CaseIDs: []string{"c1"}},
 		&value.Plan{Trials: 1, EligibleCases: 50, ControlCaseIDs: make([]string, 15)},
@@ -701,7 +706,8 @@ func TestValuationForZeroRoutedAssetsCarriesTheReason(t *testing.T) {
 		Store: st,
 		Goal:  fixedDirectionGoal{dir: knov1.Direction_DIRECTION_MAXIMIZE, domain: knov1.ScoreDomain_SCORE_DOMAIN_BINARY},
 	}
-	v, err := opts.valuationFor(context.Background(),
+	v, err := opts.valuationFor(
+		context.Background(),
 		&Asset{Id: "a"},
 		value.AssetRouting{AssetID: "a", NotMeasuredReason: knov1.RejectionReason_REJECTION_REASON_IRRELEVANT},
 		&value.Plan{Trials: 1, EligibleCases: 42},

@@ -189,7 +189,7 @@ no longer carries its finding; findings still present keep their issue open and 
 
 ## `delta_per_cost` carries the tokenizer's bias
 
-The ranking metric divides Δgoal by the Asset's `context_tokens` — the carrying cost pool adapters estimate from bytes. That estimate is deliberately pessimistic: it reserves roughly 3x what English prose actually uses, which is the right direction for reserving money and the wrong one for ranking. Two Assets of equal real token cost can differ **~2.4x in `delta_per_cost` by content type alone**, and `select` ranks on this number, so the bias travels into the portfolio. It is acknowledged here and on the field itself rather than argued away; the fix (a real tokenizer) is [ledgered](debt.md#68) as debt rather than shipped silently.
+The ranking metric divides Δgoal by the Asset's `context_tokens` — the carrying cost pool adapters estimate from bytes. The markdown, CSV, and Hugging Face pools all use the same estimate, bytes over the fixed 3.6 divisor, so the bias is uniform across content-type pools rather than a difference between them. That estimate is deliberately pessimistic: it reserves roughly 3x what English prose actually uses, which is the right direction for reserving money and the wrong one for ranking. Two Assets of equal real token cost can differ **~2.4x in `delta_per_cost` by content type alone**, and `select` ranks on this number, so the bias travels into the portfolio. It is acknowledged here and on the field itself rather than argued away; the fix (a real tokenizer) is [ledgered](debt.md#68) as debt rather than shipped silently.
 
 ## If you only remember one thing
 

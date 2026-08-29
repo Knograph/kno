@@ -87,7 +87,8 @@ func CheckIterator[T any](newIter IteratorFactory[T], opts ...Option) []string {
 	}
 	if n < 2 {
 		violations = append(violations, fmt.Sprintf(
-			"produced %d items; the conformance checks need at least 2 to be meaningful", n))
+			"produced %d items; the conformance checks need at least 2 to be meaningful", n,
+		))
 	}
 
 	// 2. Early break must not leave a goroutine behind.
@@ -106,7 +107,8 @@ func CheckIterator[T any](newIter IteratorFactory[T], opts ...Option) []string {
 		if err := goleak.Find(ignore); err != nil {
 			violations = append(violations, fmt.Sprintf(
 				"a goroutine outlived an early break; the producer must stop its work "+
-					"when the consumer stops reading: %v", err))
+					"when the consumer stops reading: %v", err,
+			))
 		}
 	}
 
@@ -121,7 +123,8 @@ func CheckIterator[T any](newIter IteratorFactory[T], opts ...Option) []string {
 			if seen > cancelPatience {
 				violations = append(violations, fmt.Sprintf(
 					"iteration continued past %d items after the context was cancelled; "+
-						"the producer must check ctx.Err() before each yield", cancelPatience))
+						"the producer must check ctx.Err() before each yield", cancelPatience,
+				))
 				break
 			}
 		}
@@ -198,7 +201,8 @@ func CheckFatalErrorStops(consume func(iter.Seq2[int, error]) error) []string {
 	}
 	if past := yielded - (errorAt + 1); past > 0 {
 		violations = append(violations, fmt.Sprintf(
-			"the consumer read %d items past a fatal error; it must stop at the first one", past))
+			"the consumer read %d items past a fatal error; it must stop at the first one", past,
+		))
 	}
 	return violations
 }
@@ -233,7 +237,8 @@ func CheckEvalsDuplicateIDs(cases iter.Seq2[*core.Case, error]) []string {
 		if _, dup := seen[c.GetId()]; dup {
 			violations = append(violations, fmt.Sprintf(
 				"the Evals source yielded Case id %q twice; an in-run duplicate must be fatal, "+
-					"or the in-memory counts and the store's dedup diverge", c.GetId()))
+					"or the in-memory counts and the store's dedup diverge", c.GetId(),
+			))
 		}
 		seen[c.GetId()] = struct{}{}
 	}

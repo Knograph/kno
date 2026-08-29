@@ -93,11 +93,16 @@ linters:
             # wire format to mirror proto field names and presence rules.
             # Same contract as adapters/**/format.go, the only difference
             # being the format arrives over HTTP rather than from a file.
-            # Scoped to the three directories so it cannot spread to code
-            # that touches kno.v1 types.
+            # Scoped to the parser directories so it cannot spread to code
+            # that touches kno.v1 types. The Hugging Face adapters and their
+            # shared datasets-server client are the same contract: wire
+            # formats in, plain structs out, a kno.v1 type never involved.
             - "!**/adapters/evals/langsmith/**"
             - "!**/adapters/evals/langfuse/**"
             - "!**/adapters/evals/braintrust/**"
+            - "!**/adapters/evals/hf/**"
+            - "!**/adapters/pool/hf/**"
+            - "!**/adapters/internal/datasetserver/**"
           deny:
             - pkg: encoding/json
               desc: >-

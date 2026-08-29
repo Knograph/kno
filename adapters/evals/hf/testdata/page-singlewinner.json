@@ -1,0 +1,3 @@
+{"rows":[
+  {"row_idx":0,"row":{"question":"q0","expected":"winner","completion":"loser","answer":"dropped"}}
+],"num_rows_total":1,"partial":false}

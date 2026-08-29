@@ -2,9 +2,11 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/knograph/kno/adapters/evals/braintrust"
+	"github.com/knograph/kno/adapters/evals/hf"
 	"github.com/knograph/kno/adapters/evals/jsonl"
 	"github.com/knograph/kno/adapters/evals/langfuse"
 	"github.com/knograph/kno/adapters/evals/langsmith"
@@ -26,11 +28,15 @@ type evalSource interface {
 // The --evals grammar: a bare path is a JSONL file; the prefixes select the
 // dataset adapters. A dataset name is exactly what follows a prefix, so a
 // dataset literally named "langsmith:..." or "langfuse:..." cannot be
-// addressed — a name that looks like the grammar is the grammar.
+// addressed — a name that looks like the grammar is the grammar. An hf:
+// source is four slash-separated segments — hf:<org>/<name>/<config>/<split>
+// — because a Hugging Face split is addressed by that pair of pairs, and
+// nothing else.
 const (
 	evalsLangsmithPrefix  = "langsmith:"
 	evalsLangfusePrefix   = "langfuse:"
 	evalsBraintrustPrefix = "braintrust:"
+	evalsHFPrefix         = "hf:"
 )
 
 // resolveEvals turns the --evals flag into an eval source.
@@ -95,6 +101,26 @@ func resolveEvals(f *baselineFlags) (evalSource, error) {
 		return ev, nil
 	}
 
+	if strings.HasPrefix(f.evalsPath, evalsHFPrefix) {
+		dataset, config, split, err := parseHFEvals(f.evalsPath)
+		if err != nil {
+			return nil, errs.ErrInvalidInput.WithFix(
+				"name the dataset in --evals, as hf:<org>/<name>/<config>/<split>",
+			).Wrap(err)
+		}
+		ev, err := hf.New(hf.Options{
+			Dataset:     dataset,
+			Config:      config,
+			Split:       split,
+			HoldoutFrac: f.holdoutFrac,
+			SplitSeed:   f.splitSeed,
+		})
+		if err != nil {
+			return nil, errs.ErrInvalidInput.WithFix(hfNewFix(err)).Wrap(err)
+		}
+		return ev, nil
+	}
+
 	ev, err := jsonl.New(jsonl.Options{
 		Path:        f.evalsPath,
 		HoldoutFrac: f.holdoutFrac,
@@ -126,6 +152,45 @@ func langsmithNewFix(err error) string {
 		// private/link-local address families.
 		return "check LANGSMITH_ENDPOINT, and opt into insecure or private " +
 			"endpoints only when the deployment is self-hosted"
+	}
+}
+
+// parseHFEvals splits an hf: source into its four segments.
+//
+// Four segments and only four: the org, the dataset name, the config, and
+// the split. A dataset name cannot be re-joined from fewer, and a revision
+// is never the fifth — the x-revision header is the fingerprint, and a
+// revision query parameter is ignored by the server. Empty segments are
+// refused by name, not counted silently.
+func parseHFEvals(path string) (dataset, config, split string, err error) {
+	rest := strings.TrimPrefix(path, evalsHFPrefix)
+	seg := strings.Split(rest, "/")
+	if len(seg) != 4 {
+		return "", "", "", fmt.Errorf("an hf: eval source is hf:<org>/<name>/<config>/<split> "+
+			"— four slash-separated segments; got %d", len(seg))
+	}
+	for i, s := range seg {
+		if s == "" {
+			return "", "", "", fmt.Errorf("segment %d of the hf: eval source is empty; an "+
+				"hf: eval source is hf:<org>/<name>/<config>/<split>", i+1)
+		}
+	}
+	return seg[0] + "/" + seg[1], seg[2], seg[3], nil
+}
+
+// hfNewFix picks the actionable fix for an hf.New refusal. The grammar
+// refusals point at the grammar; the holdout refusal points at the flag;
+// everything else — endpoint refusals reachable only by library callers,
+// who can set Host — gets the source-level pointer.
+func hfNewFix(err error) string {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "no dataset name"), strings.Contains(msg, "no config"), strings.Contains(msg, "no split"):
+		return "name the dataset in --evals, as hf:<org>/<name>/<config>/<split>"
+	case strings.Contains(msg, "holdout fraction"):
+		return "check --holdout-frac: it must be in [0, 1)"
+	default:
+		return "check the hf: source in --evals"
 	}
 }
 
@@ -180,6 +245,8 @@ func countsSplitFix(src evalSource) string {
 	switch src.(type) {
 	case *langsmith.Evals, *langfuse.Evals, *braintrust.Evals:
 		return "fix the reported dataset, endpoint, or example, then re-run"
+	case *hf.Evals:
+		return "fix the reported dataset, split, or row, then re-run"
 	}
 	return "fix the reported line, then re-run"
 }
