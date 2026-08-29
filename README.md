@@ -233,6 +233,7 @@ A CI gate branches on these, so they're a contract rather than an afterthought.
 | **Select** | Build a Portfolio under budget, with a rejection log; every decision at a Bonferroni-corrected interval | **Shipped** |
 | **Validate** | Measure the Portfolio as a set against the untouched holdout | Planned |
 | **Export** | Render the selected assets into the destination grammar: context pack, knowledge-base manifest, or tuning-set JSONL | **Shipped** |
+| **Report** | Compose the recorded stages into one page — verdicts, portfolio, gaps, and the caveat that nothing is validated on holdout yet | **Shipped** |
 
 ## Verifying a download
 

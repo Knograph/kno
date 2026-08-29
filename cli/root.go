@@ -129,6 +129,7 @@ select, and export run; validate arrives next.`,
 	root.AddCommand(newValueCmd())
 	root.AddCommand(newSelectCmd())
 	root.AddCommand(newExportCmd())
+	root.AddCommand(newReportCmd())
 	root.AddCommand(newDoctorCmd())
 	root.AddCommand(newPurgeCmd())
 	return root

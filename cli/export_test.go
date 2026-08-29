@@ -11,3 +11,9 @@ func DecodeRaw(b []byte) (map[string]any, error) { return decodeRaw(b) }
 
 // Report is the --json shape, exposed for tests.
 type Report = jsonReport
+
+// DecodeReportJSON parses a rendered `kno report --json` document.
+func DecodeReportJSON(b []byte) (ReportJSON, error) { return decodeReportJSON(b) }
+
+// ReportJSON is the report's --json shape, exposed for tests.
+type ReportJSON = reportJSON
