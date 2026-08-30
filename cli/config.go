@@ -541,14 +541,17 @@ func validateAgentRef(cfg *configFile) error {
 			re := *a
 			re.Fix = "fix agent or base_url in kno.yaml — write agent as " +
 				"scheme:target (openai:gpt-4.1, anthropic:claude-opus-5, " +
-				"fake:), base_url as a full https:// URL, and each endpoint " +
-				"once"
+				"bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0, " +
+				"vertex:claude-sonnet-4-5, fake:), base_url as a full https:// " +
+				"URL, and each endpoint once"
 			return &re
 		}
 		return errs.ErrInvalidInput.WithFix(
 			"fix agent or base_url in kno.yaml — write agent as scheme:target " +
-				"(openai:gpt-4.1, anthropic:claude-opus-5, fake:), base_url as a " +
-				"full https:// URL, and each endpoint once",
+				"(openai:gpt-4.1, anthropic:claude-opus-5, " +
+				"bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0, " +
+				"vertex:claude-sonnet-4-5, fake:), base_url as a full https:// " +
+				"URL, and each endpoint once",
 		).Wrap(err)
 	}
 	if _, err := composeRef(agent, baseURL); err != nil {

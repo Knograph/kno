@@ -1,0 +1,14 @@
+{
+	"id": "msg_vrtx_fixture_01",
+	"type": "message",
+	"role": "assistant",
+	"model": "claude-sonnet-4-5",
+	"content": [{"type": "text", "text": "hello from vertex"}],
+	"stop_reason": "end_turn",
+	"usage": {
+		"input_tokens": 1000,
+		"cache_creation_input_tokens": 100,
+		"cache_read_input_tokens": 500,
+		"output_tokens": 200
+	}
+}

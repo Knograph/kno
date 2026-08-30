@@ -104,6 +104,16 @@ func adapterFacts() []adapterFact {
 			Note: "requires --max-output-tokens",
 		},
 		{
+			Scheme: agentref.SchemeBedrock, Available: true,
+			GenerationParams: "per model", TokenCounts: true, Spends: true,
+			Note: "Converse; requires --max-output-tokens; AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION",
+		},
+		{
+			Scheme: agentref.SchemeVertex, Available: true,
+			GenerationParams: "per model", TokenCounts: true, Spends: true,
+			Note: "requires --max-output-tokens; GOOGLE_APPLICATION_CREDENTIALS, or GOOGLE_CLOUD_PROJECT + GOOGLE_CLOUD_REGION",
+		},
+		{
 			Scheme: agentref.SchemeExec, Available: true,
 			GenerationParams: "n/a", TokenCounts: false, Spends: false,
 			Note: "runs a local command per Case; free unless --cost-per-call-usd is set",
@@ -131,6 +141,8 @@ type doctorReport struct {
 	PricedModels struct {
 		OpenAI    []string `json:"openai"`
 		Anthropic []string `json:"anthropic"`
+		Bedrock   []string `json:"bedrock"`
+		Vertex    []string `json:"vertex"`
 	} `json:"priced_models"`
 }
 
@@ -144,6 +156,8 @@ func runDoctor(out io.Writer, jsonOut bool) error {
 	}
 	rep.PricedModels.OpenAI = pricing.Models(agentref.SchemeOpenAI)
 	rep.PricedModels.Anthropic = pricing.Models(agentref.SchemeAnthropic)
+	rep.PricedModels.Bedrock = pricing.Models(agentref.SchemeBedrock)
+	rep.PricedModels.Vertex = pricing.Models(agentref.SchemeVertex)
 
 	if jsonOut {
 		return writeJSON(out, rep)
@@ -186,8 +200,9 @@ func renderDoctor(out io.Writer, rep doctorReport) error {
 	// Counts, not the whole list: a user asking "is my model priced" is
 	// answered by --json, and a wall of model names buries the two lines above
 	// it that most diagnoses actually need.
-	fmt.Fprintf(&b, "\nPrices  %s (%d openai, %d anthropic models)\n",
-		rep.PriceTable, len(rep.PricedModels.OpenAI), len(rep.PricedModels.Anthropic))
+	fmt.Fprintf(&b, "\nPrices  %s (%d openai, %d anthropic, %d bedrock, %d vertex models)\n",
+		rep.PriceTable, len(rep.PricedModels.OpenAI), len(rep.PricedModels.Anthropic),
+		len(rep.PricedModels.Bedrock), len(rep.PricedModels.Vertex))
 	b.WriteString("        an unpriced model needs --price-input-per-mtok and " +
 		"--price-output-per-mtok under a cost cap\n")
 

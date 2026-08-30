@@ -13,3 +13,10 @@ openai.html
   url: https://developers.openai.com/api/docs/models/compare
   sha256: 6e1b0ef209d024bc87c5324c5844185d57d27bd11bd192668811ccc32b828824
 
+bedrock.json
+  url: https://api.pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/index.json
+  sha256: HAND-AUTHORED — pending a live capture; the sha256 names the real
+    capture once one is recorded. Prices follow the published AWS Bedrock
+    Claude rates: us-east-1 and us-west-2 at 0.0030000000 in / 0.0150000000
+    out per 1K tokens, eu-central-1 at the +10% premium
+    (0.0033000000 / 0.0165000000).

@@ -34,6 +34,15 @@ const (
 	// SchemeAnthropic is the Messages API.
 	SchemeAnthropic = "anthropic"
 
+	// SchemeBedrock is Claude on AWS Bedrock's Converse API, at a fixed
+	// regional endpoint. The target is the AWS model id verbatim — a model id
+	// is a full resource path on Bedrock, not a vendor name.
+	SchemeBedrock = "bedrock"
+
+	// SchemeVertex is Claude on GCP Vertex AI's :rawPredict endpoint, at a
+	// fixed regional endpoint. The target is the Vertex model id.
+	SchemeVertex = "vertex"
+
 	// SchemeFake is the local deterministic agent. No network, no cost.
 	SchemeFake = "fake"
 
@@ -53,6 +62,8 @@ const (
 var knownSchemes = map[string]bool{
 	SchemeOpenAI:    true,
 	SchemeAnthropic: true,
+	SchemeBedrock:   true,
+	SchemeVertex:    true,
 	SchemeFake:      true,
 	SchemeExec:      true,
 	SchemeTuned:     true,
@@ -151,8 +162,7 @@ func Parse(raw string) (*knov1.AgentRef, error) {
 
 	if baseURL != "" {
 		if !schemeUsesBaseURL(scheme) {
-			return nil, fmt.Errorf("%w: the %s scheme reaches no endpoint, so a "+
-				"base URL would be stored and never read", ErrMalformed, scheme)
+			return nil, fmt.Errorf("%w: %s", ErrMalformed, whyNoBaseURL(scheme))
 		}
 		canonical, err := checkBaseURL(baseURL)
 		if err != nil {
@@ -300,6 +310,29 @@ func checkBaseURL(raw string) (string, error) {
 // since fake is the only scheme this build resolves.
 func schemeUsesBaseURL(scheme string) bool {
 	return scheme == SchemeOpenAI || scheme == SchemeAnthropic
+}
+
+// whyNoBaseURL says why a scheme refuses an @base-url, in the user's words.
+//
+// The reason is not one thing. fake, exec, and tuned reach no HTTP endpoint at
+// all, so a base URL there is a value nothing reads. bedrock and vertex reach
+// an endpoint — but a FIXED one, a regional partner-cloud endpoint where the
+// credential and the address are bound by the adapter, and where a base URL
+// would be stored and never read, silently, forever. Telling a user their
+// scheme is "offline" when it is the opposite is how a wrong refusal sends
+// them looking in the wrong place.
+func whyNoBaseURL(scheme string) string {
+	switch scheme {
+	case SchemeBedrock:
+		return "the bedrock scheme reaches a fixed regional endpoint, so a base " +
+			"URL would be stored and never read"
+	case SchemeVertex:
+		return "the vertex scheme reaches a fixed regional endpoint, so a base " +
+			"URL would be stored and never read"
+	default:
+		return "the " + scheme + " scheme reaches no endpoint, so a base URL " +
+			"would be stored and never read"
+	}
 }
 
 // checkTarget rejects characters that have no place in a model name.

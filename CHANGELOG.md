@@ -179,6 +179,8 @@ covenants — breaking any of them requires a major version.
 
 ### Features
 
+- **Bedrock and Vertex agent adapters — the partner clouds, priced.** `kno`
+  can now measure any Claude model behind AWS Bedrock (`bedrock:anthropic.claude-sonnet-4-5-20250929-v1:0`) and Google Vertex AI (`vertex:claude-sonnet-4-5`) with the full Agent surface — Invoke, Capabilities, estimate-before-spend with WorstCase, context injection, token-count settlement against the provider's reported usage. The JWT-to-access-token exchange (Vertex) and SigV4 (Bedrock) are stdlib implementations; credentials come from the environment only (AWS_ACCESS_KEY_ID/SECRET/SESSION_TOKEN/REGION, or GOOGLE_APPLICATION_CREDENTIALS), never from kno.yaml, fixtures, or logs. Both schemes reach a fixed regional endpoint: a base URL is refused at parse, and the insecure/private-address/seed flags do not apply. The table prices the bedrock/vertex namespaces, and the regional +10% multiplier is a committed constant in the estimate and settlement path (docs/debt.md#41(d) repaid); `us.`/`eu.` cross-region inference profiles are refused until priced. pricingcheck gained check 6: AWS's machine-readable Bedrock price list confirms the 110% multiplier every run; vertex has no machine-readable source and is reported every run. Plans: `docs/plans/2026-08-29-bedrock-vertex-agents.md`.
 - **Export persists the gaps statistic the report will render** (the report
   plan's Step 0). The Value run's plan now carries a `Clusters` snapshot —
   the failure clusters routing already computed, frozen at planning time,

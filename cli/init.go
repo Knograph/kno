@@ -264,7 +264,7 @@ func runWizard(in io.Reader, out io.Writer, prefill wizardPrefill) (wizardAnswer
 
 	agent := huh.NewInput().
 		Title("Agent to measure").
-		Description("scheme:model — openai:gpt-4.1, anthropic:claude-opus-5, fake:, exec:command").
+		Description("scheme:model — openai:gpt-4.1, anthropic:claude-opus-5, bedrock:<model-id>, vertex:<model-id>, fake:, exec:command").
 		Prompt("agent: ").
 		Value(&a.agent).
 		Validate(func(s string) error {

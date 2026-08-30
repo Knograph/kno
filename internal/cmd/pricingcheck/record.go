@@ -14,7 +14,7 @@ import (
 	"golang.org/x/net/html"
 )
 
-// recordFixtures fetches the three sources live, trims them, and writes the
+// recordFixtures fetches every source live, trims them, and writes the
 // fixtures plus note.txt into dir. The fixtures must be REAL captures —
 // structure intact, only script/style and whitespace removed — because the
 // tests' claim is "this is what the page looked like on the capture date".
@@ -43,6 +43,8 @@ func recordFixtures(dir string) error {
 		switch s.name {
 		case "openrouter":
 			trimmed, err = minifyJSON(body)
+		case "bedrock":
+			trimmed, err = extractBedrockRegions(body)
 		default:
 			trimmed, err = trimHTML(body)
 		}
@@ -151,4 +153,78 @@ func minifyJSON(body []byte) ([]byte, error) {
 		return nil, fmt.Errorf("minified fixture does not parse: %w", err)
 	}
 	return b.Bytes(), nil
+}
+
+// extractBedrockRegions reduces AWS's raw offers index to the shape the
+// regional check reads: region -> usagetype -> price. The raw index keys
+// prices by opaque SKUs across two top-level maps; only the region, the
+// usage type, and the USD price per 1K tokens survive. Rows whose
+// locationType is not "AWS Region" (the deprecated edge rows) and usage
+// types that do not name Anthropic inference are dropped — the check's
+// subject is the regional spread of Claude inference on Bedrock, not the
+// platform's auxiliary fees.
+func extractBedrockRegions(body []byte) ([]byte, error) {
+	var o struct {
+		Products map[string]struct {
+			Attributes struct {
+				Region       string `json:"region"`
+				LocationType string `json:"locationType"`
+				UsageType    string `json:"usagetype"`
+			} `json:"attributes"`
+		} `json:"products"`
+		Terms map[string]map[string]map[string]struct {
+			PriceDimensions map[string]struct {
+				PricePerUnit map[string]string `json:"pricePerUnit"`
+			} `json:"priceDimensions"`
+		} `json:"terms"`
+	}
+	if err := json.Unmarshal(body, &o); err != nil {
+		return nil, err
+	}
+	regions := make(map[string]map[string]rateEntry)
+	for sku, p := range o.Products {
+		a := p.Attributes
+		if a.LocationType != "AWS Region" || !strings.HasPrefix(a.UsageType, "AnthropicClaude") {
+			continue
+		}
+		onDemand, ok := o.Terms["OnDemand"][sku]
+		if !ok {
+			continue
+		}
+		for _, term := range onDemand {
+			for _, dim := range term.PriceDimensions {
+				price, ok := dim.PricePerUnit["USD"]
+				if !ok {
+					continue
+				}
+				m := regions[a.Region]
+				if m == nil {
+					m = make(map[string]rateEntry)
+					regions[a.Region] = m
+				}
+				if prev, dup := m[a.UsageType]; dup && prev.Price != price {
+					return nil, fmt.Errorf("bedrock: usagetype %s in %s carries two different prices (%s vs %s); the extraction would lose data",
+						a.UsageType, a.Region, prev, price)
+				}
+				m[a.UsageType] = rateEntry{Price: price}
+			}
+		}
+	}
+	if len(regions) == 0 {
+		return nil, fmt.Errorf("bedrock: no AnthropicClaude inference rows in the offers index")
+	}
+	out, err := json.Marshal(struct {
+		Regions map[string]map[string]rateEntry `json:"regions"`
+	}{Regions: regions})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// rateEntry is the fixture's per-code price object; the extraction emits the
+// same shape the parser reads, so a recorded fixture and a hand-authored one
+// are interchangeable.
+type rateEntry struct {
+	Price string `json:"price"`
 }

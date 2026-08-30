@@ -87,7 +87,7 @@ The fast rows bill input and output only — Anthropic publishes no cache rates 
 
 The rule behind the table: **a version suffix inherits, a variant does not.** `claude-opus-5-20260821` prices like `claude-opus-5` — a dated pin is the same model, and so is `latest` — but `claude-opus-5-fast` is its own product with its own rate, and prefix matching it against the base row once authorized a run at a fraction of its true rate with no signal at all. That failure is why variant words never inherit.
 
-`kno doctor` prints the table's coverage and date: `Prices 2026-08-28 (3 openai, 12 anthropic models)`.
+`kno doctor` prints the table's coverage and date: `Prices <date> (3 openai, 12 anthropic, 12 bedrock, 12 vertex models)`.
 
 ## If your model has no price
 

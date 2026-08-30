@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -62,6 +63,22 @@ type Options struct {
 	// disabled cross-host redirect refusal; a demonstration delivered a bound
 	// x-api-key to an attacker host through this field.
 	HTTPClient *http.Client
+
+	// Authorize signs a request before it goes out, when the credential is
+	// not a static header. This is the partner-cloud seam: SigV4 needs a
+	// per-request date stamp and payload hash, and OAuth needs a bearer token
+	// from a cache. Called after Dest.authorize (which no-ops when the
+	// destination holds no key) and before the request is sent.
+	//
+	// body is the exact request body, so a signer can hash the bytes that
+	// will actually be written. It is the same slice newRequest reads; the
+	// request's own Body is a *bytes.Reader over it, so the hook must not
+	// consume req.Body — set headers only, or replace req.Header wholesale.
+	//
+	// A credential must not be returned here as anything but a header on req:
+	// the request is the only object with a host it may legally reach, which
+	// is the invariant Dest.authorize enforces for the static-key path.
+	Authorize func(req *http.Request, body []byte) error
 }
 
 // Client is the shared HTTP layer.
@@ -288,7 +305,20 @@ type Response struct {
 
 func (c *Client) newRequest(ctx context.Context, method, path string, body []byte) (*http.Request, error) {
 	u := *c.opts.Dest.base
-	u.Path = strings.TrimSuffix(u.Path, "/") + "/" + strings.TrimPrefix(path, "/")
+	p := strings.TrimSuffix(u.Path, "/") + "/" + strings.TrimPrefix(path, "/")
+	u.Path = p
+	// A caller may pass a path that is already percent-encoded, and the partner
+	// clouds are exactly that: a Bedrock ARN model id carries %3A for its colons
+	// and a Vertex model id carries %40 for its @, both of which url.URL would
+	// otherwise emit literally because both are legal path characters. Setting
+	// RawPath alongside the decoded Path makes String() emit the encoded form
+	// verbatim — the wire URL and the signer's canonical URI then agree, which
+	// is the whole point of the encoding. Plain paths leave RawPath empty and
+	// String() escapes as before, so no existing caller changes behaviour.
+	if dec, err := url.PathUnescape(p); err == nil && dec != p {
+		u.Path = dec
+		u.RawPath = p
+	}
 
 	var rdr io.Reader
 	if body != nil {
@@ -318,6 +348,11 @@ func (c *Client) newRequest(ctx context.Context, method, path string, body []byt
 	}
 	if err := c.opts.Dest.authorize(req); err != nil {
 		return nil, err
+	}
+	if c.opts.Authorize != nil {
+		if err := c.opts.Authorize(req, body); err != nil {
+			return nil, err
+		}
 	}
 	return req, nil
 }

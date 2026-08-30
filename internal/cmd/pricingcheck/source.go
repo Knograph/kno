@@ -49,6 +49,10 @@ var sources = []sourceSpec{
 	{name: "openrouter", url: "https://openrouter.ai/api/v1/models", file: "openrouter.json"},
 	{name: "anthropic", url: "https://platform.claude.com/docs/en/about-claude/pricing", file: "anthropic.html"},
 	{name: "openai", url: "https://developers.openai.com/api/docs/models/compare", file: "openai.html"},
+	// AWS's machine-readable Bedrock offers index: the price-of-record for the
+	// +10% regional multiplier check (docs/debt.md#41(d) repayment). Vertex
+	// has no equivalent machine-readable source — see checkRegionalMultiplier.
+	{name: "bedrock", url: "https://api.pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/index.json", file: "bedrock.json"},
 }
 
 // sourceURL returns the fetch URL for a named source.
@@ -128,9 +132,10 @@ func hostOf(u string) string {
 // and a fail-soft "no data" report live. errSelect and errRow are content
 // failures the checks judge and gate on.
 type sourceData struct {
-	name string
-	rows []row
-	err  error
+	name    string
+	rows    []row
+	regions bedrockRegions // set only for the bedrock source
+	err     error
 }
 
 // shapeBroken reports whether the source was unusable as data.
