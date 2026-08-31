@@ -212,6 +212,52 @@ Kno is deliberately opinionated about experimentation:
 - `fake:` — the local agent that costs nothing
 - `exec:` and `tuned:` arrive with the stages that need them
 
+**Eval sources:** `--evals` takes a JSONL path, or a platform dataset directly —
+`langsmith:<dataset>`, `langfuse:<dataset>`, `braintrust:<dataset>`,
+`hf:<org>/<name>/<config>/<split>`. **Pools:** `--pool` takes JSONL, `csv:<file>`,
+`md:<file-or-dir>`, or `hf:<org>/<name>/<config>/<split>:<kind>`. Platform credentials are
+environment-only, never in `kno.yaml`.
+
+## Evaluation best practices
+
+Kno measures how candidate data changes the outcomes you care about — attribution quality is
+bounded by the quality and granularity of your eval signal. A broad eval yields noisy
+attribution; this section exists so "noisy" reads as the eval's fault, not Kno's.
+
+- **Evaluate specific behaviors.** Prefer "answers refund-policy questions correctly" over a
+  single "agent quality" score.
+- **Keep Cases atomic.** One Case tests one primary behavior.
+- **Use enough Cases per behavior.** A single example rarely separates improvement from
+  variance — and Kno reports the interval, so underpowered measurements are labeled, not
+  papered over.
+- **Separate independent dimensions.** Accuracy, policy compliance, tool selection, and tone
+  deserve separate Goals.
+- **Use representative inputs.** The eval distribution should resemble the tasks the agent
+  actually encounters.
+- **Holdouts are enforced, not requested.** Kno seals a holdout at baseline time and nothing
+  reads it until `validate` — leakage is a bug, not a habit to avoid.
+- **Prefer deterministic scoring.** Exact match and programmatic checks beat subjective judges.
+- **Define judge rubrics tightly.** An ambiguous rubric is noisy attribution with extra steps.
+- **Start granular, aggregate later.** Kno rolls specific outcomes up more reliably than it
+  explains a single coarse score.
+
+> **Rule of thumb:** your eval defines what "better" means. Kno tells you which data caused
+> that metric to move.
+
+Too coarse — "Is this a good support agent?" Better:
+
+```text
+- Correctly answers refund-policy questions
+- Escalates account-security issues
+- Never promises unsupported refunds
+- Uses the correct billing tool
+- Stays within response-length requirements
+```
+
+The full guide — how granular, how many Cases are enough, judge vs deterministic scoring,
+multi-dimensional Goals, anti-patterns, and per-workload examples — is
+**[Evaluation design](docs/evaluation-design.md)**.
+
 ## Exit codes
 
 A CI gate branches on these, so they're a contract rather than an afterthought.
@@ -259,6 +305,7 @@ Both identity flags are the part that matters. Without `--certificate-identity-r
 
 - **[The mental model](docs/mental-model.md)** — one page; read it and the rest should be obvious.
 - **[What the numbers mean](docs/what-the-numbers-mean.md)** — what each number claims, and what it does not.
+- **[Evaluation design](docs/evaluation-design.md)** — how to build evals that attribution can trust.
 - **[Cookbook](docs/cookbook/)** — task-shaped recipes, including [data retention](docs/cookbook/retention.md).
 - **[DESIGN.md](DESIGN.md)** — architecture, and what is deliberately out of scope.
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — how we work. Plan, adversarial review, then code.
