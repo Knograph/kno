@@ -1,10 +1,10 @@
 # Kno — Design: Agent Data Valuation Engine (OSS)
 
-*Project: **Kno** · binary: `kno` · org: `github.com/knograph` · the OSS engine beneath the KnoGraph platform.*
+*Project: **Kno** · binary: `kno` · org: `github.com/uknoAI` · the OSS engine beneath the uknoAI platform.*
 
 ## Naming
 
-The OSS project lives in the KnoGraph namespace deliberately: **Kno** is the engine, **KnoGraph** is the platform, and the brand relationship is legible on sight (the Terraform/HashiCorp, Temporal-OSS/Temporal-Cloud pattern). The binary is `kno`, which makes every command read as a sentence about the product's job: `kno value`, `kno select`, `kno validate` — *know the value, know what to select, know it validates*. The pun is the positioning. Checked against the CLI ecosystem: no active `kno` tool collides (nearest is `okn`, an unrelated knowledge-wiki CLI; the defunct Kno tablet company died in 2013). Before scaffolding, sweep and reserve: `github.com/knograph/kno`, `kno` on Homebrew/pypi/npm (fallbacks: `knograph-kno`, `pip install knograph`), and the `kno.dev` / `kno.sh` domains if available.
+The OSS project lives in the uknoAI namespace deliberately: **Kno** is the engine, **uknoAI** is the platform, and the brand relationship is legible on sight (the Terraform/HashiCorp, Temporal-OSS/Temporal-Cloud pattern). The binary is `kno`, which makes every command read as a sentence about the product's job: `kno value`, `kno select`, `kno validate` — *know the value, know what to select, know it validates*. The pun is the positioning. Checked against the CLI ecosystem: no active `kno` tool collides (nearest is `okn`, an unrelated knowledge-wiki CLI; the defunct Kno tablet company died in 2013). Before scaffolding, sweep and reserve: `github.com/uknoAI/kno`, `kno` on Homebrew/pypi/npm (fallbacks: `uknoai-kno`, `pip install uknoai`), and the `kno.dev` / `kno.sh` domains if available.
 
 ## Thesis
 
@@ -140,7 +140,7 @@ Worked cost: 7 LoRA runs × ~$3–8/run (hosted, 3B model, ~500 examples, 2–3 
 
 **Tier 4 — Post-tune validation (v0.3; closes the loop).** `kno validate --agent tuned:<model>` re-scores the same untouched holdout against the user's actually-tuned model. `kno` is the eval harness on **both sides** of the tuning run; the before/after on one holdout is the final, honest ROI number.
 
-**Tier 5 — The learned transfer prior (v0.4 / platform; the weakness becomes the moat).** Every completed loop yields a supervised pair — (ICL-measured Δ, FT-validated Δ) — per asset kind, goal type, and model family. Recorded locally, these calibrate the user's own ICL rankings after a few cycles. Aggregated across deployments as abstractions (never pooled content), they become the compounding **valuation prior**: the map of which data kinds transfer, which don't, and by how much. Collecting that dataset requires sitting on both sides of the tuning run — which Tier 4 already does — so the bridge's error term, systematically observed, becomes the proprietary asset. (Same moat shape as KnoGraph's intervention-effectiveness mapping.)
+**Tier 5 — The learned transfer prior (v0.4 / platform; the weakness becomes the moat).** Every completed loop yields a supervised pair — (ICL-measured Δ, FT-validated Δ) — per asset kind, goal type, and model family. Recorded locally, these calibrate the user's own ICL rankings after a few cycles. Aggregated across deployments as abstractions (never pooled content), they become the compounding **valuation prior**: the map of which data kinds transfer, which don't, and by how much. Collecting that dataset requires sitting on both sides of the tuning run — which Tier 4 already does — so the bridge's error term, systematically observed, becomes the proprietary asset. (Same moat shape as uknoAI's intervention-effectiveness mapping.)
 
 **Advanced tier — gradient-based influence (post-v0.4 / platform).** For open-weight targets, LESS-family influence estimation scores per-asset effect on validation loss from gradient features without per-candidate retraining. Real and differentiating, but white-box-only and torch-native — it ships as an optional Python sidecar (`value --method gradient`), never in the Go binary, and its noisy estimates still get confirmed by Tier 3 at the top of the ranking.
 
@@ -405,4 +405,4 @@ The OSS engine is complete and genuinely useful standalone. The platform sells c
 2. At least one team **shrinks** a planned fine-tuning set based on the rejection log — proof the ROI frame landed, not just the ranking.
 3. At least one team moves assets from a planned tuning set into RAG (or vice versa) on the strength of mechanism routing — proof the bridge design landed.
 4. The first external PR is a Ring-1 adapter or judge prompt; the first Ring-2 plugin appears within a month of the protocol shipping — proof the extension surface is where intended.
-5. Someone asks "can this continuously re-value our data as the business changes?" — that email is the platform's first qualified lead, and it is the KnoGraph question asked from the data side.
+5. Someone asks "can this continuously re-value our data as the business changes?" — that email is the platform's first qualified lead, and it is the uknoAI question asked from the data side.

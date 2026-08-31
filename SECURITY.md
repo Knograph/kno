@@ -5,8 +5,8 @@
 **Do not open a public issue.**
 
 Report privately through
-[GitHub Security Advisories](https://github.com/knograph/kno/security/advisories/new), or by email
-to **security@knograph.dev**.
+[GitHub Security Advisories](https://github.com/uknoAI/kno/security/advisories/new), or by email
+to **security@uknoai.dev**.
 
 Please include: what you found, how to reproduce it, the version or commit, and what an attacker
 could do with it. A proof of concept helps enormously.
@@ -114,13 +114,13 @@ To verify:
 ```bash
 cosign verify-blob checksums.txt \
   --new-bundle-format --bundle checksums.txt.bundle \
-  --certificate-identity-regexp '^https://github\.com/[Kk]nograph/kno/\.github/workflows/release\.yml@refs/tags/.+$' \
+  --certificate-identity-regexp '^https://github\.com/uknoAI/kno/\.github/workflows/release\.yml@refs/tags/.+$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
 grep " kno_<version>_<os>_<arch>.tar.gz$" checksums.txt | shasum -a 256 -c -
 
-gh attestation verify kno_<version>_<os>_<arch>.tar.gz --repo knograph/kno \
-  --signer-workflow knograph/kno/.github/workflows/release.yml
+gh attestation verify kno_<version>_<os>_<arch>.tar.gz --repo uknoAI/kno \
+  --signer-workflow uknoAI/kno/.github/workflows/release.yml
 ```
 
 Neither identity flag is optional advice. A `verify-blob` without

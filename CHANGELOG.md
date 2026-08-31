@@ -28,70 +28,70 @@ covenants — breaking any of them requires a major version.
      At release time the hand-written heading is renamed from [Unreleased] to
      the version. See docs/debt.md#76 for why that is still a manual step. -->
 
-## [0.1.0](https://github.com/Knograph/kno/compare/v0.0.4...v0.1.0) (2026-08-29)
+## [0.1.0](https://github.com/uknoAI/kno/compare/v0.0.4...v0.1.0) (2026-08-29)
 
 
 ### ⚠ BREAKING CHANGES
 
-* kno v0.1.0 — the measurement loop is complete ([#118](https://github.com/Knograph/kno/issues/118))
+* kno v0.1.0 — the measurement loop is complete ([#118](https://github.com/uknoAI/kno/issues/118))
 
 ### Features
 
-* csv and markdown pool adapters ([#100](https://github.com/Knograph/kno/issues/100)) ([5203566](https://github.com/Knograph/kno/commit/5203566ed94ba6401f9643a48667b24e6cdd97fd))
-* exec agent adapter — any executable as an agent ([#99](https://github.com/Knograph/kno/issues/99)) ([2b97685](https://github.com/Knograph/kno/commit/2b97685220f5079509e5d912d4ceb5dd7821cb03))
-* kno init, the kno.yaml config layer, and the interactive consent prompt ([#102](https://github.com/Knograph/kno/issues/102)) ([603053b](https://github.com/Knograph/kno/commit/603053bb0f5d55388ede04a2a1d6819981cb22d0))
-* kno mine — turn production transcripts into a weak-label eval set ([#103](https://github.com/Knograph/kno/issues/103)) ([957ba8f](https://github.com/Knograph/kno/commit/957ba8fe9d05d45a37db5a007758620a04c2dc03))
-* kno report — the one-page verdict across stages ([#115](https://github.com/Knograph/kno/issues/115)) ([bfee4a2](https://github.com/Knograph/kno/commit/bfee4a268740334fe65a556a629e8a38b5024330))
-* kno v0.1.0 — the measurement loop is complete ([#118](https://github.com/Knograph/kno/issues/118)) ([0d2b21a](https://github.com/Knograph/kno/commit/0d2b21a43462019bb6c5475df869333dd9ad9b3d))
-* Langfuse Evals adapter — third core.Evals source ([#109](https://github.com/Knograph/kno/issues/109)) ([a0d1151](https://github.com/Knograph/kno/commit/a0d11513e8be9cd4950137c9822367ea9a8e5289))
-* LangSmith Evals adapter — datasets as first-class Cases ([#98](https://github.com/Knograph/kno/issues/98)) ([d568a82](https://github.com/Knograph/kno/commit/d568a823858d5975fac910f61aa6bf7f008cae5a))
-* persist the gaps statistic at export — report plan Step 0 ([#111](https://github.com/Knograph/kno/issues/111)) ([d1900eb](https://github.com/Knograph/kno/commit/d1900ebb9d8a28e78b4956badbe3d8a1a7531a3b))
-* populate Valuation.delta_per_cost in the Value stage ([#101](https://github.com/Knograph/kno/issues/101)) ([417cf03](https://github.com/Knograph/kno/commit/417cf0389436ff11ba84d5b1abfeb91cdfd0734d))
-* price the fast-mode variants; dispose the rest of debt [#46](https://github.com/Knograph/kno/issues/46) with reasons ([#91](https://github.com/Knograph/kno/issues/91)) ([a67ccbb](https://github.com/Knograph/kno/commit/a67ccbb98e54108db858b3ef8160daf0d28fa577))
-* pricing drift detector — watch the table for staleness, repricing, and unpriced variants ([#87](https://github.com/Knograph/kno/issues/87)) ([eb5dcd0](https://github.com/Knograph/kno/commit/eb5dcd095bb2de17633cd8e9c7c71757903c245d))
-* select and export — portfolio construction and destinations ([#107](https://github.com/Knograph/kno/issues/107)) ([e6b8038](https://github.com/Knograph/kno/commit/e6b803816fecbb3c978c83bff531d02c665d9ef3))
+* csv and markdown pool adapters ([#100](https://github.com/uknoAI/kno/issues/100)) ([5203566](https://github.com/uknoAI/kno/commit/5203566ed94ba6401f9643a48667b24e6cdd97fd))
+* exec agent adapter — any executable as an agent ([#99](https://github.com/uknoAI/kno/issues/99)) ([2b97685](https://github.com/uknoAI/kno/commit/2b97685220f5079509e5d912d4ceb5dd7821cb03))
+* kno init, the kno.yaml config layer, and the interactive consent prompt ([#102](https://github.com/uknoAI/kno/issues/102)) ([603053b](https://github.com/uknoAI/kno/commit/603053bb0f5d55388ede04a2a1d6819981cb22d0))
+* kno mine — turn production transcripts into a weak-label eval set ([#103](https://github.com/uknoAI/kno/issues/103)) ([957ba8f](https://github.com/uknoAI/kno/commit/957ba8fe9d05d45a37db5a007758620a04c2dc03))
+* kno report — the one-page verdict across stages ([#115](https://github.com/uknoAI/kno/issues/115)) ([bfee4a2](https://github.com/uknoAI/kno/commit/bfee4a268740334fe65a556a629e8a38b5024330))
+* kno v0.1.0 — the measurement loop is complete ([#118](https://github.com/uknoAI/kno/issues/118)) ([0d2b21a](https://github.com/uknoAI/kno/commit/0d2b21a43462019bb6c5475df869333dd9ad9b3d))
+* Langfuse Evals adapter — third core.Evals source ([#109](https://github.com/uknoAI/kno/issues/109)) ([a0d1151](https://github.com/uknoAI/kno/commit/a0d11513e8be9cd4950137c9822367ea9a8e5289))
+* LangSmith Evals adapter — datasets as first-class Cases ([#98](https://github.com/uknoAI/kno/issues/98)) ([d568a82](https://github.com/uknoAI/kno/commit/d568a823858d5975fac910f61aa6bf7f008cae5a))
+* persist the gaps statistic at export — report plan Step 0 ([#111](https://github.com/uknoAI/kno/issues/111)) ([d1900eb](https://github.com/uknoAI/kno/commit/d1900ebb9d8a28e78b4956badbe3d8a1a7531a3b))
+* populate Valuation.delta_per_cost in the Value stage ([#101](https://github.com/uknoAI/kno/issues/101)) ([417cf03](https://github.com/uknoAI/kno/commit/417cf0389436ff11ba84d5b1abfeb91cdfd0734d))
+* price the fast-mode variants; dispose the rest of debt [#46](https://github.com/uknoAI/kno/issues/46) with reasons ([#91](https://github.com/uknoAI/kno/issues/91)) ([a67ccbb](https://github.com/uknoAI/kno/commit/a67ccbb98e54108db858b3ef8160daf0d28fa577))
+* pricing drift detector — watch the table for staleness, repricing, and unpriced variants ([#87](https://github.com/uknoAI/kno/issues/87)) ([eb5dcd0](https://github.com/uknoAI/kno/commit/eb5dcd095bb2de17633cd8e9c7c71757903c245d))
+* select and export — portfolio construction and destinations ([#107](https://github.com/uknoAI/kno/issues/107)) ([e6b8038](https://github.com/uknoAI/kno/commit/e6b803816fecbb3c978c83bff531d02c665d9ef3))
 
 
 ### Bug Fixes
 
-* cli wiring tests manufacture credential absence instead of relying on the scrub ([#90](https://github.com/Knograph/kno/issues/90)) ([0dcad28](https://github.com/Knograph/kno/commit/0dcad2895e60302ec93f52d5c7b5cf6b224dfa9a))
-* pricing-check workflow bootstraps its own label ([#92](https://github.com/Knograph/kno/issues/92)) ([66d55c5](https://github.com/Knograph/kno/commit/66d55c51316ae47d7c82934b4f9258d6c842f9bb))
-* **value:** inline the routing shuffle so a recorded seed outlives the binary ([#108](https://github.com/Knograph/kno/issues/108)) ([0987d96](https://github.com/Knograph/kno/commit/0987d964a2430bd63443c4ce4559b37a005f3115))
+* cli wiring tests manufacture credential absence instead of relying on the scrub ([#90](https://github.com/uknoAI/kno/issues/90)) ([0dcad28](https://github.com/uknoAI/kno/commit/0dcad2895e60302ec93f52d5c7b5cf6b224dfa9a))
+* pricing-check workflow bootstraps its own label ([#92](https://github.com/uknoAI/kno/issues/92)) ([66d55c5](https://github.com/uknoAI/kno/commit/66d55c51316ae47d7c82934b4f9258d6c842f9bb))
+* **value:** inline the routing shuffle so a recorded seed outlives the binary ([#108](https://github.com/uknoAI/kno/issues/108)) ([0987d96](https://github.com/uknoAI/kno/commit/0987d964a2430bd63443c4ce4559b37a005f3115))
 
 
 ### Documentation
 
-* extend the quickstart tape through select, export, and report ([#116](https://github.com/Knograph/kno/issues/116)) ([9aaf1f9](https://github.com/Knograph/kno/commit/9aaf1f99ff5913e3dc04af2d381a31a666f23a86))
-* ledger the parquet deferral with a trigger that can lapse ([#104](https://github.com/Knograph/kno/issues/104)) ([9b084ed](https://github.com/Knograph/kno/commit/9b084ed22f483703ce3b6d12005dffcc7181a781))
-* n8n cookbook entry — scheduled valuation with alerts ([#97](https://github.com/Knograph/kno/issues/97)) ([13ab363](https://github.com/Knograph/kno/commit/13ab3636477c1e4d21933e101ea7e84234bcc389))
-* plan the Braintrust, Hugging Face, and Bedrock/Vertex adapters ([#119](https://github.com/Knograph/kno/issues/119)) ([5423116](https://github.com/Knograph/kno/commit/542311608a4159222a7b58de06bfafd08365685c))
-* plan the Langfuse Evals adapter ([#106](https://github.com/Knograph/kno/issues/106)) ([9775b16](https://github.com/Knograph/kno/commit/9775b161673dc8fbe4362e6396730c432dd23113))
-* plan the report page and minimal TUI dashboard ([#105](https://github.com/Knograph/kno/issues/105)) ([f03c8a8](https://github.com/Knograph/kno/commit/f03c8a8bb74795a364f55b3d8c2940f79c4ae448))
-* record the v0.1 bump-policy decision — feat: keeps bumping patch ([#113](https://github.com/Knograph/kno/issues/113)) ([2cf3b72](https://github.com/Knograph/kno/commit/2cf3b72ac61d025599d2b0c8ae5e538921bc36d1))
-* rework the README around the data-valuation pitch ([#94](https://github.com/Knograph/kno/issues/94)) ([4144be6](https://github.com/Knograph/kno/commit/4144be63eb7d70c905682f4dc5a4a9eb2ccc7a94))
-* sweep the cookbook against the v0.1 CLI; add the Anthropic entry ([#117](https://github.com/Knograph/kno/issues/117)) ([60d7608](https://github.com/Knograph/kno/commit/60d7608e0eac7a2c8ae06e553257e25d5f2735a3))
-* the v0.1 ledger review — dispose four lapses, amend stale rows ([#114](https://github.com/Knograph/kno/issues/114)) ([b63079d](https://github.com/Knograph/kno/commit/b63079d262617a441384ba85d5bff0e36b0f5c63))
-* vendor cookbook entries — GitHub, Salesforce, HubSpot, Shopify, Stripe, Jira, Confluence, Notion ([#96](https://github.com/Knograph/kno/issues/96)) ([b2fcd98](https://github.com/Knograph/kno/commit/b2fcd982c3499d50aeea055a22075ee87f5392ac))
-* Zendesk cookbook recipe and the vendor-swap reference table ([#95](https://github.com/Knograph/kno/issues/95)) ([83a5c91](https://github.com/Knograph/kno/commit/83a5c918f479d645c65d2a43b4364158d26844d3))
+* extend the quickstart tape through select, export, and report ([#116](https://github.com/uknoAI/kno/issues/116)) ([9aaf1f9](https://github.com/uknoAI/kno/commit/9aaf1f99ff5913e3dc04af2d381a31a666f23a86))
+* ledger the parquet deferral with a trigger that can lapse ([#104](https://github.com/uknoAI/kno/issues/104)) ([9b084ed](https://github.com/uknoAI/kno/commit/9b084ed22f483703ce3b6d12005dffcc7181a781))
+* n8n cookbook entry — scheduled valuation with alerts ([#97](https://github.com/uknoAI/kno/issues/97)) ([13ab363](https://github.com/uknoAI/kno/commit/13ab3636477c1e4d21933e101ea7e84234bcc389))
+* plan the Braintrust, Hugging Face, and Bedrock/Vertex adapters ([#119](https://github.com/uknoAI/kno/issues/119)) ([5423116](https://github.com/uknoAI/kno/commit/542311608a4159222a7b58de06bfafd08365685c))
+* plan the Langfuse Evals adapter ([#106](https://github.com/uknoAI/kno/issues/106)) ([9775b16](https://github.com/uknoAI/kno/commit/9775b161673dc8fbe4362e6396730c432dd23113))
+* plan the report page and minimal TUI dashboard ([#105](https://github.com/uknoAI/kno/issues/105)) ([f03c8a8](https://github.com/uknoAI/kno/commit/f03c8a8bb74795a364f55b3d8c2940f79c4ae448))
+* record the v0.1 bump-policy decision — feat: keeps bumping patch ([#113](https://github.com/uknoAI/kno/issues/113)) ([2cf3b72](https://github.com/uknoAI/kno/commit/2cf3b72ac61d025599d2b0c8ae5e538921bc36d1))
+* rework the README around the data-valuation pitch ([#94](https://github.com/uknoAI/kno/issues/94)) ([4144be6](https://github.com/uknoAI/kno/commit/4144be63eb7d70c905682f4dc5a4a9eb2ccc7a94))
+* sweep the cookbook against the v0.1 CLI; add the Anthropic entry ([#117](https://github.com/uknoAI/kno/issues/117)) ([60d7608](https://github.com/uknoAI/kno/commit/60d7608e0eac7a2c8ae06e553257e25d5f2735a3))
+* the v0.1 ledger review — dispose four lapses, amend stale rows ([#114](https://github.com/uknoAI/kno/issues/114)) ([b63079d](https://github.com/uknoAI/kno/commit/b63079d262617a441384ba85d5bff0e36b0f5c63))
+* vendor cookbook entries — GitHub, Salesforce, HubSpot, Shopify, Stripe, Jira, Confluence, Notion ([#96](https://github.com/uknoAI/kno/issues/96)) ([b2fcd98](https://github.com/uknoAI/kno/commit/b2fcd982c3499d50aeea055a22075ee87f5392ac))
+* Zendesk cookbook recipe and the vendor-swap reference table ([#95](https://github.com/uknoAI/kno/issues/95)) ([83a5c91](https://github.com/uknoAI/kno/commit/83a5c918f479d645c65d2a43b4364158d26844d3))
 
 
 ### Build & Dependencies
 
-* **release:** re-enable the Homebrew brews block — tap and token are live ([#112](https://github.com/Knograph/kno/issues/112)) ([121440d](https://github.com/Knograph/kno/commit/121440de23545a42decd09eff2b9a6cfd454815e))
+* **release:** re-enable the Homebrew brews block — tap and token are live ([#112](https://github.com/uknoAI/kno/issues/112)) ([121440d](https://github.com/uknoAI/kno/commit/121440de23545a42decd09eff2b9a6cfd454815e))
 
-## [0.0.2](https://github.com/Knograph/kno/compare/v0.0.1...v0.0.2) (2026-08-27)
+## [0.0.2](https://github.com/uknoAI/kno/compare/v0.0.1...v0.0.2) (2026-08-27)
 
 
 ### Features
 
-* ship the Value stage — routing, paired measurement, kno value ([#66](https://github.com/Knograph/kno/issues/66)) ([1d96ce9](https://github.com/Knograph/kno/commit/1d96ce9f82b3abe9d9bb12fe72861fca8c26c342))
+* ship the Value stage — routing, paired measurement, kno value ([#66](https://github.com/uknoAI/kno/issues/66)) ([1d96ce9](https://github.com/uknoAI/kno/commit/1d96ce9f82b3abe9d9bb12fe72861fca8c26c342))
 
 
 ### Bug Fixes
 
-* cosign legacy sign format, store coverage determinism ([#68](https://github.com/Knograph/kno/issues/68)) ([62f7174](https://github.com/Knograph/kno/commit/62f7174a8dce19bf1916fae5364241a89a2dd9cb))
+* cosign legacy sign format, store coverage determinism ([#68](https://github.com/uknoAI/kno/issues/68)) ([62f7174](https://github.com/uknoAI/kno/commit/62f7174a8dce19bf1916fae5364241a89a2dd9cb))
 
-## [0.0.4](https://github.com/Knograph/kno/compare/v0.0.3...v0.0.4) (2026-08-28)
+## [0.0.4](https://github.com/uknoAI/kno/compare/v0.0.3...v0.0.4) (2026-08-28)
 
 ### Fixed
 
@@ -114,17 +114,17 @@ covenants — breaking any of them requires a major version.
 - **The Homebrew tap is live.** `brew tap knograph/tap && brew install kno` installs a
   SHA-256-pinned, release-built binary; goreleaser updates the formula on every release.
 
-## [0.0.2](https://github.com/Knograph/kno/compare/v0.0.1...v0.0.2) (2026-08-27)
+## [0.0.2](https://github.com/uknoAI/kno/compare/v0.0.1...v0.0.2) (2026-08-27)
 
 
 ### Features
 
-* ship the Value stage — routing, paired measurement, kno value ([#66](https://github.com/Knograph/kno/issues/66)) ([1d96ce9](https://github.com/Knograph/kno/commit/1d96ce9f82b3abe9d9bb12fe72861fca8c26c342))
+* ship the Value stage — routing, paired measurement, kno value ([#66](https://github.com/uknoAI/kno/issues/66)) ([1d96ce9](https://github.com/uknoAI/kno/commit/1d96ce9f82b3abe9d9bb12fe72861fca8c26c342))
 
 
 ### Bug Fixes
 
-* cosign legacy sign format, store coverage determinism ([#68](https://github.com/Knograph/kno/issues/68)) ([62f7174](https://github.com/Knograph/kno/commit/62f7174a8dce19bf1916fae5364241a89a2dd9cb))
+* cosign legacy sign format, store coverage determinism ([#68](https://github.com/uknoAI/kno/issues/68)) ([62f7174](https://github.com/uknoAI/kno/commit/62f7174a8dce19bf1916fae5364241a89a2dd9cb))
 
 ## v0.1.0 — in detail
 
@@ -360,76 +360,76 @@ covenants — breaking any of them requires a major version.
 
 ### Features
 
-* **adapters:** carry an Asset in the prompt, for context-injection measurement ([#56](https://github.com/Knograph/kno/issues/56)) ([a392923](https://github.com/Knograph/kno/commit/a392923a6267841e1a98b06492acf05b60f65429))
-* **adapters:** read Assets from a JSONL pool ([#55](https://github.com/Knograph/kno/issues/55)) ([db90e92](https://github.com/Knograph/kno/commit/db90e92ed0d1a712c3a62a84edff57cabbb4f5c0))
-* **agentref:** M2-4 — the agent-ref grammar, with the repo's first fuzz target ([#31](https://github.com/Knograph/kno/issues/31)) ([5fcaacf](https://github.com/Knograph/kno/commit/5fcaacfa06b8424ad1cde6d07ca8520c2a9a51d7))
-* **anthropic:** the Messages API adapter ([#37](https://github.com/Knograph/kno/issues/37)) ([e05810b](https://github.com/Knograph/kno/commit/e05810bb0a9c5bc1fd249347d9fd20015c7081c7))
-* **build:** enforce coverage floors and godoc coverage ([#9](https://github.com/Knograph/kno/issues/9)) ([bf924d2](https://github.com/Knograph/kno/commit/bf924d2e72de1b5edf1ca2d9685f29d0c8f11f69))
-* **cli:** kno baseline, the first user-facing command ([#22](https://github.com/Knograph/kno/issues/22)) ([8911c0a](https://github.com/Knograph/kno/commit/8911c0a5158cbf9686ad21cb2422c255b4cd9735))
-* **cli:** reach a real provider, and refuse to spend a number nobody can state ([#50](https://github.com/Knograph/kno/issues/50)) ([fabefca](https://github.com/Knograph/kno/commit/fabefca788ee42d1f2deeb36e7f8bbfeae42cb7d))
-* **core:** emit the concurrency decision and a progress heartbeat ([#42](https://github.com/Knograph/kno/issues/42)) ([1673d41](https://github.com/Knograph/kno/commit/1673d41460b71acf0cb779af2688cc2977526296))
-* **core:** end a run on a failure that cannot change within it ([#49](https://github.com/Knograph/kno/issues/49)) ([78268c0](https://github.com/Knograph/kno/commit/78268c0599cd40882de7f27acfc5159d25f066c5))
-* **core:** M2-2 — per-Case cost estimation and an observable cap breach ([#29](https://github.com/Knograph/kno/issues/29)) ([4c69810](https://github.com/Knograph/kno/commit/4c69810b9c61b2713436ae95097334e266076274))
-* **core:** M2-6 — the spend path a real provider call takes ([#33](https://github.com/Knograph/kno/issues/33)) ([a7b9112](https://github.com/Knograph/kno/commit/a7b91123877c88e119aad36e3af3b73b8950d2dd))
-* **core:** route Assets to Cases, and reserve the controls before routing runs ([#60](https://github.com/Knograph/kno/issues/60)) ([6226d11](https://github.com/Knograph/kno/commit/6226d117dc6a198adc7fc8daf3f10806d05b3f1f))
-* **core:** the Baseline stage, running end to end ([#21](https://github.com/Knograph/kno/issues/21)) ([9fca190](https://github.com/Knograph/kno/commit/9fca1907dbf1b3353a91e2a6a7b9a2eff79382b0))
-* **core:** the event spine — sequence discipline and RunResumed ([#40](https://github.com/Knograph/kno/issues/40)) ([c27ea03](https://github.com/Knograph/kno/commit/c27ea0301215bf67ab5f48f304f082b0ec7d12f0))
-* **core:** the Ring-0 contracts, error grammar, and iterator conformance harness ([#10](https://github.com/Knograph/kno/issues/10)) ([4893379](https://github.com/Knograph/kno/commit/4893379128dc8f5e5e82af5960e2191fff58874e))
-* **core:** the spend path, whole ([#43](https://github.com/Knograph/kno/issues/43)) ([fbdaf46](https://github.com/Knograph/kno/commit/fbdaf469aba1b5f4131f71c926e7458a968f629f))
-* **core:** write CaseExecution from what is durably recorded ([#46](https://github.com/Knograph/kno/issues/46)) ([6bb14a8](https://github.com/Knograph/kno/commit/6bb14a8bda39e7f88426e90ef911513843f0d062))
-* **evals:** JSONL adapter, deterministic split, and the holdout seal ([#19](https://github.com/Knograph/kno/issues/19)) ([1560ce3](https://github.com/Knograph/kno/commit/1560ce32a2b258777af383397ceb9dd7e6420863))
-* **executor:** bounded worker pool with a written shutdown protocol ([#20](https://github.com/Knograph/kno/issues/20)) ([f9b62d2](https://github.com/Knograph/kno/commit/f9b62d2f117e7740cc2ca4a6a8925f54796d95b4))
-* **observe:** trace every run, Case, and provider call without carrying content ([#51](https://github.com/Knograph/kno/issues/51)) ([13171e4](https://github.com/Knograph/kno/commit/13171e4df675ca2a0c5021bcdd87d12abc356cc1))
-* **openaicompat:** the first provider adapter ([#36](https://github.com/Knograph/kno/issues/36)) ([d0bf7f1](https://github.com/Knograph/kno/commit/d0bf7f15bd3d7ab5e0b8c15a3778952528d60bfb))
-* **proto:** add Goal Direction so the sign of every reported number is interpretable ([#8](https://github.com/Knograph/kno/issues/8)) ([e5d4b98](https://github.com/Knograph/kno/commit/e5d4b98780dfbd9159757cbd16161e1a846f2a65))
-* **proto:** ConcurrencyReduced and Run.scheduling ([#41](https://github.com/Knograph/kno/issues/41)) ([b5f49e4](https://github.com/Knograph/kno/commit/b5f49e434ab08d73e5a580cb72989f4b01c43c03))
-* **proto:** M2-0 — the schema for real provider adapters ([#25](https://github.com/Knograph/kno/issues/25)) ([35f77a7](https://github.com/Knograph/kno/commit/35f77a7b834e7c8bf6fccb66352f66721b84ddc8))
-* **proto:** report an overshoot's contribution, name a billed retry, and attribute orphaned spend ([#45](https://github.com/Knograph/kno/issues/45)) ([042eefd](https://github.com/Knograph/kno/commit/042eefdfc31631f0bdcc387879c663d5ac0fc631))
-* **proto:** Run and the event spine ([#17](https://github.com/Knograph/kno/issues/17)) ([0db0990](https://github.com/Knograph/kno/commit/0db0990469cda84bd755b701ff8f9fef767f16b1))
-* **proto:** the kno.v1 contract — Ring-0 schema and generated types (M0b) ([#2](https://github.com/Knograph/kno/issues/2)) ([8361e2a](https://github.com/Knograph/kno/commit/8361e2a4b69fffcbad25f9550f3c3b5470d3c2e5))
-* **proto:** the wire contract for the Value stage ([#53](https://github.com/Knograph/kno/issues/53)) ([02e8809](https://github.com/Knograph/kno/commit/02e8809c6e1f75afafbfa037cb61a994c8442a1b))
-* **stats:** confidence intervals on paired differences ([#54](https://github.com/Knograph/kno/issues/54)) ([938202b](https://github.com/Knograph/kno/commit/938202bdfc8f5309e2c4a74c2d99aa7b53512e77))
-* **stats:** the budget guard ([#14](https://github.com/Knograph/kno/issues/14)) ([2f0562e](https://github.com/Knograph/kno/commit/2f0562e2f534a4596416340c7815dd4c2d83f377))
-* **store:** hold a Value run, and stop the readers double-spending on it ([#57](https://github.com/Knograph/kno/issues/57)) ([52fed2d](https://github.com/Knograph/kno/commit/52fed2db8583793286b62094e49aa072609698a2))
-* **store:** M2-1 — schema migration, outcome columns, and kno purge ([#27](https://github.com/Knograph/kno/issues/27)) ([68fdfaa](https://github.com/Knograph/kno/commit/68fdfaab5ada57da37f421572a966dab4333f59a))
-* **store:** SQLite persistence for runs, outcomes, and events ([#18](https://github.com/Knograph/kno/issues/18)) ([da0b95b](https://github.com/Knograph/kno/commit/da0b95b3ee5392ff6130916d1d6939f8e196a642))
-* **transport:** M2-3 — the shared HTTP layer and its security boundary ([#30](https://github.com/Knograph/kno/issues/30)) ([eda666e](https://github.com/Knograph/kno/commit/eda666ed4eefff84558fa5272fa77de0b370fcea))
+* **adapters:** carry an Asset in the prompt, for context-injection measurement ([#56](https://github.com/uknoAI/kno/issues/56)) ([a392923](https://github.com/uknoAI/kno/commit/a392923a6267841e1a98b06492acf05b60f65429))
+* **adapters:** read Assets from a JSONL pool ([#55](https://github.com/uknoAI/kno/issues/55)) ([db90e92](https://github.com/uknoAI/kno/commit/db90e92ed0d1a712c3a62a84edff57cabbb4f5c0))
+* **agentref:** M2-4 — the agent-ref grammar, with the repo's first fuzz target ([#31](https://github.com/uknoAI/kno/issues/31)) ([5fcaacf](https://github.com/uknoAI/kno/commit/5fcaacfa06b8424ad1cde6d07ca8520c2a9a51d7))
+* **anthropic:** the Messages API adapter ([#37](https://github.com/uknoAI/kno/issues/37)) ([e05810b](https://github.com/uknoAI/kno/commit/e05810bb0a9c5bc1fd249347d9fd20015c7081c7))
+* **build:** enforce coverage floors and godoc coverage ([#9](https://github.com/uknoAI/kno/issues/9)) ([bf924d2](https://github.com/uknoAI/kno/commit/bf924d2e72de1b5edf1ca2d9685f29d0c8f11f69))
+* **cli:** kno baseline, the first user-facing command ([#22](https://github.com/uknoAI/kno/issues/22)) ([8911c0a](https://github.com/uknoAI/kno/commit/8911c0a5158cbf9686ad21cb2422c255b4cd9735))
+* **cli:** reach a real provider, and refuse to spend a number nobody can state ([#50](https://github.com/uknoAI/kno/issues/50)) ([fabefca](https://github.com/uknoAI/kno/commit/fabefca788ee42d1f2deeb36e7f8bbfeae42cb7d))
+* **core:** emit the concurrency decision and a progress heartbeat ([#42](https://github.com/uknoAI/kno/issues/42)) ([1673d41](https://github.com/uknoAI/kno/commit/1673d41460b71acf0cb779af2688cc2977526296))
+* **core:** end a run on a failure that cannot change within it ([#49](https://github.com/uknoAI/kno/issues/49)) ([78268c0](https://github.com/uknoAI/kno/commit/78268c0599cd40882de7f27acfc5159d25f066c5))
+* **core:** M2-2 — per-Case cost estimation and an observable cap breach ([#29](https://github.com/uknoAI/kno/issues/29)) ([4c69810](https://github.com/uknoAI/kno/commit/4c69810b9c61b2713436ae95097334e266076274))
+* **core:** M2-6 — the spend path a real provider call takes ([#33](https://github.com/uknoAI/kno/issues/33)) ([a7b9112](https://github.com/uknoAI/kno/commit/a7b91123877c88e119aad36e3af3b73b8950d2dd))
+* **core:** route Assets to Cases, and reserve the controls before routing runs ([#60](https://github.com/uknoAI/kno/issues/60)) ([6226d11](https://github.com/uknoAI/kno/commit/6226d117dc6a198adc7fc8daf3f10806d05b3f1f))
+* **core:** the Baseline stage, running end to end ([#21](https://github.com/uknoAI/kno/issues/21)) ([9fca190](https://github.com/uknoAI/kno/commit/9fca1907dbf1b3353a91e2a6a7b9a2eff79382b0))
+* **core:** the event spine — sequence discipline and RunResumed ([#40](https://github.com/uknoAI/kno/issues/40)) ([c27ea03](https://github.com/uknoAI/kno/commit/c27ea0301215bf67ab5f48f304f082b0ec7d12f0))
+* **core:** the Ring-0 contracts, error grammar, and iterator conformance harness ([#10](https://github.com/uknoAI/kno/issues/10)) ([4893379](https://github.com/uknoAI/kno/commit/4893379128dc8f5e5e82af5960e2191fff58874e))
+* **core:** the spend path, whole ([#43](https://github.com/uknoAI/kno/issues/43)) ([fbdaf46](https://github.com/uknoAI/kno/commit/fbdaf469aba1b5f4131f71c926e7458a968f629f))
+* **core:** write CaseExecution from what is durably recorded ([#46](https://github.com/uknoAI/kno/issues/46)) ([6bb14a8](https://github.com/uknoAI/kno/commit/6bb14a8bda39e7f88426e90ef911513843f0d062))
+* **evals:** JSONL adapter, deterministic split, and the holdout seal ([#19](https://github.com/uknoAI/kno/issues/19)) ([1560ce3](https://github.com/uknoAI/kno/commit/1560ce32a2b258777af383397ceb9dd7e6420863))
+* **executor:** bounded worker pool with a written shutdown protocol ([#20](https://github.com/uknoAI/kno/issues/20)) ([f9b62d2](https://github.com/uknoAI/kno/commit/f9b62d2f117e7740cc2ca4a6a8925f54796d95b4))
+* **observe:** trace every run, Case, and provider call without carrying content ([#51](https://github.com/uknoAI/kno/issues/51)) ([13171e4](https://github.com/uknoAI/kno/commit/13171e4df675ca2a0c5021bcdd87d12abc356cc1))
+* **openaicompat:** the first provider adapter ([#36](https://github.com/uknoAI/kno/issues/36)) ([d0bf7f1](https://github.com/uknoAI/kno/commit/d0bf7f15bd3d7ab5e0b8c15a3778952528d60bfb))
+* **proto:** add Goal Direction so the sign of every reported number is interpretable ([#8](https://github.com/uknoAI/kno/issues/8)) ([e5d4b98](https://github.com/uknoAI/kno/commit/e5d4b98780dfbd9159757cbd16161e1a846f2a65))
+* **proto:** ConcurrencyReduced and Run.scheduling ([#41](https://github.com/uknoAI/kno/issues/41)) ([b5f49e4](https://github.com/uknoAI/kno/commit/b5f49e434ab08d73e5a580cb72989f4b01c43c03))
+* **proto:** M2-0 — the schema for real provider adapters ([#25](https://github.com/uknoAI/kno/issues/25)) ([35f77a7](https://github.com/uknoAI/kno/commit/35f77a7b834e7c8bf6fccb66352f66721b84ddc8))
+* **proto:** report an overshoot's contribution, name a billed retry, and attribute orphaned spend ([#45](https://github.com/uknoAI/kno/issues/45)) ([042eefd](https://github.com/uknoAI/kno/commit/042eefdfc31631f0bdcc387879c663d5ac0fc631))
+* **proto:** Run and the event spine ([#17](https://github.com/uknoAI/kno/issues/17)) ([0db0990](https://github.com/uknoAI/kno/commit/0db0990469cda84bd755b701ff8f9fef767f16b1))
+* **proto:** the kno.v1 contract — Ring-0 schema and generated types (M0b) ([#2](https://github.com/uknoAI/kno/issues/2)) ([8361e2a](https://github.com/uknoAI/kno/commit/8361e2a4b69fffcbad25f9550f3c3b5470d3c2e5))
+* **proto:** the wire contract for the Value stage ([#53](https://github.com/uknoAI/kno/issues/53)) ([02e8809](https://github.com/uknoAI/kno/commit/02e8809c6e1f75afafbfa037cb61a994c8442a1b))
+* **stats:** confidence intervals on paired differences ([#54](https://github.com/uknoAI/kno/issues/54)) ([938202b](https://github.com/uknoAI/kno/commit/938202bdfc8f5309e2c4a74c2d99aa7b53512e77))
+* **stats:** the budget guard ([#14](https://github.com/uknoAI/kno/issues/14)) ([2f0562e](https://github.com/uknoAI/kno/commit/2f0562e2f534a4596416340c7815dd4c2d83f377))
+* **store:** hold a Value run, and stop the readers double-spending on it ([#57](https://github.com/uknoAI/kno/issues/57)) ([52fed2d](https://github.com/uknoAI/kno/commit/52fed2db8583793286b62094e49aa072609698a2))
+* **store:** M2-1 — schema migration, outcome columns, and kno purge ([#27](https://github.com/uknoAI/kno/issues/27)) ([68fdfaa](https://github.com/uknoAI/kno/commit/68fdfaab5ada57da37f421572a966dab4333f59a))
+* **store:** SQLite persistence for runs, outcomes, and events ([#18](https://github.com/uknoAI/kno/issues/18)) ([da0b95b](https://github.com/uknoAI/kno/commit/da0b95b3ee5392ff6130916d1d6939f8e196a642))
+* **transport:** M2-3 — the shared HTTP layer and its security boundary ([#30](https://github.com/uknoAI/kno/issues/30)) ([eda666e](https://github.com/uknoAI/kno/commit/eda666ed4eefff84558fa5272fa77de0b370fcea))
 
 
 ### Bug Fixes
 
-* **build:** guard record-fixtures against unmetered live spend ([#23](https://github.com/Knograph/kno/issues/23)) ([976a42b](https://github.com/Knograph/kno/commit/976a42bc8dd7e4a0f547849c83f5f693be1736f1))
-* **build:** make gate recipes enforce failure without relying on .SHELLFLAGS ([#7](https://github.com/Knograph/kno/issues/7)) ([199ea63](https://github.com/Knograph/kno/commit/199ea63d8b3f50924d92a8543d18f7066c6f31eb))
-* **ci:** make the coverage baseline the floor across platforms ([#26](https://github.com/Knograph/kno/issues/26)) ([b029d55](https://github.com/Knograph/kno/commit/b029d55948d7e180bdaa893ab70dba19220b6589))
-* **ci:** one toolchain, a correct cache key, and actions off Node 20 ([#11](https://github.com/Knograph/kno/issues/11)) ([c9fa189](https://github.com/Knograph/kno/commit/c9fa1898e0ff2d0de1946e48fbe595cbc38654ae))
-* **core:** quote a resumed run against the money it has left ([#39](https://github.com/Knograph/kno/issues/39)) ([ecd8b68](https://github.com/Knograph/kno/commit/ecd8b682b0e8d164a87a397e26ebfa7e03266d9f))
-* **executor:** bound the drain after cancellation, not the run ([#47](https://github.com/Knograph/kno/issues/47)) ([e63628f](https://github.com/Knograph/kno/commit/e63628f72c0f44252215975d3bf53910062dc9a1))
-* **pricing:** refuse a variant suffix rather than pricing it as its base ([#35](https://github.com/Knograph/kno/issues/35)) ([0d49f0d](https://github.com/Knograph/kno/commit/0d49f0d7e7e08b6776277b5f7dfc119fde563274))
-* report a resumed run's mean over the whole run ([#34](https://github.com/Knograph/kno/issues/34)) ([8a30dbe](https://github.com/Knograph/kno/commit/8a30dbe2fee27930249fd1a349ffaf764b600a26))
-* **stats:** restore budget state on resume ([#16](https://github.com/Knograph/kno/issues/16)) ([1cc8ffc](https://github.com/Knograph/kno/commit/1cc8ffc2a1f0e30a745f9a6694b9a4d9759c3844))
-* **store:** make spend durable when a Case never produces an outcome ([#44](https://github.com/Knograph/kno/issues/44)) ([937294f](https://github.com/Knograph/kno/commit/937294fb71df0349445de94f11286a56766d5708))
-* **store:** two kno processes opening one database could fail to start ([#28](https://github.com/Knograph/kno/issues/28)) ([acdc9b1](https://github.com/Knograph/kno/commit/acdc9b146ac7dbf21c35ab072f32e2c4fd6bb074))
+* **build:** guard record-fixtures against unmetered live spend ([#23](https://github.com/uknoAI/kno/issues/23)) ([976a42b](https://github.com/uknoAI/kno/commit/976a42bc8dd7e4a0f547849c83f5f693be1736f1))
+* **build:** make gate recipes enforce failure without relying on .SHELLFLAGS ([#7](https://github.com/uknoAI/kno/issues/7)) ([199ea63](https://github.com/uknoAI/kno/commit/199ea63d8b3f50924d92a8543d18f7066c6f31eb))
+* **ci:** make the coverage baseline the floor across platforms ([#26](https://github.com/uknoAI/kno/issues/26)) ([b029d55](https://github.com/uknoAI/kno/commit/b029d55948d7e180bdaa893ab70dba19220b6589))
+* **ci:** one toolchain, a correct cache key, and actions off Node 20 ([#11](https://github.com/uknoAI/kno/issues/11)) ([c9fa189](https://github.com/uknoAI/kno/commit/c9fa1898e0ff2d0de1946e48fbe595cbc38654ae))
+* **core:** quote a resumed run against the money it has left ([#39](https://github.com/uknoAI/kno/issues/39)) ([ecd8b68](https://github.com/uknoAI/kno/commit/ecd8b682b0e8d164a87a397e26ebfa7e03266d9f))
+* **executor:** bound the drain after cancellation, not the run ([#47](https://github.com/uknoAI/kno/issues/47)) ([e63628f](https://github.com/uknoAI/kno/commit/e63628f72c0f44252215975d3bf53910062dc9a1))
+* **pricing:** refuse a variant suffix rather than pricing it as its base ([#35](https://github.com/uknoAI/kno/issues/35)) ([0d49f0d](https://github.com/uknoAI/kno/commit/0d49f0d7e7e08b6776277b5f7dfc119fde563274))
+* report a resumed run's mean over the whole run ([#34](https://github.com/uknoAI/kno/issues/34)) ([8a30dbe](https://github.com/uknoAI/kno/commit/8a30dbe2fee27930249fd1a349ffaf764b600a26))
+* **stats:** restore budget state on resume ([#16](https://github.com/uknoAI/kno/issues/16)) ([1cc8ffc](https://github.com/uknoAI/kno/commit/1cc8ffc2a1f0e30a745f9a6694b9a4d9759c3844))
+* **store:** make spend durable when a Case never produces an outcome ([#44](https://github.com/uknoAI/kno/issues/44)) ([937294f](https://github.com/uknoAI/kno/commit/937294fb71df0349445de94f11286a56766d5708))
+* **store:** two kno processes opening one database could fail to start ([#28](https://github.com/uknoAI/kno/issues/28)) ([acdc9b1](https://github.com/uknoAI/kno/commit/acdc9b146ac7dbf21c35ab072f32e2c4fd6bb074))
 
 
 ### Refactoring
 
-* **core:** split baseline.go along its seams ([#38](https://github.com/Knograph/kno/issues/38)) ([2a149ca](https://github.com/Knograph/kno/commit/2a149ca78372b6116ed8c78ec4f9943909a6cd10))
+* **core:** split baseline.go along its seams ([#38](https://github.com/uknoAI/kno/issues/38)) ([2a149ca](https://github.com/uknoAI/kno/commit/2a149ca78372b6116ed8c78ec4f9943909a6cd10))
 
 
 ### Documentation
 
-* initial repo scaffold with design and operating manual ([b5ea55c](https://github.com/Knograph/kno/commit/b5ea55c861f97d274d90e6cd1d151436fa699906))
-* plan M2-11, the PR that makes the adapters reachable ([#48](https://github.com/Knograph/kno/issues/48)) ([b7984f2](https://github.com/Knograph/kno/commit/b7984f21415a5aa96b943ec221ee60c884b93459))
-* plan the Value stage ([#52](https://github.com/Knograph/kno/issues/52)) ([3ced7e0](https://github.com/Knograph/kno/commit/3ced7e04243ac516a93c592bfef3b47b00ccbdc3))
-* **plan:** M1 Baseline plan, amended after Phase-1 review ([#15](https://github.com/Knograph/kno/issues/15)) ([c854f0a](https://github.com/Knograph/kno/commit/c854f0aaf0bb1591c8fc1f091be1a0c0d4300771))
-* **plans:** M2 — the first real provider adapter ([#24](https://github.com/Knograph/kno/issues/24)) ([9bdc951](https://github.com/Knograph/kno/commit/9bdc95120b39f3da604bff55c4dee928bab18d31))
-* stop the 0.0.1 changelog shipping under an Unreleased heading ([#63](https://github.com/Knograph/kno/issues/63)) ([7a2d94f](https://github.com/Knograph/kno/commit/7a2d94fd7e7d7958a5c1a5ae4976e845f7b5d63d))
+* initial repo scaffold with design and operating manual ([b5ea55c](https://github.com/uknoAI/kno/commit/b5ea55c861f97d274d90e6cd1d151436fa699906))
+* plan M2-11, the PR that makes the adapters reachable ([#48](https://github.com/uknoAI/kno/issues/48)) ([b7984f2](https://github.com/uknoAI/kno/commit/b7984f21415a5aa96b943ec221ee60c884b93459))
+* plan the Value stage ([#52](https://github.com/uknoAI/kno/issues/52)) ([3ced7e0](https://github.com/uknoAI/kno/commit/3ced7e04243ac516a93c592bfef3b47b00ccbdc3))
+* **plan:** M1 Baseline plan, amended after Phase-1 review ([#15](https://github.com/uknoAI/kno/issues/15)) ([c854f0a](https://github.com/uknoAI/kno/commit/c854f0aaf0bb1591c8fc1f091be1a0c0d4300771))
+* **plans:** M2 — the first real provider adapter ([#24](https://github.com/uknoAI/kno/issues/24)) ([9bdc951](https://github.com/uknoAI/kno/commit/9bdc95120b39f3da604bff55c4dee928bab18d31))
+* stop the 0.0.1 changelog shipping under an Unreleased heading ([#63](https://github.com/uknoAI/kno/issues/63)) ([7a2d94f](https://github.com/uknoAI/kno/commit/7a2d94fd7e7d7958a5c1a5ae4976e845f7b5d63d))
 
 
 ### Build & Dependencies
 
-* repository foundation — gates, governance, and process machinery (M0a) ([#1](https://github.com/Knograph/kno/issues/1)) ([fb55946](https://github.com/Knograph/kno/commit/fb559461eac9481fe0be4242e31eb1b6f6e97a53))
-* sign, attest and publish what a tag produces ([#59](https://github.com/Knograph/kno/issues/59)) ([7b4971a](https://github.com/Knograph/kno/commit/7b4971aca34c808b2a30ab3a50fb088fc4736ad2))
+* repository foundation — gates, governance, and process machinery (M0a) ([#1](https://github.com/uknoAI/kno/issues/1)) ([fb55946](https://github.com/uknoAI/kno/commit/fb559461eac9481fe0be4242e31eb1b6f6e97a53))
+* sign, attest and publish what a tag produces ([#59](https://github.com/uknoAI/kno/issues/59)) ([7b4971a](https://github.com/uknoAI/kno/commit/7b4971aca34c808b2a30ab3a50fb088fc4736ad2))
 
 ## 0.0.1 — in detail
 
@@ -1619,4 +1619,4 @@ covenants — breaking any of them requires a major version.
   time, for up to twice the intended spend across one kill/resume cycle. `Guard.Restore` reseeds
   settled spend from the store, which is the only thing that outlives the process.
 
-[Unreleased]: https://github.com/knograph/kno/commits/main
+[Unreleased]: https://github.com/uknoAI/kno/commits/main

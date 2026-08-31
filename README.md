@@ -83,12 +83,12 @@ old_refund_policy.md      -9%     reject → harmful
 ## Install
 
 ```bash
-curl -sSfL https://raw.githubusercontent.com/knograph/kno/main/install.sh | sh
+curl -sSfL https://raw.githubusercontent.com/uknoAI/kno/main/install.sh | sh
 ```
 
 The script picks the right build for your platform, **verifies the SHA-256 checksum**, verifies the cosign signature if you have `cosign` installed, and drops the binary on your PATH. It is short and worth reading before you pipe it anywhere.
 
-Or take the archive yourself from [Releases](https://github.com/knograph/kno/releases) — macOS, Linux and Windows, amd64 and arm64. Or build from source:
+Or take the archive yourself from [Releases](https://github.com/uknoAI/kno/releases) — macOS, Linux and Windows, amd64 and arm64. Or build from source:
 
 ```bash
 go install github.com/knograph/kno/cmd/kno@latest
@@ -99,7 +99,7 @@ A `go install` binary reports the module version with no commit or date — `kno
 Homebrew:
 
 ```sh
-brew tap knograph/tap
+brew tap uknoAI/homebrew-tap
 brew install kno
 ```
 
@@ -244,13 +244,13 @@ Every release ships a `checksums.txt`, a keyless [cosign](https://docs.sigstore.
 ```bash
 cosign verify-blob checksums.txt \
   --new-bundle-format --bundle checksums.txt.bundle \
-  --certificate-identity-regexp '^https://github\.com/[Kk]nograph/kno/\.github/workflows/release\.yml@refs/tags/.+$' \
+  --certificate-identity-regexp '^https://github\.com/uknoAI/kno/\.github/workflows/release\.yml@refs/tags/.+$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
 grep " kno_<version>_<os>_<arch>.tar.gz$" checksums.txt | shasum -a 256 -c -
 
-gh attestation verify kno_<version>_<os>_<arch>.tar.gz --repo Knograph/kno \
-  --signer-workflow knograph/kno/.github/workflows/release.yml
+gh attestation verify kno_<version>_<os>_<arch>.tar.gz --repo uknoAI/kno \
+  --signer-workflow uknoAI/kno/.github/workflows/release.yml
 ```
 
 Both identity flags are the part that matters. Without `--certificate-identity-regexp`, `verify-blob` accepts a valid signature from anyone; without `--signer-workflow`, `attestation verify` accepts an attestation from any workflow in the repository. The checksum line is written with `grep`+`shasum` rather than `sha256sum --ignore-missing` because macOS ships neither.
