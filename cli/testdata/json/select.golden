@@ -1,0 +1,9 @@
+budget: object
+guarded: boolean
+rejected: array
+run_id: string
+selected: null
+source_run_id: string
+source_status: string
+status: string
+total_cost: object

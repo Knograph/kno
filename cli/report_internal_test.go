@@ -415,7 +415,19 @@ Export run ` + "`export-1`" + ` (completed)
 
 _This list is a discovery aid, not a test — with 4 clusters, as many as 4 of these verdicts can be noise under screening._
 
-_Recorded aggregates only: no LLM calls, no evals re-read, no trace content._
+## Cost
+
+| Stage | Run | Spent | LLM calls |
+|---|---|---|---|
+| baseline | ` + "`baseline-1`" + ` | $0.00 | 0 |
+| value | ` + "`value-1`" + ` | $0.00 | 0 |
+| **total** | | **$0.00** | **0** |
+
+_Select and export make no LLM calls and are absent from this table rather than listed at zero._
+
+_Both runs were metered and settled nothing — a zero measured, not a missing meter. The call counts above are what the meter counted._
+
+_Recorded aggregates only: no LLM calls, no evals re-read, no trace content — the money above was spent by the runs named, not by this page._
 `
 	if got != want {
 		t.Errorf("markdown mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)

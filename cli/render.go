@@ -176,7 +176,7 @@ func render(
 	if f.jsonOut {
 		return renderJSON(out, f, opts, res, counts, runID, warnings)
 	}
-	return renderHuman(out, res, counts, runID, warnings)
+	return renderHuman(out, res, counts, runID, warnings, f.resume)
 }
 
 // warningsFor collects the caveats that must travel with a result.
@@ -213,6 +213,7 @@ func renderHuman(
 	counts jsonl.SplitCounts,
 	runID string,
 	warnings []string,
+	resumed bool,
 ) error {
 	run := res.Run
 
@@ -239,8 +240,13 @@ func renderHuman(
 	} else {
 		b.WriteString("  score      none\n")
 	}
-	fmt.Fprintf(&b, "  spent      %s over %d call(s)\n",
-		formatUSD(res.Spent.CostUSDMicros), res.Spent.Calls)
+	// Through the shared renderer: one spend block, one set of words, for
+	// every stage that spends. The line it writes is byte-identical to the
+	// one this function used to write inline.
+	if err := spendLines(&b, res.Spent,
+		run.GetCaseExecution().GetUsageEstimatedCaseCount(), resumed); err != nil {
+		return err
+	}
 	fmt.Fprintf(&b, "  status     %s\n", statusName(run.GetStatus()))
 
 	// The width the run actually executed at, but ONLY when the engine chose a

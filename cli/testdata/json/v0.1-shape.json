@@ -1,0 +1,60 @@
+{
+  "_readme": [
+    "FROZEN. Do not regenerate this file; it is not a golden.",
+    "It is the shape kno's --json contract emitted at the v0.1.0 tag: one entry per key",
+    "that v0.1.0 emitted UNCONDITIONALLY, with the JSON type it emitted. Derived from",
+    "the struct tags of jsonReport, valueReport, selectReport, exportReport and",
+    "reportJSON in cli/jsonreport.go at v0.1.0. Keys tagged omitempty there are absent",
+    "here, because their absence is legal and pinning them would fail on legal output.",
+    "TestV01ShapeIsStillASubset asserts every key below still exists with the same type.",
+    "A PR that edits this file is renaming, removing or retyping a released key and owes",
+    "a CHANGELOG migration note per ADR-0006 rule 2. Adding keys to the output is free;",
+    "adding them here is not, and is not what this file is for."
+  ],
+  "baseline": {
+    "run_id": "string",
+    "status": "string",
+    "agent": "string",
+    "goal": "string",
+    "dev_cases": "number",
+    "holdout_cases": "number",
+    "attempted": "number",
+    "scored": "number",
+    "errored": "number",
+    "score": "number|null",
+    "spent_usd": "string",
+    "concurrency": "number"
+  },
+  "value": {
+    "run_id": "string",
+    "status": "string",
+    "goal_direction": "string",
+    "valuations": "array|null"
+  },
+  "select": {
+    "run_id": "string",
+    "status": "string",
+    "source_run_id": "string",
+    "source_status": "string",
+    "budget": "object",
+    "selected": "array|null",
+    "rejected": "array|null",
+    "total_cost": "object"
+  },
+  "export": {
+    "run_id": "string",
+    "status": "string",
+    "select_run_id": "string",
+    "destination": "string",
+    "asset_count": "number",
+    "bytes_written": "number",
+    "path": "string",
+    "manifest_path": "string"
+  },
+  "report": {
+    "value_run_id": "string",
+    "value_status": "string",
+    "baseline": "object",
+    "assets": "array|null"
+  }
+}

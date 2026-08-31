@@ -112,6 +112,21 @@ type ValueResult struct {
 	// MINIMIZE deltas for display: the stored delta is sign-corrected
 	// (positive is better), and the display wants the goal's own units.
 	GoalDirection knov1.Direction
+
+	// Spent is what the run actually cost, settled.
+	//
+	// Carried here rather than on the Run for BaselineResult.Spent's reason:
+	// it is the guard's number, not the schema's, and a caller reporting
+	// spend should read what the guard settled rather than re-deriving it
+	// from stored measurements. On a resumed run it is run-lifetime spend —
+	// Guard.Restore is additive and openRun seeds it from SettledSpend before
+	// anything is authorized — because the run, not the session, is the unit
+	// the user authorized.
+	//
+	// Populated on EVERY path that returns a non-nil result, including the
+	// error paths: a run that spent real money and then failed for a reason
+	// that has nothing to do with money still owes the caller the figure.
+	Spent budget.Spend
 }
 
 // errNoInjection is returned when the agent cannot carry an Asset.

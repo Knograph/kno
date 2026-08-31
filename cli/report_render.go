@@ -163,7 +163,14 @@ func buildReportMarkdown(d *reportData) string {
 		}
 	}
 
-	b.WriteString("\n_Recorded aggregates only: no LLM calls, no evals re-read, no trace content._\n")
+	// The answer to "what did knowing this cost me?" — the ROI frame the
+	// design's success criterion is built on, and a question the tool could
+	// not answer before, because the number is a sum across runs and no
+	// single stage holds them all.
+	spendCostSection(&b, d.Spend)
+
+	b.WriteString("\n_Recorded aggregates only: no LLM calls, no evals re-read, no trace content — " +
+		"the money above was spent by the runs named, not by this page._\n")
 	return b.String()
 }
 

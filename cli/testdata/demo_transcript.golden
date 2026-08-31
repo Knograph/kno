@@ -15,6 +15,8 @@ brand-guide   +0.0000  [-0.3960, +0.3960]   low -0.5815 (underpowered)
 refund-policy-v3  +0.0000  [-0.3960, +0.3960]   low -0.5815 (underpowered)  
 ship-promise  +0.0000  [-0.3960, +0.3960]   low -0.5815 (underpowered)  
 
+  spent      $0.00 over 36 call(s)
+
 Scores and traces are recorded. `kno purge` removes trace content when you no longer need it.
 Select run demo-select (RUN_STATUS_COMPLETED)
   source    demo-value (completed)

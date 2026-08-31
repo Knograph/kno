@@ -31,14 +31,14 @@ func renderValue(
 		dir = -1.0
 	}
 	if f.jsonOut {
-		return renderValueJSON(out, res, runID, dir)
+		return renderValueJSON(out, res, runID, dir, f.resume)
 	}
-	return renderValueHuman(out, res, runID, dir)
+	return renderValueHuman(out, res, runID, dir, f.resume)
 }
 
 // renderValueHuman prints one line per Asset: the delta with its interval,
 // the harm bound, and the reason when there is no number.
-func renderValueHuman(out io.Writer, res *core.ValueResult, runID string, dir float64) error {
+func renderValueHuman(out io.Writer, res *core.ValueResult, runID string, dir float64, resumed bool) error {
 	if _, err := fmt.Fprintf(out, "Value run %s (%s)\n\n", runID, res.Status); err != nil {
 		return err
 	}
@@ -79,6 +79,15 @@ func renderValueHuman(out io.Writer, res *core.ValueResult, runID string, dir fl
 			v.GetAssetId(), delta, control, note); err != nil {
 			return err
 		}
+	}
+	// The motivating bug, closed: the stage that spends the most money said
+	// nothing about spending. The block is the same one baseline prints,
+	// through the same renderer, so the two stages cannot drift.
+	if _, err := fmt.Fprintln(out); err != nil {
+		return err
+	}
+	if err := spendLines(out, res.Spent, 0, resumed); err != nil {
+		return err
 	}
 	_, err := fmt.Fprintln(out, "\nScores and traces are recorded. `kno purge` removes trace content when you no longer need it.")
 	return err

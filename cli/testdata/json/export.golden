@@ -1,0 +1,9 @@
+asset_count: number
+bytes_written: number
+destination: string
+guarded: boolean
+manifest_path: string
+path: string
+run_id: string
+select_run_id: string
+status: string

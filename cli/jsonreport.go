@@ -51,8 +51,13 @@ type jsonReport struct {
 	// cannot tell a run that scored nothing from one whose numbers cannot be
 	// read back, and those call for different responses: the first is a broken
 	// run, the second is intact data with a lost measurement.
-	ScoreUnavailable bool   `json:"score_unavailable,omitempty"`
-	SpentUSD         string `json:"spent_usd"`
+	ScoreUnavailable bool `json:"score_unavailable,omitempty"`
+
+	// The spend block, embedded so its keys flatten to the top level and the
+	// released spent_usd key keeps both its name and its position. Every key
+	// beside it is an addition, which ADR-0006 rule 2 permits; nothing here is
+	// renamed or retyped.
+	spendReport
 
 	// EstimatedUSD is what the run expected to spend before it started.
 	//
@@ -102,10 +107,11 @@ func renderJSON(
 		Errored:          res.Run.GetCaseExecution().GetErroredCaseCount(),
 		Score:            res.AggregateScore,
 		ScoreUnavailable: res.AggregateUnavailable,
-		SpentUSD:         formatUSD(res.Spent.CostUSDMicros),
-		WeakLabelCases:   res.Run.GetWeakLabelCaseCount(),
-		Incomplete:       res.Run.GetIncompleteReason(),
-		Warnings:         warnings,
+		spendReport: newSpendReport(res.Spent,
+			res.Run.GetCaseExecution().GetUsageEstimatedCaseCount(), f.resume),
+		WeakLabelCases: res.Run.GetWeakLabelCaseCount(),
+		Incomplete:     res.Run.GetIncompleteReason(),
+		Warnings:       warnings,
 	}
 	concurrencyFields(&rep, res.Run)
 	if perCall := core.PlanningCostPerCall(opts); perCall > 0 {
@@ -183,10 +189,17 @@ func decodeRaw(b []byte) (map[string]any, error) {
 // as jsonReport: a hand-written shape aimed at a jq pipeline, not a kno.v1
 // type.
 type valueReport struct {
-	RunID         string                 `json:"run_id"`
-	Status        string                 `json:"status"`
-	GoalDirection string                 `json:"goal_direction"`
-	Valuations    []valueReportValuation `json:"valuations"`
+	RunID         string `json:"run_id"`
+	Status        string `json:"status"`
+	GoalDirection string `json:"goal_direction"`
+
+	// The same embedded block baseline emits, with the same keys. Value is
+	// the expensive stage — DESIGN.md sizes a routed valuation at $15–40
+	// against a baseline's fraction of a dollar — and it reported nothing
+	// about money until this block existed.
+	spendReport
+
+	Valuations []valueReportValuation `json:"valuations"`
 }
 
 type valueReportValuation struct {
@@ -204,8 +217,17 @@ type valueReportValuation struct {
 }
 
 // renderValueJSON emits the machine-readable Value report.
-func renderValueJSON(out io.Writer, res *core.ValueResult, runID string, dir float64) error {
-	rep := valueReport{RunID: runID, Status: res.Status.String(), GoalDirection: res.GoalDirection.String()}
+func renderValueJSON(out io.Writer, res *core.ValueResult, runID string, dir float64, resumed bool) error {
+	rep := valueReport{
+		RunID:         runID,
+		Status:        res.Status.String(),
+		GoalDirection: res.GoalDirection.String(),
+		// Value records no usage-estimated count today (core/value_loop.go
+		// writes attempted/scored/errored only), so the qualifier is
+		// structurally zero here rather than suppressed. See the plan's
+		// accepted risks.
+		spendReport: newSpendReport(res.Spent, 0, resumed),
+	}
 	for _, v := range res.Valuations {
 		row := valueReportValuation{
 			AssetID:     v.GetAssetId(),
@@ -244,8 +266,21 @@ func renderValueJSON(out io.Writer, res *core.ValueResult, runID string, dir flo
 // CLI contract aimed at somebody's jq pipeline, hand-written for the same
 // reason as the reports above (ADR-0001).
 type selectReport struct {
-	RunID        string                  `json:"run_id"`
-	Status       string                  `json:"status"`
+	RunID  string `json:"run_id"`
+	Status string `json:"status"`
+
+	// Guarded is false and constant: select ran no budget guard, made no LLM
+	// call, and has no spend to report. Stated rather than left to be
+	// inferred from the absent spend keys — a missing key and an explicit
+	// null are the same value to jq, so absence on its own is a fact the
+	// document does not carry. The measurement select ranks was paid for by
+	// the Value run named in source_run_id.
+	//
+	// max_cost_usd below and acquisition_usd in total_cost are NOT run spend:
+	// the first is the cap the Portfolio was built under, the second is the
+	// carrying cost of the selected Assets. Both keep their v0.1 meanings.
+	Guarded bool `json:"guarded"`
+
 	SourceRunID  string                  `json:"source_run_id"`
 	SourceStatus string                  `json:"source_status"`
 	Budget       selectReportBudget      `json:"budget"`
@@ -304,6 +339,7 @@ func renderSelectJSON(out io.Writer, res *core.SelectResult) error {
 	rep := selectReport{
 		RunID:        res.RunID,
 		Status:       res.Status.String(),
+		Guarded:      false,
 		SourceRunID:  p.GetSourceRunId(),
 		SourceStatus: statusName(p.GetSourceStatus()),
 		Budget: selectReportBudget{
@@ -351,8 +387,13 @@ func renderSelectJSON(out io.Writer, res *core.SelectResult) error {
 
 // exportReport is the JSON shape of an Export run.
 type exportReport struct {
-	RunID        string `json:"run_id"`
-	Status       string `json:"status"`
+	RunID  string `json:"run_id"`
+	Status string `json:"status"`
+
+	// False and constant, for selectReport.Guarded's reason: export renders a
+	// recorded Portfolio to disk and calls no agent.
+	Guarded bool `json:"guarded"`
+
 	SelectRunID  string `json:"select_run_id"`
 	Destination  string `json:"destination"`
 	AssetCount   int    `json:"asset_count"`
@@ -366,6 +407,7 @@ func renderExportJSON(out io.Writer, res *core.ExportResult) error {
 	rep := exportReport{
 		RunID:        res.RunID,
 		Status:       "completed",
+		Guarded:      false,
 		SelectRunID:  res.SelectRunID,
 		Destination:  destinationName(res.Destination),
 		AssetCount:   res.AssetCount,
@@ -381,6 +423,13 @@ func renderExportJSON(out io.Writer, res *core.ExportResult) error {
 // (ADR-0001). The two renderers share one reportData, so a change to the
 // reading code changes both, and the equivalence goldens pin them together.
 type reportJSON struct {
+	// Guarded is false: report reads recorded aggregates and spends nothing.
+	// The money in its spend object belongs to the runs it names, every one
+	// of which did run a guard — which is why the total lives in a named
+	// object rather than in a top-level spent_usd that would claim report
+	// spent it.
+	Guarded bool `json:"guarded"`
+
 	ValueRunID      string           `json:"value_run_id"`
 	ValueStatus     string           `json:"value_status"`
 	ValueIncomplete string           `json:"value_incomplete_reason,omitempty"`
@@ -388,6 +437,10 @@ type reportJSON struct {
 	Assets          []reportAsset    `json:"assets"`
 	Portfolio       *reportPortfolio `json:"portfolio,omitempty"`
 	Gaps            *reportGaps      `json:"gaps,omitempty"`
+
+	// Spend is what the pipeline cost — the number nobody could get before,
+	// because it is the sum across runs and no single stage holds them all.
+	Spend reportSpend `json:"spend"`
 }
 
 // reportBaseline is the reference the page's deltas are measured against.
@@ -473,6 +526,8 @@ type reportGapCluster struct {
 // writeReportJSON emits the machine-readable report.
 func writeReportJSON(out io.Writer, d *reportData) error {
 	rep := reportJSON{
+		Guarded:         false,
+		Spend:           d.Spend,
 		ValueRunID:      d.ValueRun.GetId(),
 		ValueStatus:     statusName(d.ValueRun.GetStatus()),
 		ValueIncomplete: d.ValueRun.GetIncompleteReason(),

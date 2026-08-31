@@ -1,0 +1,9 @@
+goal_direction: string
+guarded: boolean
+llm_calls: number
+run_id: string
+spent_usd: string
+spent_usd_micros: number
+status: string
+tokens: number
+valuations: array

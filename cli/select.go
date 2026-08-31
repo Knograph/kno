@@ -55,7 +55,15 @@ included. The honest number arrives with validate, against the untouched
 holdout.
 
 Select makes no LLM calls, reads no evals, and never touches the holdout:
-every decision is a pure function of what the store holds.`,
+every decision is a pure function of what the store holds.
+
+Because it runs no budget guard, select reports no spend: there is no
+spent_usd key in --json, and "guarded": false says so rather than leaving you
+to read a missing key as a zero. The measurement select ranks was paid for by
+the Value run named in source_run_id — run kno report --value-run-id <id> for
+what the pipeline cost. The two dollar figures select does report are
+something else: max_cost_usd is the cap the Portfolio was built under, and
+acquisition_usd is the carrying cost of the selected assets.`,
 		Example: `  # Choose the portfolio under budget
   kno select --value-run-id <id> --max-context-tokens 10000
 
