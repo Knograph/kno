@@ -30,6 +30,36 @@ covenants — breaking any of them requires a major version.
 
 ## [Unreleased]
 
+### Features
+
+- **`kno eval inspect` — whether an eval set can support attribution.** Reads
+  an Evals source and reports what routing and the power arithmetic will
+  actually see, before anything is spent: how many distinct behaviors the tags
+  declare (normalized through routing's own `value.NormalizeTag`, with the
+  spelling collapse reported), the smallest effect each behavior's dev Cases
+  could separate from noise, how much of the dev split sits under a single
+  catch-all tag or under no tag at all, and whether the holdout can support
+  `validate`. Five checks, each `ok`/`flagged`/`unknown` against a constant the
+  engine already uses — `core.MinClusterCases`, `split.MinHoldout` — and a
+  headline that is a **count**, never a grade. `--value-run-id` adds what a
+  recorded Value run actually attributed. It constructs no Agent, makes no LLM
+  call, creates no Run, and writes nothing; the exit code is `0` whatever it
+  finds, so `checks_flagged` in `--json` is the gate for anyone who wants one.
+  The first two-level command in the tree, because
+  `docs/evaluation-design.md` published the name before the command existed.
+- **`stats/interval.MinDetectableEffect(m, sidedness, level)`.** The bound
+  `core/value`'s harm arithmetic already computed, exported and generalized
+  over sidedness so one implementation serves both questions: `inspect` quotes
+  the **two-sided** figure, because "is this distinguishable from noise" is
+  symmetric, and `Plan.MinDetectableHarm` keeps its **one-sided** figure,
+  because "did this get worse" is directional. Both are labeled at every
+  appearance in both renderings. `core/value.minDetectableHarm` now delegates
+  to it — behavior-preserving, pinned to full float64 equality by a test — so
+  the two numbers cannot drift apart.
+- **`core/value.NormalizeTag` is exported.** Anything reporting a tag count a
+  user will compare against a run must use routing's own normalizer rather
+  than a copy of its body.
+
 ### Bug Fixes
 
 - **`kno export --json` names the Select run it rendered from.** The

@@ -6,6 +6,7 @@ Task-shaped recipes. Each one is a thing you might actually want to do, start to
 
 | Recipe | What it covers |
 |---|---|
+| [Check whether your evals can attribute anything](check-your-evals.md) | `kno eval inspect` before you spend — behaviors, separable effects, and the five checks |
 | [Score your agent for the first time](first-baseline.md) | Getting from an eval file to a baseline, and reading what comes back |
 | [Point Kno at your own provider](your-own-provider.md) | Keys, cost caps, local model servers, and the first run that can bill you |
 | [Score your agent against Claude](anthropic.md) | The Anthropic agent — `ANTHROPIC_API_KEY`, the priced models, and a complete baseline-to-report run |

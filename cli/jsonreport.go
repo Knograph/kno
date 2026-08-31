@@ -678,3 +678,237 @@ func decodeDemoSelect(raw demoStageDoc) (selectReport, error) {
 	}
 	return rep, nil
 }
+
+// evalInspectReport is `kno eval inspect --json`.
+//
+// Hand-written, like every other shape in this file, and for the same reason:
+// this is a jq contract, not a proto encoding. The `checks` array's `name`
+// values are the part people will pin their CI to, so they are treated as
+// stable from the first release — renaming one is a breaking change with a
+// CHANGELOG note.
+//
+// Floats are unrounded. A consumer comparing separable_effect against a
+// threshold of their own needs the number, not a rendering of it.
+type evalInspectReport struct {
+	Evals string               `json:"evals"`
+	Cases evalInspectCaseCount `json:"cases"`
+
+	// Behaviors is every normalized tag, dev Cases descending, tag ascending on
+	// ties — the same order the human table uses, and complete where the table
+	// truncates.
+	Behaviors []evalInspectBehavior `json:"behaviors"`
+
+	// CollapsedSpellings is how many raw spellings belong to behaviors that
+	// have more than one. Zero when every behavior was spelled one way.
+	CollapsedSpellings int `json:"collapsed_spellings"`
+	// BlankTagRefs is how many empty or whitespace-only tags were skipped,
+	// matching cluster()'s key == "" skip. Reported rather than dropped
+	// silently.
+	BlankTagRefs int `json:"blank_tag_refs,omitempty"`
+	// DuplicateTagRefs is how many repeat references to a tag on one Case were
+	// counted once, matching snapshotClusters' NDropped accounting.
+	DuplicateTagRefs int `json:"duplicate_tag_refs,omitempty"`
+	// UnscorableCases is how many dev Cases carry neither an expected answer
+	// nor a rubric; exact-match scores those as failures by construction.
+	UnscorableCases int `json:"cases_without_expected_or_rubric,omitempty"`
+
+	UntaggedDevCases      int     `json:"untagged_dev_cases"`
+	MultiBehaviorDevCases int     `json:"multi_behavior_dev_cases"`
+	MultiBehaviorShare    float64 `json:"multi_behavior_share"`
+
+	// DominantBehavior is the tag carried by the most dev Cases. Absent when
+	// no dev Case carries a tag — absence is the honest answer, not a zero.
+	DominantBehavior *evalInspectDominant `json:"dominant_behavior,omitempty"`
+
+	Checks        []evalInspectCheck `json:"checks"`
+	ChecksFlagged int                `json:"checks_flagged"`
+	ChecksTotal   int                `json:"checks_total"`
+
+	Suggestions []string `json:"suggestions,omitempty"`
+	// Notes carries the caveats the human rendering prints. notes[0] is always
+	// the standing conditional on every per-tag number.
+	Notes []string `json:"notes"`
+
+	// Observed is present only when --value-run-id named a run whose plan
+	// decoded and whose eval fingerprint still matches the source.
+	Observed *evalInspectObserved `json:"observed,omitempty"`
+}
+
+// evalInspectCaseCount is how the eval set divided.
+type evalInspectCaseCount struct {
+	Total     int `json:"total"`
+	Dev       int `json:"dev"`
+	Holdout   int `json:"holdout"`
+	WeakLabel int `json:"weak_label"`
+}
+
+// evalInspectBehavior is one normalized tag.
+type evalInspectBehavior struct {
+	Tag      string `json:"tag"`
+	DevCases int    `json:"dev_cases"`
+	// SeparableEffect is the smallest effect this many dev Cases can separate
+	// from zero. TWO-sided, and the sidedness rides beside it so a consumer
+	// cannot mistake it for observed.min_detectable_harm, which is one-sided.
+	SeparableEffect float64 `json:"separable_effect"`
+	Sidedness       string  `json:"sidedness"`
+	Level           float64 `json:"level"`
+	Status          string  `json:"status"`
+	Spellings       int     `json:"spellings"`
+}
+
+// evalInspectDominant is the most common tag and its share of dev Cases.
+type evalInspectDominant struct {
+	Tag      string  `json:"tag"`
+	DevCases int     `json:"dev_cases"`
+	Share    float64 `json:"share"`
+}
+
+// evalInspectCheck is one flaggable check's answer.
+type evalInspectCheck struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// evalInspectObserved is what a recorded Value run actually did.
+type evalInspectObserved struct {
+	ValueRunID     string `json:"value_run_id"`
+	ValueRunStatus string `json:"value_run_status"`
+	BaselineRunID  string `json:"baseline_run_id,omitempty"`
+	RoutingMode    string `json:"routing_mode"`
+	EligibleCases  int    `json:"eligible_cases"`
+	ControlCases   int    `json:"control_cases"`
+
+	ControlUnderpowered bool `json:"control_underpowered"`
+	// MinDetectableHarm is Plan.MinDetectableHarm verbatim and is therefore
+	// ONE-sided; the sidedness key is not decoration, it is what stops a jq
+	// consumer comparing it against a behavior's two-sided separable_effect.
+	MinDetectableHarm          float64 `json:"min_detectable_harm"`
+	MinDetectableHarmSidedness string  `json:"min_detectable_harm_sidedness"`
+
+	Behaviors []evalInspectObservedBehavior `json:"behaviors"`
+}
+
+// evalInspectObservedBehavior is one planned cluster and its verdict.
+type evalInspectObservedBehavior struct {
+	Tag string `json:"tag"`
+	// ClusterCases is how many dev Cases routing clustered as FAILURES under
+	// this tag. Failures by construction: cluster() clusters only the Cases the
+	// baseline failed, drawn from the eligible partition.
+	ClusterCases int `json:"cluster_cases"`
+	// DevCases is the same tag's dev Case count in the eval source, so the two
+	// read as "N of M".
+	DevCases     int     `json:"dev_cases"`
+	GapStatus    string  `json:"gap_status"`
+	BestAssetID  string  `json:"best_asset_id,omitempty"`
+	BestDelta    float64 `json:"best_delta"`
+	CoveredCount int     `json:"covered_count"`
+}
+
+// evalInspectJSON projects the inspection onto the contract.
+func evalInspectJSON(i *inspection) evalInspectReport {
+	rep := evalInspectReport{
+		Evals: i.Evals,
+		Cases: evalInspectCaseCount{
+			Total:     i.Counts.Total(),
+			Dev:       i.Counts.Dev,
+			Holdout:   i.Counts.Holdout,
+			WeakLabel: i.Counts.WeakLabelCases,
+		},
+		CollapsedSpellings:    i.CollapsedSpellings,
+		BlankTagRefs:          i.BlankTagRefs,
+		DuplicateTagRefs:      i.DuplicateTagRefs,
+		UnscorableCases:       i.UnscorableCases,
+		UntaggedDevCases:      i.UntaggedDevCases,
+		MultiBehaviorDevCases: i.MultiBehaviorDevCases,
+		MultiBehaviorShare:    i.MultiBehaviorShare(),
+		ChecksFlagged:         i.Flagged(),
+		ChecksTotal:           inspectChecksTotal,
+		Suggestions:           i.suggestions(),
+		Notes:                 evalInspectNotes(i),
+	}
+	rep.Behaviors = make([]evalInspectBehavior, 0, len(i.Behaviors))
+	for _, b := range i.Behaviors {
+		rep.Behaviors = append(rep.Behaviors, evalInspectBehavior{
+			Tag:             b.Tag,
+			DevCases:        b.DevCases,
+			SeparableEffect: b.SeparableEffect,
+			Sidedness:       "two-sided",
+			Level:           inspectSeparableLevel,
+			Status:          string(b.Status),
+			Spellings:       b.Spellings,
+		})
+	}
+	if i.Dominant != nil {
+		rep.DominantBehavior = &evalInspectDominant{
+			Tag:      i.Dominant.Tag,
+			DevCases: i.Dominant.DevCases,
+			Share:    i.DominantShare(),
+		}
+	}
+	for _, c := range i.Checks {
+		rep.Checks = append(rep.Checks, evalInspectCheck{
+			Name: c.Name, Status: string(c.Status), Detail: c.Detail,
+		})
+	}
+	rep.Observed = evalInspectObservedJSON(i.Observed)
+	return rep
+}
+
+// evalInspectNotes are the caveats, with the standing conditional first.
+func evalInspectNotes(i *inspection) []string {
+	notes := []string{
+		inspectStandingConditionalNote,
+		inspectSeparableNote,
+		inspectMultiBehaviorNote,
+	}
+	if i.Observed != nil {
+		notes = append(notes, inspectHarmSidednessNote)
+	}
+	return notes
+}
+
+// evalInspectObservedJSON projects the observed section, or nil.
+func evalInspectObservedJSON(o *inspectObserved) *evalInspectObserved {
+	if o == nil {
+		return nil
+	}
+	out := &evalInspectObserved{
+		ValueRunID:                 o.ValueRunID,
+		ValueRunStatus:             o.ValueRunStatus,
+		BaselineRunID:              o.BaselineRunID,
+		RoutingMode:                o.RoutingMode,
+		EligibleCases:              o.EligibleCases,
+		ControlCases:               o.ControlCases,
+		ControlUnderpowered:        o.ControlUnderpowered,
+		MinDetectableHarm:          o.MinDetectableHarm,
+		MinDetectableHarmSidedness: "one-sided",
+		Behaviors:                  make([]evalInspectObservedBehavior, 0, len(o.Behaviors)),
+	}
+	for _, b := range o.Behaviors {
+		// A conversion, not a literal: the two structs are the same fields in
+		// the same order, so a literal would let one gain a field the other
+		// silently dropped.
+		out.Behaviors = append(out.Behaviors, evalInspectObservedBehavior(b))
+	}
+	return out
+}
+
+// decodeEvalInspect parses `kno eval inspect --json` output, refusing anything
+// after it and refusing an unknown key.
+//
+// DisallowUnknownFields is the point: the equivalence test asserts the document
+// a jq pipeline reads carries the same content the human page does, and a key
+// the struct silently ignored would make that test pass over a contract change.
+func decodeEvalInspect(b []byte) (evalInspectReport, error) {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	var rep evalInspectReport
+	if err := dec.Decode(&rep); err != nil {
+		return evalInspectReport{}, fmt.Errorf("decoding the inspect document: %w", err)
+	}
+	if dec.More() {
+		return evalInspectReport{}, fmt.Errorf("inspect emitted more than one JSON document")
+	}
+	return rep, nil
+}

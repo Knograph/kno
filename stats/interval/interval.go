@@ -409,3 +409,42 @@ func normalQuantile(p float64) float64 {
 			(((((b[0]*r+b[1])*r+b[2])*r+b[3])*r+b[4])*r + 1)
 	}
 }
+
+// MinDetectableEffect is the smallest effect m paired observations can
+// separate from zero, at the given level and sidedness.
+//
+// The half-width of a bound over m paired observations, computed from the
+// sample size alone: q(level, side, m-1) * sqrt(0.5) / sqrt(m). It is a BOUND
+// rather than an estimate from data, which is what makes it printable before
+// any measurement exists — `kno eval inspect` quotes it per behavior over an
+// eval set nothing has been run against yet.
+//
+// sqrt(0.5) is the worst-case paired-binary standard deviation: differences
+// live in {-1, 0, +1}, and the variance 2p(1-p) is maximised at 0.5 when the
+// discordant pairs split evenly. Quoting the observed variance instead would
+// shrink the number exactly on the runs where it mattered most. For a
+// continuous Goal with lower variance the true detectable effect is smaller,
+// so this over-warns — conservative in the recoverable direction.
+//
+// The quantile is Student-t at m-1 degrees of freedom, never z: t exceeds z at
+// every finite df, so a z approximation returns a bound SMALLER than the truth
+// — an optimistic figure, and the one thing a bound may not be.
+//
+// Sidedness is the caller's question, and the two answers differ. SIDEDNESS_UPPER
+// answers a directional one ("did this get worse"), which is what core/value's
+// harm bound asks. SIDEDNESS_TWO_SIDED answers a symmetric one ("is this
+// distinguishable from noise"), which is what inspect asks, and it is the
+// larger number at the same level. Reusing the one-sided figure for the
+// symmetric question reports more power than exists.
+//
+// Returns 0 for m < 1: there is no sample, so nothing is detectable at all.
+// The caller must not read that zero as a tight bound.
+func MinDetectableEffect(m int, side knov1.Sidedness, level float64) float64 {
+	if m < 1 {
+		return 0
+	}
+	// sdMax is the STANDARD DEVIATION bound, sqrt(0.5) ~ 0.707, not the
+	// variance bound 0.5.
+	const sdMax = 0.7071067811865476 // math.Sqrt(0.5)
+	return Quantile(level, side, m-1) * sdMax / math.Sqrt(float64(m))
+}

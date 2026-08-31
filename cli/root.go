@@ -126,6 +126,7 @@ beside them --- one declaration, not a copy of the list maintained here.`,
 
 	root.AddCommand(newInitCmd())
 	root.AddCommand(newDemoCmd())
+	root.AddCommand(newEvalCmd())
 	root.AddCommand(newBaselineCmd())
 	root.AddCommand(newMineCmd())
 	root.AddCommand(newValueCmd())

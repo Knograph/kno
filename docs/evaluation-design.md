@@ -24,7 +24,10 @@ presented as a point estimate pretending to be truth.
 
 Practical anchors, honestly labeled as heuristics:
 
-- **~10+ Cases per behavior** before a small improvement is distinguishable from noise.
+- **~10+ Cases per behavior** before a small improvement is distinguishable from noise. That
+  heuristic is shorthand for arithmetic, and `kno eval inspect` prints the arithmetic: ten dev
+  Cases can separate a **0.51** two-sided swing on a binary Goal, and nothing smaller. See
+  the table in [The inspect idea](#the-inspect-idea).
 - **The interval is the answer.** If the interval spans "would act" and "wouldn't", add Cases
   before deciding — that is exactly the information the interval exists to carry.
 - **A single Case is a demonstration, not evidence.** One Case can show the mechanism works;
@@ -114,6 +117,74 @@ state as one that updates in place, and only one is acceptable.
 
 ## The inspect idea
 
-A `kno eval inspect` command — flagging underpowered behaviors, multi-behavior Cases, and
-coarse Goals from the data a run already records — is on the roadmap; this page is written so
-that command's output has a vocabulary to point at.
+`kno eval inspect` reads an Evals source and reports what routing and the power arithmetic
+will actually see — before anything is spent.
+
+```bash
+kno eval inspect --evals cases.jsonl
+```
+
+It answers five checks, each anchored to a constant the engine already uses rather than to a
+number the command invented:
+
+| Check | Question | Anchor |
+|---|---|---|
+| `behaviors_declared` | Do any dev Cases carry tags at all? | zero tagged dev Cases means routing falls back to all-failed and nothing is attributed per behavior |
+| `behaviors_powered` | Enough dev Cases per behavior to separate an effect? | `core.MinClusterCases` (5) |
+| `behavior_concentration` | How much of the dev split sits under one tag, and how much under none? | more than half of all dev Cases |
+| `holdout_powered` | Can the holdout support a meaningful interval at `validate`? | `split.MinHoldout` (20) |
+| `attribution_observed` | What did a recorded Value run actually attribute? | `UNKNOWN` without `--value-run-id` |
+
+Each answers `ok`, `flagged` or `unknown`, and the headline is a **count** — `2 of 5 checks
+flagged` — never a grade. A single word blending five checks with five different fixes is the
+"one giant score" anti-pattern this page's section 8 names first, and a tool cannot credibly
+criticise a number it is simultaneously emitting. The exit code is `0` whatever it finds:
+`inspect` is a diagnostic, not a gate. Read `checks_flagged` from `--json` if you want one.
+
+### What "separable effect" means
+
+Per behavior, `inspect` prints the smallest effect that many dev Cases can separate from
+zero — a **two-sided 95%** bound computed from the sample size and the worst-case
+paired-binary standard deviation, `sqrt(0.5)`. It is a bound, not an estimate from your data,
+which is what makes it printable before any measurement exists.
+
+| dev Cases in the behavior | separable effect (two-sided 95%) | one-sided 95%, for comparison |
+|---|---|---|
+| 3 | 1.76 (i.e. nothing) | 1.19 |
+| 5 (`core.MinClusterCases`) | 0.88 | 0.67 |
+| 10 (the "~10+" heuristic above) | 0.51 | 0.41 |
+| 20 (`value.MinControlSample`) | 0.33 | 0.27 |
+| 44 | 0.21 | 0.18 |
+| ~135 | 0.12 | 0.10 (`value.HarmMargin`) |
+| ~195 | 0.10 | 0.08 |
+
+That table is the honest version of "~10+ Cases per behavior": ten Cases buys the ability to
+detect a **51-percentage-point** swing on a binary Goal. `inspect` prints the number rather
+than an adjective, so you argue with arithmetic instead of with an opinion.
+
+The two-sided column is what `inspect` reports, because "is this behavior distinguishable
+from noise" is a symmetric question. The one-sided column is what `Plan.MinDetectableHarm`
+reports about a run's control arm, because "did this get worse" is a directional one. Both are
+labeled at every appearance, in the page and in `--json`. [What the numbers
+mean](what-the-numbers-mean.md#what-a-separable-effect-claims) says why they are not
+interchangeable.
+
+### What it does not claim
+
+**That your tags are behaviors.** `inspect` defines a behavior as a normalized tag, because
+that is what the engine means by one: `cluster()` groups failed dev Cases by tag, an Asset
+routes to the clusters its own tags overlap, and every gap verdict is per tag. But tags
+routinely encode priority, provenance or a date — `p0`, `flaky`, `regression-2024` — and
+nothing in the schema distinguishes those from a real behavior taxonomy. So the page says so
+once, prominently, above every number it qualifies, and `--json` carries the same sentence as
+`notes[0]`.
+
+**That a score decomposes.** A line like `"overall_quality" accounts for 62% of total score`
+is not computable in this build: no shipped Goal populates `Score.components`. `inspect`
+reports *Case* concentration instead — the share of dev Cases carrying the most common tag —
+which measures the same anti-pattern from data that exists.
+
+**That the multi-behavior share is a problem at any particular level.** The share of dev Cases
+carrying two or more tags is reported and never flagged, marked `·` rather than `!` or `✓`,
+because there is no principled threshold for it anywhere in the tree — and a tool built to
+refuse invented cut-offs cannot flag on one of its own.

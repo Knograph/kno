@@ -153,6 +153,40 @@ Stated plainly, because a tool that lists its limits is easier to trust than one
 
 - **The harm bound is a limit, not a score.** The run's Plan — recorded on the Run at close — reports `min_detectable_harm`: the smallest regression its control sample could have separated from zero, at the shipped confidence level, computed from the worst-case paired variance — it does not shrink because your observed variance happened to be small, and it uses the t distribution at small samples. Against a harm margin of 0.10 the honest threshold sits near 135 control Cases, so most real runs report a bound larger than the margin and carry the underpowered flag. That is information, not noise: a run reporting no regression while able to see only ±0.27 has not cleared an asset that costs 0.10, and the number says so. **A delta is reported only beside its interval** — if no interval could be formed (too few pairs, or ragged attrition), the Valuation reports `UNDERPOWERED` and no delta, never a bare number.
 
+## What a separable effect claims
+
+`kno eval inspect` prints one number per behavior: the **separable effect**, the smallest
+effect that behavior's dev Cases could separate from zero.
+
+It is computed from two things and nothing else: the number of dev Cases carrying the tag,
+and the worst-case paired-binary standard deviation, `sqrt(0.5)`. It is therefore a **bound,
+not an estimate from your data** — which is exactly what makes it printable before any
+measurement exists, and what makes it honest on the small behaviors where an estimate from
+three observations would be worthless. On a continuous Goal with lower variance the true
+detectable effect is smaller, so the number over-warns: conservative in the recoverable
+direction, and never in the direction that tells you an eval set is more powerful than it is.
+
+**It is two-sided.** `inspect` asks a symmetric question — *is this behavior distinguishable
+from noise* — and a two-sided bound is the answer to a symmetric question. It is a larger
+number than the one-sided bound at the same level, and deliberately so.
+
+**`min_detectable_harm` is one-sided, and the two are not interchangeable.** The figure a
+Value run records about its control arm (see the harm bound above) answers a *directional*
+question — *did this get worse* — and a one-sided bound at 95% is tighter than a two-sided one
+at 95%. Quoting the one-sided number against the symmetric question would report every eval
+set as more powerful than it is. So both numbers carry their sidedness at every appearance: the
+column header reads `SEPARABLE EFFECT (two-sided 95%)`, the observed block reads `ONE-sided
+95%`, and `--json` carries `sidedness` beside the behaviors and
+`min_detectable_harm_sidedness` beside the harm bound. If you see both in one output, they are
+answering different questions and will not agree.
+
+**It says nothing about whether the number matters to you.** There is no adjectival tier above
+the floor: a behavior with 12 dev Cases is not "adequate", it is "can separate 0.45", and only
+you know whether 0.45 is an effect you would act on. Below `core.MinClusterCases` (5) the
+behavior is labeled `underpowered`, because below that line a measurement may not testify
+about a cluster at all — that is a rule the engine already enforces, not a judgement `inspect`
+is adding.
+
 ## What a gaps verdict claims
 
 The gaps statistic is Export's per-cluster answer to "is anything we routed

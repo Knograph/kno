@@ -37,6 +37,7 @@
     "baseline",
     "demo",
     "doctor",
+    "eval",
     "export",
     "init",
     "mine",
@@ -108,8 +109,8 @@
   ],
   "price_table": "2026-08-28",
   "debt": {
-    "total": 92,
-    "open": 34,
+    "total": 93,
+    "open": 35,
     "skipped": 0
   }
 }

@@ -2,7 +2,6 @@ package value
 
 import (
 	"fmt"
-	"math"
 	"math/rand/v2"
 	"slices"
 	"sort"
@@ -101,20 +100,16 @@ const (
 // 1.729 against z's 1.645, and quoting z there under-states a bound the user
 // is about to act on.
 func minDetectableHarm(m int) float64 {
-	if m < 1 {
-		// No control sample: nothing is detectable, and the caller must not
-		// read a small number here as a tight bound.
-		return 0
-	}
-	// The exact one-sided t quantile, not a table lookup with a z fallback.
+	// One implementation, in stats/interval, so this bound and the two-sided
+	// one `kno eval inspect` prints cannot drift apart. The sidedness is the
+	// whole difference: harm detection is directional.
 	//
+	// The exact one-sided t quantile, not a table lookup with a z fallback.
 	// This used to read a 3-decimal table for df<=30 and then use z=1.645
 	// beyond it, on the reasoning that "t reaches z". It does not: t > z for
 	// every finite df, approaching it only in the limit. So past m=33 the
 	// bound came back SMALLER than the truth — an optimistic figure, which is
-	// precisely what the comment above refuses to report. The error is small
-	// (~3% at m=33, ~1.6% at m=60) and always in the direction that flatters
-	// the run.
+	// precisely what the comment above refuses to report.
 	//
 	// It reached a safety gate. ControlUnderpowered is MinDetectableHarm >
 	// HarmMargin, so understating the bound clears the gate early: at m=136
@@ -122,12 +117,7 @@ func minDetectableHarm(m int) float64 {
 	// is the "underpowered harm test that looks like a passed one" the
 	// regression rule exists to prevent. The gate now clears at m=138, where
 	// it always should have.
-	q := interval.Quantile(harmLevel, knov1.Sidedness_SIDEDNESS_UPPER, m-1)
-	// sdMax is the STANDARD DEVIATION bound, sqrt(0.5) ~ 0.707, not the
-	// variance bound 0.5 — the earlier slip that understated every reported
-	// minimum by ~sqrt(2).
-	const sdMax = 0.7071067811865476 // math.Sqrt(0.5)
-	return q * sdMax / math.Sqrt(float64(m))
+	return interval.MinDetectableEffect(m, knov1.Sidedness_SIDEDNESS_UPPER, harmLevel)
 }
 
 // String renders a Mode for events and error messages.
@@ -638,7 +628,7 @@ func cluster(eligible []CaseRef) (map[string][]CaseRef, Mode) {
 	clusters := make(map[string][]CaseRef)
 	for _, c := range failed {
 		for _, t := range c.Tags {
-			key := normalizeTag(t)
+			key := NormalizeTag(t)
 			if key == "" {
 				continue
 			}
@@ -707,7 +697,7 @@ func candidatesFor(a AssetRef, eligible []CaseRef, clusters map[string][]CaseRef
 		seen := make(map[string]struct{})
 		var out []CaseRef
 		for _, t := range a.Tags {
-			for _, c := range clusters[normalizeTag(t)] {
+			for _, c := range clusters[NormalizeTag(t)] {
 				if _, dup := seen[c.ID]; dup {
 					// A Case carrying two of this Asset's tags appears in two
 					// clusters and must still be measured once.
@@ -736,14 +726,19 @@ func failedIn(cases []CaseRef) []CaseRef {
 	return out
 }
 
-// normalizeTag makes tag matching case- and whitespace-insensitive.
+// NormalizeTag makes tag matching case- and whitespace-insensitive.
+//
+// Exported because it is ROUTING's normalizer, and anything that reports a tag
+// count the user will compare against a run must use this function rather than
+// a copy of its body. A second normalizer that drifted would report a behavior
+// count the engine disagrees with, and the disagreement would be invisible.
 //
 // "Refunds" in a pool and "refunds" in an eval file are the same cluster to
 // every human who wrote them, and an Asset that silently routes to nothing
 // because of a capital letter reports REJECTION_REASON_IRRELEVANT — a
 // confident, wrong answer that costs nothing and is indistinguishable from a
 // correct one.
-func normalizeTag(t string) string { return strings.ToLower(strings.TrimSpace(t)) }
+func NormalizeTag(t string) string { return strings.ToLower(strings.TrimSpace(t)) }
 
 // sampleIDs draws a reproducible sample of Case IDs.
 //

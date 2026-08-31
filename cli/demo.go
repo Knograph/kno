@@ -676,7 +676,18 @@ const demoWrapWidth = 88
 // are one string in the source, the JSON prints them whole, and this is the
 // only thing that reshapes them.
 func wrapIndent(s string, width int, indent string) string {
-	hang := indent + "  "
+	return wrapHanging(s, width, indent, indent+"  ")
+}
+
+// wrapHanging is wrapIndent with the continuation prefix named separately, for
+// callers whose first line already carries a marker and whose continuations
+// must align under the TEXT rather than under the marker.
+//
+// Measured in BYTES, not runes, deliberately: every existing golden was
+// recorded against this arithmetic, and a multi-byte character makes a line
+// wrap early rather than late — conservative, deterministic, and identical on
+// every machine.
+func wrapHanging(s string, width int, indent, hang string) string {
 	var b strings.Builder
 	line := indent
 	prefix := indent

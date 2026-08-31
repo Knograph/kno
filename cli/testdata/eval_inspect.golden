@@ -1,0 +1,43 @@
+Evals  cases.jsonl
+  60 Cases — 48 dev, 12 held back
+  5 distinct behaviors (tags), 3 spellings collapsed into "refunds", 3 blank
+  tags skipped, 3 duplicate tag references counted once
+
+  Everything below reads your tags as behaviors, because that is what routing
+  does. If these tags name something else — priority, source, a date — the
+  per-tag numbers and suggestions below do not apply to them. Kno cannot tell
+  the difference.
+
+BEHAVIOR         DEV CASES  SEPARABLE EFFECT (two-sided 95%)  STATUS
+overall_quality         42                              0.22  ok
+billing                  6                              0.74  ok
+refunds                  6                              0.74  ok
+shipping                 3                              1.76  underpowered
+tool_use                 3                              1.76  underpowered
+
+  · 25% of dev Cases carry more than one behavior tag — a failure in those
+    Cases testifies about every tag it carries, so per-behavior attribution is
+    shared. (Heuristic: a tag is a label, not a claim about what a Case
+    exercises. Reported, not flagged: there is no principled threshold for
+    this.)
+  ! "overall_quality" is carried by 88% of dev Cases — a catch-all tag under
+    which nothing can be attributed. If it is a behavior you would fix in one
+    place, that is fine; if it is several, split it.
+  ! 2 behaviors have fewer than 5 dev Cases, the minimum a measurement needs
+    before it may testify about a behavior at all (core.MinClusterCases):
+    "shipping", "tool_use".
+  ! the holdout has 12 Cases (20 is the minimum for a meaningful interval at
+    validate, split.MinHoldout)
+
+3 of 5 checks flagged.  If these tags are behaviors you would fix separately:
+  - split "overall_quality" into the behaviors you would act on separately
+  - add Cases to "shipping" and "tool_use", or merge them into a behavior you
+    would fix together
+  - add Cases so the holdout reaches 20, or validate cannot confirm a gain
+  - re-run with --value-run-id <id> to see which behaviors a run actually
+    attributed
+
+Markers: ! flagged, ✓ ok, ? unknown, · reported and never flagged.
+
+What each number claims: docs/what-the-numbers-mean.md
+Designing evals: docs/evaluation-design.md

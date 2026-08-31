@@ -273,6 +273,18 @@ Too coarse — "Is this a good support agent?" Better:
 - Stays within response-length requirements
 ```
 
+Kno will tell you where your eval set stands before you pay to find out:
+
+```bash
+kno eval inspect --evals cases.jsonl
+```
+
+It reads the file, reports how many distinct behaviors your tags declare, how small an effect
+each one could separate from noise, how much of the dev split sits under a single catch-all
+tag, and whether the holdout can support `validate`. No agent, no LLM call, no run — and it
+exits `0` whatever it finds, so it fits in a pre-commit hook. Recipe:
+**[Check whether your evals can attribute anything](docs/cookbook/check-your-evals.md)**.
+
 The full guide — how granular, how many Cases are enough, judge vs deterministic scoring,
 multi-dimensional Goals, anti-patterns, and per-workload examples — is
 **[Evaluation design](docs/evaluation-design.md)**.
@@ -315,6 +327,7 @@ Both tables are machine-checked against the code: [`docs/status.json`](docs/stat
 |---|---|
 | `kno init` | Write a `kno.yaml` configuration file |
 | `kno demo` | Run the whole loop against `fake:`, for free, on data it writes for you |
+| `kno eval` | Read an eval set and report what it can support (`kno eval inspect`) |
 | `kno mine` | Turn production transcripts into a weak-label eval set |
 | `kno baseline` | Run your agent over your evals and score it |
 | `kno value` | Measure the marginal value of each asset in a pool |

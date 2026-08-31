@@ -59,9 +59,40 @@ const (
 // the endpoint are. WithFix replaces, so this is the only wrapper — callers
 // must not wrap again.
 func resolveEvals(f *baselineFlags) (evalSource, error) {
-	if strings.HasPrefix(f.evalsPath, evalsBraintrustPrefix) {
+	return resolveEvalSource(evalSourceSpec{
+		path:                f.evalsPath,
+		holdoutFrac:         f.holdoutFrac,
+		splitSeed:           f.splitSeed,
+		allowInsecureURL:    f.allowInsecureURL,
+		allowPrivateAddress: f.allowPrivateAddress,
+	})
+}
+
+// evalSourceSpec is everything resolveEvalSource needs, and nothing else.
+//
+// The five fields an eval source is actually built from, rather than the whole
+// baselineFlags struct: `kno eval inspect` resolves a source without an agent,
+// a goal, a budget or a run ID, and a resolver that took a run's flag set would
+// force that command to carry forty fields it has no business holding.
+type evalSourceSpec struct {
+	// path is the --evals value: a bare JSONL path, or a prefixed dataset.
+	path string
+	// holdoutFrac is the share of Cases held back for validate.
+	holdoutFrac float64
+	// splitSeed deliberately re-splits the evals when non-empty.
+	splitSeed string
+	// allowInsecureURL permits a plain-http endpoint on a remote source.
+	allowInsecureURL bool
+	// allowPrivateAddress permits loopback and private addresses.
+	allowPrivateAddress bool
+}
+
+// resolveEvalSource builds the adapter the spec names. See resolveEvals.
+func resolveEvalSource(spec evalSourceSpec) (evalSource, error) {
+	f := spec
+	if strings.HasPrefix(f.path, evalsBraintrustPrefix) {
 		ev, err := braintrust.New(braintrust.Options{
-			Dataset:              strings.TrimPrefix(f.evalsPath, evalsBraintrustPrefix),
+			Dataset:              strings.TrimPrefix(f.path, evalsBraintrustPrefix),
 			HoldoutFrac:          f.holdoutFrac,
 			SplitSeed:            f.splitSeed,
 			AllowInsecureBaseURL: f.allowInsecureURL,
@@ -73,9 +104,9 @@ func resolveEvals(f *baselineFlags) (evalSource, error) {
 		return ev, nil
 	}
 
-	if strings.HasPrefix(f.evalsPath, evalsLangsmithPrefix) {
+	if strings.HasPrefix(f.path, evalsLangsmithPrefix) {
 		ev, err := langsmith.New(langsmith.Options{
-			Dataset:              strings.TrimPrefix(f.evalsPath, evalsLangsmithPrefix),
+			Dataset:              strings.TrimPrefix(f.path, evalsLangsmithPrefix),
 			HoldoutFrac:          f.holdoutFrac,
 			SplitSeed:            f.splitSeed,
 			AllowInsecureBaseURL: f.allowInsecureURL,
@@ -87,9 +118,9 @@ func resolveEvals(f *baselineFlags) (evalSource, error) {
 		return ev, nil
 	}
 
-	if strings.HasPrefix(f.evalsPath, evalsLangfusePrefix) {
+	if strings.HasPrefix(f.path, evalsLangfusePrefix) {
 		ev, err := langfuse.New(langfuse.Options{
-			Dataset:              strings.TrimPrefix(f.evalsPath, evalsLangfusePrefix),
+			Dataset:              strings.TrimPrefix(f.path, evalsLangfusePrefix),
 			HoldoutFrac:          f.holdoutFrac,
 			SplitSeed:            f.splitSeed,
 			AllowInsecureBaseURL: f.allowInsecureURL,
@@ -101,8 +132,8 @@ func resolveEvals(f *baselineFlags) (evalSource, error) {
 		return ev, nil
 	}
 
-	if strings.HasPrefix(f.evalsPath, evalsHFPrefix) {
-		dataset, config, split, err := parseHFEvals(f.evalsPath)
+	if strings.HasPrefix(f.path, evalsHFPrefix) {
+		dataset, config, split, err := parseHFEvals(f.path)
 		if err != nil {
 			return nil, errs.ErrInvalidInput.WithFix(
 				"name the dataset in --evals, as hf:<org>/<name>/<config>/<split>",
@@ -122,7 +153,7 @@ func resolveEvals(f *baselineFlags) (evalSource, error) {
 	}
 
 	ev, err := jsonl.New(jsonl.Options{
-		Path:        f.evalsPath,
+		Path:        f.path,
 		HoldoutFrac: f.holdoutFrac,
 		SplitSeed:   f.splitSeed,
 	})
