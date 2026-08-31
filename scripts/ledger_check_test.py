@@ -86,13 +86,28 @@ class TestReportJSON(unittest.TestCase):
         self.assertEqual(got["total"], 2)
         self.assertEqual(got["open"], 1)
         self.assertEqual(got["skipped"], 0)
-        self.assertEqual(got["entries"], [{"id": 1, "open": False}, {"id": 2, "open": True}])
+        self.assertEqual(
+            got["entries"],
+            [
+                {"id": 1, "open": False, "redated": False},
+                {"id": 2, "open": True, "redated": False},
+            ],
+        )
 
     def test_a_disposition_in_the_trigger_cell_also_counts(self):
         # The release gate reads both cells; --json must read the same two, or
         # the two callers disagree about the same row.
-        path = ledger_file(row(1, trigger="Re-dated to v0.3"))
+        path = ledger_file(row(1, what="**REPAID** in M2"))
         self.assertEqual(ledger.report_json(path)["open"], 0)
+
+    def test_a_redate_in_the_trigger_cell_leaves_the_row_open(self):
+        # This test asserted the opposite until 2026-08-31, which is how eight
+        # live entries became invisible to the release gate. A re-date moves a
+        # trigger; it does not close a row.
+        path = ledger_file(row(1, trigger="Re-dated to v0.3"))
+        got = ledger.report_json(path)
+        self.assertEqual(got["open"], 1)
+        self.assertEqual(got["redated_open"], 1)
 
     def test_skipped_rows_are_reported_rather_than_folded_into_total(self):
         path = ledger_file(row(1) + "| 2 | no anchor | why | trigger | owner |\n")
@@ -182,6 +197,53 @@ class DuplicateIds(unittest.TestCase):
         # (make test) and from scripts/ (directly).
         real, _ = ledger.scan(_HERE.parent / "docs" / "debt.md")
         self.assertEqual(ledger.duplicate_ids(real), [])
+
+
+class ReDateIsNotImmunity(unittest.TestCase):
+    """A re-dated entry is live debt with a new trigger, not a closed one.
+
+    Treating "Re-dated" as a disposition granted eight rows permanent
+    immunity from the release gate and understated the published open count
+    by 17%. #43's re-dated trigger then fired a second time and nothing
+    reported it.
+    """
+
+    def test_a_redated_row_is_still_open(self):
+        self.assertFalse(ledger.disposed("Re-dated (2026-08-29): moved", "before 1.0"))
+
+    def test_every_spelling_of_redated_is_still_open(self):
+        for spelling in ("Re-dated", "re-dated", "RE-DATED"):
+            self.assertFalse(
+                ledger.disposed("%s: moved" % spelling, "before 1.0"),
+                "%s must not close a row" % spelling,
+            )
+
+    def test_repaid_still_closes_a_row(self):
+        self.assertTrue(ledger.disposed("REPAID (2026-08-28) on the trigger", "x"))
+
+    def test_wont_fix_still_closes_a_row(self):
+        self.assertTrue(ledger.disposed("promoted to won't fix, see ADR-0004", "x"))
+
+    def test_a_redated_row_whose_trigger_fires_is_reported(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as fh:
+            fh.write("| # | What | Why | Trigger | Owner |\n")
+            fh.write("|---|---|---|---|---|\n")
+            fh.write('| <a id="7"></a>7 | **Re-dated** (2026): moved | why | '
+                     "before 0.9.9 | @o |\n")
+            path = fh.name
+        try:
+            rows, _ = ledger.scan(path)
+            firing = [
+                (e, w) for e, w, t in rows
+                if not ledger.disposed(w, t) and "0.9.9" in t
+            ]
+            self.assertEqual(len(firing), 1, "a re-dated row must not be immune")
+        finally:
+            os.unlink(path)
+
+    def test_redated_is_counted_separately(self):
+        self.assertTrue(ledger.redated("Re-dated (2026): moved", "x"))
+        self.assertFalse(ledger.redated("REPAID (2026)", "x"))
 
 
 if __name__ == "__main__":

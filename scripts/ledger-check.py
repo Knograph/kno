@@ -19,7 +19,7 @@ answer.
 
 `--json` is the second caller, added for docs/status.json (see
 docs/plans/2026-08-30-kno-status.md). It reports the ledger's size and how much
-of it is open, over the SAME row scan and the SAME DISPOSITIONS tuple the
+of it is open, over the SAME row scan and the SAME disposition rules the
 release gate uses. That sameness is the whole point: a second parser of a
 hand-written 84-row Markdown table would drift from this one silently, because
 the two consumers ask different questions and would disagree without either
@@ -38,7 +38,22 @@ import sys
 LEDGER = "docs/debt.md"
 
 # The dispositions the ledger rules permit.
-DISPOSITIONS = ("REPAID", "Re-dated", "re-dated", "RE-DATED", "won't fix", "WON'T FIX")
+# TERMINAL dispositions: the entry is finished and its trigger will never fire
+# again. Only these close a row.
+TERMINAL = ("REPAID", "won't fix", "WON'T FIX")
+
+# A re-date is NOT terminal, and treating it as one was a real bug with real
+# consequences. A re-dated entry is live debt that was given a NEW trigger --
+# and that trigger can fire, which is the entire point of re-dating rather
+# than repaying. Counting the word as a disposition granted eight entries
+# permanent immunity from the release gate: #3, #22, #28, #33, #68, #70, #78
+# and #83 were unreadable to it no matter what their new triggers said, and
+# docs/status.json published an open count 17% below the truth. Entry #43's
+# re-dated trigger then fired a second time and nothing reported it.
+#
+# So re-dated rows fall through to the trigger check, exactly like rows that
+# were never re-dated. The word records history; the trigger governs.
+REDATED = ("Re-dated", "re-dated", "RE-DATED")
 
 # A row of the ledger table. Anything else in the file is prose.
 _SEPARATOR = re.compile(r"^\|[\s:|-]+\|$")
@@ -99,20 +114,42 @@ def duplicate_ids(rows):
 
 
 def disposed(what, trigger):
-    """Whether a row carries one of the dispositions the ledger rules allow."""
-    return any(d in what or d in trigger for d in DISPOSITIONS)
+    """Whether a row is CLOSED -- repaid or promoted to won't-fix.
+
+    A re-dated row is deliberately not closed: see REDATED above.
+    """
+    return any(d in what or d in trigger for d in TERMINAL)
+
+
+def redated(what, trigger):
+    """Whether a row has been re-dated at least once.
+
+    Reported separately so the open count can distinguish debt that was
+    examined and moved from debt nobody has looked at twice.
+    """
+    return any(d in what or d in trigger for d in REDATED)
 
 
 def report_json(path=LEDGER):
     """The ledger's shape, for docs/status.json."""
     rows, skipped = scan(path)
     entries = [
-        {"id": int(entry), "open": not disposed(what, trigger)}
+        {
+            "id": int(entry),
+            "open": not disposed(what, trigger),
+            "redated": redated(what, trigger),
+        }
         for entry, what, trigger in rows
     ]
+    open_entries = [e for e in entries if e["open"]]
     return {
         "total": len(entries),
-        "open": sum(1 for e in entries if e["open"]),
+        "open": len(open_entries),
+        # Open debt that has already been examined and moved at least once.
+        # Published separately because a re-dated entry is a different kind of
+        # open than one nobody has revisited: it has a considered trigger, and
+        # a second lapse on it is worse than a first lapse elsewhere.
+        "redated_open": sum(1 for e in open_entries if e["redated"]),
         "skipped": skipped,
         "entries": entries,
     }
