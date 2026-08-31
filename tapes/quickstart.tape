@@ -36,15 +36,25 @@ Set Theme "Catppuccin Mocha"
 
 Hide
 Type "cd $(mktemp -d)" Enter
-# Nine Cases, so the split is visible: six dev, three held back, and the
-# under-powered-holdout warning fires. A three-Case eval file would hide both.
+# Twelve Cases, and the number is load-bearing rather than arbitrary: the
+# split is id-keyed, so eight land in dev and four are held back, and the
+# control arm reserves 0.3 of dev — int(8 * 0.3) = 2, which is the minimum
+# an interval can be computed from. At nine Cases the reserve rounds to ONE
+# control Case, every interval comes back nil, and the value table renders
+# "sample too small or ragged to form an interval" for every row. This tape
+# spent its first life claiming deltas of 0.0000 that the screen never
+# showed. Do not shrink this file without re-recording and reading what the
+# frames actually say.
 Type "cat > cases.jsonl <<'JSONL'" Enter
 Type '{"id":"refund-01","input":"How do I get a refund?","expected":"Refunds are issued within 5 business days.","tags":["refunds"]}' Enter
 Type '{"id":"refund-02","input":"Refund policy for sale items?","expected":"Sale items are final and non-refundable.","tags":["refunds"]}' Enter
+Type '{"id":"refund-03","input":"Can I refund a gift?","expected":"Gift refunds go to store credit.","tags":["refunds"]}' Enter
 Type '{"id":"ship-01","input":"When will my order arrive?","expected":"Standard shipping takes 3-5 business days.","tags":["shipping"]}' Enter
 Type '{"id":"ship-02","input":"Do you ship internationally?","expected":"We ship to 40 countries.","tags":["shipping"]}' Enter
+Type '{"id":"ship-03","input":"Can I change my delivery address?","expected":"Yes, until the order ships.","tags":["shipping"]}' Enter
 Type '{"id":"acct-01","input":"How do I reset my password?","expected":"Use the reset link on the sign-in page.","tags":["account"]}' Enter
 Type '{"id":"acct-02","input":"Can I change my email?","expected":"Yes, from Settings > Account.","tags":["account"]}' Enter
+Type '{"id":"acct-03","input":"How do I close my account?","expected":"Contact support and we close it within 24 hours.","tags":["account"]}' Enter
 Type '{"id":"bill-01","input":"Why was I charged twice?","expected":"A duplicate charge is released within 48 hours.","tags":["billing"]}' Enter
 Type '{"id":"bill-02","input":"Where is my invoice?","expected":"Invoices are emailed and available under Billing.","tags":["billing"]}' Enter
 Type '{"id":"bill-03","input":"Do you take purchase orders?","expected":"Yes, for annual plans.","tags":["billing"]}' Enter
@@ -63,10 +73,12 @@ Type "kno baseline --evals cases.jsonl --agent fake: --goal exact-match --run-id
 Sleep 5s
 
 # The distinctive half: value three candidate assets against that baseline.
-# With fake: the deltas read 0.0000 and the README says why — the tape is
+# With fake: the deltas read 0.0000 WITH their intervals — the tape is
 # proving the LOOP (routed, injected, re-measured against controls, reported
-# with intervals), not that any asset helps. Do not "improve" this tape by
-# choosing assets that make the numbers look earned.
+# with intervals), not that any asset helps. The interval is the point: it is
+# what lets select say "no-effect, CI crosses zero" rather than the weaker
+# "underpowered". Do not "improve" this tape by choosing assets that make the
+# numbers look earned.
 Type "cat > pool.jsonl <<'JSONL'" Enter
 Type '{"id":"refund-policy-v3","content":"Refunds are issued within 5 business days.","kind":"knowledge"}' Enter
 Type '{"id":"ship-promise","content":"Standard shipping takes 3-5 business days.","kind":"knowledge"}' Enter
