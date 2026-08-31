@@ -54,7 +54,13 @@ jobs:
             # message body.
             # grep -x anchors the whole line, -F treats the name/email as a
             # literal, so no regex escaping of . + ( ) in a real name is needed.
-            if printf '%s\n' "$body" | tr -d '\r' \
+            #
+            # Trailing whitespace is stripped first, and that is not cosmetic:
+            # -x anchors the WHOLE line, so a trailer with one trailing space —
+            # which several editors and clients append on save — would fail a
+            # commit that is correctly signed off. `tr -d '\r'` already handles
+            # the CRLF case for the same reason; this handles the rest of it.
+            if printf '%s\n' "$body" | tr -d '\r' | sed 's/[[:space:]]*$//' \
                  | grep -qxiF -e "Signed-off-by: $author" -e "Signed-off-by: $committer"; then
               continue
             fi

@@ -75,7 +75,71 @@ jobs:
           # that identity, not a bot's.
           # The pinned action version (SHA 45996ed) does NOT accept a
           # `signoff` input — the run logs the warning "Unexpected input(s)
-          # 'signoff'" and the commit ships without a trailer. The release PR
-          # therefore still needs a manual `--signoff` amend before merge,
-          # which is the documented step in docs/debt.md#82. Removing the
-          # dead input keeps the file honest about what it does.
+          # 'signoff'" and the commit ships without a trailer. The amend step
+          # below adds it, so the manual step docs/debt.md#82 described is no
+          # longer part of the release runbook.
+
+      # docs/debt.md#82's standing half, repaid: the trailer is added here
+      # instead of by a maintainer, on every release, forever.
+      #
+      # Why an amend rather than an exemption in dco.yml: with
+      # RELEASE_PLEASE_TOKEN present the release commit is authored by the
+      # token's OWNER, not by a bot, so there is no bot login for dco.yml's
+      # dependabot-style `if` to match — and a branch-name exemption would be
+      # a hole anyone could push through. Amending makes the commit genuinely
+      # signed off, so the check keeps enforcing for everyone and nothing is
+      # carved out. The certification is honest: a release commit is a
+      # CHANGELOG section and a manifest bump DERIVED from commits that were
+      # each already signed off.
+      #
+      # The push must carry RELEASE_PLEASE_TOKEN. A push made with the default
+      # GITHUB_TOKEN creates no workflow runs, so the DCO check would never
+      # re-run and the PR would sit red holding a commit that is now green.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+
+      - name: Sign off the release commit
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # The action may have created nothing (no releasable commits), or
+          # updated an existing PR. Either way the question is the same: is
+          # there an open release PR whose head commit lacks its trailer.
+          branch="$(gh pr list --repo "$REPO" --state open \
+            --json headRefName,title \
+            --jq '[.[] | select(.title | startswith("chore(main): release"))][0].headRefName // empty')"
+          if [ -z "$branch" ]; then
+            echo "no open release PR; nothing to sign off"
+            exit 0
+          fi
+
+          git fetch --quiet origin "$branch"
+          git checkout --quiet -B signoff-amend "origin/$branch"
+
+          # Match dco.yml's own rule: the trailer may name the author or the
+          # committer, and trailing whitespace is stripped before comparing.
+          author="$(git show -s --format='%an <%ae>' HEAD)"
+          if git show -s --format='%B' HEAD | tr -d '\r' | sed 's/[[:space:]]*$//' \
+               | grep -qxiF "Signed-off-by: $author"; then
+            echo "release commit already carries its trailer; nothing to do"
+            exit 0
+          fi
+
+          # Amend as the commit's own author so the trailer, the author, and
+          # the committer are one identity — dco.yml matches on author OR
+          # committer, and leaving them different would pass for the wrong
+          # reason.
+          git config user.name "$(git show -s --format='%an' HEAD)"
+          git config user.email "$(git show -s --format='%ae' HEAD)"
+          git commit --quiet --amend --no-edit --signoff
+
+          # --force-with-lease: if release-please updated the branch between
+          # the fetch and the push, refuse rather than clobber its work. The
+          # next run picks it up.
+          git push --quiet --force-with-lease origin "signoff-amend:$branch"
+          echo "signed off $branch"
