@@ -405,6 +405,15 @@ func (o SelectOptions) decide(
 // REGRESSION, NO_EFFECT, REDUNDANT, COST_DOMINATED, WRONG_MECHANISM — the
 // strongest claim wins, and an Asset rejected by an earlier rule never gets
 // a weaker reason.
+//
+// Interval bounds print at four decimal places, matching the value table and
+// the report. They used to print with %v, i.e. all 17 digits — which was
+// false precision on a bound derived from a t-quantile, and not merely ugly:
+// math.Exp and math.Log are architecture-specific, so the bisection that
+// computes the quantile lands one ULP apart on arm64 and amd64 and the tail
+// digits genuinely differ by platform. uknoAI/kno-benchmarks caught that as a
+// cross-platform diff on identical inputs. Four places is more precision than
+// the measurement carries and is the same on every machine.
 func rejectReason(
 	v *Valuation,
 	corrected *Interval,
@@ -423,7 +432,8 @@ func rejectReason(
 	if !v.GetControlUnderpowered() {
 		if net := netInterval(v, corrected, level); net != nil && net.GetHigh() <= 0 {
 			return knov1.RejectionReason_REJECTION_REASON_REGRESSION, fmt.Sprintf(
-				"net delta %v, CI [%v, %v] at or below zero", netCenter(net), net.GetLow(), net.GetHigh(),
+				"net delta %+.4f, CI [%+.4f, %+.4f] at or below zero",
+				netCenter(net), net.GetLow(), net.GetHigh(),
 			), nil
 		}
 	}
@@ -431,7 +441,8 @@ func rejectReason(
 	// Asset's place would rest on is indistinguishable from nothing.
 	if corrected.GetLow() <= 0 && corrected.GetHigh() >= 0 {
 		return knov1.RejectionReason_REJECTION_REASON_NO_EFFECT, fmt.Sprintf(
-			"delta %v, CI [%v, %v] crosses zero", v.GetDeltaGoal(), corrected.GetLow(), corrected.GetHigh(),
+			"delta %+.4f, CI [%+.4f, %+.4f] crosses zero",
+			v.GetDeltaGoal(), corrected.GetLow(), corrected.GetHigh(),
 		), nil
 	}
 	// REDUNDANT: within knowledge-kind only, and only against Assets already

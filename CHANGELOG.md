@@ -66,6 +66,15 @@ covenants — breaking any of them requires a major version.
   control samples in that range may newly report `control_underpowered`, which
   is the correct verdict. Found while implementing `kno eval inspect`, whose
   plan mandated reusing this bound two-sided.
+- **The rejection log prints interval bounds at four decimal places.** They
+  printed with `%v` — all 17 digits — while the value table and the report
+  used four. That was false precision on a bound derived from a t-quantile,
+  and not merely inconsistent: `math.Exp` and `math.Log` are
+  architecture-specific, so the bisection computing the quantile lands one ULP
+  apart on arm64 and amd64 and the tail digits genuinely differed by platform.
+  `uknoAI/kno-benchmarks` caught it as a cross-platform diff on identical
+  inputs. Four places is more precision than the measurement carries and is
+  the same on every machine.
 
 * **ci:** the release commit signs itself, and the DCO check stops failing correct trailers ([#142](https://github.com/uknoAI/kno/issues/142)) ([63cfa20](https://github.com/uknoAI/kno/commit/63cfa2087b5b72c882f1aee144e6c241daf59228))
 
