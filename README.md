@@ -107,7 +107,26 @@ The formula pins each platform archive's SHA-256 and is updated automatically by
 
 ## Quickstart
 
-The whole loop, in four steps.
+**0. See the whole loop first, for free:**
+
+```bash
+kno demo
+```
+
+One command writes a small eval set and asset pool into `./kno-demo`, then runs all five
+stages over them — baseline, value, select, export, report — against the built-in `fake:`
+agent. It spends nothing, sends nothing anywhere, and reads no configuration: not `kno.yaml`,
+not `KNO_*`. The files stay on disk afterwards, because the next thing worth doing is editing
+them.
+
+**The demo's deltas read `+0.0000`, its score reads `1.000`, and its portfolio comes back
+empty — on purpose.** `fake:` answers every Case with what the Case expects, and injecting an
+asset cannot change a deterministic answer, so no asset measures any effect. The intervals
+around those zeros are real; the effects are zero. An empty portfolio is a legal, first-class
+outcome, and the rejection log says why for each asset — which is the tool doing its job
+rather than nothing happening. `kno demo` prints those three sentences itself, every time.
+
+The four steps below are the same loop by hand, which is what you will do with your own data.
 
 **1. Write some Cases** — one scoreable interaction per line, each with a stable `id`:
 
@@ -164,7 +183,7 @@ Scores and traces are recorded. `kno purge` removes trace content when you no lo
 
 ![Kno quickstart](docs/quickstart.gif)
 
-**The deltas read 0.0000 because `fake:` answers every Case with what the Case expects.** That is the point of it: the quickstart proves the loop runs — assets routed, injected, re-measured against controls, reported with intervals — costs nothing, and seals a holdout, not that any asset helps. Point it at a real provider and the numbers start meaning something:
+**The deltas read 0.0000 here for the same reason they do in `kno demo`**, and it is worth repeating rather than assuming: `fake:` answers every Case with what the Case expects. The quickstart proves the loop runs — assets routed, injected, re-measured against controls, reported with intervals — costs nothing, and seals a holdout, not that any asset helps. Point it at a real provider and the numbers start meaning something:
 
 ```bash
 export OPENAI_API_KEY=sk-...

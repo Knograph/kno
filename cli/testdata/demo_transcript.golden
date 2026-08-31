@@ -1,0 +1,64 @@
+
+Baseline demo-baseline
+  cases      8 scored, 0 errored (of 8 dev; 4 held back)
+  score      1.000
+  spent      $0.00 over 8 call(s)
+  status     completed
+
+  warning: the holdout has only 4 cases, too few for a meaningful confidence interval at validate
+
+Scores and traces are recorded. `kno purge` removes trace content when you no longer need it.
+Value run demo-value (RUN_STATUS_COMPLETED)
+
+ASSET         DELTA (95% CI, positive = goal dir)  CONTROL             NOTE
+brand-guide   +0.0000  [-0.3960, +0.3960]   low -0.5815 (underpowered)  
+refund-policy-v3  +0.0000  [-0.3960, +0.3960]   low -0.5815 (underpowered)  
+ship-promise  +0.0000  [-0.3960, +0.3960]   low -0.5815 (underpowered)  
+
+Scores and traces are recorded. `kno purge` removes trace content when you no longer need it.
+Select run demo-select (RUN_STATUS_COMPLETED)
+  source    demo-value (completed)
+  budget    context ≤ 5000 tokens; tuning ≤ 10 examples; cost ≤ $1.00
+
+Selected 0 — greedy on delta-per-cost, no approximation guarantee; keep/reject decisions used Bonferroni-corrected intervals
+  RANK  ASSET         DESTINATION       DELTA (95% CI)
+
+Rejected 3
+  brand-guide   no-effect         delta 0, CI [-0.4836569575661475, 0.4836569575661475] crosses zero
+  refund-policy-v3  no-effect         delta 0, CI [-0.4836569575661475, 0.4836569575661475] crosses zero
+  ship-promise  no-effect         delta 0, CI [-0.4836569575661475, 0.4836569575661475] crosses zero
+
+Portfolio recorded. `kno export` writes the selected assets to their destinations.
+Export run demo-export (completed)
+  destination  tuning_set
+  wrote        kno-demo/tuning.jsonl (0 assets, 121 bytes)
+  manifest     kno-demo/tuning.jsonl.manifest.md
+
+The artifact is a pure function of the Portfolio and the pool: re-exporting is byte-identical, and export never mutates a destination.
+
+«the report page, asserted by substring below»
+Demo complete — nothing was spent, and nothing was sent anywhere.
+
+  kno-demo/cases.jsonl               12 eval Cases (8 dev, 4 held back)
+  kno-demo/pool.jsonl                3 candidate Assets
+  kno-demo/tuning.jsonl              the exported tuning set
+  kno-demo/tuning.jsonl.manifest.md  what the export claims, and from what
+  kno-demo/kno.db                    every run, score and trace
+  kno-demo/.gitignore                written by the demo, so this directory stays out of `git status`
+
+Why the numbers look like this:
+  score 1.000 — `fake:` answers every Case with what the Case expects, by
+    construction. The run happened, was scored against a declared Goal, cost nothing,
+    and sealed a holdout; nobody's agent is perfect.
+  deltas +0.0000 — injecting an Asset cannot change a deterministic answer, so no
+    Asset measured any effect. The intervals are real; the effects are zero.
+  portfolio empty — every corrected interval crosses zero, so nothing earned its
+    place. "Include nothing new" is a legal, first-class outcome, and the rejection log
+    says why for each Asset.
+
+Now do it with your data:
+  1. edit kno-demo/cases.jsonl — one scoreable interaction per line, with a stable id
+  2. kno baseline --evals kno-demo/cases.jsonl --agent openai:gpt-4.1 --max-cost-usd 2.00
+
+kno.yaml and KNO_* were not read: the demo is pinned to `fake:` so it cannot bill anyone.
+Remove everything with: rm -rf kno-demo

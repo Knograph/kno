@@ -2,6 +2,27 @@
 
 Goal: get from nothing to a baseline you can trust, and understand what it says.
 
+## 0. Watch it happen once, for free
+
+```bash
+kno demo
+```
+
+`kno demo` writes a twelve-Case eval set and a three-Asset pool into `./kno-demo`, then runs
+all five stages over them against the built-in `fake:` agent. It spends nothing, contacts
+nothing, and reads no configuration — not `kno.yaml`, not `KNO_*` — so it cannot bill anyone
+whatever your environment says. It finishes in well under a second, and you have seen the
+shape of everything below.
+
+Its score reads `1.000`, its deltas read `+0.0000`, and its portfolio comes back empty. All
+three are honest rather than flattering: `fake:` answers every Case with what the Case
+expects, injecting an Asset cannot change a deterministic answer, and an interval around zero
+that crosses zero is an Asset that has not earned its place. The demo prints those three
+sentences itself.
+
+The files it leaves behind are the starting point for the rest of this recipe: open
+`kno-demo/cases.jsonl` and replace its lines with your own.
+
 ## 1. Write some Cases
 
 A Case is one scoreable interaction: an input, and what a correct answer looks like. One JSON object per line.
