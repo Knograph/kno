@@ -1,0 +1,48 @@
+{"id":"case-000","input":"q","expected":"a","tags":["Refunds"]}
+{"id":"case-001","input":"q","expected":"a","tags":["refunds"]}
+{"id":"case-002","input":"q","expected":"a","tags":[" refunds "]}
+{"id":"case-003","input":"q","expected":"a","tags":["REFUNDS"]}
+{"id":"case-004","input":"q","expected":"a","tags":["Refunds"]}
+{"id":"case-005","input":"q","expected":"a","tags":["refunds"]}
+{"id":"case-006","input":"q","expected":"a","tags":[" refunds "]}
+{"id":"case-007","input":"q","expected":"a","tags":["REFUNDS"]}
+{"id":"case-008","input":"q","expected":"a","tags":["Refunds"]}
+{"id":"case-009","input":"q","expected":"a","tags":["refunds"]}
+{"id":"case-010","input":"q","expected":"a","tags":[" refunds "]}
+{"id":"case-011","input":"q","expected":"a","tags":["REFUNDS"]}
+{"id":"case-012","input":"q","expected":"a","tags":["Refunds"]}
+{"id":"case-013","input":"q","expected":"a","tags":["refunds"]}
+{"id":"case-014","input":"q","expected":"a","tags":[" refunds "]}
+{"id":"case-015","input":"q","expected":"a","tags":["REFUNDS"]}
+{"id":"case-016","input":"q","expected":"a","tags":["Refunds"]}
+{"id":"case-017","input":"q","expected":"a","tags":["refunds"]}
+{"id":"case-018","input":"q","expected":"a","tags":[" refunds "]}
+{"id":"case-019","input":"q","expected":"a","tags":["REFUNDS"]}
+{"id":"case-020","input":"q","expected":"a","tags":["Refunds"]}
+{"id":"case-021","input":"q","expected":"a","tags":["refunds"]}
+{"id":"case-022","input":"q","expected":"a","tags":[" refunds "]}
+{"id":"case-023","input":"q","expected":"a","tags":["REFUNDS"]}
+{"id":"case-024","input":"q","expected":"a","tags":["Refunds"]}
+{"id":"case-025","input":"q","expected":"a","tags":["refunds"]}
+{"id":"case-026","input":"q","expected":"a","tags":[" refunds "]}
+{"id":"case-027","input":"q","expected":"a","tags":["REFUNDS"]}
+{"id":"case-028","input":"q","expected":"a","tags":["Refunds"]}
+{"id":"case-029","input":"q","expected":"a","tags":["refunds"]}
+{"id":"case-030","input":"q","expected":"a","tags":[" refunds "]}
+{"id":"case-031","input":"q","expected":"a","tags":["REFUNDS"]}
+{"id":"case-032","input":"q","expected":"a","tags":["Refunds"]}
+{"id":"case-033","input":"q","expected":"a","tags":["refunds"]}
+{"id":"case-034","input":"q","expected":"a","tags":[" refunds "]}
+{"id":"case-035","input":"q","expected":"a","tags":["REFUNDS"]}
+{"id":"case-036","input":"q","expected":"a","tags":["Refunds"]}
+{"id":"case-037","input":"q","expected":"a","tags":["refunds"]}
+{"id":"case-038","input":"q","expected":"a","tags":[" refunds "]}
+{"id":"case-039","input":"q","expected":"a","tags":["REFUNDS"]}
+{"id":"b-000","input":"q","expected":"a","tags":["Billing","billing"]}
+{"id":"b-001","input":"q","expected":"a","tags":["Billing","billing"]}
+{"id":"b-002","input":"q","expected":"a","tags":["Billing","billing"]}
+{"id":"b-003","input":"q","expected":"a","tags":["Billing","billing"]}
+{"id":"b-004","input":"q","expected":"a","tags":["Billing","billing"]}
+{"id":"b-005","input":"q","expected":"a","tags":["Billing","billing"]}
+{"id":"b-006","input":"q","expected":"a","tags":["Billing","billing"]}
+{"id":"b-007","input":"q","expected":"a","tags":["Billing","billing"]}

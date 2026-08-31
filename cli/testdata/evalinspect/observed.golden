@@ -1,0 +1,129 @@
+# a recorded Value run joined to the source: the routing mode, the cluster verdict, and the ONE-sided minimum detectable harm beside the TWO-sided separable effects
+
+Evals  testdata/evalinspect/observed.jsonl
+  60 Cases — 52 dev, 8 held back
+  1 distinct behavior (tags)
+
+  Everything below reads your tags as behaviors, because that is what routing
+  does. If these tags name something else — priority, source, a date — the
+  per-tag numbers and suggestions below do not apply to them. Kno cannot tell
+  the difference.
+
+BEHAVIOR  DEV CASES  SEPARABLE EFFECT (two-sided 95%)  STATUS
+refunds          52                              0.20  ok
+
+  ! flagged   ✓ ok   ? unknown   · reported, never flagged
+  · 0% of dev Cases carry more than one behavior tag — a failure in those
+    Cases testifies about every tag it carries, so per-behavior attribution is
+    shared. (Heuristic: a tag is a label, not a claim about what a Case
+    exercises. Reported, not flagged: there is no principled threshold for
+    this.)
+  ✓ 1 distinct behavior on 52 of 52 dev Cases
+  ✓ every behavior has at least 5 dev Cases (core.MinClusterCases)
+  ! "refunds" is carried by 100% of dev Cases
+  ! the holdout has 8 Cases (20 is the minimum for a meaningful interval at
+    validate)
+  ✓ routing ran in tag-overlap mode over 1 cluster
+
+Observed  value run v-golden, against baseline b-golden
+  routing mode tag-overlap, run completed
+  control arm 20 Cases, minimum detectable harm 0.27 (one-sided 95%) — underpowered
+  BEHAVIOR  CLUSTER CASES  FAILED AT BASELINE  VERDICT  BEST ASSET  BEST DELTA  COVERED
+  refunds   9              0                   unknown  —           —           0
+
+2 of 5 checks flagged.  If these tags are behaviors you would fix separately:
+  - split "refunds" into the behaviors you would act on separately
+  - grow the eval set to roughly 100 Cases so the holdout reaches 20 at a
+    holdout fraction of 0.20, or validate will have no meaningful interval
+
+What each number claims: docs/what-the-numbers-mean.md
+Designing evals: docs/evaluation-design.md
+
+===== --json =====
+{
+  "evals": "testdata/evalinspect/observed.jsonl",
+  "cases": {
+    "total": 60,
+    "dev": 52,
+    "holdout": 8,
+    "weak_label": 0
+  },
+  "behaviors": [
+    {
+      "tag": "refunds",
+      "dev_cases": 52,
+      "separable_effect": 0.1969,
+      "sidedness": "two-sided",
+      "level": 0.95,
+      "status": "ok",
+      "spellings": 1
+    }
+  ],
+  "untagged_dev_cases": 0,
+  "multi_behavior_dev_cases": 0,
+  "multi_behavior_share": 0,
+  "dominant_behavior": {
+    "tag": "refunds",
+    "dev_cases": 52,
+    "share": 1
+  },
+  "checks": [
+    {
+      "name": "behaviors_declared",
+      "status": "ok",
+      "detail": "1 distinct behavior on 52 of 52 dev Cases"
+    },
+    {
+      "name": "behaviors_powered",
+      "status": "ok",
+      "detail": "every behavior has at least 5 dev Cases (core.MinClusterCases)"
+    },
+    {
+      "name": "behavior_concentration",
+      "status": "flagged",
+      "detail": "\"refunds\" is carried by 100% of dev Cases"
+    },
+    {
+      "name": "holdout_powered",
+      "status": "flagged",
+      "detail": "the holdout has 8 Cases (20 is the minimum for a meaningful interval at validate)"
+    },
+    {
+      "name": "attribution_observed",
+      "status": "ok",
+      "detail": "routing ran in tag-overlap mode over 1 cluster"
+    }
+  ],
+  "checks_flagged": 2,
+  "checks_total": 5,
+  "suggestions": [
+    "split \"refunds\" into the behaviors you would act on separately",
+    "grow the eval set to roughly 100 Cases so the holdout reaches 20 at a holdout fraction of 0.20, or validate will have no meaningful interval"
+  ],
+  "notes": [
+    "every per-tag number and suggestion assumes your tags name behaviors you would fix separately; kno cannot distinguish a behavior tag from a priority, source or date tag",
+    "separable_effect is a two-sided 95% bound using the worst-case paired-binary standard deviation; it is a bound, not an estimate from your data",
+    "multi_behavior_share is reported and never flagged: there is no principled threshold for it"
+  ],
+  "observed": {
+    "value_run_id": "v-golden",
+    "baseline_run_id": "b-golden",
+    "run_status": "completed",
+    "routing_mode": "tag-overlap",
+    "eval_source_matches_run": true,
+    "control_cases": 20,
+    "control_underpowered": true,
+    "min_detectable_harm": 0.27339990310659096,
+    "min_detectable_harm_sidedness": "one-sided",
+    "behaviors": [
+      {
+        "tag": "refunds",
+        "cluster_cases": 9,
+        "failed_at_baseline": 0,
+        "gap_status": "GAP_STATUS_UNKNOWN",
+        "best_delta": 0,
+        "covered_count": 0
+      }
+    ]
+  }
+}

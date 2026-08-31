@@ -1,0 +1,135 @@
+# one catch-all tag over most of the set: the concentration flag and its 'carried by' wording
+
+Evals  testdata/evalinspect/dominant.jsonl
+  150 Cases — 123 dev, 27 held back
+  4 distinct behaviors (tags)
+
+  Everything below reads your tags as behaviors, because that is what routing
+  does. If these tags name something else — priority, source, a date — the
+  per-tag numbers and suggestions below do not apply to them. Kno cannot tell
+  the difference.
+
+BEHAVIOR         DEV CASES  SEPARABLE EFFECT (two-sided 95%)  STATUS
+overall_quality        113                              0.13  ok
+billing                 12                              0.45  ok
+refunds                  8                              0.59  ok
+tool_use                 2                              6.35  underpowered
+
+  ! flagged   ✓ ok   ? unknown   · reported, never flagged
+  · 10% of dev Cases carry more than one behavior tag — a failure in those
+    Cases testifies about every tag it carries, so per-behavior attribution is
+    shared. (Heuristic: a tag is a label, not a claim about what a Case
+    exercises. Reported, not flagged: there is no principled threshold for
+    this.)
+  ✓ 4 distinct behaviors on 123 of 123 dev Cases
+  ! 1 behavior below core.MinClusterCases (5)
+  ! "overall_quality" is carried by 92% of dev Cases
+  ✓ the holdout has 27 Cases (20 is the minimum for a meaningful interval at
+    validate)
+  ? attribution_observed is unknown: no --value-run-id given
+
+2 of 5 checks flagged.  If these tags are behaviors you would fix separately:
+  - split "overall_quality" into the behaviors you would act on separately
+  - add Cases to tool_use, or merge them into a behavior you would fix
+    together
+  - re-run with --value-run-id <id> to see which behaviors a run actually
+    attributed
+
+What each number claims: docs/what-the-numbers-mean.md
+Designing evals: docs/evaluation-design.md
+
+===== --json =====
+{
+  "evals": "testdata/evalinspect/dominant.jsonl",
+  "cases": {
+    "total": 150,
+    "dev": 123,
+    "holdout": 27,
+    "weak_label": 0
+  },
+  "behaviors": [
+    {
+      "tag": "overall_quality",
+      "dev_cases": 113,
+      "separable_effect": 0.1318,
+      "sidedness": "two-sided",
+      "level": 0.95,
+      "status": "ok",
+      "spellings": 1
+    },
+    {
+      "tag": "billing",
+      "dev_cases": 12,
+      "separable_effect": 0.4493,
+      "sidedness": "two-sided",
+      "level": 0.95,
+      "status": "ok",
+      "spellings": 1
+    },
+    {
+      "tag": "refunds",
+      "dev_cases": 8,
+      "separable_effect": 0.5912,
+      "sidedness": "two-sided",
+      "level": 0.95,
+      "status": "ok",
+      "spellings": 1
+    },
+    {
+      "tag": "tool_use",
+      "dev_cases": 2,
+      "separable_effect": 6.3531,
+      "sidedness": "two-sided",
+      "level": 0.95,
+      "status": "underpowered",
+      "spellings": 1
+    }
+  ],
+  "untagged_dev_cases": 0,
+  "multi_behavior_dev_cases": 12,
+  "multi_behavior_share": 0.0975609756097561,
+  "dominant_behavior": {
+    "tag": "overall_quality",
+    "dev_cases": 113,
+    "share": 0.9186991869918699
+  },
+  "checks": [
+    {
+      "name": "behaviors_declared",
+      "status": "ok",
+      "detail": "4 distinct behaviors on 123 of 123 dev Cases"
+    },
+    {
+      "name": "behaviors_powered",
+      "status": "flagged",
+      "detail": "1 behavior below core.MinClusterCases (5)"
+    },
+    {
+      "name": "behavior_concentration",
+      "status": "flagged",
+      "detail": "\"overall_quality\" is carried by 92% of dev Cases"
+    },
+    {
+      "name": "holdout_powered",
+      "status": "ok",
+      "detail": "the holdout has 27 Cases (20 is the minimum for a meaningful interval at validate)"
+    },
+    {
+      "name": "attribution_observed",
+      "status": "unknown",
+      "detail": "no --value-run-id given"
+    }
+  ],
+  "checks_flagged": 2,
+  "checks_total": 5,
+  "suggestions": [
+    "split \"overall_quality\" into the behaviors you would act on separately",
+    "add Cases to tool_use, or merge them into a behavior you would fix together",
+    "re-run with --value-run-id \u003cid\u003e to see which behaviors a run actually attributed"
+  ],
+  "notes": [
+    "every per-tag number and suggestion assumes your tags name behaviors you would fix separately; kno cannot distinguish a behavior tag from a priority, source or date tag",
+    "separable_effect is a two-sided 95% bound using the worst-case paired-binary standard deviation; it is a bound, not an estimate from your data",
+    "multi_behavior_share is reported and never flagged: there is no principled threshold for it"
+  ]
+}

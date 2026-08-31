@@ -39,6 +39,42 @@ const (
 	evalsHFPrefix         = "hf:"
 )
 
+// evalsFlags is what resolving an eval source actually needs.
+//
+// Extracted from baselineFlags because `kno eval inspect` resolves a source
+// and has none of the other forty fields: no agent, no goal, no budget, no
+// generation parameters. A read-only command taking the spend command's flag
+// struct would compile, and would then be one line away from reading a field
+// that implies a run.
+type evalsFlags struct {
+	// path is the --evals value: a bare path or one of the dataset prefixes.
+	path string
+
+	// holdoutFrac and splitSeed decide the division. Both are inputs to the
+	// split, so both change which Cases are dev — which is why inspect
+	// accepts them rather than assuming the default.
+	holdoutFrac float64
+	splitSeed   string
+
+	// The two endpoint-security opt-outs, for a self-hosted dataset
+	// deployment. Flags-only by configSpecs' rule: a committed TLS downgrade
+	// is an ambient one.
+	allowInsecureURL    bool
+	allowPrivateAddress bool
+}
+
+// evalsFlags projects the spend command's flags onto the subset a source
+// needs.
+func (f *baselineFlags) evalsFlags() evalsFlags {
+	return evalsFlags{
+		path:                f.evalsPath,
+		holdoutFrac:         f.holdoutFrac,
+		splitSeed:           f.splitSeed,
+		allowInsecureURL:    f.allowInsecureURL,
+		allowPrivateAddress: f.allowPrivateAddress,
+	}
+}
+
 // resolveEvals turns the --evals flag into an eval source.
 //
 // The bare path is the jsonl adapter, unchanged. The langsmith: prefix
@@ -58,10 +94,10 @@ const (
 // path is wrong; for the dataset adapters, the keys, the dataset name, or
 // the endpoint are. WithFix replaces, so this is the only wrapper — callers
 // must not wrap again.
-func resolveEvals(f *baselineFlags) (evalSource, error) {
-	if strings.HasPrefix(f.evalsPath, evalsBraintrustPrefix) {
+func resolveEvals(f evalsFlags) (evalSource, error) {
+	if strings.HasPrefix(f.path, evalsBraintrustPrefix) {
 		ev, err := braintrust.New(braintrust.Options{
-			Dataset:              strings.TrimPrefix(f.evalsPath, evalsBraintrustPrefix),
+			Dataset:              strings.TrimPrefix(f.path, evalsBraintrustPrefix),
 			HoldoutFrac:          f.holdoutFrac,
 			SplitSeed:            f.splitSeed,
 			AllowInsecureBaseURL: f.allowInsecureURL,
@@ -73,9 +109,9 @@ func resolveEvals(f *baselineFlags) (evalSource, error) {
 		return ev, nil
 	}
 
-	if strings.HasPrefix(f.evalsPath, evalsLangsmithPrefix) {
+	if strings.HasPrefix(f.path, evalsLangsmithPrefix) {
 		ev, err := langsmith.New(langsmith.Options{
-			Dataset:              strings.TrimPrefix(f.evalsPath, evalsLangsmithPrefix),
+			Dataset:              strings.TrimPrefix(f.path, evalsLangsmithPrefix),
 			HoldoutFrac:          f.holdoutFrac,
 			SplitSeed:            f.splitSeed,
 			AllowInsecureBaseURL: f.allowInsecureURL,
@@ -87,9 +123,9 @@ func resolveEvals(f *baselineFlags) (evalSource, error) {
 		return ev, nil
 	}
 
-	if strings.HasPrefix(f.evalsPath, evalsLangfusePrefix) {
+	if strings.HasPrefix(f.path, evalsLangfusePrefix) {
 		ev, err := langfuse.New(langfuse.Options{
-			Dataset:              strings.TrimPrefix(f.evalsPath, evalsLangfusePrefix),
+			Dataset:              strings.TrimPrefix(f.path, evalsLangfusePrefix),
 			HoldoutFrac:          f.holdoutFrac,
 			SplitSeed:            f.splitSeed,
 			AllowInsecureBaseURL: f.allowInsecureURL,
@@ -101,8 +137,8 @@ func resolveEvals(f *baselineFlags) (evalSource, error) {
 		return ev, nil
 	}
 
-	if strings.HasPrefix(f.evalsPath, evalsHFPrefix) {
-		dataset, config, split, err := parseHFEvals(f.evalsPath)
+	if strings.HasPrefix(f.path, evalsHFPrefix) {
+		dataset, config, split, err := parseHFEvals(f.path)
 		if err != nil {
 			return nil, errs.ErrInvalidInput.WithFix(
 				"name the dataset in --evals, as hf:<org>/<name>/<config>/<split>",
@@ -122,7 +158,7 @@ func resolveEvals(f *baselineFlags) (evalSource, error) {
 	}
 
 	ev, err := jsonl.New(jsonl.Options{
-		Path:        f.evalsPath,
+		Path:        f.path,
 		HoldoutFrac: f.holdoutFrac,
 		SplitSeed:   f.splitSeed,
 	})

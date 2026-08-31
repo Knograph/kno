@@ -575,6 +575,19 @@ func decodeReportJSON(b []byte) (reportJSON, error) {
 	return rep, nil
 }
 
+// decodeInspectJSON parses a rendered `kno eval inspect --json` document.
+//
+// Here rather than beside the struct it decodes, because the encoding/json
+// exemption is scoped to THIS FILENAME: cli/evalinspect_json.go declares the
+// shape and this file is the only place that encodes or decodes it.
+func decodeInspectJSON(b []byte) (inspectJSON, error) {
+	var doc inspectJSON
+	if err := json.Unmarshal(b, &doc); err != nil {
+		return inspectJSON{}, fmt.Errorf("decoding eval inspect json: %w", err)
+	}
+	return doc, nil
+}
+
 // demoReport is `kno demo --json`: ONE document, no prose before or after it.
 //
 // Hand-written for the same reason as jsonReport, and living in this file for

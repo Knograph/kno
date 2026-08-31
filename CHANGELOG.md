@@ -40,6 +40,79 @@ covenants — breaking any of them requires a major version.
   which is the work the field exists to save. `core.ExportResult` now carries
   the ID and the renderer reports it. Found by `uknoAI/kno-examples`, whose
   scenarios assert on projected `--json` subsets.
+### Added
+
+- **`kno eval inspect` — whether an eval set can support attribution, before anything is
+  spent.** Kno's promise is *this Asset moved this outcome by this much*, and every mechanism
+  that delivers it is bounded by the granularity of the eval set. Until now that bound was
+  discovered the expensive way: after paying for a baseline and a value run, in the routing
+  mode line or in an `UNDERPOWERED` verdict. `kno eval inspect --evals <source>` reports it
+  first. It constructs no Agent, resolves no model credential, makes no LLM call, creates no
+  Run and writes nothing — the `kno doctor` posture. (A remote source does call its vendor's
+  API with the vendor's credentials, because reading the dataset is the job; the help text
+  says exactly that.)
+
+  Five checks, each anchored to a constant the engine already uses rather than to a number the
+  command invented: `behaviors_declared` (`cluster()`'s all-failed mode),
+  `behaviors_powered` (`core.MinClusterCases`), `behavior_concentration`, `holdout_powered`
+  (`split.MinHoldout`), and `attribution_observed`, which reports `unknown` without
+  `--value-run-id` rather than passing by default. Per behavior it prints the **separable
+  effect**: the smallest effect that many dev Cases can distinguish from zero. That number is
+  the arithmetic behind `docs/evaluation-design.md`'s "~10+ Cases per behavior" heuristic —
+  ten Cases buys the ability to detect a 51-percentage-point swing on a binary Goal, and
+  nothing smaller.
+
+  **The exit code is 0 whether zero or five checks are flagged.** It is a diagnostic, not a
+  gate; overloading exit 1 ("something is broken") with "your eval set is coarse" trains
+  people to ignore 1, which the README's exit-code table warns against. A CI job that wants a
+  gate reads `checks_flagged` from `--json`.
+
+  **Three things it deliberately does not claim.** It emits no adjectival grade — the headline
+  is a count (`2 of 5 checks flagged`) and each check reports `ok`/`flagged`/`unknown`, the
+  three-state discipline `knov1.GapStatus` already uses, because a single word blending five
+  checks with five different fixes is the anti-pattern the command exists to find. It reports
+  no score decomposition: no Goal in this build populates `Score.components`, so
+  "this Goal accounts for 62% of total score" is not computable and is not printed
+  (docs/debt.md#131). And the multi-behavior share is **reported and never flagged** — the
+  only threshold ever proposed for it was anchored to nothing in the tree, and a tool built to
+  refuse invented cut-offs cannot flag on one.
+
+  **The one thing it cannot know, stated once and prominently in both renderings.** A
+  behavior, to the engine, is a normalized tag — `cluster()` groups by tag, routing overlaps
+  against them, `ComputeGaps` reports one verdict per tag. But `Case.tags` is free-form, so
+  `p0`, `regression-2024` and `source:zendesk` are reported as distinct behaviors with
+  specific numbers and directive per-tag suggestions, and nothing in the schema distinguishes
+  them from a real taxonomy. The output says so above every number that depends on it, carries
+  it as `notes[0]` in `--json`, and introduces the suggestions with "If these tags are
+  behaviors you would fix separately". Goldens pin both renderings.
+
+  Holdout Cases are counted and never read: the per-Case analysis goes through `core.Seal`,
+  while totals come from `CountSplits`, which counts every Case and retains nothing but
+  counters. Two canary tests hold that — one plants a holdout Case with a tag that appears
+  nowhere else, one fills every Case's input, expected, rubric and turn content with a
+  sentinel that must appear in no output at any verbosity.
+
+- **`stats/interval.MinDetectableEffect(n, sidedness, level)`** — the minimum-detectable-effect
+  arithmetic, extracted from `core/value` so that both sidednesses come from one
+  implementation. `core/value.minDetectableHarm` now delegates to it.
+
+### Changed
+
+- **`docs/status.json` lists command LEAVES, not namespaces.** `kno eval` is the first
+  two-level command in the tree and runs nothing on its own, so `registeredCommands` now
+  recurses and publishes `eval inspect`. Before this PR every command was a leaf and the
+  distinction did not exist; an artifact whose job is to say what a release does must not
+  advertise a name a reader cannot run.
+
+- **`Plan.MinDetectableHarm` is computed from the exact Student-t quantile at every degree of
+  freedom.** It previously read a 3-4-digit lookup table that stopped at df=31 and fell back
+  to `z = 1.645` beyond it. Two consequences, both in the conservative direction. Within the
+  table's range the reported bound moves by at most 0.03% — the table's own rounding. Beyond
+  df=31 the bound **widens by up to 3%**: at a 40-Case control arm the old code reported
+  0.1839 where the true one-sided bound is 0.1884, which understated the smallest regression
+  the run could actually see. A characterization test pins the pre-refactor values, asserts
+  agreement inside the table's precision, and asserts the direction of the correction past
+  df=31, so neither can change again by accident.
 
 ## [0.1.2](https://github.com/uknoAI/kno/compare/v0.1.1...v0.1.2) (2026-08-31)
 

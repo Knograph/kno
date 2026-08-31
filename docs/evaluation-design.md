@@ -24,7 +24,11 @@ presented as a point estimate pretending to be truth.
 
 Practical anchors, honestly labeled as heuristics:
 
-- **~10+ Cases per behavior** before a small improvement is distinguishable from noise.
+- **~10+ Cases per behavior** before a small improvement is distinguishable from noise. That
+  heuristic is shorthand for arithmetic, and the arithmetic is printable: ten Cases buys the
+  ability to separate a **51-percentage-point** swing on a binary Goal from zero, and no
+  smaller effect. `kno eval inspect` prints that number per behavior for your own eval set —
+  see [the table below](#the-inspect-command).
 - **The interval is the answer.** If the interval spans "would act" and "wouldn't", add Cases
   before deciding — that is exactly the information the interval exists to carry.
 - **A single Case is a demonstration, not evidence.** One Case can show the mechanism works;
@@ -112,8 +116,60 @@ state as one that updates in place, and only one is acceptable.
 - **Judging what the model was told.** If the expected answer is pasted into the prompt or
   the Asset, the Goal measures copying, not the behavior.
 
-## The inspect idea
+## The inspect command
 
-A `kno eval inspect` command — flagging underpowered behaviors, multi-behavior Cases, and
-coarse Goals from the data a run already records — is on the roadmap; this page is written so
-that command's output has a vocabulary to point at.
+`kno eval inspect --evals <source>` reports what routing and the power machinery will actually
+see, **before anything is spent**. It reads no model, creates no Run, writes nothing, and
+exits 0 whatever it finds — a diagnostic, not a gate. This page is the vocabulary its output
+points at.
+
+```
+kno eval inspect --evals cases.jsonl
+```
+
+Five checks, each anchored to a constant the engine already uses:
+
+| Check | Question | Anchored to |
+|---|---|---|
+| `behaviors_declared` | Do any dev Cases carry tags at all? | `cluster()`'s all-failed mode |
+| `behaviors_powered` | Per behavior, enough dev Cases to separate an effect? | `core.MinClusterCases` (5) |
+| `behavior_concentration` | How much of the set sits under one catch-all tag, or under none? | section 8's "one giant score" |
+| `holdout_powered` | Is the holdout large enough for `validate`? | `split.MinHoldout` (20) |
+| `attribution_observed` | What did a recorded Value run's routing actually do? | needs `--value-run-id`; `unknown` without it |
+
+### Separable effect: the arithmetic behind "~10+ Cases"
+
+For each behavior, `inspect` prints the **smallest effect that many dev Cases can separate
+from zero** — a two-sided 95% bound over the worst-case paired-binary standard deviation. It
+is a bound, not an estimate from your data, which is exactly why it can be printed before a
+measurement exists.
+
+| dev Cases in the behavior | separable effect (two-sided 95%) | one-sided 95%, for comparison |
+|---|---|---|
+| 3 | 1.76 (i.e. nothing) | 1.19 |
+| 5 (`core.MinClusterCases`) | 0.88 | 0.67 |
+| 10 (the "~10+" heuristic above) | 0.51 | 0.41 |
+| 20 (`value.MinControlSample`) | 0.33 | 0.27 |
+| 44 | 0.21 | 0.18 |
+| ~135 | 0.12 | 0.10 |
+| ~195 | 0.10 | 0.08 |
+
+The command prints the number rather than an adjective, so you argue with arithmetic instead
+of with an opinion. Which column applies depends on the question — see
+[What the numbers mean](what-the-numbers-mean.md#separable-effect-and-minimum-detectable-harm).
+
+### What it deliberately does not claim
+
+- **It does not know whether your tags are behaviors.** A behavior, to the engine, is a
+  normalized tag: `cluster()` groups by tag and `ComputeGaps` reports one verdict per tag. But
+  tags are free-form, so `p0`, `regression-2024` and `source:zendesk` are reported as distinct
+  behaviors with confident per-tag numbers. The output says so once, prominently, above every
+  number that depends on it.
+- **It emits no overall grade.** A single word blending five checks with five different fixes
+  is anti-pattern one on this page. The headline is a count — `2 of 5 checks flagged` — and
+  each check reports `ok`, `flagged` or `unknown`, where `unknown` is a real answer.
+- **It does not report a score decomposition.** No Goal in this build populates
+  `Score.components`, so "this Goal accounts for 62% of total score" is not computable and is
+  not printed. Case-share concentration measures the same anti-pattern from data that exists.
+- **The multi-behavior share is reported and never flagged.** There is no principled threshold
+  for it anywhere in the tree, and a tool built to refuse invented cut-offs cannot flag on one.
