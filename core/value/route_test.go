@@ -818,9 +818,13 @@ func TestTheReportedBoundIsTheOneTheRunCanActuallySee(t *testing.T) {
 	t.Parallel()
 
 	const (
-		z   = 1.645 // one-sided 95% beyond df=30
 		sd  = 0.7071067811865476
 		t20 = 1.729 // one-sided 95% at df=19
+		t60 = 1.671 // one-sided 95% at df=59
+		// The published constants carry three decimals, so the comparison
+		// does too. A tighter tolerance would be pinning the table's rounding
+		// rather than the statistic.
+		tol = 5e-4
 	)
 	// dev=67 reserves floor(0.3 x 67) = 20 controls; dev=200 reserves 60.
 	plan20, err := value.Route(devCases(67, 3), []value.AssetRef{{ID: "a"}}, value.Options{Seed: 1})
@@ -830,15 +834,23 @@ func TestTheReportedBoundIsTheOneTheRunCanActuallySee(t *testing.T) {
 	if m := len(plan20.ControlCaseIDs); m != 20 {
 		t.Fatalf("fixture reserved %d controls, want 20", m)
 	}
-	if got := plan20.MinDetectableHarm; math.Abs(got-t20*sd/math.Sqrt(20)) > 1e-6 {
+	if got := plan20.MinDetectableHarm; math.Abs(got-t20*sd/math.Sqrt(20)) > tol {
 		t.Errorf("MinDetectableHarm over 20 Cases = %v, want %v", got, t20*sd/math.Sqrt(20))
 	}
 	plan60, err := value.Route(devCases(200, 3), []value.AssetRef{{ID: "a"}}, value.Options{Seed: 1})
 	if err != nil {
 		t.Fatalf("Route: %v", err)
 	}
-	if got := plan60.MinDetectableHarm; math.Abs(got-z*sd/math.Sqrt(60)) > 1e-6 {
-		t.Errorf("MinDetectableHarm over 60 Cases = %v, want %v", got, z*sd/math.Sqrt(60))
+	// df=59, where the bound used to fall back to z=1.645 and come back
+	// SMALLER than the truth. t is above z at every finite df, so the old
+	// value flattered the run by ~1.6% here and by ~3% at m=33.
+	if got := plan60.MinDetectableHarm; math.Abs(got-t60*sd/math.Sqrt(60)) > tol {
+		t.Errorf("MinDetectableHarm over 60 Cases = %v, want %v", got, t60*sd/math.Sqrt(60))
+	}
+	if got := plan60.MinDetectableHarm; got <= 1.645*sd/math.Sqrt(60) {
+		t.Errorf("MinDetectableHarm over 60 Cases = %v, which is at or below the z "+
+			"bound %v — the bound must never be optimistic, and t exceeds z at "+
+			"every finite df", got, 1.645*sd/math.Sqrt(60))
 	}
 
 	// The bound must shrink as the sample grows, or it is not a bound.
@@ -1033,5 +1045,36 @@ func TestSnapshotIsEmptyWhenThereIsNoCluster(t *testing.T) {
 	}
 	if plan.Clusters != nil {
 		t.Fatalf("Clusters = %v, want nil when routing is disabled", plan.Clusters)
+	}
+}
+
+// TestTheHarmGateClearsWhereThePowerActuallyArrives pins the sample size at
+// which a control arm stops being underpowered.
+//
+// ControlUnderpowered is MinDetectableHarm > HarmMargin, so any understatement
+// of the bound clears the gate EARLY — and the bound was understated for every
+// m past 33, because it fell back to z=1.645 where the true t is larger. The
+// gate cleared at m=136; the honest crossing is m=138. Two sample sizes
+// declared a powered control arm they did not have, which is exactly the
+// "underpowered harm test that looks like a passed one" the regression rule
+// refuses to act on.
+//
+// Pinned by arithmetic rather than by routing a fixture, because the crossing
+// is a property of the bound and the margin, not of any particular eval set.
+func TestTheHarmGateClearsWhereThePowerActuallyArrives(t *testing.T) {
+	t.Parallel()
+
+	underpowered := func(m int) bool { return value.MinDetectableHarmFor(m) > value.HarmMargin }
+
+	if underpowered(138) {
+		t.Errorf("a control arm of 138 is reported underpowered; the bound at 138 is %v, "+
+			"which clears HarmMargin %v", value.MinDetectableHarmFor(138), value.HarmMargin)
+	}
+	for _, m := range []int{136, 137} {
+		if !underpowered(m) {
+			t.Errorf("a control arm of %d is reported POWERED; its bound is %v against "+
+				"HarmMargin %v. This is the z-fallback bug: the gate must not clear "+
+				"before the power actually arrives", m, value.MinDetectableHarmFor(m), value.HarmMargin)
+		}
 	}
 }

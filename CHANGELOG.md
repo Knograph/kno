@@ -38,6 +38,22 @@ covenants — breaking any of them requires a major version.
 
 ### Bug Fixes
 
+- **The harm bound is the exact t quantile, and the underpowered gate clears
+  where the power actually arrives.** `minDetectableHarm` read a 3-decimal
+  table for df≤30 and then fell back to `z = 1.645`, on the reasoning that "t
+  reaches z". It does not — t exceeds z at every finite df — so past m=33 the
+  reported bound came back **smaller than the truth**: ~3% optimistic at m=33,
+  ~1.6% at m=60. The function's own godoc refuses to report an optimistic
+  figure; it was reporting one.
+  It reached a safety gate. `ControlUnderpowered` is
+  `MinDetectableHarm > HarmMargin`, so understating the bound cleared the gate
+  early: control arms of **136 and 137** Cases were reported powered when they
+  were not — the "underpowered harm test that looks like a passed one" that
+  the regression rule exists to refuse. The gate now clears at 138. Runs with
+  control samples in that range may newly report `control_underpowered`, which
+  is the correct verdict. Found while implementing `kno eval inspect`, whose
+  plan mandated reusing this bound two-sided.
+
 * **ci:** the release commit signs itself, and the DCO check stops failing correct trailers ([#142](https://github.com/uknoAI/kno/issues/142)) ([63cfa20](https://github.com/uknoAI/kno/commit/63cfa2087b5b72c882f1aee144e6c241daf59228))
 
 

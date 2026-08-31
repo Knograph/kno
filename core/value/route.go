@@ -10,7 +10,12 @@ import (
 
 	"github.com/knograph/kno/core/errs"
 	knov1 "github.com/knograph/kno/gen/kno/v1"
+	"github.com/knograph/kno/stats/interval"
 )
+
+// harmLevel is the confidence level the harm bound is quoted at: 95%,
+// one-sided, matching what the bound has always claimed.
+const harmLevel = 0.95
 
 // CaseRef is everything the router is allowed to know about a Case.
 //
@@ -101,28 +106,28 @@ func minDetectableHarm(m int) float64 {
 		// read a small number here as a tight bound.
 		return 0
 	}
-	z := 1.645 // z at 95% one-sided, used beyond df=30 where t reaches it.
-	// The table is indexed by degrees of freedom 1..31, stored 0-based, so
-	// df=1 (m=2) reads index 0.
-	if df := m - 1; df >= 1 && df <= len(t95OneSided) {
-		z = t95OneSided[df-1]
-	}
+	// The exact one-sided t quantile, not a table lookup with a z fallback.
+	//
+	// This used to read a 3-decimal table for df<=30 and then use z=1.645
+	// beyond it, on the reasoning that "t reaches z". It does not: t > z for
+	// every finite df, approaching it only in the limit. So past m=33 the
+	// bound came back SMALLER than the truth — an optimistic figure, which is
+	// precisely what the comment above refuses to report. The error is small
+	// (~3% at m=33, ~1.6% at m=60) and always in the direction that flatters
+	// the run.
+	//
+	// It reached a safety gate. ControlUnderpowered is MinDetectableHarm >
+	// HarmMargin, so understating the bound clears the gate early: at m=136
+	// and m=137 a run declared its control arm powered when it was not, which
+	// is the "underpowered harm test that looks like a passed one" the
+	// regression rule exists to prevent. The gate now clears at m=138, where
+	// it always should have.
+	q := interval.Quantile(harmLevel, knov1.Sidedness_SIDEDNESS_UPPER, m-1)
 	// sdMax is the STANDARD DEVIATION bound, sqrt(0.5) ~ 0.707, not the
 	// variance bound 0.5 — the earlier slip that understated every reported
 	// minimum by ~sqrt(2).
 	const sdMax = 0.7071067811865476 // math.Sqrt(0.5)
-	return z * sdMax / math.Sqrt(float64(m))
-}
-
-// t95OneSided is the one-sided 95% Student-t critical value by degrees of
-// freedom, df 0..30. df = m-1 for a sample of m pairs. Kept as a table rather
-// than a dependency: these are the small-m values where t differs from z
-// enough to matter, and the bound is reported, not refined.
-var t95OneSided = [...]float64{
-	6.314, 2.920, 2.353, 2.132, 2.015, 1.943, 1.895, 1.860, 1.833, 1.812,
-	1.796, 1.782, 1.771, 1.761, 1.753, 1.746, 1.740, 1.734, 1.729, 1.725,
-	1.721, 1.717, 1.714, 1.711, 1.708, 1.706, 1.703, 1.701, 1.699, 1.697,
-	1.695,
+	return q * sdMax / math.Sqrt(float64(m))
 }
 
 // String renders a Mode for events and error messages.
