@@ -111,6 +111,17 @@ does not belong in a fail-fast-cheapest-first gate. Run them by hand if you touc
 | `make release-stamp` | Builds one binary and reads its `--version` back. Schema validation cannot see an `-X` path that names the wrong symbol; that failure is silent and ships a release reporting `dev` forever |
 | `make release-snapshot` | All six platforms, locally. Cannot publish: `--snapshot` disables every publisher unconditionally |
 
+Two further targets are **red on purpose**, and that is the whole point of them. Each is a gate
+whose implementation is a curated first issue, so the check was landed *first, failing*: a
+contribution to either has a test to make pass rather than a paragraph to satisfy. Neither is in
+`make check` and neither runs in CI, so "`main` goes red" is not one of the ways they can go
+wrong — you see them only when you run them.
+
+| Command | What it checks | What makes it green |
+|---|---|---|
+| `make selftest` | Breaks a gate's invariant on purpose and requires that gate to fail *with a message naming the break*. A gate nobody has watched fail is a gate nobody knows works — the `.SHELLFLAGS` defect left eleven recipes reporting success while the commands inside them failed ([docs/debt.md#16](docs/debt.md)). `docs` and `ledger-check` are covered as the worked pattern; the script prints the rest | One `case_<gate>` per pull request, modelled on `case_docs` in `scripts/selftest.sh`. Break it in a scratch file or a trap-restored copy, never in the tree. The pull request that empties the list wires the target into `make check` and repays the entry |
+| `make actions-pin-check` | Every `uses:` in `.github/workflows/` must name a 40-character commit SHA rather than a movable tag, the way `go.sum` byte-pins every Go tool we build with ([docs/debt.md#14](docs/debt.md)) | Replace each tag with that tag's commit SHA, keeping the tag as a trailing comment so Dependabot can still bump it. This one is a mechanical chore and is offered as exactly that: what it teaches is the contribution workflow — sign-off, commit title, CHANGELOG, a red-to-green run — not the codebase |
+
 **New dependencies need justification in the PR body:** what it does, why the standard library or
 an existing dependency can't, its license, and its maintenance signal.
 
