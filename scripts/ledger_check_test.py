@@ -155,5 +155,34 @@ class TestReleaseGateIsUnchanged(unittest.TestCase):
         self.assertEqual(code, 2)
 
 
+class DuplicateIds(unittest.TestCase):
+    """Two rows sharing an id is an ambiguous citation and an overcount.
+
+    Not hypothetical: two parallel workstreams each appended an id="131",
+    and the collision surfaced only as a merge conflict in a file where
+    conflicts are routine. Landing in either order without touching the same
+    lines, nothing would have caught it.
+    """
+
+    def test_a_collision_is_reported(self):
+        rows = [("7", "what", "trigger"), ("8", "w", "t"), ("7", "w2", "t2")]
+        self.assertEqual(ledger.duplicate_ids(rows), ["7"])
+
+    def test_each_duplicate_is_named_once(self):
+        rows = [("3", "a", "b"), ("3", "c", "d"), ("3", "e", "f")]
+        self.assertEqual(ledger.duplicate_ids(rows), ["3"])
+
+    def test_a_clean_ledger_reports_nothing(self):
+        rows = [(str(n), "w", "t") for n in range(1, 40)]
+        self.assertEqual(ledger.duplicate_ids(rows), [])
+
+    def test_the_real_ledger_has_no_duplicates(self):
+        # Resolved from this file rather than the cwd: scan()'s default path
+        # is repo-relative, and these tests are run from both the repo root
+        # (make test) and from scripts/ (directly).
+        real, _ = ledger.scan(_HERE.parent / "docs" / "debt.md")
+        self.assertEqual(ledger.duplicate_ids(real), [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=0, argv=[sys.argv[0], "-q"])
