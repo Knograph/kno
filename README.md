@@ -112,7 +112,7 @@ The whole loop, in four steps.
 **1. Write some Cases** — one scoreable interaction per line, each with a stable `id`:
 
 ```jsonl
-{"id":"refund-01","input":"How do I get a refund?","expected":"Refunds are processed within 5 business days."}
+{"id":"refund-01","input":"How do I get a refund?","expected":"Refunds are issued within 5 business days."}
 {"id":"ship-01","input":"When does my order ship?","expected":"Orders ship within 1 business day."}
 ```
 
