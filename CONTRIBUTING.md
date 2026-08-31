@@ -1,8 +1,12 @@
 # Contributing to Kno
 
 Thanks for being here. Kno is built so that external contributors are the point, not an
-afterthought — Ring-1 adapters and judge prompts are the designed on-ramp, and every external PR
-gets a first response within 48 hours, even if it's "reviewing this week."
+afterthought — Ring-1 adapters are the designed on-ramp, and every external PR gets a first
+response within 48 hours, even if it's "reviewing this week." (Judge prompts are named as a
+second on-ramp in DESIGN, and will be one: `judge/` is a package doc today, and the harness
+that would make a prompt contributable arrives with `judge calibrate` in v0.2. Until then the
+on-ramp is adapters and the curated issues below, and this file says so rather than pointing
+you at a door that does not open.)
 
 This is `CLAUDE.md` (our engineering operating manual) distilled for humans. Where the two
 disagree, `CLAUDE.md` wins and the disagreement is a bug — please file it.
@@ -302,6 +306,9 @@ none ever goes into telemetry.
 ## Where to start
 
 `good-first-issue` here is a curated pipeline, not a label of neglect — each one has context,
-pointers, and a test to make pass. The natural on-ramps are **Ring-1 adapters** (a new
-OpenAI-compatible endpoint, a pool format) and **judge prompts**. Several entries in
-[the Debt Ledger](docs/debt.md) are also well-scoped starting points.
+pointers, and a test to make pass. The natural on-ramp today is **Ring-1 adapters** — a new
+OpenAI-compatible endpoint, an Evals source, a pool format — because `coretest` already ships
+the conformance suite that defines correct for them, so the hard question is answered before
+you start. **Judge prompts** join that list when `judge calibrate` lands in v0.2 and gives a
+prompt something to be measured against. Several entries in [the Debt Ledger](docs/debt.md)
+are also well-scoped starting points.
