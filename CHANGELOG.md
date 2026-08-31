@@ -28,6 +28,27 @@ covenants — breaking any of them requires a major version.
      At release time the hand-written heading is renamed from [Unreleased] to
      the version. See docs/debt.md#76 for why that is still a manual step. -->
 
+## [0.1.2](https://github.com/uknoAI/kno/compare/v0.1.1...v0.1.2) (2026-08-31)
+
+
+### Features
+
+* kno demo — the whole loop in one command, for free ([#144](https://github.com/uknoAI/kno/issues/144)) ([6317b9a](https://github.com/uknoAI/kno/commit/6317b9ade6d5369a282014bcd67c9619a5ad0bf3))
+
+
+### Bug Fixes
+
+* **ci:** the release commit signs itself, and the DCO check stops failing correct trailers ([#142](https://github.com/uknoAI/kno/issues/142)) ([63cfa20](https://github.com/uknoAI/kno/commit/63cfa2087b5b72c882f1aee144e6c241daf59228))
+
+
+### Documentation
+
+* **adapters:** package godoc names only the adapters that exist ([#141](https://github.com/uknoAI/kno/issues/141)) ([dec47a8](https://github.com/uknoAI/kno/commit/dec47a85a747547c1f2a8f1230194fea2bcb35c2))
+* evaluation best practices in the README, and the deep evaluation-design guide ([#137](https://github.com/uknoAI/kno/issues/137)) ([bfb85c7](https://github.com/uknoAI/kno/commit/bfb85c77b3422fa85795dacde85e3bc2c65bb37c))
+* Phase-0 plans for the next body of work, all adversarially reviewed ([#140](https://github.com/uknoAI/kno/issues/140)) ([648effb](https://github.com/uknoAI/kno/commit/648effbcd2a4fe401e99eac33d406873500f6699))
+* the quickstart tape shows the intervals it claims ([#143](https://github.com/uknoAI/kno/issues/143)) ([1c6403f](https://github.com/uknoAI/kno/commit/1c6403f9c49ab156b79a5e90dad4cd713d265372))
+* the README quickstart Case matches the recorded tape ([#139](https://github.com/uknoAI/kno/issues/139)) ([20c7dfe](https://github.com/uknoAI/kno/commit/20c7dfe7a1cc2c27311a20f72aac238d6f9be42b))
+
 ## [Unreleased]
 
 ### Added
