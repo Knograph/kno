@@ -16,8 +16,22 @@ guessed at "when a second Tuner lands" would be wrong often enough to get
 switched off, and a gate people switch off is worse than no gate --- which is
 what docs/debt.md#70 is about. This one asks a question with a mechanical
 answer.
+
+`--json` is the second caller, added for docs/status.json (see
+docs/plans/2026-08-30-kno-status.md). It reports the ledger's size and how much
+of it is open, over the SAME row scan and the SAME DISPOSITIONS tuple the
+release gate uses. That sameness is the whole point: a second parser of a
+hand-written 84-row Markdown table would drift from this one silently, because
+the two consumers ask different questions and would disagree without either
+failing. The release gate's exit-code behaviour is unchanged by its arrival.
+
+The one place the two callers differ is strictness, and it is deliberate: this
+gate skips a row it cannot parse, because it is narrow on purpose; `--json`
+reports `skipped` so its caller can refuse to publish a count that silently
+omitted a row. See docs/debt.md#87.
 """
 
+import json
 import re
 import sys
 
@@ -26,13 +40,67 @@ LEDGER = "docs/debt.md"
 # The dispositions the ledger rules permit.
 DISPOSITIONS = ("REPAID", "Re-dated", "re-dated", "RE-DATED", "won't fix", "WON'T FIX")
 
+# A row of the ledger table. Anything else in the file is prose.
+_SEPARATOR = re.compile(r"^\|[\s:|-]+\|$")
+_ANCHOR = re.compile(r'id="(\d+)"')
 
-def main(argv):
-    if len(argv) != 2:
-        print("usage: ledger-check.py <version-being-released>", file=sys.stderr)
-        return 2
-    version = argv[1].lstrip("v")
 
+def scan(path=LEDGER):
+    """Return (rows, skipped) for the ledger at path.
+
+    A row is (entry_id, what_cell, trigger_cell) --- the same three values the
+    release gate has always read, taken by the same rule: a line carrying an
+    id="N" anchor and at least six pipe-delimited cells.
+
+    skipped counts the lines that LOOK like table rows and are not the header
+    or its separator, yet fail one of those two conditions. The release gate
+    ignores it; a caller publishing a count must not, because a skipped row is
+    an undercount presented as a fact.
+    """
+    rows, skipped = [], 0
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            stripped = line.strip()
+            if not stripped.startswith("|"):
+                continue
+            if _SEPARATOR.match(stripped):
+                continue
+            cells = line.split("|")
+            # The header's first cell is the column name "#". A malformed row
+            # is not distinguishable from a header by shape alone, so the
+            # header is identified by its content rather than its position.
+            if len(cells) > 1 and cells[1].strip() == "#":
+                continue
+            m = _ANCHOR.search(line)
+            if not m or len(cells) < 6:
+                skipped += 1
+                continue
+            rows.append((m.group(1), cells[2], cells[4]))
+    return rows, skipped
+
+
+def disposed(what, trigger):
+    """Whether a row carries one of the dispositions the ledger rules allow."""
+    return any(d in what or d in trigger for d in DISPOSITIONS)
+
+
+def report_json(path=LEDGER):
+    """The ledger's shape, for docs/status.json."""
+    rows, skipped = scan(path)
+    entries = [
+        {"id": int(entry), "open": not disposed(what, trigger)}
+        for entry, what, trigger in rows
+    ]
+    return {
+        "total": len(entries),
+        "open": sum(1 for e in entries if e["open"]),
+        "skipped": skipped,
+        "entries": entries,
+    }
+
+
+def check_release(version, path=LEDGER):
+    """Return the entries naming version that carry no disposition."""
     # "the first tagged release" for 0.0.1; the literal version otherwise. Both
     # spellings appear, because an entry written before any release existed
     # could not name a number.
@@ -42,20 +110,29 @@ def main(argv):
     names_release = re.compile("|".join(patterns), re.IGNORECASE)
 
     lapsed = []
-    with open(LEDGER, encoding="utf-8") as fh:
-        for line in fh:
-            m = re.search(r'id="(\d+)"', line)
-            if not m:
-                continue
-            cells = line.split("|")
-            if len(cells) < 6:
-                continue
-            entry, what, trigger = m.group(1), cells[2], cells[4]
-            if not names_release.search(trigger):
-                continue
-            if any(d in what or d in trigger for d in DISPOSITIONS):
-                continue
-            lapsed.append((entry, re.sub(r"[*~`]", "", what).strip()[:100]))
+    rows, _ = scan(path)
+    for entry, what, trigger in rows:
+        if not names_release.search(trigger):
+            continue
+        if disposed(what, trigger):
+            continue
+        lapsed.append((entry, re.sub(r"[*~`]", "", what).strip()[:100]))
+    return lapsed
+
+
+def main(argv):
+    if len(argv) == 2 and argv[1] == "--json":
+        json.dump(report_json(), sys.stdout, indent=2, sort_keys=True)
+        sys.stdout.write("\n")
+        return 0
+
+    if len(argv) != 2:
+        print("usage: ledger-check.py <version-being-released>", file=sys.stderr)
+        print("       ledger-check.py --json", file=sys.stderr)
+        return 2
+    version = argv[1].lstrip("v")
+
+    lapsed = check_release(version)
 
     if lapsed:
         plural = "y" if len(lapsed) == 1 else "ies"

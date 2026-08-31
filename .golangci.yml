@@ -71,6 +71,13 @@ linters:
             # adapters/**/format.go), and neither touches a kno.v1 type. Scoped
             # to the one directory so it cannot spread to engine code.
             - "!**/internal/cmd/pricingcheck/**"
+            # internal/cmd/status is the docs/status.json generator: a build
+            # tool, not engine code. It decodes scripts/ledger-check.py --json
+            # (a hand-written shape from a build script) and encodes a
+            # hand-written artifact aimed at a jq pipeline and a site build.
+            # No kno.v1 type is involved. Same contract as pricingcheck above,
+            # scoped to the one directory so it cannot spread.
+            - "!**/internal/cmd/status/**"
 
             # core/export.go renders the tuning-set grammar: OpenAI chat format
             # JSONL, a downstream wire format Tuner adapters parse. Hand-built
