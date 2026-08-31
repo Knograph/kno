@@ -28,6 +28,25 @@ covenants — breaking any of them requires a major version.
      At release time the hand-written heading is renamed from [Unreleased] to
      the version. See docs/debt.md#76 for why that is still a manual step. -->
 
+## [0.1.1](https://github.com/uknoAI/kno/compare/v0.1.0...v0.1.1) (2026-08-31)
+
+
+### Features
+
+* Bedrock and Vertex agent adapters — partner clouds priced ([#128](https://github.com/uknoAI/kno/issues/128)) ([360cabc](https://github.com/uknoAI/kno/commit/360cabcd7c9adf9c5d4a467e4d16675beef6eada))
+* Braintrust Evals adapter — fourth core.Evals source ([#124](https://github.com/uknoAI/kno/issues/124)) ([638e3d2](https://github.com/uknoAI/kno/commit/638e3d230820359f2c6c5ef15e3e714b3f02ac97))
+* Hugging Face adapters — Evals and Pool ([#125](https://github.com/uknoAI/kno/issues/125)) ([ebd4d4a](https://github.com/uknoAI/kno/commit/ebd4d4aa8c28341169d65c8e662bec0c36eaad56))
+
+
+### Documentation
+
+* fold the hand-written changelog into v0.1.0 ([#131](https://github.com/uknoAI/kno/issues/131)) ([c86e28b](https://github.com/uknoAI/kno/commit/c86e28bd3b61619057cc32378e803bba1e181170))
+
+
+### Build & Dependencies
+
+* **deps:** Bump github.com/charmbracelet/glamour from 0.9.1 to 1.0.0 ([#136](https://github.com/uknoAI/kno/issues/136)) ([2514b25](https://github.com/uknoAI/kno/commit/2514b25f74f5ce530d80881f1a0d6ba16ed069bc))
+
 ## [0.1.0](https://github.com/uknoAI/kno/compare/v0.0.4...v0.1.0) (2026-08-29)
 
 
