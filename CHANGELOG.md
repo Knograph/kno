@@ -49,7 +49,7 @@ covenants — breaking any of them requires a major version.
 * the quickstart tape shows the intervals it claims ([#143](https://github.com/uknoAI/kno/issues/143)) ([1c6403f](https://github.com/uknoAI/kno/commit/1c6403f9c49ab156b79a5e90dad4cd713d265372))
 * the README quickstart Case matches the recorded tape ([#139](https://github.com/uknoAI/kno/issues/139)) ([20c7dfe](https://github.com/uknoAI/kno/commit/20c7dfe7a1cc2c27311a20f72aac238d6f9be42b))
 
-## [Unreleased]
+## v0.1.2 — in detail
 
 ### Added
 
