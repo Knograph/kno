@@ -57,7 +57,7 @@ covenants — breaking any of them requires a major version.
 
 * Bump anchore/sbom-action/download-syft from 0.24.0 to 0.24.2 ([#135](https://github.com/uknoAI/kno/issues/135)) ([23dcfe0](https://github.com/uknoAI/kno/commit/23dcfe031cc5c00718b3c66d0ccd224f3a35f651))
 
-## [Unreleased]
+## v0.1.3 — in detail
 
 ### Changed
 
