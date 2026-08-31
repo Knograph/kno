@@ -79,6 +79,25 @@ def scan(path=LEDGER):
     return rows, skipped
 
 
+def duplicate_ids(rows):
+    """Ids appearing on more than one row, in first-seen order.
+
+    A duplicate id is not a cosmetic problem. Entries cite each other by
+    number ("the shape debt #46 already ruled out"), the release gate reports
+    by number, and docs/status.json publishes a count that silently becomes
+    an overcount. It happened once already: two parallel workstreams each
+    appended an id="131" and the collision surfaced only as a merge conflict
+    in a file where conflicts are routine, so nothing would have caught it if
+    the two rows had landed in either order without touching the same lines.
+    """
+    seen, dupes = set(), []
+    for entry, _what, _trigger in rows:
+        if entry in seen and entry not in dupes:
+            dupes.append(entry)
+        seen.add(entry)
+    return dupes
+
+
 def disposed(what, trigger):
     """Whether a row carries one of the dispositions the ledger rules allow."""
     return any(d in what or d in trigger for d in DISPOSITIONS)
@@ -131,6 +150,21 @@ def main(argv):
         print("       ledger-check.py --json", file=sys.stderr)
         return 2
     version = argv[1].lstrip("v")
+
+    # Checked before the release question, because a duplicate id makes every
+    # answer below it ambiguous: "#131" would name two entries, and a reader
+    # chasing a citation gets whichever the parser saw first.
+    rows, _ = scan()
+    if dupes := duplicate_ids(rows):
+        plural = "" if len(dupes) == 1 else "s"
+        print("\033[31m FAIL \033[0m duplicate ledger id%s: %s"
+              % (plural, ", ".join("#" + d for d in dupes)))
+        print("        Entries cite each other by number and status.json counts")
+        print("        by number, so two rows sharing one id is an ambiguous")
+        print("        citation and an overcount. Renumber the later row to the")
+        print("        next free id; the ledger is append-only, so the highest")
+        print("        existing id plus one is always safe.")
+        return 1
 
     lapsed = check_release(version)
 
