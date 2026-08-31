@@ -132,13 +132,15 @@ func (o BaselineOptions) invoker(agg *aggregator) invoker {
 		RetryBackoff: o.retryBackoff(),
 		OnOvershoot: func(ctx context.Context, key store.MeasurementKey, estimated, settled, overshoot int64) {
 			agg.recordEmitFailure(o.emitSettlementOvershoot(
-				ctx, agg, key, estimated, settled, overshoot))
+				ctx, agg, key, estimated, settled, overshoot,
+			))
 		},
 		OnRetry: func(ctx context.Context, key store.MeasurementKey, attempt int,
 			reason knov1.RetryReason, wait, remaining time.Duration,
 		) {
 			agg.recordEmitFailure(o.emitRetryAttempted(
-				ctx, agg, key, attempt, reason, wait, remaining))
+				ctx, agg, key, attempt, reason, wait, remaining,
+			))
 		},
 	}
 }

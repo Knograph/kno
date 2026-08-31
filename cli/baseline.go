@@ -121,7 +121,7 @@ continues without paying for anything twice.`,
 	}
 
 	flags := cmd.Flags()
-	flags.StringVar(&f.evalsPath, "evals", "", "eval cases: a JSONL file path, langsmith:<dataset-name>, langfuse:<dataset-name>, or braintrust:<dataset-name> (required)")
+	flags.StringVar(&f.evalsPath, "evals", "", "eval cases: a JSONL file path, langsmith:<dataset-name>, langfuse:<dataset-name>, braintrust:<dataset-name>, or hf:<org>/<name>/<config>/<split> (required)")
 	flags.StringVar(&f.agentRef, "agent", "fake:", "agent to measure: fake:, openai:<model>, anthropic:<model>, bedrock:<model-id>, vertex:<model-id>, exec:<command>")
 	flags.StringVar(&f.goalName, "goal", "exact-match", "goal to score against")
 	flags.StringVar(&f.dbPath, "db", "kno.db", "where runs and traces are stored")

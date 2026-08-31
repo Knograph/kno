@@ -89,9 +89,9 @@ Interrupting is safe: measurements are checkpointed as they complete, and
 	}
 
 	flags := cmd.Flags()
-	flags.StringVar(&f.evalsPath, "evals", "", "eval cases: a JSONL file path, langsmith:<dataset-name>, langfuse:<dataset-name>, or braintrust:<dataset-name> (required)")
+	flags.StringVar(&f.evalsPath, "evals", "", "eval cases: a JSONL file path, langsmith:<dataset-name>, langfuse:<dataset-name>, braintrust:<dataset-name>, or hf:<org>/<name>/<config>/<split> (required)")
 	flags.StringVar(&f.poolPath, "pool", "",
-		"assets to value: a JSONL file path, csv:<file>, or md:<file-or-dir> (required)")
+		"assets to value: a JSONL file path, csv:<file>, md:<file-or-dir>, or hf:<org>/<name>/<config>/<split>:<kind> (required)")
 	flags.BoolVar(&f.splitSections, "split-sections", false,
 		"split an md: pool into its ## sections, one asset per section")
 	flags.StringVar(&f.baselineRunID, "baseline-run-id", "",

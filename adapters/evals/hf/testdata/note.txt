@@ -1,0 +1,12 @@
+Fixtures for the Hugging Face Evals adapter tests. All of these are shapes
+served by the real datasets-server API (https://datasets-server.huggingface.co),
+recorded as static bodies and served by the test fake; nothing here requires
+network access, a token, or spend.
+
+The x-revision response header is the fingerprint. The test fake serves a
+constant revision (the datasetserver test constant "abc123def") unless a test
+deliberately drifts it.
+
+Envelope shapes:
+  /splits  -> {"splits":[{"config","split"},...]}
+  /rows    -> {"rows":[{"row_idx","row"}...],"num_rows_total":N,"partial":false}

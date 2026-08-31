@@ -146,6 +146,24 @@ covenants — breaking any of them requires a major version.
   endpoint-security refusals and opt-in flags as the other dataset adapters.
   [docs/plans/2026-08-29-braintrust-evals-adapter.md](docs/plans/2026-08-29-braintrust-evals-adapter.md)
 
+### Features
+
+- **Hugging Face Evals and Pool adapters.** `--evals hf:<org>/<name>/<config>/<split>`
+  reads a dataset split as Cases — `input`/`prompt`/`question` maps to the input,
+  `expected`/`completion`/`answer` to the expected, `row_idx` to the Case id —
+  and `--pool hf:<org>/<name>/<config>/<split>:<kind>` reads the same rows as
+  Assets, text-bearing columns composed as sorted `name: value` lines. The
+  datasets-server `x-revision` header is the fingerprint: a split whose
+  revision moves between pages, or between runs, is a different object and is
+  refused, never silently absorbed. The two adapters share a transport client
+  (`adapters/internal/datasetserver`) and the shared endpoint-security checks
+  (`adapters/internal/endpointsec`) that the LangSmith and Langfuse adapters
+  each carried their own copy of. Docs: [cookbook entry](docs/cookbook/huggingface.md),
+  [adapter plan](docs/plans/2026-08-29-huggingface-adapters.md), `docs/debt.md#68` fired
+  (the HF pool carries the same byte-based `context_tokens` estimate as the
+  markdown and CSV pools, acknowledged on the field and in
+  what-the-numbers-mean).
+
 ### Changed
 
 - **The routing shuffle is inlined, and the seed's meaning is now specified.**

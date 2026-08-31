@@ -1,0 +1,5 @@
+{"splits":[
+  {"dataset":"org/name","config":"main","split":"train"},
+  {"dataset":"org/name","config":"main","split":"test"},
+  {"dataset":"org/name","config":"alt","split":"train"}
+]}

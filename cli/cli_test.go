@@ -432,10 +432,12 @@ func TestHelpIsSnapshotted(t *testing.T) {
 		"untouched until validate",
 		"without paying for anything twice",
 		// The eval-source grammar: a bare path is a JSONL file, the prefixes
-		// are dataset names. Both commands promise the same grammar.
+		// are dataset names; an hf: source is four slash-separated segments.
+		// Both commands promise the same grammar.
 		"langsmith:<dataset-name>",
 		"langfuse:<dataset-name>",
 		"braintrust:<dataset-name>",
+		"hf:<org>/<name>/<config>/<split>",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("help text no longer mentions %q:\n%s", want, stdout)
@@ -450,6 +452,7 @@ func TestHelpIsSnapshotted(t *testing.T) {
 		"langsmith:<dataset-name>",
 		"langfuse:<dataset-name>",
 		"braintrust:<dataset-name>",
+		"hf:<org>/<name>/<config>/<split>:<kind>",
 	} {
 		if !strings.Contains(valueOut, want) {
 			t.Errorf("value help no longer mentions the %s grammar:\n%s", want, valueOut)

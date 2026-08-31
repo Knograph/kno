@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/knograph/kno/adapters/evals/braintrust"
+	"github.com/knograph/kno/adapters/evals/hf"
 	"github.com/knograph/kno/adapters/evals/jsonl"
 	"github.com/knograph/kno/adapters/evals/langfuse"
 	"github.com/knograph/kno/adapters/evals/langsmith"
@@ -431,4 +432,48 @@ func newBraintrustEvalsServer(t *testing.T, miss bool) *httptest.Server {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// TestEvalsGrammarHFPrefix: the hf: prefix selects the Hugging Face
+// adapter. The CLI has no host knob — the adapter always talks to the
+// public datasets-server — so the resolver's result is type-checked, not
+// driven against a fake server; the adapter's own package tests drive it.
+func TestEvalsGrammarHFPrefix(t *testing.T) {
+	t.Parallel()
+	f := &baselineFlags{
+		evalsPath:   "hf:org/name/main/train",
+		holdoutFrac: 0.3,
+		splitSeed:   "seed-1",
+	}
+	ev, err := resolveEvals(f)
+	if err != nil {
+		t.Fatalf("resolveEvals: %v", err)
+	}
+	if _, ok := ev.(*hf.Evals); !ok {
+		t.Fatalf("resolveEvals(hf:) = %T, want *hf.Evals", ev)
+	}
+}
+
+// TestEvalsGrammarHFRefusals: the hf: grammar is four slash-separated
+// segments and nothing else — no revision segment, no fifth segment, no
+// empty one — and every refusal names the grammar it expects.
+func TestEvalsGrammarHFRefusals(t *testing.T) {
+	t.Parallel()
+	for _, path := range []string{
+		"hf:org/name/main",            // three segments
+		"hf:org/name/main/train/more", // five segments
+		"hf:org//main/train",          // empty segment
+		"hf:/name/main/train",         // empty org
+		"hf:",                         // nothing at all
+	} {
+		f := &baselineFlags{evalsPath: path}
+		_, err := resolveEvals(f)
+		if err == nil {
+			t.Errorf("resolveEvals(%q) accepted a malformed hf: source", path)
+			continue
+		}
+		if !strings.Contains(err.Error(), "hf:<org>/<name>/<config>/<split>") {
+			t.Errorf("resolveEvals(%q) refusal does not name the grammar: %v", path, err)
+		}
+	}
 }

@@ -170,7 +170,8 @@ func watchReport(ctx context.Context, out io.Writer, db store.Store, f reportFla
 		case <-ctx.Done():
 			return errs.ErrInterrupted.Wrap(fmt.Errorf(
 				"the watch was interrupted before %s reached a terminal status",
-				data.ValueRun.GetId()))
+				data.ValueRun.GetId(),
+			))
 		case <-tick:
 		}
 	}

@@ -415,7 +415,8 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		return fmt.Errorf(
 			"database is at schema version %d but this build understands %d; "+
 				"upgrade kno, or point --db at a different file",
-			current, schemaVersion)
+			current, schemaVersion,
+		)
 	}
 
 	for _, m := range migrations {
@@ -929,7 +930,8 @@ func (s *SQLite) distinctNonEmpty(ctx context.Context, runID, column string) ([]
 		     UNION ALL
 		     SELECT %s FROM measurements WHERE run_id = ?
 		 ) WHERE %s != '' ORDER BY %s`,
-		column, column, column, column, column)
+		column, column, column, column, column,
+	)
 	rows, err := db.QueryContext(ctx, q, runID, runID)
 	if err != nil {
 		return nil, fmt.Errorf("reading %s for %s: %w", column, runID, err)
@@ -1141,7 +1143,8 @@ func (s *SQLite) Purge(ctx context.Context, runID string) (int64, error) {
 			q := fmt.Sprintf(
 				`UPDATE %s SET response_proto = NULL, score_proto = NULL
 				 WHERE run_id = ? AND (response_proto IS NOT NULL OR score_proto IS NOT NULL)`,
-				table)
+				table,
+			)
 			res, execErr := tx.ExecContext(ctx, q, runID)
 			if execErr != nil {
 				return 0, fmt.Errorf("purging traces from %s for %s: %w", table, runID, execErr)

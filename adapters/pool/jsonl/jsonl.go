@@ -140,7 +140,8 @@ func (p *Pool) Assets(ctx context.Context) (iter.Seq2[*core.Asset, error], error
 			// terms the user can act on rather than passing the raw error up.
 			yield(nil, fmt.Errorf(
 				"%s line %d: %w (records are capped at %d bytes; split the asset or raise MaxRecordBytes)",
-				path, line+1, err, maxBytes))
+				path, line+1, err, maxBytes,
+			))
 		}
 	}, nil
 }
@@ -165,7 +166,8 @@ func (p *Pool) assetAt(raw []byte, line int, seen map[string]struct{}) (*core.As
 			"%s line %d: the record is not valid UTF-8, and decoding it would "+
 				"silently replace the bad bytes rather than fail — so the Asset "+
 				"measured would differ from the Asset on disk",
-			p.opts.Path, line)
+			p.opts.Path, line,
+		)
 	}
 
 	rec, err := decode(raw)
@@ -180,7 +182,8 @@ func (p *Pool) assetAt(raw []byte, line int, seen map[string]struct{}) (*core.As
 		// inserting one line above it would orphan everything already paid for.
 		return nil, fmt.Errorf(
 			"%s line %d: asset has no id, and every measurement is keyed on it; "+
-				"give every asset a stable id", p.opts.Path, line)
+				"give every asset a stable id", p.opts.Path, line,
+		)
 	}
 	if rec.Content == "" {
 		// An Asset with no content cannot be injected and costs nothing to
