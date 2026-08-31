@@ -28,6 +28,35 @@ covenants — breaking any of them requires a major version.
      At release time the hand-written heading is renamed from [Unreleased] to
      the version. See docs/debt.md#76 for why that is still a manual step. -->
 
+## [0.1.3](https://github.com/uknoAI/kno/compare/v0.1.2...v0.1.3) (2026-08-31)
+
+
+### Features
+
+* docs/status.json — generated status data for the site, gated in make check ([#150](https://github.com/uknoAI/kno/issues/150)) ([cb50d5b](https://github.com/uknoAI/kno/commit/cb50d5bdf35e65bcb0d11609e42d7561396a7f5c))
+* kno eval inspect — whether an eval set can support attribution ([#155](https://github.com/uknoAI/kno/issues/155)) ([18ebb4a](https://github.com/uknoAI/kno/commit/18ebb4a7c7ec865b15b7ce2a4c23b9147a58e4e9))
+
+
+### Bug Fixes
+
+* **cli:** kno export --json names the Select run it rendered from ([#156](https://github.com/uknoAI/kno/issues/156)) ([074d73f](https://github.com/uknoAI/kno/commit/074d73fbcedca5184cca0a38f1b51c9fe25f9c09))
+* **core:** the rejection log prints bounds at four places, not seventeen ([#157](https://github.com/uknoAI/kno/issues/157)) ([350bc01](https://github.com/uknoAI/kno/commit/350bc0152a952f8a685ec3005050014ed3425271))
+* **value:** the harm bound is the exact t quantile, not z beyond df=30 ([#158](https://github.com/uknoAI/kno/issues/158)) ([4622b90](https://github.com/uknoAI/kno/commit/4622b90ef06e41938014f860e2ecc0225d291587))
+
+
+### Documentation
+
+* answer the examples plan's blocking question by reading kno-www ([#146](https://github.com/uknoAI/kno/issues/146)) ([9bc5c47](https://github.com/uknoAI/kno/commit/9bc5c47bfef0058c1c4430ee9b6ac1032b98ddbe))
+* **debt:** record two live defects found by the v0.2 Phase-0 workstreams ([#159](https://github.com/uknoAI/kno/issues/159)) ([37967e5](https://github.com/uknoAI/kno/commit/37967e584c221f5722e007cdf804ee2fd85a471a))
+* fold the hand-written changelog into v0.1.2 ([#145](https://github.com/uknoAI/kno/issues/145)) ([bd858c3](https://github.com/uknoAI/kno/commit/bd858c3f75a1b785b63eb651c18271cacaa967f4))
+* Phase-0 plans for v0.2, all adversarially reviewed ([#161](https://github.com/uknoAI/kno/issues/161)) ([83c7641](https://github.com/uknoAI/kno/commit/83c76416c87d653126bfb979e9cf677d1f994e5b))
+* stop advertising an on-ramp that does not exist yet ([#162](https://github.com/uknoAI/kno/issues/162)) ([89ce9ee](https://github.com/uknoAI/kno/commit/89ce9eeb7847c9b1b7b1410135ee4663a686e3c9))
+
+
+### Build & Dependencies
+
+* Bump anchore/sbom-action/download-syft from 0.24.0 to 0.24.2 ([#135](https://github.com/uknoAI/kno/issues/135)) ([23dcfe0](https://github.com/uknoAI/kno/commit/23dcfe031cc5c00718b3c66d0ccd224f3a35f651))
+
 ## [Unreleased]
 
 ### Bug Fixes
