@@ -19,6 +19,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/spf13/cobra"
+
 	"github.com/knograph/kno/adapters/agent/pricing"
 	knov1 "github.com/knograph/kno/gen/kno/v1"
 )
@@ -106,16 +108,34 @@ func stageName(s knov1.Stage) string {
 // Cobra's own help and completion commands are excluded: they are not Kno's
 // surface, and completion is added lazily during Execute, so including them
 // would make the artifact depend on whether the tree had been run.
+//
+// LEAVES, not parents. `kno eval` is a namespace that runs nothing — a bare
+// invocation prints its help — so listing it as a command would publish an
+// entry a reader cannot run, in an artifact whose whole job is to say what
+// this release actually does. The recursion emits `eval inspect` instead.
 func registeredCommands() []string {
 	names := []string{}
-	for _, c := range NewRootCmd().Commands() {
+	collectCommands(NewRootCmd(), "", &names)
+	sort.Strings(names)
+	return names
+}
+
+// collectCommands appends every runnable leaf under cmd, prefixed by its path.
+func collectCommands(cmd *cobra.Command, prefix string, out *[]string) {
+	for _, c := range cmd.Commands() {
 		if c.Hidden || c.Name() == "help" || c.Name() == "completion" {
 			continue
 		}
-		names = append(names, c.Name())
+		path := c.Name()
+		if prefix != "" {
+			path = prefix + " " + c.Name()
+		}
+		if c.HasSubCommands() {
+			collectCommands(c, path, out)
+			continue
+		}
+		*out = append(*out, path)
 	}
-	sort.Strings(names)
-	return names
 }
 
 // StatusDebt is the Debt Ledger's size, as scripts/ledger-check.py reports it.

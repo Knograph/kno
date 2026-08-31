@@ -39,3 +39,9 @@ func DecodeDemoSelect(raw []byte) (SelectReport, error) { return decodeDemoSelec
 
 // SelectReport is `kno select --json`'s shape, exposed for tests.
 type SelectReport = selectReport
+
+// DecodeInspectJSON parses a rendered `kno eval inspect --json` document.
+func DecodeInspectJSON(b []byte) (InspectJSON, error) { return decodeInspectJSON(b) }
+
+// InspectJSON is `kno eval inspect --json`'s shape, exposed for tests.
+type InspectJSON = inspectJSON

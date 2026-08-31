@@ -337,3 +337,32 @@ func renderStatusRaw(t *testing.T) map[string]any {
 	}
 	return raw
 }
+
+// TestRegisteredCommandsListsLeavesNotNamespaces: `kno eval` runs nothing —
+// a bare invocation prints its help — so the artifact must publish
+// `eval inspect`, which a reader can actually run.
+//
+// The first two-level command in the tree made this reachable. Before it,
+// every command was a leaf and the distinction did not exist; the day a
+// second namespace lands, this is what stops the artifact from advertising a
+// name that does nothing.
+func TestRegisteredCommandsListsLeavesNotNamespaces(t *testing.T) {
+	t.Parallel()
+
+	got := registeredCommands()
+	for _, name := range got {
+		if name == "eval" {
+			t.Error("docs/status.json lists `eval`, which is a namespace that runs nothing; " +
+				"it must list the leaf `eval inspect`")
+		}
+	}
+	found := false
+	for _, name := range got {
+		if name == "eval inspect" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("docs/status.json does not list `eval inspect`: %v", got)
+	}
+}

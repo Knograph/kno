@@ -254,7 +254,7 @@ func runBaseline(ctx context.Context, in io.Reader, out, errOut io.Writer, f bas
 	}
 	defer stopTracing()
 
-	evals, err := resolveEvals(&f)
+	evals, err := resolveEvals(f.evalsFlags())
 	if err != nil {
 		return err
 	}

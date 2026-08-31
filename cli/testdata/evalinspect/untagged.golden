@@ -1,0 +1,88 @@
+# no dev Case carries a tag, so routing degrades to all-failed and nothing is attributed per behavior
+
+Evals  testdata/evalinspect/untagged.jsonl
+  120 Cases — 100 dev, 20 held back
+  0 distinct behaviors (tags)
+
+  Everything below reads your tags as behaviors, because that is what routing
+  does. If these tags name something else — priority, source, a date — the
+  per-tag numbers and suggestions below do not apply to them. Kno cannot tell
+  the difference.
+
+No dev Case carries a behavior tag.
+
+  ! flagged   ✓ ok   ? unknown   · reported, never flagged
+  · 0% of dev Cases carry more than one behavior tag — a failure in those
+    Cases testifies about every tag it carries, so per-behavior attribution is
+    shared. (Heuristic: a tag is a label, not a claim about what a Case
+    exercises. Reported, not flagged: there is no principled threshold for
+    this.)
+  ! no dev Case carries a tag, so routing runs in all-failed mode and
+    attributes nothing per behavior
+  ? behaviors_powered is unknown: no behavior tags to assess
+  ! 100% of dev Cases carry no behavior tag
+  ✓ the holdout has 20 Cases (20 is the minimum for a meaningful interval at
+    validate)
+  ? attribution_observed is unknown: no --value-run-id given
+
+2 of 5 checks flagged.  If these tags are behaviors you would fix separately:
+  - tag the 100 dev Cases that carry no behavior tag, or accept that routing
+    will measure everything against everything
+  - re-run with --value-run-id <id> to see which behaviors a run actually
+    attributed
+
+What each number claims: docs/what-the-numbers-mean.md
+Designing evals: docs/evaluation-design.md
+
+===== --json =====
+{
+  "evals": "testdata/evalinspect/untagged.jsonl",
+  "cases": {
+    "total": 120,
+    "dev": 100,
+    "holdout": 20,
+    "weak_label": 0
+  },
+  "behaviors": [],
+  "untagged_dev_cases": 100,
+  "multi_behavior_dev_cases": 0,
+  "multi_behavior_share": 0,
+  "checks": [
+    {
+      "name": "behaviors_declared",
+      "status": "flagged",
+      "detail": "no dev Case carries a tag, so routing runs in all-failed mode and attributes nothing per behavior"
+    },
+    {
+      "name": "behaviors_powered",
+      "status": "unknown",
+      "detail": "no behavior tags to assess"
+    },
+    {
+      "name": "behavior_concentration",
+      "status": "flagged",
+      "detail": "100% of dev Cases carry no behavior tag"
+    },
+    {
+      "name": "holdout_powered",
+      "status": "ok",
+      "detail": "the holdout has 20 Cases (20 is the minimum for a meaningful interval at validate)"
+    },
+    {
+      "name": "attribution_observed",
+      "status": "unknown",
+      "detail": "no --value-run-id given"
+    }
+  ],
+  "checks_flagged": 2,
+  "checks_total": 5,
+  "suggestions": [
+    "tag the 100 dev Cases that carry no behavior tag, or accept that routing will measure everything against everything",
+    "re-run with --value-run-id \u003cid\u003e to see which behaviors a run actually attributed"
+  ],
+  "notes": [
+    "every per-tag number and suggestion assumes your tags name behaviors you would fix separately; kno cannot distinguish a behavior tag from a priority, source or date tag",
+    "separable_effect is a two-sided 95% bound using the worst-case paired-binary standard deviation; it is a bound, not an estimate from your data",
+    "multi_behavior_share is reported and never flagged: there is no principled threshold for it"
+  ]
+}

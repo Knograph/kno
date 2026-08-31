@@ -1,0 +1,120 @@
+# four spellings of one tag, and a holdout below MinHoldout
+
+Evals  testdata/evalinspect/spellings.jsonl
+  48 Cases — 42 dev, 6 held back
+  2 distinct behaviors (tags), 4 spellings collapsed into "refunds"
+
+  Everything below reads your tags as behaviors, because that is what routing
+  does. If these tags name something else — priority, source, a date — the
+  per-tag numbers and suggestions below do not apply to them. Kno cannot tell
+  the difference.
+
+BEHAVIOR  DEV CASES  SEPARABLE EFFECT (two-sided 95%)  STATUS
+refunds          35                              0.24  ok
+billing           7                              0.65  ok
+
+  ! flagged   ✓ ok   ? unknown   · reported, never flagged
+  · 0% of dev Cases carry more than one behavior tag — a failure in those
+    Cases testifies about every tag it carries, so per-behavior attribution is
+    shared. (Heuristic: a tag is a label, not a claim about what a Case
+    exercises. Reported, not flagged: there is no principled threshold for
+    this.)
+  · 7 repeated tag references on single Cases were counted once each, matching
+    snapshotClusters' NDropped accounting.
+  ✓ 2 distinct behaviors on 42 of 42 dev Cases
+  ✓ every behavior has at least 5 dev Cases (core.MinClusterCases)
+  ! "refunds" is carried by 83% of dev Cases
+  ! the holdout has 6 Cases (20 is the minimum for a meaningful interval at
+    validate)
+  ? attribution_observed is unknown: no --value-run-id given
+
+2 of 5 checks flagged.  If these tags are behaviors you would fix separately:
+  - split "refunds" into the behaviors you would act on separately
+  - grow the eval set to roughly 100 Cases so the holdout reaches 20 at a
+    holdout fraction of 0.20, or validate will have no meaningful interval
+  - re-run with --value-run-id <id> to see which behaviors a run actually
+    attributed
+
+What each number claims: docs/what-the-numbers-mean.md
+Designing evals: docs/evaluation-design.md
+
+===== --json =====
+{
+  "evals": "testdata/evalinspect/spellings.jsonl",
+  "cases": {
+    "total": 48,
+    "dev": 42,
+    "holdout": 6,
+    "weak_label": 0
+  },
+  "behaviors": [
+    {
+      "tag": "refunds",
+      "dev_cases": 35,
+      "separable_effect": 0.2428996778700269,
+      "sidedness": "two-sided",
+      "level": 0.95,
+      "status": "ok",
+      "spellings": 4
+    },
+    {
+      "tag": "billing",
+      "dev_cases": 7,
+      "separable_effect": 0.653964700187019,
+      "sidedness": "two-sided",
+      "level": 0.95,
+      "status": "ok",
+      "spellings": 1
+    }
+  ],
+  "collapsed_spellings": 4,
+  "collapsed_tag": "refunds",
+  "untagged_dev_cases": 0,
+  "multi_behavior_dev_cases": 0,
+  "multi_behavior_share": 0,
+  "dominant_behavior": {
+    "tag": "refunds",
+    "dev_cases": 35,
+    "share": 0.8333333333333334
+  },
+  "duplicate_tag_refs": 7,
+  "checks": [
+    {
+      "name": "behaviors_declared",
+      "status": "ok",
+      "detail": "2 distinct behaviors on 42 of 42 dev Cases"
+    },
+    {
+      "name": "behaviors_powered",
+      "status": "ok",
+      "detail": "every behavior has at least 5 dev Cases (core.MinClusterCases)"
+    },
+    {
+      "name": "behavior_concentration",
+      "status": "flagged",
+      "detail": "\"refunds\" is carried by 83% of dev Cases"
+    },
+    {
+      "name": "holdout_powered",
+      "status": "flagged",
+      "detail": "the holdout has 6 Cases (20 is the minimum for a meaningful interval at validate)"
+    },
+    {
+      "name": "attribution_observed",
+      "status": "unknown",
+      "detail": "no --value-run-id given"
+    }
+  ],
+  "checks_flagged": 2,
+  "checks_total": 5,
+  "suggestions": [
+    "split \"refunds\" into the behaviors you would act on separately",
+    "grow the eval set to roughly 100 Cases so the holdout reaches 20 at a holdout fraction of 0.20, or validate will have no meaningful interval",
+    "re-run with --value-run-id \u003cid\u003e to see which behaviors a run actually attributed"
+  ],
+  "notes": [
+    "every per-tag number and suggestion assumes your tags name behaviors you would fix separately; kno cannot distinguish a behavior tag from a priority, source or date tag",
+    "separable_effect is a two-sided 95% bound using the worst-case paired-binary standard deviation; it is a bound, not an estimate from your data",
+    "multi_behavior_share is reported and never flagged: there is no principled threshold for it"
+  ]
+}

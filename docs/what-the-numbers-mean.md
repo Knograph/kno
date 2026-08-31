@@ -58,6 +58,44 @@ A holdout of six can only produce a very wide interval — wide enough that most
 
 If your holdout is underpowered, the honest reading of a holdout gain is "consistent with anything in this wide range," not the point estimate.
 
+## Separable effect, and minimum detectable harm
+
+Two numbers in Kno's output answer near-identical-sounding questions with
+different values, and both carry their sidedness wherever they appear.
+
+**`separable_effect`** (`kno eval inspect`) is the smallest effect a
+behavior's dev Cases could separate from zero — **two-sided at 95%**. It is
+computed from the sample size and the worst-case paired-binary standard
+deviation (sqrt(0.5)) alone, so it is a **bound rather than an estimate from
+your data**, and that is precisely what makes it printable *before* any
+measurement exists. It is the arithmetic behind
+[evaluation-design.md](evaluation-design.md#separable-effect-the-arithmetic-behind-10-cases)'s
+"~10+ Cases per behavior" heuristic: ten Cases separates 0.51 and nothing
+smaller.
+
+**`min_detectable_harm`** (`Plan.MinDetectableHarm`, reported by `kno value`
+and in `inspect`'s observed section) is the smallest *regression* a run's
+control arm could distinguish from zero — **one-sided at 95%**.
+
+They differ because the questions differ. Harm detection is directional: you
+are asking "did this get worse", so the whole error budget goes in one tail.
+"Is this behavior distinguishable from noise" is symmetric, so the budget
+splits, and the bound is wider. At 20 Cases the one-sided figure is 0.27 and
+the two-sided is 0.33 — reusing the one-sided number for the symmetric
+question would report an eval set as more powerful than it is, which is the
+one direction these numbers must never err in.
+
+Two consequences worth stating plainly:
+
+- **Both over-warn on a continuous Goal.** sqrt(0.5) is the paired-*binary*
+  maximum. A Goal with lower variance can separate smaller effects than these
+  numbers claim. Conservative in the recoverable direction — neither number
+  will ever tell you your eval set is more powerful than it is.
+- **`separable_effect` is dev-only.** It counts the Cases the power
+  arithmetic actually uses. A behavior's true Case count is roughly the
+  holdout fraction higher, and the column header says `dev Cases` for that
+  reason.
+
 ## Errors are excluded, and why that's the lesser evil
 
 Cases where the agent failed to answer are counted separately and left out of the score.

@@ -1,0 +1,130 @@
+# four behaviors, none dominant, all above the power floor, holdout past MinHoldout: the zero-flag page
+
+Evals  testdata/evalinspect/healthy.jsonl
+  200 Cases — 162 dev, 38 held back
+  4 distinct behaviors (tags)
+
+  Everything below reads your tags as behaviors, because that is what routing
+  does. If these tags name something else — priority, source, a date — the
+  per-tag numbers and suggestions below do not apply to them. Kno cannot tell
+  the difference.
+
+BEHAVIOR  DEV CASES  SEPARABLE EFFECT (two-sided 95%)  STATUS
+account          42                              0.22  ok
+billing          41                              0.22  ok
+shipping         41                              0.22  ok
+refunds          38                              0.23  ok
+
+  ! flagged   ✓ ok   ? unknown   · reported, never flagged
+  · 0% of dev Cases carry more than one behavior tag — a failure in those
+    Cases testifies about every tag it carries, so per-behavior attribution is
+    shared. (Heuristic: a tag is a label, not a claim about what a Case
+    exercises. Reported, not flagged: there is no principled threshold for
+    this.)
+  ✓ 4 distinct behaviors on 162 of 162 dev Cases
+  ✓ every behavior has at least 5 dev Cases (core.MinClusterCases)
+  ✓ the most common behavior "account" is carried by 26% of dev Cases
+  ✓ the holdout has 38 Cases (20 is the minimum for a meaningful interval at
+    validate)
+  ? attribution_observed is unknown: no --value-run-id given
+
+0 of 5 checks flagged.  If these tags are behaviors you would fix separately:
+  - re-run with --value-run-id <id> to see which behaviors a run actually
+    attributed
+
+What each number claims: docs/what-the-numbers-mean.md
+Designing evals: docs/evaluation-design.md
+
+===== --json =====
+{
+  "evals": "testdata/evalinspect/healthy.jsonl",
+  "cases": {
+    "total": 200,
+    "dev": 162,
+    "holdout": 38,
+    "weak_label": 0
+  },
+  "behaviors": [
+    {
+      "tag": "account",
+      "dev_cases": 42,
+      "separable_effect": 0.22034998490741384,
+      "sidedness": "two-sided",
+      "level": 0.95,
+      "status": "ok",
+      "spellings": 1
+    },
+    {
+      "tag": "billing",
+      "dev_cases": 41,
+      "separable_effect": 0.22319043966388688,
+      "sidedness": "two-sided",
+      "level": 0.95,
+      "status": "ok",
+      "spellings": 1
+    },
+    {
+      "tag": "shipping",
+      "dev_cases": 41,
+      "separable_effect": 0.22319043966388688,
+      "sidedness": "two-sided",
+      "level": 0.95,
+      "status": "ok",
+      "spellings": 1
+    },
+    {
+      "tag": "refunds",
+      "dev_cases": 38,
+      "separable_effect": 0.23242021543438682,
+      "sidedness": "two-sided",
+      "level": 0.95,
+      "status": "ok",
+      "spellings": 1
+    }
+  ],
+  "untagged_dev_cases": 0,
+  "multi_behavior_dev_cases": 0,
+  "multi_behavior_share": 0,
+  "dominant_behavior": {
+    "tag": "account",
+    "dev_cases": 42,
+    "share": 0.25925925925925924
+  },
+  "checks": [
+    {
+      "name": "behaviors_declared",
+      "status": "ok",
+      "detail": "4 distinct behaviors on 162 of 162 dev Cases"
+    },
+    {
+      "name": "behaviors_powered",
+      "status": "ok",
+      "detail": "every behavior has at least 5 dev Cases (core.MinClusterCases)"
+    },
+    {
+      "name": "behavior_concentration",
+      "status": "ok",
+      "detail": "the most common behavior \"account\" is carried by 26% of dev Cases"
+    },
+    {
+      "name": "holdout_powered",
+      "status": "ok",
+      "detail": "the holdout has 38 Cases (20 is the minimum for a meaningful interval at validate)"
+    },
+    {
+      "name": "attribution_observed",
+      "status": "unknown",
+      "detail": "no --value-run-id given"
+    }
+  ],
+  "checks_flagged": 0,
+  "checks_total": 5,
+  "suggestions": [
+    "re-run with --value-run-id \u003cid\u003e to see which behaviors a run actually attributed"
+  ],
+  "notes": [
+    "every per-tag number and suggestion assumes your tags name behaviors you would fix separately; kno cannot distinguish a behavior tag from a priority, source or date tag",
+    "separable_effect is a two-sided 95% bound using the worst-case paired-binary standard deviation; it is a bound, not an estimate from your data",
+    "multi_behavior_share is reported and never flagged: there is no principled threshold for it"
+  ]
+}

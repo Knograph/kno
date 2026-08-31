@@ -260,6 +260,18 @@ attribution; this section exists so "noisy" reads as the eval's fault, not Kno's
 - **Start granular, aggregate later.** Kno rolls specific outcomes up more reliably than it
   explains a single coarse score.
 
+Kno can check most of that for you, before you spend anything:
+
+```bash
+kno eval inspect --evals cases.jsonl
+```
+
+It reports how many distinct behaviors your tags describe, how small an effect each behavior's
+Cases could separate from noise, how much of the set sits under one catch-all tag, and whether
+the holdout is large enough for `validate`. It calls no model, writes nothing, and exits 0
+whatever it finds. [Check whether your evals can attribute
+anything](docs/cookbook/check-your-evals.md).
+
 > **Rule of thumb:** your eval defines what "better" means. Kno tells you which data caused
 > that metric to move.
 
@@ -315,6 +327,7 @@ Both tables are machine-checked against the code: [`docs/status.json`](docs/stat
 |---|---|
 | `kno init` | Write a `kno.yaml` configuration file |
 | `kno demo` | Run the whole loop against `fake:`, for free, on data it writes for you |
+| `kno eval inspect` | Report whether an eval set can support attribution, before anything is spent |
 | `kno mine` | Turn production transcripts into a weak-label eval set |
 | `kno baseline` | Run your agent over your evals and score it |
 | `kno value` | Measure the marginal value of each asset in a pool |

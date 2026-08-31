@@ -24,7 +24,7 @@ func TestEvalsGrammarBarePathIsJSONL(t *testing.T) {
 		evalsPath:   filepath.Join(t.TempDir(), "cases.jsonl"),
 		holdoutFrac: 0.2,
 	}
-	ev, err := resolveEvals(f)
+	ev, err := resolveEvals(f.evalsFlags())
 	if err != nil {
 		t.Fatalf("resolveEvals: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestEvalsGrammarLangsmithPrefix(t *testing.T) {
 		allowInsecureURL:    true,
 		allowPrivateAddress: true,
 	}
-	ev, err := resolveEvals(f)
+	ev, err := resolveEvals(f.evalsFlags())
 	if err != nil {
 		t.Fatalf("resolveEvals: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestEvalsLangsmithCountsAgainstEndpoint(t *testing.T) {
 		allowInsecureURL:    true,
 		allowPrivateAddress: true,
 	}
-	ev, err := resolveEvals(f)
+	ev, err := resolveEvals(f.evalsFlags())
 	if err != nil {
 		t.Fatalf("resolveEvals: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestEvalsLangsmithMissingKeyIsRefused(t *testing.T) {
 	t.Setenv(langsmith.EndpointEnv, "")
 	t.Setenv(langsmith.DefaultKeyEnv, "")
 	f := &baselineFlags{evalsPath: "langsmith:support-llm"}
-	_, err := resolveEvals(f)
+	_, err := resolveEvals(f.evalsFlags())
 	if err == nil {
 		t.Fatal("a missing key was accepted")
 	}
@@ -120,7 +120,7 @@ func TestEvalsLangsmithMissingKeyIsRefused(t *testing.T) {
 func TestEvalsLangsmithEmptyNameIsRefused(t *testing.T) {
 	t.Setenv(langsmith.DefaultKeyEnv, "test-key")
 	f := &baselineFlags{evalsPath: "langsmith:"}
-	_, err := resolveEvals(f)
+	_, err := resolveEvals(f.evalsFlags())
 	if err == nil {
 		t.Fatal("an empty dataset name was accepted")
 	}
@@ -165,7 +165,7 @@ func TestEvalsGrammarLangfusePrefix(t *testing.T) {
 		allowInsecureURL:    true,
 		allowPrivateAddress: true,
 	}
-	ev, err := resolveEvals(f)
+	ev, err := resolveEvals(f.evalsFlags())
 	if err != nil {
 		t.Fatalf("resolveEvals: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestEvalsLangfuseCountsAgainstEndpoint(t *testing.T) {
 		allowInsecureURL:    true,
 		allowPrivateAddress: true,
 	}
-	ev, err := resolveEvals(f)
+	ev, err := resolveEvals(f.evalsFlags())
 	if err != nil {
 		t.Fatalf("resolveEvals: %v", err)
 	}
@@ -223,7 +223,7 @@ func TestEvalsLangfuseCountsAgainstEndpoint(t *testing.T) {
 		allowInsecureURL:    true,
 		allowPrivateAddress: true,
 	}
-	ev, err = resolveEvals(f)
+	ev, err = resolveEvals(f.evalsFlags())
 	if err != nil {
 		t.Fatalf("resolveEvals must not resolve the dataset: %v", err)
 	}
@@ -243,7 +243,7 @@ func TestEvalsLangfuseMissingKeysAreRefused(t *testing.T) {
 	t.Setenv(langfuse.PublicKeyEnv, "")
 	t.Setenv(langfuse.SecretKeyEnv, "")
 	f := &baselineFlags{evalsPath: "langfuse:support-llm"}
-	_, err := resolveEvals(f)
+	_, err := resolveEvals(f.evalsFlags())
 	if err == nil {
 		t.Fatal("missing keys were accepted")
 	}
@@ -260,7 +260,7 @@ func TestEvalsLangfuseEmptyNameIsRefused(t *testing.T) {
 	t.Setenv(langfuse.PublicKeyEnv, "test-pk")
 	t.Setenv(langfuse.SecretKeyEnv, "test-sk")
 	f := &baselineFlags{evalsPath: "langfuse:"}
-	_, err := resolveEvals(f)
+	_, err := resolveEvals(f.evalsFlags())
 	if err == nil {
 		t.Fatal("an empty dataset name was accepted")
 	}
@@ -312,7 +312,7 @@ func TestEvalsGrammarBraintrustPrefix(t *testing.T) {
 		allowInsecureURL:    true,
 		allowPrivateAddress: true,
 	}
-	ev, err := resolveEvals(f)
+	ev, err := resolveEvals(f.evalsFlags())
 	if err != nil {
 		t.Fatalf("resolveEvals: %v", err)
 	}
@@ -343,7 +343,7 @@ func TestEvalsBraintrustCountsAgainstEndpoint(t *testing.T) {
 		allowInsecureURL:    true,
 		allowPrivateAddress: true,
 	}
-	ev, err := resolveEvals(f)
+	ev, err := resolveEvals(f.evalsFlags())
 	if err != nil {
 		t.Fatalf("resolveEvals: %v", err)
 	}
@@ -369,7 +369,7 @@ func TestEvalsBraintrustCountsAgainstEndpoint(t *testing.T) {
 		allowInsecureURL:    true,
 		allowPrivateAddress: true,
 	}
-	ev, err = resolveEvals(f)
+	ev, err = resolveEvals(f.evalsFlags())
 	if err != nil {
 		t.Fatalf("resolveEvals must not resolve the dataset: %v", err)
 	}
@@ -388,7 +388,7 @@ func TestEvalsBraintrustMissingKeyIsRefused(t *testing.T) {
 	t.Setenv(braintrust.HostEnv, "")
 	t.Setenv(braintrust.KeyEnv, "")
 	f := &baselineFlags{evalsPath: "braintrust:support-llm"}
-	_, err := resolveEvals(f)
+	_, err := resolveEvals(f.evalsFlags())
 	if err == nil {
 		t.Fatal("a missing key was accepted")
 	}
@@ -402,7 +402,7 @@ func TestEvalsBraintrustMissingKeyIsRefused(t *testing.T) {
 func TestEvalsBraintrustEmptyNameIsRefused(t *testing.T) {
 	t.Setenv(braintrust.KeyEnv, "test-key")
 	f := &baselineFlags{evalsPath: "braintrust:"}
-	_, err := resolveEvals(f)
+	_, err := resolveEvals(f.evalsFlags())
 	if err == nil {
 		t.Fatal("an empty dataset name was accepted")
 	}
@@ -445,7 +445,7 @@ func TestEvalsGrammarHFPrefix(t *testing.T) {
 		holdoutFrac: 0.3,
 		splitSeed:   "seed-1",
 	}
-	ev, err := resolveEvals(f)
+	ev, err := resolveEvals(f.evalsFlags())
 	if err != nil {
 		t.Fatalf("resolveEvals: %v", err)
 	}
@@ -467,7 +467,7 @@ func TestEvalsGrammarHFRefusals(t *testing.T) {
 		"hf:",                         // nothing at all
 	} {
 		f := &baselineFlags{evalsPath: path}
-		_, err := resolveEvals(f)
+		_, err := resolveEvals(f.evalsFlags())
 		if err == nil {
 			t.Errorf("resolveEvals(%q) accepted a malformed hf: source", path)
 			continue

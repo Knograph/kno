@@ -817,6 +817,14 @@ func TestASmallEvalSetKeepsBothSides(t *testing.T) {
 func TestTheReportedBoundIsTheOneTheRunCanActuallySee(t *testing.T) {
 	t.Parallel()
 
+	// The critical values are the EXACT one-sided 95% Student-t quantiles,
+	// not the 3-decimal table this code used to carry and not z. The bound
+	// now delegates to interval.MinDetectableEffect, which computes the t
+	// quantile at every df — so df=59 gets t (1.6711), where the old table
+	// ran out at df=31 and fell back to z (1.645), understating the bound by
+	// 1.6%. Widening a bound that was too narrow is the conservative
+	// direction, and pinning the exact quantiles here is what keeps this test
+	// asserting against external arithmetic rather than against the code.
 	const (
 		sd  = 0.7071067811865476
 		t20 = 1.729 // one-sided 95% at df=19
