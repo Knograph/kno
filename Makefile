@@ -357,6 +357,15 @@ vuln: $(GOVULNCHK) ## govulncheck over the shipping module
 	@# DEBT(docs/debt.md#12): the tools module is not scanned. Its binaries run
 	@# in CI, so its dependency graph is in scope for a real audit.
 
+# DEBT(docs/debt.md#14): actions are pinned to mutable tags in three workflows
+# and to commit SHAs in the other four. This target reports the gap and exits
+# non-zero; it is NOT in `check` yet, because a gate that is red for known
+# reasons is a gate people learn to skip. The PR that pins the last reference
+# adds it to `check` and repays the entry.
+.PHONY: actions-pin-check
+actions-pin-check: ## Every GitHub Action must be pinned to a commit SHA, not a tag
+	@./scripts/actions-pin-check.sh
+
 ## ─── Fuzz & bench ───────────────────────────────────────────────────────────
 
 # DEBT(docs/debt.md#4): the agent-ref parser has a target; the plugin handshake,
@@ -391,6 +400,23 @@ bench-diff: ## Tripwire: fails once benchmarks exist, until the gate is implemen
 	else \
 		$(call pending,bench-diff,the first benchmark — see docs/debt.md#3); \
 	fi
+
+## ─── Gate self-tests ────────────────────────────────────────────────────────
+
+# DEBT(docs/debt.md#16): every gate here is trusted on the strength of a one-off
+# manual check. This target breaks each gate's invariant on purpose and requires
+# the gate to fail, with a message that names the break — the .SHELLFLAGS defect
+# is what happens without it: eleven recipes reported success while the commands
+# inside them failed, and `make check` was green throughout.
+#
+# Two gates are covered; the rest are listed by the script, one per PR. Same
+# posture as actions-pin-check above: red on demand, not in `check`, until the
+# list is empty. The PR that empties it wires this in and repays the entry.
+#
+# It re-enters make, so MAKE is passed explicitly rather than assumed.
+.PHONY: selftest
+selftest: ## Prove each gate FAILS when its invariant is broken
+	@$(SAFE) MAKE='$(MAKE)' ./scripts/selftest.sh
 
 ## ─── Docs ───────────────────────────────────────────────────────────────────
 
@@ -458,7 +484,12 @@ ledger-check: ## A ledger trigger naming the release being cut must carry a disp
 		exit 1; \
 	fi; \
 	python3 scripts/ledger-check.py "$$v"
-	@printf '\033[32m  OK  \033[0m .goreleaser.yaml is valid\n'
+	@# No OK line here on purpose. scripts/ledger-check.py prints its own, naming
+	@# the release it checked --- and a second line printed by a recipe that did
+	@# not do the checking is a line that can drift from what was checked. This
+	@# one had: it was copy-pasted from release-check and announced
+	@# ".goreleaser.yaml is valid" on every tag, so the release log asserted a
+	@# gate that had not run. Asserted by scripts/selftest.sh's ledger-check case.
 
 # The cosign certificate identity is the ONLY root of trust in this pipeline: a
 # verify-blob without it confirms that somebody signed the file, which is a
