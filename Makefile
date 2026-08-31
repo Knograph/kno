@@ -450,6 +450,7 @@ status-check: ## Fail if regenerating docs/status.json would change it
 .PHONY: docs
 docs: status-check ## Regenerate OpenAPI, check godoc coverage, verify links, gate docs/status.json
 	@go run ./internal/cmd/godoccheck
+	@$(SAFE) ./scripts/cookbook-stub-check.sh
 	@$(call pending,OpenAPI generation,the first proto service definition)
 	@$(SAFE) broken=0; checked=0; \
 	for f in $$(find . -name '*.md' -not -path './bin/*' -not -path './.git/*'); do \

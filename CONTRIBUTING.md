@@ -312,3 +312,16 @@ the conformance suite that defines correct for them, so the hard question is ans
 you start. **Judge prompts** join that list when `judge calibrate` lands in v0.2 and gives a
 prompt something to be measured against. Several entries in [the Debt Ledger](docs/debt.md)
 are also well-scoped starting points.
+
+**Recipes are the second on-ramp available today, and they live in
+[`uknoAI/kno-examples`](https://github.com/uknoAI/kno-examples).** A recipe there declares in
+front matter how far it has actually been verified, and CI enforces the declaration: a Tier A
+page ships committed expectations and its commands are executed against the released binary in
+PR CI; a Tier B or C page names an owner and every credential its own commands imply. A PR that
+adds a recipe with no tier fails the lint rather than a review. That repository needs no Go
+knowledge, no key, and no local provider — `git clone && sh scenarios/support-refunds/run.sh` is
+the whole setup.
+
+`docs/cookbook/` here keeps the index and a one-line stub per moved recipe. **Do not add prose to
+a stub.** A stub that grows becomes a second copy of a recipe, and a second copy drifting from
+the first is the bug the move exists to kill; `make docs` fails on it.

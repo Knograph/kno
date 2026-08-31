@@ -1114,13 +1114,14 @@ func (s *SQLite) Purge(ctx context.Context, runID string) (int64, error) {
 	// Both tables. A measurement's response holds exactly the same end-user
 	// conversation content an outcome's does, so a purge that cleared only
 	// outcomes would report "purged 44 rows" over content still on disk — the
-	// same class of bug as the secure_delete gap docs/cookbook/retention.md
-	// records having been fixed once, and worse for being reported as success.
+	// same class of bug as the secure_delete gap kno-examples'
+	// recipes/retention.md records having been fixed once, and worse for
+	// being reported as success.
 	// Both tables in ONE transaction. A measurement's response holds exactly
 	// the same end-user conversation content an outcome's does, so a purge that
 	// cleared only outcomes would report "purged 44 rows" over content still on
-	// disk — the same class as the secure_delete gap
-	// docs/cookbook/retention.md records having been fixed once, and worse for
+	// disk — the same class as the secure_delete gap kno-examples'
+	// recipes/retention.md records having been fixed once, and worse for
 	// being reported as success.
 	//
 	// The transaction is what stops the halfway state: two independent

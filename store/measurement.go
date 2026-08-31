@@ -375,7 +375,7 @@ func (s *SQLite) CaseScores(ctx context.Context, runID string) (map[string]CaseS
 //
 // The score, not the Response. A Valuation is recomputed from numbers, and
 // `kno purge` nulls the blobs — so a resume that needed the blob would find a
-// purged run unresumable, which is the trade docs/cookbook/retention.md
+// purged run unresumable, which is the trade kno-examples' recipes/retention.md
 // promises it is not.
 type RecordedMeasurement struct {
 	// Key identifies the measurement.
