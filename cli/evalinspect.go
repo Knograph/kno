@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"sort"
 
 	"github.com/spf13/cobra"
@@ -465,6 +466,10 @@ func inspectEvals(ctx context.Context, src evalSource, sourceName string) (*insp
 // Deterministic: dev Case count descending, tag ascending on ties. Map
 // iteration order must not reach the output — the same file inspected twice
 // is byte-identical.
+// roundTo4 pins a computed bound to four decimal places. See the call site
+// for why this is correctness rather than presentation.
+func roundTo4(f float64) float64 { return math.Round(f*1e4) / 1e4 }
+
 func behaviorsFrom(acc *tagAccumulator) []behavior {
 	out := make([]behavior, 0, len(acc.byTag))
 	for tag, n := range acc.byTag {
@@ -472,9 +477,19 @@ func behaviorsFrom(acc *tagAccumulator) []behavior {
 			Tag:       tag,
 			DevCases:  n,
 			Spellings: len(acc.spellings[tag]),
-			SeparableEffect: interval.MinDetectableEffect(
+			// Rounded at the source, so the human table, the --json document,
+			// and the goldens all carry one number.
+			//
+			// Not cosmetic: MinDetectableEffect bisects a t quantile through
+			// math.Exp and math.Log, which are architecture-specific, so the
+			// tail digits of an unrounded bound genuinely differ between
+			// arm64 and amd64 — a golden holding 0.19685978500032256 cannot
+			// pass on both. Four places is also more precision than a bound
+			// derived from a worst-case standard deviation carries; the same
+			// reasoning retired 17-digit bounds from the rejection log.
+			SeparableEffect: roundTo4(interval.MinDetectableEffect(
 				n, knov1.Sidedness_SIDEDNESS_TWO_SIDED, interval.DefaultLevel,
-			),
+			)),
 			Status: powerStatus(n),
 		})
 	}

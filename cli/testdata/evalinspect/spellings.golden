@@ -51,7 +51,7 @@ Designing evals: docs/evaluation-design.md
     {
       "tag": "refunds",
       "dev_cases": 35,
-      "separable_effect": 0.2428996778700269,
+      "separable_effect": 0.2429,
       "sidedness": "two-sided",
       "level": 0.95,
       "status": "ok",
@@ -60,7 +60,7 @@ Designing evals: docs/evaluation-design.md
     {
       "tag": "billing",
       "dev_cases": 7,
-      "separable_effect": 0.653964700187019,
+      "separable_effect": 0.654,
       "sidedness": "two-sided",
       "level": 0.95,
       "status": "ok",

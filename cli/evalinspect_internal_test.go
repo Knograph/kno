@@ -235,7 +235,12 @@ func TestInspectSeparableEffectIsTheTwoSidedBound(t *testing.T) {
 	b := insp.Behaviors[0]
 	want := interval.MinDetectableEffect(12,
 		knov1.Sidedness_SIDEDNESS_TWO_SIDED, interval.DefaultLevel)
-	if b.SeparableEffect != want {
+	// The reported figure is rounded to four places at the source, because
+	// the bisection behind it runs through math.Exp and math.Log and its tail
+	// digits differ by architecture. The tolerance is that rounding and
+	// nothing more: the one-sided bound this test rules out sits far outside
+	// it, so the assertion still distinguishes the two sidednesses.
+	if math.Abs(b.SeparableEffect-want) > 5e-5 {
 		t.Fatalf("separable effect %.10f, want the two-sided bound %.10f", b.SeparableEffect, want)
 	}
 	oneSided := interval.MinDetectableEffect(12,

@@ -51,7 +51,7 @@ Designing evals: docs/evaluation-design.md
     {
       "tag": "overall_quality",
       "dev_cases": 113,
-      "separable_effect": 0.13179889260526756,
+      "separable_effect": 0.1318,
       "sidedness": "two-sided",
       "level": 0.95,
       "status": "ok",
@@ -60,7 +60,7 @@ Designing evals: docs/evaluation-design.md
     {
       "tag": "billing",
       "dev_cases": 12,
-      "separable_effect": 0.4492742144717781,
+      "separable_effect": 0.4493,
       "sidedness": "two-sided",
       "level": 0.95,
       "status": "ok",
@@ -69,7 +69,7 @@ Designing evals: docs/evaluation-design.md
     {
       "tag": "refunds",
       "dev_cases": 8,
-      "separable_effect": 0.5911560628981353,
+      "separable_effect": 0.5912,
       "sidedness": "two-sided",
       "level": 0.95,
       "status": "ok",
@@ -78,7 +78,7 @@ Designing evals: docs/evaluation-design.md
     {
       "tag": "tool_use",
       "dev_cases": 2,
-      "separable_effect": 6.353102368085622,
+      "separable_effect": 6.3531,
       "sidedness": "two-sided",
       "level": 0.95,
       "status": "underpowered",
