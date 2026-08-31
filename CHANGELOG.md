@@ -28,6 +28,19 @@ covenants — breaking any of them requires a major version.
      At release time the hand-written heading is renamed from [Unreleased] to
      the version. See docs/debt.md#76 for why that is still a manual step. -->
 
+## [Unreleased]
+
+### Bug Fixes
+
+- **`kno export --json` names the Select run it rendered from.** The
+  `select_run_id` field was declared in the contract and never populated, so
+  it rendered as `""` on every run — including runs given a
+  `--select-run-id`. A consumer holding a tuning set could not say which
+  measured Portfolio produced it without re-deriving that from the manifest,
+  which is the work the field exists to save. `core.ExportResult` now carries
+  the ID and the renderer reports it. Found by `uknoAI/kno-examples`, whose
+  scenarios assert on projected `--json` subsets.
+
 ## [0.1.2](https://github.com/uknoAI/kno/compare/v0.1.1...v0.1.2) (2026-08-31)
 
 

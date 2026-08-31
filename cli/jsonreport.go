@@ -366,6 +366,7 @@ func renderExportJSON(out io.Writer, res *core.ExportResult) error {
 	rep := exportReport{
 		RunID:        res.RunID,
 		Status:       "completed",
+		SelectRunID:  res.SelectRunID,
 		Destination:  destinationName(res.Destination),
 		AssetCount:   res.AssetCount,
 		BytesWritten: res.BytesWritten,
