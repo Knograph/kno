@@ -121,7 +121,7 @@ make check        # runs everything below; this is the only command you need to 
 
 - `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, issue templates (bug/feature/plugin), PR template with the DoD checklist, `CODEOWNERS` routing reviews (core/stats → maintainers; adapters → adapter owners).
 - **License: Apache-2.0** (patent grant matters for enterprise adoption). **DCO sign-off** (`git commit -s`), not a CLA — lower contributor friction, sufficient for Apache-2.0.
-- `good-first-issue` is a curated pipeline, not a label of neglect: each one has context, pointers, and a test to make pass. Ring-1 adapters and judge prompts are the designed on-ramp.
+- `good-first-issue` is a curated pipeline, not a label of neglect: each one has context, pointers, and a test to make pass. Ring-1 adapters are the designed on-ramp today, because `coretest`'s conformance suite already defines correct for them; judge prompts join once `judge calibrate` (v0.2) gives a prompt something to be measured against. Do not advertise an on-ramp before the thing a contributor would submit to exists.
 - Every external PR gets a first response within 48h, even if it's "reviewing this week."
 
 ## Agent parallelization quick-reference
