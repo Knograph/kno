@@ -59,6 +59,12 @@ type ExportResult struct {
 	// RunID identifies the run.
 	RunID string
 
+	// SelectRunID is the Select run whose Portfolio this artifact was
+	// rendered from — the artifact's provenance link. Reported so a consumer
+	// holding a tuning set can say which measured Portfolio produced it
+	// without re-deriving it from the manifest.
+	SelectRunID string
+
 	// Destination rendered.
 	Destination knov1.Destination
 
@@ -176,6 +182,7 @@ func (o ExportOptions) Export(ctx context.Context) (*ExportResult, error) {
 	}
 	return &ExportResult{
 		RunID:        o.RunID,
+		SelectRunID:  o.SelectRunID,
 		Destination:  o.Destination,
 		AssetCount:   len(entries),
 		BytesWritten: bytesWritten,

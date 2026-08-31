@@ -295,3 +295,62 @@ func TestReportHoldoutCanary(t *testing.T) {
 		}
 	}
 }
+
+// TestExportJSONNamesItsSelectRun pins the artifact's provenance link.
+//
+// `kno export --json` declared `select_run_id` in its contract and never
+// populated it: the field rendered as "" on every run, including runs that
+// were given a --select-run-id. A consumer holding a tuning set could not
+// say which measured Portfolio produced it without re-deriving that from the
+// manifest — which is exactly what the field exists to save them.
+//
+// Found by uknoAI/kno-examples, whose scenario asserts on projected --json
+// subsets; an empty string where a run ID belongs is the kind of thing a
+// human reading their own output stops noticing.
+func TestExportJSONNamesItsSelectRun(t *testing.T) {
+	t.Parallel()
+
+	db := filepath.Join(t.TempDir(), "kno.db")
+	evalsPath := writeCases(t, 10)
+	poolPath := writePool(t, 2)
+
+	baseOut, _, code := run(t, "baseline", "--evals", evalsPath, "--agent", "fake:", "--db", db, "--yes")
+	if code != errs.ExitOK {
+		t.Fatalf("baseline exit = %d", code)
+	}
+	baseRunID := runIDFrom(t, baseOut, "Baseline ")
+
+	valueOut, _, code := run(t, "value", "--evals", evalsPath, "--pool", poolPath,
+		"--baseline-run-id", baseRunID, "--agent", "fake:", "--db", db, "--yes")
+	if code != errs.ExitOK {
+		t.Fatalf("value exit = %d", code)
+	}
+	valueRunID := runIDFrom(t, valueOut, "Value run ")
+
+	selectOut, _, code := run(t, "select", "--value-run-id", valueRunID, "--pool", poolPath,
+		"--max-context-tokens", "10000", "--db", db)
+	if code != errs.ExitOK {
+		t.Fatalf("select exit = %d", code)
+	}
+	selectRunID := runIDFrom(t, selectOut, "Select run ")
+
+	outPath := filepath.Join(t.TempDir(), "pack.md")
+	stdout, _, code := run(t, "export", "--select-run-id", selectRunID, "--pool", poolPath,
+		"--destination", "context", "--out", outPath, "--db", db, "--json")
+	if code != errs.ExitOK {
+		t.Fatalf("export exit = %d", code)
+	}
+
+	raw, err := cli.DecodeRaw([]byte(stdout))
+	if err != nil {
+		t.Fatalf("decoding export --json: %v", err)
+	}
+	got, ok := raw["select_run_id"].(string)
+	if !ok {
+		t.Fatalf("select_run_id is %T, want a string", raw["select_run_id"])
+	}
+	if got != selectRunID {
+		t.Errorf("select_run_id = %q, want %q — the field names the Portfolio "+
+			"this artifact was rendered from", got, selectRunID)
+	}
+}
