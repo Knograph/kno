@@ -1,0 +1,12 @@
+{"id":"refund-01","input":"How do I get a refund?","expected":"Refunds are issued within 5 business days.","tags":["refunds"]}
+{"id":"refund-02","input":"Refund policy for sale items?","expected":"Sale items are final and non-refundable.","tags":["refunds"]}
+{"id":"refund-03","input":"Can I refund a gift?","expected":"Gift refunds go to store credit.","tags":["refunds"]}
+{"id":"ship-01","input":"When will my order arrive?","expected":"Standard shipping takes 3-5 business days.","tags":["shipping"]}
+{"id":"ship-02","input":"Do you ship internationally?","expected":"We ship to 40 countries.","tags":["shipping"]}
+{"id":"ship-03","input":"Can I change my delivery address?","expected":"Yes, until the order ships.","tags":["shipping"]}
+{"id":"acct-01","input":"How do I reset my password?","expected":"Use the reset link on the sign-in page.","tags":["account"]}
+{"id":"acct-02","input":"Can I change my email?","expected":"Yes, from Settings > Account.","tags":["account"]}
+{"id":"acct-03","input":"How do I close my account?","expected":"Contact support and we close it within 24 hours.","tags":["account"]}
+{"id":"bill-01","input":"Why was I charged twice?","expected":"A duplicate charge is released within 48 hours.","tags":["billing"]}
+{"id":"bill-02","input":"Where is my invoice?","expected":"Invoices are emailed and available under Billing.","tags":["billing"]}
+{"id":"bill-03","input":"Do you take purchase orders?","expected":"Yes, for annual plans.","tags":["billing"]}

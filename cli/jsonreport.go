@@ -15,6 +15,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -569,6 +570,110 @@ func decodeReportJSON(b []byte) (reportJSON, error) {
 	var rep reportJSON
 	if err := json.Unmarshal(b, &rep); err != nil {
 		return reportJSON{}, fmt.Errorf("decoding report json: %w", err)
+	}
+	return rep, nil
+}
+
+// demoReport is `kno demo --json`: ONE document, no prose before or after it.
+//
+// Hand-written for the same reason as jsonReport, and living in this file for
+// the same reason: the depguard exemption that lets the CLI encode a
+// jq-shaped envelope is scoped to this filename (ADR-0001).
+//
+// Each stage's own --json document rides under `stages` VERBATIM, so a
+// consumer already parsing `kno baseline --json` reads the same keys here
+// rather than a second, demo-flavored spelling of them.
+type demoReport struct {
+	Dir   string   `json:"dir"`
+	Agent string   `json:"agent"`
+	Files []string `json:"files"`
+
+	// LeftInPlace names files --force found in the directory and did not
+	// touch. Present so the human line "…left in place" has a machine
+	// equivalent: an audit that only a person can read is not an audit.
+	LeftInPlace []string   `json:"left_in_place,omitempty"`
+	Stages      demoStages `json:"stages"`
+
+	// Notes carries the same three sentences the human epilogue prints, in
+	// the same order. A machine consumer reading "score": 1.0 with no caveat
+	// has been misled by omission, so this is not omitempty and not optional.
+	Notes     []string `json:"notes"`
+	Config    string   `json:"config"`
+	NextSteps []string `json:"next_steps"`
+	Cleanup   string   `json:"cleanup"`
+}
+
+// demoStages holds each stage's own --json document, unmodified.
+type demoStages struct {
+	Baseline demoStageDoc `json:"baseline"`
+	Value    demoStageDoc `json:"value"`
+	Select   demoStageDoc `json:"select"`
+	Export   demoStageDoc `json:"export"`
+	Report   demoStageDoc `json:"report"`
+}
+
+// demoStageDoc is one stage's rendered --json document, carried through
+// untouched.
+//
+// An alias rather than a named type so cli/demo.go can hold one without
+// importing encoding/json, which the depguard rule reserves for this file.
+type demoStageDoc = json.RawMessage
+
+// demoStageDocument validates a stage's captured output and returns it.
+//
+// A stage that printed prose in --json mode would produce a document nothing
+// can parse; refusing here names which stage did it, rather than leaving the
+// consumer with a syntax error at a byte offset.
+func demoStageDocument(stage string, b []byte) (demoStageDoc, error) {
+	trimmed := bytes.TrimSpace(b)
+	if !json.Valid(trimmed) {
+		return nil, fmt.Errorf("the %s stage did not emit a JSON document", stage)
+	}
+	return demoStageDoc(trimmed), nil
+}
+
+// decodeDemoReport parses a rendered `kno demo --json` document, refusing
+// anything after it.
+//
+// Used by tests, which would otherwise need their own encoding/json import.
+// The trailing check is part of the contract, not a convenience: the whole
+// point of the envelope is that five stages produce ONE document.
+func decodeDemoReport(b []byte) (demoReport, error) {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	var rep demoReport
+	if err := dec.Decode(&rep); err != nil {
+		return demoReport{}, fmt.Errorf("decoding the demo report: %w", err)
+	}
+	if dec.More() {
+		return demoReport{}, fmt.Errorf("the demo emitted more than one JSON document")
+	}
+	return rep, nil
+}
+
+// decodeDemoBaseline, decodeDemoValue and decodeDemoSelect parse the embedded
+// stage documents as the very structs the stages render — which is the
+// assertion worth making: the envelope carries the stages' own contract, not a
+// copy of it.
+func decodeDemoBaseline(raw demoStageDoc) (jsonReport, error) {
+	var rep jsonReport
+	if err := json.Unmarshal(raw, &rep); err != nil {
+		return jsonReport{}, fmt.Errorf("decoding the demo's baseline stage: %w", err)
+	}
+	return rep, nil
+}
+
+func decodeDemoValue(raw demoStageDoc) (valueReport, error) {
+	var rep valueReport
+	if err := json.Unmarshal(raw, &rep); err != nil {
+		return valueReport{}, fmt.Errorf("decoding the demo's value stage: %w", err)
+	}
+	return rep, nil
+}
+
+func decodeDemoSelect(raw demoStageDoc) (selectReport, error) {
+	var rep selectReport
+	if err := json.Unmarshal(raw, &rep); err != nil {
+		return selectReport{}, fmt.Errorf("decoding the demo's select stage: %w", err)
 	}
 	return rep, nil
 }

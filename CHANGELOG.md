@@ -28,6 +28,40 @@ covenants — breaking any of them requires a major version.
      At release time the hand-written heading is renamed from [Unreleased] to
      the version. See docs/debt.md#76 for why that is still a manual step. -->
 
+## [Unreleased]
+
+### Added
+
+- **`kno demo` — the whole loop in one command, against `fake:`, for free.** The onboarding
+  stage nobody owned: `baseline`, `value`, `select`, `export` and `report` all shipped, and
+  what did not ship was the ten minutes before the first one of them runs. `kno demo` writes
+  a twelve-Case eval set and a three-Asset pool into `./kno-demo` (embedded in the binary, so
+  it needs no checkout and no network), runs all five stages over them in process, and leaves
+  the files on disk so the next thing you do is edit them. No run-ID copy step: the run IDs
+  are fixed strings the epilogue names.
+
+  Three flags — `--dir`, `--force`, `--json` — and no others. Deliberately **not** accepted:
+  `--agent` (a demo against a real provider is a run, and it spends), `--yes` (a bypass flag
+  on a free path is one copy-paste away from a paid one), and `--config`. The command reads
+  no configuration at all: neither `kno.yaml` nor any `KNO_*` variable, because `KNO_AGENT`
+  resolves onto `--agent` and a demo that honored it would bill the user for the privilege of
+  being shown around. The budget guard is exercised rather than bypassed — the quote is
+  $0.00, which is below the confirmation threshold, so nothing prompts and nothing is waived.
+
+  **The numbers are unimpressive on purpose, and the command says so in three sentences it
+  always prints.** `fake:` answers every Case with what the Case expects, so the score reads
+  `1.000`; injection delegates to it unchanged, so every delta is `+0.0000` — with real
+  intervals around those zeros; and every corrected interval crosses zero, so the Portfolio
+  comes back empty, which is the product refusing to recommend something rather than nothing
+  happening. `--json` carries the same three sentences in a `notes` array, and a golden pins
+  that the two renderings stay in step.
+
+  `--force` deletes an explicit allowlist of demo-owned filenames — never a directory. It
+  refuses any directory without the `.kno-demo` marker the demo writes, refuses `--dir .`
+  outright, and names any file it leaves in place rather than silently removing it. The demo
+  also writes its own `<dir>/.gitignore`, so running it inside your repository does not
+  pollute `git status`.
+
 ## [0.1.1](https://github.com/uknoAI/kno/compare/v0.1.0...v0.1.1) (2026-08-31)
 
 

@@ -17,3 +17,25 @@ func DecodeReportJSON(b []byte) (ReportJSON, error) { return decodeReportJSON(b)
 
 // ReportJSON is the report's --json shape, exposed for tests.
 type ReportJSON = reportJSON
+
+// DecodeDemoReport parses a rendered `kno demo --json` document, refusing
+// anything after it.
+func DecodeDemoReport(b []byte) (DemoReport, error) { return decodeDemoReport(b) }
+
+// DemoReport is `kno demo --json`'s envelope, exposed for tests.
+type DemoReport = demoReport
+
+// DecodeDemoBaseline parses the demo's embedded baseline stage document.
+func DecodeDemoBaseline(raw []byte) (Report, error) { return decodeDemoBaseline(raw) }
+
+// DecodeDemoValue parses the demo's embedded value stage document.
+func DecodeDemoValue(raw []byte) (ValueReport, error) { return decodeDemoValue(raw) }
+
+// ValueReport is `kno value --json`'s shape, exposed for tests.
+type ValueReport = valueReport
+
+// DecodeDemoSelect parses the demo's embedded select stage document.
+func DecodeDemoSelect(raw []byte) (SelectReport, error) { return decodeDemoSelect(raw) }
+
+// SelectReport is `kno select --json`'s shape, exposed for tests.
+type SelectReport = selectReport

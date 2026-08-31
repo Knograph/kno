@@ -124,6 +124,7 @@ select, and export run; validate arrives next.`,
 	}
 
 	root.AddCommand(newInitCmd())
+	root.AddCommand(newDemoCmd())
 	root.AddCommand(newBaselineCmd())
 	root.AddCommand(newMineCmd())
 	root.AddCommand(newValueCmd())
