@@ -380,21 +380,32 @@ Playwright end-to-end crawl that asserts links resolve. It is a third repository
 can turn red, and the first draft did not list it at all. Two consequences, the first of which is
 an open question that must be **answered, not guessed, before Phase 2 begins**:
 
-**Open question (blocks Phase 2): what does `kno-www`'s content collection actually source?** If
-any collection entry reads cookbook prose out of `uknoAI/kno`'s `docs/cookbook/*` — by submodule,
-by build-time fetch, by a sync script, or by transclusion — then deleting those 24 files breaks
-the **site build**, not merely a link, and this migration is a coordinated release rather than a
-docs PR. If the collection only *links* to them, the blast radius is the crawl. This plan
-deliberately does not assume which. The first task of Phase 2 is to read `kno-www`'s
-`src/content/` config and its `website` workflow and record the answer here as a dated amendment.
+**Open question — ANSWERED 2026-08-31, by reading the repository.** `kno-www`'s build sources
+content ONLY from its own tree: every collection in `src/content.config.ts` is an Astro
+`glob({ base: './src/content/...' })` over `site`, `home`, `blog`, `use-cases`, `pages`, and
+`docs`. Nothing reads `uknoAI/kno`'s `docs/cookbook/*` — no submodule, no build-time fetch, no
+sync script, no transclusion. **Deleting those files cannot break the site build.** The
+migration is a docs PR, not a coordinated release.
 
-**Known consequence: the Playwright crawl.** `kno-www` may already assert
-`github.com/uknoAI/kno/blob/main/docs/cookbook/<name>.md` URLs. Branch-pinned links break the
-moment `main` moves past the deletion; SHA-pinned links do not. A nightly drift detector is the
-wrong instrument for this — it reports a breakage a coordinating PR could have prevented.
+**And the Playwright crawl does not catch it either — which is worse, not better.**
+`tests/e2e/links.spec.ts:31` skips every href beginning with `http`, so external links are never
+asserted. The site holds **22 hard links** to `github.com/uknoAI/kno/blob/main/docs/cookbook/*.md`
+across nine entries (`anthropic`, `ci-gate`, `export-a-tuning-set`, `first-baseline`,
+`read-the-whole-story`, `retention`, `select-a-portfolio`, `your-own-provider`, `zendesk`), all
+branch-pinned to `main`. Every one 404s the moment `main` moves past the deletion, and **no gate
+in either repository would report it** — not `make docs`, which checks only relative links, and
+not the crawl, which skips external ones. Silent rot, discovered by a reader.
 
-**Sequencing decision: a `kno-www` PR lands before, or atomically with, the migration.** Not
-after, and not delegated to the detector. In order: (1) answer the open question above; (2) open
+This raises rather than lowers the value of the tombstone decision in *(F3)*: the stubs are what
+keep all 22 links alive, and they are load-bearing precisely because nothing else is watching.
+The coordinating `kno-www` PR remains worth doing — a link to a stub is worse prose than a link
+to the real page — but it is now a quality step, not a build-breakage mitigation, and it may
+land after the migration rather than before it.
+
+**Sequencing decision, relaxed by the answer above.** The original ordering assumed a possible
+build break; there is none, and the tombstones keep every link working, so the `kno-www` PR may
+follow the migration. What must NOT happen is the migration landing without the stubs — that is
+the step nothing else would catch. In order: (1) answered; (2) open
 the `kno-www` PR that re-points every cookbook reference at `kno-examples` — and, if the content
 collection sources prose, re-points the source; (3) merge the `uknoAI/kno` migration only once
 (2) is green on a Cloudflare Pages preview. If the answer is "the collection sources prose", the
