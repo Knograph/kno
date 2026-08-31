@@ -453,9 +453,42 @@ func TestHelpIsSnapshotted(t *testing.T) {
 		"langfuse:<dataset-name>",
 		"braintrust:<dataset-name>",
 		"hf:<org>/<name>/<config>/<split>:<kind>",
+		// Value is the expensive stage and now says what it reports. The
+		// panic asymmetry is stated rather than papered over: a recovered
+		// panic prints no spend block, and the help names the recovery.
+		"it reports what it spent",
+		"spent_usd_micros",
+		"kno report --value-run-id",
 	} {
 		if !strings.Contains(valueOut, want) {
-			t.Errorf("value help no longer mentions the %s grammar:\n%s", want, valueOut)
+			t.Errorf("value help no longer mentions %q:\n%s", want, valueOut)
+		}
+	}
+
+	// The unmetered stages say so, and say where the cost actually lives —
+	// otherwise the absence of a spend key is a fact the CLI never states to
+	// a human either.
+	for _, tc := range []struct {
+		cmd   string
+		wants []string
+	}{
+		{"select", []string{
+			"runs no budget guard", "reports no spend",
+			"source_run_id", "max_cost_usd is the cap",
+		}},
+		{"export", []string{
+			"runs no budget guard", "reports no spend",
+			"kno report --value-run-id",
+		}},
+	} {
+		out, _, code := run(t, tc.cmd, "--help")
+		if code != errs.ExitOK {
+			t.Fatalf("%s --help exit = %d", tc.cmd, code)
+		}
+		for _, want := range tc.wants {
+			if !strings.Contains(out, want) {
+				t.Errorf("%s help no longer mentions %q:\n%s", tc.cmd, want, out)
+			}
 		}
 	}
 }

@@ -223,10 +223,14 @@ func (o ValueOptions) Value(ctx context.Context, pool Pool) (*ValueResult, error
 	em := &valueEmitter{}
 	if !o.Resume {
 		if err := o.emitRunStarted(ctx, em, plan, scheduled); err != nil {
-			return nil, err
+			return o.failedResult(result, err)
 		}
 	} else if err := o.emitRunResumed(ctx, em, plan, completed); err != nil {
-		return nil, err
+		// After openRun, and openRun is where a resume calls Guard.Restore.
+		// Returning nil here would throw away the previous session's settled
+		// spend along with the result, which is the money the resumed run is
+		// most likely to be asked about.
+		return o.failedResult(result, err)
 	}
 
 	var stopReason atomic.Int32
@@ -248,7 +252,12 @@ func (o ValueOptions) Value(ctx context.Context, pool Pool) (*ValueResult, error
 			break
 		}
 		if err := o.measureAsset(ctx, em, gate, routing, plan, baseline, cases, assetsByID[routing.AssetID], completed, result, counts, &stopReason); err != nil {
-			return nil, err
+			// The result travels with the error. Measurements that settled
+			// before this point were paid for, and a caller handed only an
+			// error cannot report them — the failure that loses money most
+			// confusingly is real charges followed by a failure that has
+			// nothing to do with money.
+			return o.failedResult(result, err)
 		}
 		if stopReason.Load() != 0 {
 			break
@@ -260,6 +269,10 @@ func (o ValueOptions) Value(ctx context.Context, pool Pool) (*ValueResult, error
 		status = knov1.RunStatus_RUN_STATUS_COMPLETED
 	}
 	result.Status = status
+	// Read before the close, so a close that fails still reports the run's
+	// real cost: Guard.Spent is settled spend and does not depend on
+	// FinishRun having written.
+	result.Spent = o.Guard.Spent()
 	// The result comes back even when the close fails: the run it describes
 	// is resumable, and discarding it with the error is how a paid run gets
 	// thrown away because its last event did not write. The close itself runs
@@ -274,6 +287,20 @@ func (o ValueOptions) Value(ctx context.Context, pool Pool) (*ValueResult, error
 		return result, fmt.Errorf("an event write failed mid-run: %w", *f)
 	}
 	return result, nil
+}
+
+// failedResult returns a result the caller can still report from, alongside
+// the error that ended the run.
+//
+// Discarding the result on an error path discards the spend figure with it,
+// and the money is already gone. The status is FAILED rather than the
+// zero value because an unreported status renders as UNSPECIFIED, which reads
+// as a bug rather than as a failure; the durable Run row is untouched here,
+// since the stage that could not finish is in no position to close itself.
+func (o ValueOptions) failedResult(result *ValueResult, err error) (*ValueResult, error) {
+	result.Status = knov1.RunStatus_RUN_STATUS_FAILED
+	result.Spent = o.Guard.Spent()
+	return result, err
 }
 
 // Quote computes the routing plan a Value run would execute under, without

@@ -1,0 +1,17 @@
+agent: string
+attempted: number
+concurrency: number
+dev_cases: number
+errored: number
+goal: string
+guarded: boolean
+holdout_cases: number
+llm_calls: number
+run_id: string
+score: number
+scored: number
+spent_usd: string
+spent_usd_micros: number
+status: string
+tokens: number
+warnings: array

@@ -28,6 +28,64 @@ covenants — breaking any of them requires a major version.
      At release time the hand-written heading is renamed from [Unreleased] to
      the version. See docs/debt.md#76 for why that is still a manual step. -->
 
+## [Unreleased]
+
+### Features
+
+* **every stage reports what it spent, or says it could not.** `kno value` — the stage
+  `DESIGN.md` sizes at $15–40 for a run against a baseline's fraction of a dollar — reported
+  nothing about money in either rendering. It now carries the same spend block `kno baseline`
+  has printed since v0.1, through one shared renderer, and `kno report` gains the pipeline
+  total: what knowing this cost.
+
+### `--json` contract changes (all additive)
+
+New keys. Nothing is renamed, removed or retyped; `spent_usd` keeps its v0.1 value byte for byte.
+
+* `kno baseline --json` and `kno value --json` gain `guarded` (always `true`),
+  `spent_usd_micros`, `llm_calls`, and — when they have something to say — `tokens`,
+  `usage_estimated_cases`, and `resumed`. `kno value --json` gains `spent_usd` for the first
+  time.
+* `kno select --json`, `kno export --json` and `kno report --json` gain `guarded: false` and
+  emit **no** spend keys at all. This is deliberate and is the point: these stages run no budget
+  guard, and a uniform `"spent_usd": "$0.00"` would be indistinguishable from a stage that spent
+  money with a missing meter — which is exactly how the `kno value` hole survived v0.1. Absence
+  alone is not enough either, because `jq` cannot tell a missing key from an explicit null and
+  the repair a consumer reaches for, `.spent_usd // 0`, reinstates the ambiguity on the reading
+  side. So the documents say it positively. **The CI idiom is
+  `map(select(.guarded) | .spent_usd_micros) | add`, never `// 0`.**
+* `kno report --json` gains a `spend` object: one entry per metered run it names (baseline and
+  value; select and export are absent rather than zero), plus `total_usd`, `total_usd_micros`,
+  `total_llm_calls`, `incomplete`, and `no_metered_spend`.
+* `spent_usd` stays a formatted display string, and `spent_usd_micros` exists because the string
+  cannot be summed. The string is for eyes; the micros are for arithmetic.
+
+Why `spent_usd_micros` rather than retyping `spent_usd`: retyping a released key breaks every
+`jq` pipeline written against v0.1, and the recipe that samples it now lives in a repository this
+one cannot update in the same commit.
+
+### Documentation
+
+* **[ADR-0006: the `--json` contract](docs/adr/0006-the-json-contract.md)** — new, and now the
+  **only** statement of that contract in this repository. The previous one was a sentence in
+  `docs/cookbook/ci-gate.md`; the cookbook migration (#163) turned that page into a one-line
+  tombstone and the sentence left the repo with it, while the behavior it described stayed
+  exactly the same. Six rules, plus an explicit note that the ADR records a decision and does not
+  enforce one — the goldens and the tests do that.
+* `docs/what-the-numbers-mean.md` gains *What a reported spend figure covers*: run-lifetime, not
+  per-session; settled, not billed; and why a stage reporting no figure is not reporting zero.
+* `kno value --help`, `kno select --help` and `kno export --help` say which of them meters and
+  which does not, and where an unmetered stage's cost actually lives.
+
+### Internal
+
+* The repository's first `--json` goldens (`cli/testdata/json/`), one per stage, plus
+  `v0.1-shape.json` — a frozen capture of what v0.1.0 emitted unconditionally, asserted as a
+  subset of current output so a released key cannot be renamed or retyped unnoticed.
+* `core.ValueResult` gains `Spent`, populated on **every** path that returns a result, error
+  paths included: a run that settled real charges and then failed for a reason unrelated to
+  money still reports what it cost, before the error.
+
 ## [0.1.3](https://github.com/uknoAI/kno/compare/v0.1.2...v0.1.3) (2026-08-31)
 
 

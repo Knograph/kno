@@ -1,0 +1,7 @@
+assets: array
+baseline: object
+guarded: boolean
+portfolio: object
+spend: object
+value_run_id: string
+value_status: string

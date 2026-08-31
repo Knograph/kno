@@ -61,7 +61,15 @@ and what did it cost.
 The control arm never carries the asset. The holdout is never read here.
 
 Interrupting is safe: measurements are checkpointed as they complete, and
---resume continues without paying for anything twice.`,
+--resume continues without paying for anything twice.
+
+Value is the expensive stage, and it reports what it spent: one spent line in
+the human output, and guarded / spent_usd / spent_usd_micros / llm_calls in
+--json. A resumed run reports the whole run's spend, not this session's, and
+says so in both renderings. A run that fails for a reason other than money
+still prints the block before the error — but a run that PANICS does not, and
+that asymmetry is real: the recovery is kno report --value-run-id <id>, whose
+spend object reads the durable record rather than the lost guard.`,
 		Example: `  # Value a pool against a recorded baseline
   kno value --evals cases.jsonl --pool assets.jsonl --baseline-run-id <id>
 

@@ -215,6 +215,13 @@ type reportData struct {
 	// guess.
 	ExportRun *knov1.Run
 	Gaps      *knov1.Gaps
+
+	// Spend is what the pipeline cost: Store.SettledSpend for each of the two
+	// metered runs the page always names, plus the total. Read from the store
+	// rather than from a guard, because report runs none and the processes
+	// that did are gone. Composed once here so both renderers show the same
+	// numbers.
+	Spend reportSpend
 }
 
 // composeReport reads every recorded stage the flags name and composes the
@@ -296,6 +303,32 @@ func composeReport(ctx context.Context, db store.Store, f reportFlags) (*reportD
 			d.Portfolio = p
 		}
 	}
+
+	// The pipeline total, composed before either renderer runs.
+	//
+	// Both stages here ran a budget guard, always: --value-run-id is REQUIRED
+	// and loadBaseline refuses an empty baseline ID, so there is no page that
+	// references zero metered runs. Select and Export are absent from the
+	// object rather than present at zero — they run no guard, and a plausible
+	// zero beside two real figures is exactly the confusion this reporting
+	// exists to remove.
+	//
+	// A store error here is fatal rather than degraded. A cost figure is not
+	// decoration: rendering the page with a silent zero because the sum could
+	// not be read is how a report earns distrust.
+	baselineSpend, err := db.SettledSpend(ctx, baseline.GetId())
+	if err != nil {
+		return nil, fmt.Errorf("reading the baseline run's settled spend: %w", err)
+	}
+	valueSpend, err := db.SettledSpend(ctx, f.valueRunID)
+	if err != nil {
+		return nil, fmt.Errorf("reading the value run's settled spend: %w", err)
+	}
+	d.Spend = newReportSpend(
+		baseline.GetId(), baselineSpend,
+		f.valueRunID, valueSpend,
+		valueRun.GetIncompleteReason() != "" || baseline.GetIncompleteReason() != "",
+	)
 
 	if f.exportRunID != "" {
 		exportRun, err := db.GetRun(ctx, f.exportRunID)

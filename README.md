@@ -360,6 +360,7 @@ Both identity flags are the part that matters. Without `--certificate-identity-r
 - **[The mental model](docs/mental-model.md)** — one page; read it and the rest should be obvious.
 - **[What the numbers mean](docs/what-the-numbers-mean.md)** — what each number claims, and what it does not.
 - **[Evaluation design](docs/evaluation-design.md)** — how to build evals that attribution can trust.
+- **[ADR-0006: the `--json` contract](docs/adr/0006-the-json-contract.md)** — what every `--json` document promises a `jq` pipeline, which keys can move, and why an absent key is never a zero.
 - **[Cookbook](docs/cookbook/)** — task-shaped recipes, including [data retention](https://github.com/uknoAI/kno-examples/blob/main/recipes/retention.md).
 - **[DESIGN.md](DESIGN.md)** — architecture, and what is deliberately out of scope.
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — how we work. Plan, adversarial review, then code.

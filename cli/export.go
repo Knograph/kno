@@ -48,7 +48,12 @@ JSONL, the shape the Tuner adapters will parse).
 
 The artifact is a pure function of the Portfolio and the pool: re-exporting
 the same Portfolio is byte-identical, and export never mutates a destination.
-An existing target file is refused unless --force; writes are temp-then-rename.`,
+An existing target file is refused unless --force; writes are temp-then-rename.
+
+Export makes no LLM calls and runs no budget guard, so it reports no spend:
+no spent_usd key in --json, and "guarded": false says so positively. What the
+exported assets cost to measure belongs to the Value run behind the
+Portfolio; kno report --value-run-id <id> sums the pipeline.`,
 		Example: `  # Write the tuning set
   kno export --select-run-id <id> --pool assets.jsonl --destination tuning_set --out tuning.jsonl
 

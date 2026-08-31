@@ -21,6 +21,70 @@ reaches the human rendering and not only `--json` *(F3)*, ADR-0006 is described 
 with the goldens and the AST test doing the actual binding *(F4)*, and a new acceptance criterion
 covers a stage that spends and then fails for a **non-budget** reason *(F5)*.
 
+**Phase-2 amendment 2026-08-31 — the docs surface moved.** Everything above was verified against
+`4622b90`. [#163](https://github.com/uknoAI/kno/pull/163) then landed — *move the cookbook to
+`uknoAI/kno-examples`, leaving tombstones* — and deleted this plan's docs surface out from under
+it. `docs/cookbook/ci-gate.md` is now an 80-byte tombstone (`Moved to <…/recipes/ci-gate.md>.`),
+and `scripts/cookbook-stub-check.sh`, which runs inside `make docs`, fails any stub that grows a
+second line: *"a stub is exactly one line; anything more is a second copy of a recipe waiting to
+drift from the real one."* Three items named that page. They are unwritable as stated, and one of
+the corrections **strengthens** §7 rather than weakening it.
+
+**The migration deleted the repository's only statement of the `--json` stability promise.**
+`grep -rn "stable, hand-written"` now matches this plan file and nothing else. §7 argued ADR-0006
+was worth writing because the promise lived in a recipe rather than a decision record — a
+codification. That argument is now too weak for what happened: the promise does not live anywhere.
+Every `jq` pipeline written against v0.1 is running against a contract this repository no longer
+states. ADR-0006 is not a restatement; after this PR it is the **only** place the contract exists,
+and the sentence it replaces is one the reader can no longer go and check. §7 is amended to say
+that, and the withdrawn sentence is quoted there from the v0.1.3 tag rather than from a live path.
+
+Six further corrections, each folded into the section it belongs to:
+
+- **AC4** cannot be written: there is no fenced sample in a one-line tombstone to parse. Replaced
+  with a check against an **in-repo frozen v0.1 shape fixture** this PR creates
+  (`cli/testdata/json/v0.1-shape.json`, derived mechanically from the `v0.1.0` tag's struct tags),
+  asserted as a subset of current output. That is a stronger regression guard than the original —
+  it covers all five stage shapes rather than one page's baseline sample, and it does not depend
+  on a second repository staying reachable or unedited.
+- **AC17** linked the ADR from `docs/cookbook/ci-gate.md`. Linking a decision record from a
+  redirect stub is wrong on its own terms and would now fail `make docs`. The in-repo home is
+  **README's Documentation list** — defended below — plus a cross-link from
+  `docs/what-the-numbers-mean.md`, the page that says what a cost figure claims. Updating the
+  `kno-examples` recipe to cite ADR-0006 is a follow-up in that repository and is explicitly
+  **out of scope for this PR**; it is recorded as a Debt Ledger row with a trigger rather than
+  left as an intention.
+- **AC13's state is unreachable.** `cli/report.go:74` marks `--value-run-id` REQUIRED, and
+  `loadBaseline` (`cli/report.go:335`) refuses an empty baseline ID with *"the value run paired
+  against no baseline"*. No `kno report` invocation can therefore reference zero metered runs:
+  every page names exactly one Value run and one Baseline, and both stages run a guard. Rewritten
+  against the reachable state that carries the same risk — every referenced run settled zero,
+  which is precisely what a `fake:` pipeline in CI produces.
+- **§1 and §5 state `report`'s flags wrongly.** `reportFlags` (`cli/report.go:20-27`) is
+  `db`/`value-run-id`/`select-run-id`/`export-run-id`/`watch`/`json`. There is **no**
+  `--baseline-run-id`: the Baseline is reached through `valueRun.GetBaselineRunId()`. The design
+  is unaffected — `report` still holds every run ID it needs, it just does not hold them all as
+  flags — but the sentence claiming a flag that does not exist is corrected in both places.
+- **AC6's allowlist was wrong by more than double.** `formatUSD` has **nine** non-test call sites
+  in `cli/` across **six** enclosing functions — `printEstimate`, `renderHuman`, `quoteEstimate`
+  (twice), `renderJSON` (twice), `renderSelectJSON` (twice), `budgetCaps` — not the three the
+  allowlist named. Re-deriving the list would produce a test that fails on the next legitimate
+  cap or estimate rendering, which is a test about the wrong thing: `formatUSD` also formats
+  estimates, caps and carrying costs, none of which are spend. The mechanism is replaced with an
+  invariant that enumerates nothing — see AC6.
+- **AC18 is self-referential on this PR.** There are no JSON goldens in the tree, so there is no
+  "previous release's shape" for the first ones to be a superset of. Stated as such: on this PR
+  AC18 establishes the baseline, and the superset check becomes load-bearing at the next release,
+  when the frozen fixture of AC4 is re-cut against v0.2.
+
+Nothing in §2, §4, §6 or §8 changed, and the confirmed audit underneath them is unchanged:
+`ValueResult` has no `Spent`; `BaselineResult.Spent` is set at `core/baseline_close.go:141` from
+`o.Guard.Spent()`; `value` runs a guard; `select` and `export` reference no `budget.Guard`
+(`core/select.go`'s `budget` identifier is a `*knov1.Budget` local, not the guard);
+`cli/demo_test.go:246` asserts `$0.00` and nothing about call counts; and `make update-golden`
+exists (`Makefile:276-277`).
+
+
 ## Problem
 
 **The bug, verified against the tree at `4622b90`.**
@@ -93,9 +157,13 @@ Three things this table settles:
    *carrying cost of the selected Assets*. Neither is run spend. A consumer scanning for dollars
    in `kno select --json` today finds two dollar figures, neither of which answers "what did this
    cost me" — which is worse than finding none.
-3. **`Report` is a rendering gap of a different shape.** It holds `--baseline-run-id`,
-   `--value-run-id`, `--select-run-id` and `--export-run-id`, so it can call `SettledSpend` on
-   each and produce the number nobody currently gets: **what the pipeline cost**.
+3. **`Report` is a rendering gap of a different shape.** Its flags are `--value-run-id`
+   (REQUIRED, `cli/report.go:74`), `--select-run-id` and `--export-run-id`; the Baseline is not a
+   flag but is reached through `valueRun.GetBaselineRunId()` and loaded by `loadBaseline`
+   (`:335`), which refuses an empty one. So `report` holds — by flag or by chain — every run ID
+   the pipeline produced, and can call `SettledSpend` on each to produce the number nobody
+   currently gets: **what the pipeline cost**. The two IDs it always has are exactly the two
+   metered stages.
 
 ### 2 — Where the truth lives, and what must not become the source
 
@@ -111,6 +179,23 @@ Two readers, and the choice between them matters:
 runs reports `Store.SettledSpend`.** They agree by construction — `Restore` seeds the guard from
 `SettledSpend` and every settled charge is persisted before the run ends — and a test pins the
 agreement to the micro-dollar.
+
+**Correction, found by writing that test** *(Phase-2 amendment)*. They agree on **calls and
+cost**. They do **not** agree on **tokens** for a Value run. `core/value_loop.go`'s `sinkFunc`
+records `budget.Spend{Calls, CostUSDMicros}` and drops the token count, while Baseline's
+`settledSpend` (`core/baseline_budget.go:452-463`) carries all three from the Response. So
+`Store.SettledSpend` returns `Tokens: 0` for a Value run whose guard settled a real token total —
+and, since `Restore` seeds from `SettledSpend`, **a resumed Value run restores a token total of
+zero**, which under-enforces a token cap across a resume. That is a budget-recording bug in
+`core`, one struct field wide, and it is **not fixed in this PR**: changing what a stage persists
+about money inside a rendering PR is precisely the drive-by this repository's process exists to
+prevent, and it deserves its own plan, its own resume test, and its own review. It is ledgered
+with a trigger.
+
+Nothing this plan reports is wrong because of it, which is why it can wait. The in-process spend
+block reads `Guard.Spent()`, whose token count is correct; `report`'s entries carry no token field
+at all; and `AC1`'s test compares calls and cost exactly while logging — loudly — if the token
+divergence ever changes shape.
 
 **What must NOT happen: spend must not move onto `knov1.Run`.** `Run` carries no settled-spend
 field today (verified: `run.proto`'s only micro-USD fields are on `ConcurrencyDecision`), and
@@ -164,9 +249,12 @@ type spendReport struct {
 
 Four decisions inside that struct, the last added in review:
 
-- **`spent_usd` stays a formatted string.** It is the released key and `docs/cookbook/ci-gate.md`
-  ships a sample containing `"spent_usd": "$0.00"`. Changing its type would break every
-  `jq` pipeline written against v0.1 for a cosmetic gain.
+- **`spent_usd` stays a formatted string.** It is the released key, shipped since v0.1.0 and
+  sampled as `"spent_usd": "$0.00"` in the CI-gate recipe — which now lives in `kno-examples` and
+  is therefore *outside this repository's ability to update in lockstep*, which makes the key more
+  frozen than it was, not less. Changing its type would break every `jq` pipeline written against
+  v0.1 for a cosmetic gain, and would break them from a repository the pipeline's author is not
+  watching.
 - **`spent_usd_micros` is added because the string cannot be summed.** `jq` cannot add `"$2.41"`
   and `"$0.35"`, and the repo's own money discipline is integer micro-USD end to end
   (`stats/budget/budget.go:725-727` warns that `formatUSD` is "for error messages only. Never use
@@ -239,7 +327,9 @@ spend; the measurement it ranks was paid for by the Value run named in `source_r
 
 ### 5 — `kno report`: the pipeline total
 
-`report` reads recorded aggregates only, and it is the only surface holding every run ID at once.
+`report` reads recorded aggregates only, and it is the only surface holding every run ID at once
+— not all of them as flags (`reportFlags` is value/select/export; the Baseline arrives through
+`valueRun.GetBaselineRunId()`), but all of them in `reportData` by the time either renderer runs.
 It gains a `spend` object — **never a bare top-level `spent_usd`**, which would claim `report`
 spent it:
 
@@ -305,10 +395,26 @@ Its money content is a *serialization-correctness* rule — that `cost_usd_micro
 `encoding/json` outside `api/`. Useful, but not a stability promise. **No ADR covers `--json`
 output stability.**
 
-The only stability promise that exists is prose in a cookbook page, `docs/cookbook/ci-gate.md:35`:
+The only stability promise that ever existed was prose in a cookbook page, and **it is gone**
+*(Phase-2 amendment)*. Until #163 it read, at `docs/cookbook/ci-gate.md:35`:
 
 > `--json` emits a stable, hand-written shape aimed at `jq` — not the internal schema, so it
 > won't shift under you when the proto gains a field
+
+That page is now a one-line tombstone; the sentence survives only at the `v0.1.3` tag and in the
+`kno-examples` copy, which this repository cannot edit and CI here does not read.
+`grep -rn "stable, hand-written"` over the tree matches this plan file and nothing else.
+
+**This changes the argument for ADR-0006, in the direction of writing it.** The first draft
+justified the ADR as codification: the promise existed but lived in the wrong genre of document,
+and moving it to a decision record would make it citable. That is no longer the situation. The
+promise exists **nowhere in this repository**, while the behavior it described — hand-written
+structs, additive keys, a released `spent_usd` — is unchanged and is what every v0.1 `jq` pipeline
+is still running against. A contract that a codebase honors and never states is one the next
+contributor breaks in good faith, and this PR is about to add seven keys to it. ADR-0006 is
+therefore not a tidy-up: **it is the only statement of the `--json` contract this repository will
+have**, and the migration is the reason rather than an obstacle. It is also the reason the ADR's
+home matters (AC17): a decision record nothing links to is one nobody finds.
 
 **Decision: write `docs/adr/0006-the-json-contract.md`** in this PR, codifying what the code
 already does and what this plan extends:
@@ -338,7 +444,8 @@ one. Nothing in `make check` reads a markdown file, and a rule that lives only i
 obeyed exactly as long as the next contributor happens to have read it. **The enforcement is three
 mechanical artifacts, and they are the deliverable the rules describe**: the per-stage JSON
 goldens (rule 2 — a renamed or removed key shows up as a golden diff reviewed like code), the AST
-test on `formatUSD` callers (rule 4's single formatter — AC6), and the explicit absence assertion
+test that confines spend-field reads to one file (rule 4's single formatter — AC6, whose
+mechanism the Phase-2 amendment replaced), and the explicit absence assertion
 `TestSelectExportReportEmitNoSpentUSD` (rules 4–5 — AC8). The ADR's value is that a reviewer
 rejecting a future PR has something to cite; its value is **not** that the PR would have been
 caught without those three tests. Any rule added to it later that no test enforces should be
@@ -350,7 +457,11 @@ transcript) and `adapters/evals/hf/testdata/golden/single-winner.golden`. The `-
 is currently guarded by one key-presence loop at `cli/cli_test.go:353`. This plan adds a JSON
 golden per stage under `cli/testdata/json/`, regenerated by the existing
 `make update-golden` (`Makefile:276-277`) and reviewed like code — which is what makes rule 2
-enforceable rather than aspirational.
+enforceable rather than aspirational. Two honest consequences, stated rather than glossed
+*(Phase-2 amendment)*: this PR **creates** the baseline these goldens compare against, so on this
+PR the comparison is against itself and catches nothing (AC18); and the thing that does have
+historical force on this PR is the frozen v0.1 shape fixture (AC4), cut from the `v0.1.0` tag's
+struct tags rather than from anything this PR wrote.
 
 ### 8 — Is this a prerequisite for `--bridge`? Yes, and here is the sequencing argument
 
@@ -400,24 +511,60 @@ inventing a fifth.
 
 ## Acceptance criteria
 
-1. `core.ValueResult` gains `Spent budget.Spend`, populated at close from `o.Guard.Spent()`. A
-   test asserts it equals `Store.SettledSpend(ctx, runID)` for the same run to the micro-dollar,
-   for a run with measurements, a run with orphan spend, and a run with both.
+1. `core.ValueResult` gains `Spent budget.Spend`, populated at close from `o.Guard.Spent()` —
+   and on **every** path that returns a non-nil result, error paths included (AC21). A test
+   asserts it equals `Store.SettledSpend(ctx, runID)` for the same run **on calls and cost, to
+   the micro-dollar**, for a completed run, a run that failed after settling, and a resumed run.
+
+   **Scoped to two of the three dimensions by the Phase-2 amendment**, and the scoping is a
+   finding rather than a weakening: the Value sink does not persist token counts (see §2), so a
+   three-dimension equality assertion fails on `main`'s recording behavior rather than on
+   anything this plan changes. The test compares calls and cost exactly and logs if the token
+   divergence changes shape, so the day `core` starts recording tokens the allowance is removed
+   deliberately rather than forgotten. The orphan-spend fixture folds into AC15, which is where
+   `docs/debt.md#50`'s path already lives.
 2. `kno value` human output contains the line `  spent      $X.XX over N call(s)` with the same
    spacing, ordering and pluralization as `kno baseline`'s — pinned by a golden that diffs the
    two stages' spend blocks and fails on any divergence.
 3. `kno value --json` contains `guarded: true`, `spent_usd`, `spent_usd_micros` and `llm_calls`.
    A test runs a fake agent priced at a known non-zero rate and asserts
    `spent_usd_micros == calls * rate` exactly, and `spent_usd == formatUSD(spent_usd_micros)`.
-4. `kno baseline --json` gains `spent_usd_micros` and `llm_calls` and its `spent_usd` value is
-   **byte-identical** to v0.1 for the same run. The v0.1 sample in `docs/cookbook/ci-gate.md`
-   remains a valid subset of the emitted document — asserted by a test that parses the doc's
-   fenced sample and checks every key still exists with the same type.
+4. **Rewritten by the Phase-2 amendment.** `kno baseline --json` gains `spent_usd_micros` and
+   `llm_calls` and its `spent_usd` value is **byte-identical** to v0.1 for the same run. The
+   original criterion parsed the fenced sample in `docs/cookbook/ci-gate.md`; that page is a
+   one-line tombstone and has no fenced sample, so the check is not writable and — worse — would
+   have been a check against a file in another repository that this one's CI cannot see change.
+   Instead this PR commits **`cli/testdata/json/v0.1-shape.json`**: a frozen, in-repo capture of
+   the v0.1 `--json` shape for all five stage documents, one entry per key that v0.1.0 emitted
+   unconditionally, recording its JSON type (`string`, `number`, `boolean`, `array`, `object`,
+   or `number|null` for `score`). It is derived mechanically from the `v0.1.0` tag's struct tags
+   in `cli/jsonreport.go` (`jsonReport`, `valueReport`, `selectReport`, `exportReport`,
+   `reportJSON`) and it is **frozen**: a PR that edits it is renaming or removing a released key
+   and owes a CHANGELOG migration note per ADR-0006 rule 2. `TestV01ShapeIsStillASubset` renders
+   every stage document and asserts each frozen key is still present with the same JSON type.
+   This is strictly stronger than the criterion it replaces — five shapes rather than one, no
+   cross-repository dependency, and it fails on a *retype* as well as a removal.
 5. Human and `--json` spend content are equal for `baseline` and `value`: an equivalence golden
    asserts the dollars and call count rendered by each surface match.
-6. `spendLines` is the **only** place a spend line is formatted. An AST test asserts
-   `formatUSD` has no other caller in `cli/` outside `spendLines`, `printEstimate`, and the
-   select-budget renderer, and fails when a fourth appears.
+6. **Rewritten by the Phase-2 amendment.** `spendLines` is the **only** place a spend line is
+   formatted. The original mechanism — an AST allowlist of `formatUSD`'s callers — was wrong on
+   the facts and wrong in kind. On the facts: `formatUSD` has nine non-test call sites in `cli/`
+   across six functions (`printEstimate`, `renderHuman`, `quoteEstimate` ×2, `renderJSON` ×2,
+   `renderSelectJSON` ×2, `budgetCaps`), not the three named, so the test fails on `main` before
+   it tests anything. In kind: `formatUSD` renders estimates, cost caps and carrying costs as
+   well as spend, so an allowlist over its callers polices the wrong noun and would fail the next
+   legitimate cap rendering — a test that has to be edited to stay green is a test that will be
+   edited to stay green.
+
+   The replacement enumerates no callers. The invariant is **spend fields are read in exactly one
+   file**: `spendLines` and `newSpendReport` move to a new `cli/spend.go`, and
+   `TestSpendFieldsAreReadInOneFile` walks the AST of every non-test file in `cli/` and fails on
+   any selector chain that reaches *into* a `budget.Spend` — a `SelectorExpr` whose own `X` is a
+   `SelectorExpr` named `Spent` (`res.Spent.CostUSDMicros`, `d.ValueSpend.Calls`) — outside
+   `spend.go`. Passing `res.Spent` whole to a renderer is one selector and stays legal anywhere;
+   formatting its contents is confined to one file. Purely syntactic, needs no type information,
+   names no caller, and fails on exactly the thing the rule is about: a second private spend
+   formatter. A companion assertion pins the spend line's format literal to `spendLines`.
 7. When `CaseExecution.usage_estimated_case_count > 0`, both renderings carry the qualifier
    (`usage_estimated_cases` in JSON, the `note` line in human output). When it is zero, neither
    does — `omitempty` on the key, no line in human output.
@@ -437,9 +584,24 @@ inventing a fifth.
     exactly, and each entry equals `Store.SettledSpend` for that run ID.
 12. `report`'s `spend.incomplete` is `true` when any referenced run has a non-empty
     `Run.incomplete_reason`, and the human `## Cost` table carries a visible marker in that case.
-13. `kno report` given only `--select-run-id` (no baseline or value run) emits a `spend` object
-    with no entries and a zero total, and says in both renderings that no metered run was
-    referenced — rather than omitting the block, which would be indistinguishable from "free".
+13. **Rewritten by the Phase-2 amendment: the original state is unreachable.** The criterion
+    described `kno report` given only `--select-run-id`. That invocation does not exist:
+    `cli/report.go:74` marks `--value-run-id` REQUIRED via `MarkFlagRequired`, and `loadBaseline`
+    (`cli/report.go:335`) refuses an empty baseline ID before the page composes. Every `kno
+    report` page therefore names exactly one Value run and one Baseline, and both are stages that
+    run a guard — there is no path to "zero metered runs referenced", and a test for it would
+    have been unwritable or, worse, written against a stubbed `reportData` that no CLI invocation
+    produces.
+
+    The reachable state carrying the same risk is **every referenced metered run settled zero**,
+    which is exactly what a `fake:` pipeline in CI produces on every run — including `kno demo`.
+    A machine consumer reading `total_usd_micros: 0` there must be able to tell "these runs were
+    metered and cost nothing" from "no meter", which is §4's distinction one level up. So: a
+    `report` over a `fake:` baseline and value run emits the `spend` object with **both entries
+    present**, each at zero with a non-zero `llm_calls`, `total_usd_micros: 0`, and
+    `no_metered_spend: true`; the human `## Cost` table carries the matching sentence. The block
+    is never omitted and the entries are never dropped for being zero — dropping them would
+    reproduce, inside `report`, the ambiguity the whole plan exists to remove.
 14. **Resume reports run-lifetime spend, and says so in both renderings** *(F3)*. A test kills a
     `value` run mid-flight, resumes it, and asserts the resumed run's reported `spent_usd_micros`
     equals first-process + second-process settled spend, that no Case is paid for twice, that
@@ -455,12 +617,42 @@ inventing a fifth.
     from "unmetered", and `guarded` states the same thing without requiring the consumer to reason
     about it. **This pairing is new behavior, not a pin of existing behavior**: today
     `cli/demo_test.go:245` asserts the `$0.00` alone, because `llm_calls` does not yet exist.
-17. `docs/adr/0006-the-json-contract.md` exists, is linked from `CONTRIBUTING.md` and from
-    `docs/cookbook/ci-gate.md`, and states rules 1–6 of §7.
+17. **Rewritten by the Phase-2 amendment: the link target moved.** `docs/adr/0006-the-json-contract.md`
+    exists and states rules 1–6 of §7. It is linked from **README's Documentation list** and
+    cross-linked from `docs/what-the-numbers-mean.md`.
+
+    Why not the original targets. `docs/cookbook/ci-gate.md` is an 80-byte tombstone, and
+    `scripts/cookbook-stub-check.sh` — inside `make docs` — fails any stub of more than one line;
+    linking a decision record from a redirect stub is also wrong on its own terms, since the stub
+    exists to send the reader somewhere else. `CONTRIBUTING.md` carries no ADR index at all
+    (`grep -in adr CONTRIBUTING.md` returns nothing), so a lone ADR-0006 link there would be a
+    link with no list to join, and the four existing ADRs would remain unlinked beside it.
+
+    Why README's Documentation list. It is this repository's only curated documentation index —
+    mental model, what-the-numbers-mean, evaluation design, cookbook, DESIGN, CONTRIBUTING, debt
+    ledger — and it is where a reader who wants to know what a surface promises already looks.
+    The `--json` contract is a **user-facing promise**, not an internal decision: it belongs
+    beside "what each number claims" and not in a contributor workflow document. The cross-link
+    from `docs/what-the-numbers-mean.md` is the second half, because the spend figure is the
+    number this PR adds and that page is where its meaning is stated.
+
+    **Out of scope for this PR:** updating the `kno-examples` CI-gate recipe to cite ADR-0006 and
+    to teach `select(.guarded) | .spent_usd_micros` instead of `// 0`. That edit lands in
+    `uknoAI/kno-examples`, which is a different repository with its own CI, and a PR here cannot
+    make it atomic. It is recorded as a Debt Ledger row with a trigger rather than left as an
+    intention — which is the whole point of the ledger.
 18. A JSON golden exists under `cli/testdata/json/` for `baseline`, `value`, `select`, `export`
-    and `report`, regenerated by `make update-golden`. A test asserts each golden is a
-    key-for-key superset of the previous release's shape for that stage — the mechanical form of
-    ADR-0006 rule 2.
+    and `report`, regenerated by `make update-golden` and reviewed like code — the mechanical
+    form of ADR-0006 rule 2: a renamed or removed key shows up as a golden diff.
+
+    **Honest scope on this PR** *(Phase-2 amendment)*. The original criterion asked each golden to
+    be a key-for-key superset of "the previous release's shape". There is no such artifact: this
+    PR creates the repository's first JSON goldens, so the comparison would be against itself and
+    would catch nothing. On this PR AC18 **establishes** the baseline and its value is the review
+    diff, not an assertion. The historical check that does bite today is AC4's frozen v0.1 shape
+    fixture, cut from the `v0.1.0` tag rather than from this PR's output. AC18's superset check
+    becomes load-bearing at the next release, when `v0.1-shape.json` gains a `v0.2-shape.json`
+    sibling and the goldens have a predecessor to be a superset of.
 19. No spend rendering path emits `Case.input`, `Case.expected` or any `Turn.content`, and no
     spend log line above DEBUG carries trace content. Pinned by the existing sentinel test,
     extended to the new surfaces.
@@ -507,7 +699,9 @@ disagree with `SettledSpend` after an orphan-spend write or a crash between the 
 store costs. `SettledSpend` is already the single durable source and needs no rival.
 
 **Change `spent_usd` to a number (micro-USD or float dollars).** Cleaner for `jq`. Rejected: it
-breaks the one released spend key, for which `docs/cookbook/ci-gate.md` ships a sample; adding
+breaks the one released spend key, sampled in the CI-gate recipe that now lives in a repository
+this one cannot update in the same commit *(Phase-2 amendment)* — which makes the break worse,
+not more tolerable, because the sample would keep teaching the old type; adding
 `spent_usd_micros` gets the arithmetic without the break, and floats-for-money is banned by the
 repo's own micro-USD discipline.
 
@@ -586,7 +780,8 @@ unchanged. **The store schema is also unchanged**: no migration.
   populated.* This is the test the fix ships with, per CLAUDE.md's "no test, no fix".
 - **Cross-stage identity.** `TestSpendBlockIsIdenticalAcrossStages` — diffs `baseline`'s and
   `value`'s rendered spend blocks. *Fails if anyone writes a second formatter.*
-  `TestFormatUSDHasNoFourthCaller` (AST). *Fails on a private copy.*
+  `TestSpendFieldsAreReadInOneFile` (AST, and enumerating no callers — see AC6).
+  *Fails on a private copy.*
 - **Truth agreement.** `TestGuardSpentEqualsSettledSpend` over three fixtures: measurements
   only, orphan only, both. *Fails if a settle path stops persisting.*
 - **Absence is asserted, not incidental.** `TestSelectExportReportEmitNoSpentUSD` and
@@ -596,9 +791,12 @@ unchanged. **The store schema is also unchanged**: no migration.
 - **Failure after spend.** `TestValueReportsSpendAfterStoreError` (block rendered, error printed,
   exit non-zero, `SettledSpend` intact) and `TestPanickedRunsSpendIsRecoverableViaReport` *(F5)*.
   *Fails if the result struct stops being returned on non-budget error paths.*
-- **Contract stability.** JSON goldens per stage; `TestCiGateCookbookSampleIsStillValid` parses
-  the fenced sample in `docs/cookbook/ci-gate.md` and checks every key survives with its type.
-  *Fails if a key is renamed or retyped without updating the published contract.*
+- **Contract stability.** JSON goldens per stage (AC18 — the baseline this PR establishes) and
+  `TestV01ShapeIsStillASubset`, which reads the frozen in-repo `cli/testdata/json/v0.1-shape.json`
+  and checks every key v0.1.0 emitted unconditionally still exists with the same JSON type across
+  all five stage documents *(Phase-2 amendment: the original test parsed a fenced sample in
+  `docs/cookbook/ci-gate.md`, which is now a one-line tombstone)*. *Fails if a released key is
+  renamed, removed, or retyped.*
 - **Resume.** `TestResumedValueReportsLifetimeSpend` (kill, resume, assert the sum and no double
   charge); `TestBudgetStoppedRunStillReportsWhatItSpent`. *Fails if `Restore` is moved after the
   first `Authorize` or dropped.*
@@ -629,12 +827,16 @@ There is no schema change and no store migration, so there is nothing irreversib
 
 - **`docs/adr/0006-the-json-contract.md`** — new, §7's six rules. This is the deliverable that
   outlives the patch.
-- **`docs/cookbook/ci-gate.md`** — link the ADR; add a `kno value` example alongside the existing
-  baseline one; add a `jq` snippet summing `spent_usd_micros` across stages, which is the
-  operation the string form made impossible. The snippet gates on `guarded`
-  (`map(select(.guarded) | .spent_usd_micros) | add`) and the page states explicitly that
-  `// 0` is the wrong repair for a missing key, because it recreates the exact ambiguity the
-  absence rule removes *(F1)*.
+- **README** — ADR-0006 joins the Documentation list. This is the ADR's in-repo home
+  *(Phase-2 amendment, AC17)*: the repository's only curated doc index, and the `--json` contract
+  is a user-facing promise rather than a contributor-workflow rule.
+- **~~`docs/cookbook/ci-gate.md`~~ — gone, and out of scope** *(Phase-2 amendment)*. The original
+  plan added the ADR link, a `kno value` example, and the cross-stage `jq` snippet
+  (`map(select(.guarded) | .spent_usd_micros) | add`, and never `// 0`) to that page. #163 turned
+  it into a one-line tombstone that `make docs` forbids growing. The snippet and the `// 0`
+  warning are **not lost** — they move into ADR-0006 rule 5, which is now the contract's only
+  home and the right place for them. Teaching them in the `kno-examples` recipe is a follow-up in
+  that repository, ledgered with a trigger, and explicitly not part of this PR.
 - **`docs/what-the-numbers-mean.md`** — extend *"What a cost figure claims"* with two sentences:
   reported spend is the **run's lifetime** spend including resumed sessions, and it is what the
   guard settled, which is neither an invoice nor a bound on the dark-spend window
@@ -675,3 +877,30 @@ There is no schema change and no store migration, so there is nothing irreversib
   *Trigger: the first `SettlementOvershoot` observed in a nightly live run, or 1.0.*
 - **`kno mine` has no `--json` at all** and is therefore untouched by this plan's contract.
   *Trigger: when `mine` grows a `--json` flag.*
+- **The CI-gate recipe still teaches the pre-`guarded` idiom** *(Phase-2 amendment)*. The recipe
+  moved to `uknoAI/kno-examples` in #163 and cannot be updated in this PR's commit. Until it is,
+  the published example of a CI cost gate does not mention `guarded`, does not sum
+  `spent_usd_micros`, and its `--json` stability sentence points at nothing citable. ADR-0006 is
+  the in-repo mitigation. *Trigger: within one minor release of this PR shipping, or the first
+  time a `kno-examples` CI-gate run reports a spend figure from an unmetered stage — whichever is
+  first.*
+- **`Store.SettledSpend` loses a Value run's token count** *(Phase-2 amendment, found by AC1's
+  test)*. `core/value_loop.go`'s `sinkFunc` writes `budget.Spend{Calls, CostUSDMicros}` and drops
+  `Tokens`; Baseline's `settledSpend` writes all three. Consequences: `kno report` cannot ever
+  report a Value run's tokens, and — the part that is a real defect rather than a reporting gap —
+  `Guard.Restore` seeds a resumed Value run with zero tokens, so a token cap is under-enforced
+  across a resume. Not fixed here: it is a change to what a stage persists about money, which
+  needs its own plan and its own resume test rather than a hunk in a rendering PR. This plan's
+  own surfaces are unaffected (the in-process block reads the guard; `report`'s entries carry no
+  token field). *Trigger: before the next minor release, or the first time a token cap is set on
+  a Value run that resumes — whichever is first.*
+- **`value` records no `usage_estimated_case_count`, so its qualifier line can never fire**
+  *(Phase-2 amendment)*. `core/value_loop.go:1015-1020` writes a `CaseExecution` with attempted /
+  scored / errored / resolved models and no usage-estimated count; only
+  `core/baseline_close.go:242` writes one. AC7's qualifier is therefore exercised on `baseline`
+  and is structurally dead on `value`, which means a Value run priced from the engine's estimate
+  rather than reported usage says so nowhere. This plan renders the field and does not start
+  recording it — that is a `core` measurement-aggregation change with its own store query, and
+  bundling it into a rendering PR is how a rendering PR becomes unreviewable. The renderer is
+  built to take the number the day it exists. *Trigger: before 1.0, or when the first provider
+  adapter that cannot report token usage is measured with `kno value` — whichever is first.*
