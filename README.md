@@ -193,7 +193,7 @@ kno value --evals cases.jsonl --pool pool.jsonl --baseline-run-id <run id> --age
 
 Keys come from the environment, never from a flag. Kno prices each Case from its own table, so the cap binds *before* the call rather than at settlement. `kno doctor` prints which providers, models, and goals this build supports — it contacts nothing.
 
-Full walkthrough: **[Score your agent for the first time](docs/cookbook/first-baseline.md)**, then **[Point Kno at your own provider](docs/cookbook/your-own-provider.md)** — or **[Score your agent against Claude](docs/cookbook/anthropic.md)** for the Anthropic API, **[on Bedrock](docs/cookbook/bedrock.md)** for AWS, and **[on Vertex](docs/cookbook/vertex.md)** for Google Cloud. Got a support stack already? **[Value your Zendesk knowledge](docs/cookbook/zendesk.md)** shows the whole recipe against real vendor data. Every recipe in one place: **[the cookbook index](docs/cookbook/README.md)**.
+Full walkthrough: **[Score your agent for the first time](https://github.com/uknoAI/kno-examples/blob/main/recipes/first-baseline.md)**, then **[Point Kno at your own provider](https://github.com/uknoAI/kno-examples/blob/main/recipes/your-own-provider.md)** — or **[Score your agent against Claude](https://github.com/uknoAI/kno-examples/blob/main/recipes/anthropic.md)** for the Anthropic API, **[on Bedrock](https://github.com/uknoAI/kno-examples/blob/main/recipes/bedrock.md)** for AWS, and **[on Vertex](https://github.com/uknoAI/kno-examples/blob/main/recipes/vertex.md)** for Google Cloud. Got a support stack already? **[Value your Zendesk knowledge](https://github.com/uknoAI/kno-examples/blob/main/recipes/zendesk.md)** shows the whole recipe against real vendor data. Every recipe in one place: **[the cookbook index](docs/cookbook/README.md)**.
 
 ## How it works
 
@@ -220,7 +220,7 @@ Kno is deliberately opinionated about experimentation:
 - **Provider failures aren't bad scores.** Infrastructure errors don't artificially lower your baseline; they're counted separately.
 - **Nothing spends your money silently.** Every path that can call a provider goes through a budget guard: estimate, confirm, checkpoint. Caps are enforced *before* the call, not discovered at settlement.
 - **Interrupting is boring.** Work is checkpointed as each Case completes, in one transaction with its result. `--resume` skips what's finished and reconstructs prior spend from disk, so an interrupted run cannot pay twice.
-- **Your traces stay yours, and nothing expires on its own.** Runs are stored locally in SQLite, including the agent's output — which is conversation content if your evals come from production logs. Kno itself sends nothing anywhere — there is no telemetry of content, ever. Your Cases go to whatever provider you point Kno at, and that provider's retention is theirs. `kno purge` deletes it when you decide to, keeping the scores and costs so the run stays resumable. [Retention, in full](docs/cookbook/retention.md).
+- **Your traces stay yours, and nothing expires on its own.** Runs are stored locally in SQLite, including the agent's output — which is conversation content if your evals come from production logs. Kno itself sends nothing anywhere — there is no telemetry of content, ever. Your Cases go to whatever provider you point Kno at, and that provider's retention is theirs. `kno purge` deletes it when you decide to, keeping the scores and costs so the run stays resumable. [Retention, in full](https://github.com/uknoAI/kno-examples/blob/main/recipes/retention.md).
 
 ## Supported agents and providers
 
@@ -301,7 +301,7 @@ A CI gate branches on these, so they're a contract rather than an afterthought.
 | `3` | Validation failed | Fail the build — the deploy gate (reserved for `kno validate`) |
 | `4` | Interrupted by a signal or deadline | Not a failure. Resume it |
 
-`2` and `4` both leave a resumable run. Reporting either as `1` would train people to ignore `1`, which is the code that actually means something is wrong. Recipe: **[Gate a deploy on Kno in CI](docs/cookbook/ci-gate.md)**.
+`2` and `4` both leave a resumable run. Reporting either as `1` would train people to ignore `1`, which is the code that actually means something is wrong. Recipe: **[Gate a deploy on Kno in CI](https://github.com/uknoAI/kno-examples/blob/main/recipes/ci-gate.md)**.
 
 ## Status
 
@@ -360,7 +360,7 @@ Both identity flags are the part that matters. Without `--certificate-identity-r
 - **[The mental model](docs/mental-model.md)** — one page; read it and the rest should be obvious.
 - **[What the numbers mean](docs/what-the-numbers-mean.md)** — what each number claims, and what it does not.
 - **[Evaluation design](docs/evaluation-design.md)** — how to build evals that attribution can trust.
-- **[Cookbook](docs/cookbook/)** — task-shaped recipes, including [data retention](docs/cookbook/retention.md).
+- **[Cookbook](docs/cookbook/)** — task-shaped recipes, including [data retention](https://github.com/uknoAI/kno-examples/blob/main/recipes/retention.md).
 - **[DESIGN.md](DESIGN.md)** — architecture, and what is deliberately out of scope.
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — how we work. Plan, adversarial review, then code.
 - **[docs/debt.md](docs/debt.md)** — every piece of accepted debt, with a repayment trigger. Public on purpose.

@@ -239,7 +239,7 @@ Timing rationale: Ring 2 lands at v0.3 deliberately, *after* the Ring-0 interfac
 
 ## Judge integrity
 
-Scoring and routing use LLM judges (BAML: typed, schema-enforced, model-swappable, testable in isolation). Judges are the epistemic foundation, so they get explicit treatment: `examples/` ships a small human-labeled calibration set; `kno judge calibrate` reports judge-human agreement before you trust a run; judge model ≠ agent model is the stated default (correlated blind spots); every judge prompt lives in `judge/baml_src/` where changing it is a reviewable diff.
+Scoring and routing use LLM judges (BAML: typed, schema-enforced, model-swappable, testable in isolation). Judges are the epistemic foundation, so they get explicit treatment: `judge/testdata/` ships a small human-labeled calibration set — it stays in this repository, unlike the scenarios and recipes, because a judge-agreement threshold is a CI gate and a gate cannot depend on fetching a sibling repository; `kno judge calibrate` reports judge-human agreement before you trust a run; judge model ≠ agent model is the stated default (correlated blind spots); every judge prompt lives in `judge/baml_src/` where changing it is a reviewable diff.
 
 ## Developer Experience
 
@@ -258,7 +258,6 @@ The CLI is the product's face, built on the charm.sh toolkit (native Go — same
 | **glow** | `kno report` renders `report.md` beautifully in-terminal; no browser required |
 | **log (charmbracelet)** | structured, leveled, human-first logging; `--json` flips to machine output for CI |
 | **vhs** | every README demo is a scripted `.tape` — docs GIFs regenerate in CI and never rot |
-| **gum** | used in `examples/` shell scripts so even the demo scripts feel polished |
 
 Principles behind the polish:
 
@@ -350,9 +349,10 @@ kno/
 ├── store/              # SQLite run/trace/valuation storage
 ├── tui/                # bubbletea dashboard, lipgloss styles, event renderers
 ├── cli/                # fang/cobra binary: the OSS product
-├── api/                # connect-rpc (gRPC + REST from one proto definition; SSE events)
-└── examples/           # toy agent + pool + calibration set; gum-polished scripts; vhs tapes
+└── api/                # connect-rpc (gRPC + REST from one proto definition; SSE events)
 ```
+
+**Scenarios and recipes live in [`uknoAI/kno-examples`](https://github.com/uknoAI/kno-examples), not in an `examples/` directory here.** Earlier drafts of this document placed them in-tree; the split is deliberate and is argued in [the examples-repo plan](docs/plans/2026-08-30-examples-repo.md). The short version: what has to be verified is the binary a user can download, and a job inside this repository can only test HEAD (which nobody has) or the previous release (which cannot validate the change under review). The judge calibration set is the exception and stays here — see *Judge integrity* — because a CI gate cannot live across a repository boundary without making this repository's CI depend on a network fetch.
 
 Dependency rule: `core` imports nothing above it. `cli`, `tui`, and `api` are thin shells over identical engine calls and one shared event stream — the open-core seam is a directory boundary, not a fork.
 

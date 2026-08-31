@@ -59,6 +59,34 @@ covenants — breaking any of them requires a major version.
 
 ## [Unreleased]
 
+### Changed
+
+- **The cookbook moved to [`uknoAI/kno-examples`](https://github.com/uknoAI/kno-examples).**
+  Twenty-five recipes left `docs/cookbook/`; each old path keeps a one-line stub pointing at
+  its new home, and `make docs` fails if a stub is missing, is longer than one line, or carries
+  anything but its link. The reason for the move is narrow and worth stating: **no CI job
+  anywhere had ever run a command from this repository's documentation.** `make docs` checks
+  godoc coverage and relative-link integrity — both real gates, neither of which executes
+  anything — so the cookbook was twenty-five pages of instructions, none of them run, some
+  already contradicting each other. `kno-examples` runs them nightly against the binary you can
+  download, which is a question this repository cannot answer about itself: a job here can test
+  HEAD (which nobody has) or the previous release (which cannot validate the change under
+  review).
+
+  Eleven recipes are now executed end to end against committed expectations; the rest declare,
+  on the page, exactly what was and was not checked. `docs/cookbook/README.md` stays as the
+  index. The README quickstart stays here in full and self-contained — the front door must not
+  depend on a second repository being reachable. One page did not move:
+  `check-your-evals`, which documents `kno eval inspect`, a command on `main` and in no release.
+
+  The stubs are load-bearing rather than tidy. Twenty-two branch-pinned links to
+  `github.com/uknoAI/kno/blob/main/docs/cookbook/*.md` live in `uknoAI/kno-www` alone, plus
+  however many are in merged PR bodies, issues, and bookmarks — and **nothing in either
+  repository would report them 404ing**: `make docs` skips `https://` targets by construction
+  and the website's Playwright crawl skips external hrefs. Ledgering that breakage instead would
+  have meant a repayment trigger of "when someone reports a dead link", which fires only after
+  the damage and cannot lapse observably.
+
 ### Bug Fixes
 
 - **`kno export --json` names the Select run it rendered from.** The
