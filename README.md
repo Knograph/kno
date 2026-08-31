@@ -293,6 +293,12 @@ A CI gate branches on these, so they're a contract rather than an afterthought.
 
 ## Status
 
+Two tables, because "stage" and "command" are two different things and one table conflating them is how they drifted apart. A **Stage** is a step of the pipeline, named by the `Stage` enum in [`proto/kno/v1/run.proto`](proto/kno/v1/run.proto). A **command** is a verb the CLI registers — some are stages, some (`report`, `demo`, `doctor`) compose or inspect them and are deliberately not stages.
+
+Both tables are machine-checked against the code: [`docs/status.json`](docs/status.json) is the generated, machine-readable version (`make status`), and `make status-check` — inside `make check` — fails if either table, the declaration in `cli/status.go`, or the command tree drifts from the others.
+
+### Stages
+
 | Stage | What it does | State |
 |---|---|---|
 | **Baseline** | Run the agent over the dev Cases, score against the Goal, persist every result | **Shipped** |
@@ -300,7 +306,23 @@ A CI gate branches on these, so they're a contract rather than an afterthought.
 | **Select** | Build a Portfolio under budget, with a rejection log; every decision at a Bonferroni-corrected interval | **Shipped** |
 | **Validate** | Measure the Portfolio as a set against the untouched holdout | Planned |
 | **Export** | Render the selected assets into the destination grammar: context pack, knowledge-base manifest, or tuning-set JSONL | **Shipped** |
-| **Report** | Compose the recorded stages into one page — verdicts, portfolio, gaps, and the caveat that nothing is validated on holdout yet | **Shipped** |
+
+`Stage` carries `STAGE_VALIDATE` already, and that is not an oversight: the schema leads the implementation ([CLAUDE.md](CLAUDE.md), "proto first"), so enum membership does not mean shipped. Which stages ship is declared once, in `cli/status.go`, and cross-checked against this table, the enum, and the command tree.
+
+### Commands
+
+| Command | What it does |
+|---|---|
+| `kno init` | Write a `kno.yaml` configuration file |
+| `kno demo` | Run the whole loop against `fake:`, for free, on data it writes for you |
+| `kno mine` | Turn production transcripts into a weak-label eval set |
+| `kno baseline` | Run your agent over your evals and score it |
+| `kno value` | Measure the marginal value of each asset in a pool |
+| `kno select` | Choose the assets that earn their place, under budget |
+| `kno export` | Write a portfolio's selected assets to a destination |
+| `kno report` | The one-page verdict across the recorded stages |
+| `kno doctor` | Print what this build supports |
+| `kno purge` | Delete stored agent output and judge rationales for a run |
 
 ## Verifying a download
 

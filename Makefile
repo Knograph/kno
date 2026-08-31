@@ -420,8 +420,35 @@ selftest: ## Prove each gate FAILS when its invariant is broken
 
 ## ─── Docs ───────────────────────────────────────────────────────────────────
 
+# docs/status.json is generated, committed, and gated here for the same reason
+# gen/ is gated by generate-check: it is an artifact that must agree with the
+# tree it describes. `make status` writes it; this fails if it would change.
+#
+# It reports a RELEASE, never a build, so it carries no version, commit or
+# released_version -- see cli/status.go's header and
+# docs/plans/2026-08-30-kno-status.md section 7. That is what keeps a dirty tree
+# and a release PR from both failing the gate.
+.PHONY: status
+status: ## Regenerate docs/status.json from the tree
+	@go run ./internal/cmd/status
+
+.PHONY: status-check
+status-check: ## Fail if regenerating docs/status.json would change it
+	@$(SAFE) if ! command -v python3 >/dev/null 2>&1; then \
+		$(call skip_missing,python3,status-check); \
+	else \
+		if ! python3 scripts/ledger_check_test.py >/dev/null 2>&1; then \
+			printf '\033[31m FAIL \033[0m status-check: scripts/ledger-check.py does not pass its own tests.\n'; \
+			printf '        docs/status.json publishes the numbers it reports, so the\n'; \
+			printf '        parser is checked before the artifact is.\n'; \
+			python3 scripts/ledger_check_test.py; \
+			exit 1; \
+		fi; \
+		go run ./internal/cmd/status -check; \
+	fi
+
 .PHONY: docs
-docs: ## Regenerate OpenAPI, check godoc coverage, verify links
+docs: status-check ## Regenerate OpenAPI, check godoc coverage, verify links, gate docs/status.json
 	@go run ./internal/cmd/godoccheck
 	@$(call pending,OpenAPI generation,the first proto service definition)
 	@$(SAFE) broken=0; checked=0; \

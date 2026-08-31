@@ -146,12 +146,20 @@ type doctorReport struct {
 	} `json:"priced_models"`
 }
 
+// doctorGoals is every Goal this build can score against.
+//
+// Extracted from runDoctor so docs/status.json reports the same list rather
+// than a second copy of it (cli/status.go). One list, two readers.
+func doctorGoals() []string {
+	return []string{"exact-match"}
+}
+
 // runDoctor renders the matrix.
 func runDoctor(out io.Writer, jsonOut bool) error {
 	rep := doctorReport{
 		Version:    doctorVersion(),
 		Adapters:   adapterFacts(),
-		Goals:      []string{"exact-match"},
+		Goals:      doctorGoals(),
 		PriceTable: pricing.Version,
 	}
 	rep.PricedModels.OpenAI = pricing.Models(agentref.SchemeOpenAI)

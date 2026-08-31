@@ -100,6 +100,7 @@ it did not run is worse than no gate, so they announce themselves as `PEND`.
 | `make fuzz-short` | 30s fuzz on parsers. No fuzz targets exist yet; it discovers them automatically, so it starts working the moment you add one ([docs/debt.md#4](docs/debt.md)) |
 | `make vuln` | `govulncheck` over the shipping module. The `tools/` module is **not** scanned yet ([docs/debt.md#12](docs/debt.md)) |
 | `make docs` | Will regenerate OpenAPI and check godoc coverage. **Both are pending** — `godoccheck` lands with M0c and OpenAPI needs a proto service to exist. It reports what it did not run rather than passing quietly |
+| `make status-check` | Regenerates [`docs/status.json`](docs/status.json) and fails if the committed copy differs — the same idiom `make generate-check` uses for proto codegen. Runs inside `make docs`. The fix is always `make status` plus a commit |
 | `make bench-diff` | **Currently a tripwire, not a comparison.** No benchmarks exist yet, so it passes. The moment you add the first `func Benchmark`, it fails deliberately and asks you to implement the >10% regression gate ([docs/debt.md#3](docs/debt.md)) — that is the forcing function, not a bug |
 
 Three gates cover the release path but **not** inside `make check`, because both fetch or compile something that
@@ -124,6 +125,46 @@ wrong — you see them only when you run them.
 
 **New dependencies need justification in the PR body:** what it does, why the standard library or
 an existing dependency can't, its license, and its maintenance signal.
+
+### `docs/status.json` is generated
+
+It reports what a **release** does — which stages ship, which commands exist, which adapters this
+build carries, how much of the Debt Ledger is open — and the website reads it at a release tag. It
+is deliberately not a `kno status` command: a command reports the binary in front of you, and those
+two documents disagree in exactly the cases that matter (a dev build's `version: "dev"` on a public
+roadmap page). `cli/status.go`'s header carries the full argument; read it before proposing a
+command.
+
+Three rules, and the third is the one people meet first:
+
+1. **Never hand-edit it.** Change the source instead — the stage declaration in `cli/status.go`, the
+   command tree, README.md's Status tables, or `docs/debt.md`. `make status-check` fails on a
+   hand-edit.
+
+2. **Never hand-resolve a merge conflict in it.** Two PRs that touch its inputs both regenerate it,
+   and the second to merge conflicts. Take either side and regenerate:
+
+   ```bash
+   git checkout --ours docs/status.json && make status && git add docs/status.json
+   ```
+
+   `make status-check` tells you if you got it wrong, which is why hand-resolving is not merely
+   discouraged but pointless.
+
+3. **`schema_version` bumps only on a breaking shape change** — a key renamed, removed or retyped,
+   or a value's meaning changed. **Adding a key does not bump it**, and a consumer that breaks on an
+   unknown key is broken. The PR that bumps it owes two things *in the same PR*, not as follow-ups:
+   a `CHANGELOG.md` entry under `## [Unreleased]`, and an issue filed on
+   [`uknoAI/kno-www`](https://github.com/uknoAI/kno-www) linking the PR and naming the changed keys.
+   The site pins the version it understands and **fails its build** on one it does not; because it
+   fetches at a release tag, it keeps rendering the last shape it understands until it is updated,
+   so a bump is a deadline with a working fallback rather than an outage.
+
+   The artifact carries **no version, commit or `released_version` key**, and must not gain one.
+   Beyond the staleness argument, a field derived from `.release-please-manifest.json` would make
+   `make status-check` fail on every release PR — release-please bumps that manifest in an ordinary
+   PR that runs `make check`. `TestAReleasePRProducesNoStatusDiff` is that hazard's regression
+   guard. The version anchor is the git ref the site fetched at.
 
 ## Tests
 

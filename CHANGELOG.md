@@ -53,6 +53,36 @@ covenants — breaking any of them requires a major version.
 
 ### Added
 
+- **`docs/status.json` — a generated, committed answer to "what does this release do, and how
+  honest is it being about the parts it does not do yet?"** Written by `make status`, gated by
+  `make status-check` inside `make docs` and therefore inside `make check`. It carries the
+  pipeline stages with their shipped/partial/planned state and milestone, the registered command
+  tree, the adapter matrix, the goals, the price-table version, and the Debt Ledger's size. The
+  website reads it at a release tag, which retires three hand-maintained copies of the same
+  claims in `uknoAI/kno-www`.
+
+  **There is no `kno status` command, deliberately.** A command reports the binary in front of
+  you; this file reports a release, and they disagree in exactly the cases that matter — a
+  `go install`ed dev build reports `version: "dev"`, and a website rendering that would claim a
+  version nobody can install. No consumer for the command exists anywhere in the repo, and
+  pre-1.0 CLI surface becomes a post-1.0 covenant, so it is deferred behind a named-consumer
+  trigger ([docs/debt.md#85](docs/debt.md)) rather than bought on credit. The renderer and the
+  stage declaration ship in `cli/status.go` regardless, so reviving it later is a printer over a
+  struct that already exists.
+
+  **The artifact carries no version key at all** — not `version`, not `commit`, not
+  `released_version`. Its version anchor is the git ref the site fetches it at. A
+  `released_version` derived from `.release-please-manifest.json` would have made
+  `status-check` fail on *every release PR*, because release-please bumps that manifest in an
+  ordinary PR against `main` that runs `make check` — a gate blocking the release it exists to
+  describe. The field is deleted rather than automated around, which makes the hazard
+  structurally impossible; `TestAReleasePRProducesNoStatusDiff` keeps it that way.
+
+  Which stages have shipped is one human judgement, declared once in `cli/status.go` and
+  cross-checked three ways: exhaustively against the `Stage` enum, against the command tree, and
+  against README.md. Full derivation is impossible on purpose — the enum carries
+  `STAGE_VALIDATE` before `validate` ships, because proto leads implementation.
+
 - **`kno demo` — the whole loop in one command, against `fake:`, for free.** The onboarding
   stage nobody owned: `baseline`, `value`, `select`, `export` and `report` all shipped, and
   what did not ship was the ten minutes before the first one of them runs. `kno demo` writes
@@ -82,6 +112,28 @@ covenants — breaking any of them requires a major version.
   outright, and names any file it leaves in place rather than silently removing it. The demo
   also writes its own `<dir>/.gitignore`, so running it inside your repository does not
   pollute `git status`.
+
+### Changed
+
+- **README's `## Status` is now two tables, Stages and Commands, both test-pinned.** The single
+  table had already drifted at one release: it listed **Report** as a stage, where the `Stage`
+  enum has no `REPORT` member — `report` composes recorded stages rather than being one — and it
+  omitted `init`, `demo`, `mine`, `doctor` and `purge`, all registered commands. Conflating the
+  two meanings in one table is *how* that happened, so the tables are split rather than patched.
+
+- **`scripts/ledger-check.py` gains an additive `--json` mode**, reporting the ledger's `total`,
+  `open` and `skipped` counts over the *same* row scan and the *same* dispositions the release
+  gate uses. The release gate's exit-code behaviour is byte-identical and has a regression test
+  saying so. `docs/debt.md` keeps exactly one parser; a Go reader of the same hand-written table
+  would have drifted from the Python one silently.
+
+- **`kno --help`'s prose no longer lists which stages run.** It points at the README's Stages
+  table, which is now checked, instead of being a fifth hand-maintained copy of the list.
+
+- **`docs/status.json`, once the website reads it, is a consumed contract.** Keys are added,
+  never renamed or removed within a major; `schema_version` bumps only on a breaking shape
+  change, and the PR that bumps it owes a CHANGELOG entry and a cross-repo issue in the same PR.
+  CONTRIBUTING.md carries the protocol and the never-hand-resolve-a-conflict procedure.
 
 ## [0.1.1](https://github.com/uknoAI/kno/compare/v0.1.0...v0.1.1) (2026-08-31)
 

@@ -24,5 +24,6 @@ executor 94.9
 goal/exactmatch 0.0
 internal/cmd/covercheck 83.9
 internal/cmd/godoccheck 74.0
+internal/cmd/status 78.0
 stats/budget 95.4
 store 82.0

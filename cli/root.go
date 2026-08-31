@@ -114,8 +114,9 @@ func NewRootCmd() *cobra.Command {
 feeding an LLM agent, then tells you which ones earn their place, what they
 cost, and where each belongs.
 
-The loop is: baseline, value, select, validate, export. Today baseline, value,
-select, and export run; validate arrives next.`,
+The loop is: baseline, value, select, validate, export. Which of them this
+release implements is in the README's Status tables, and in docs/status.json
+beside them --- one declaration, not a copy of the list maintained here.`,
 		Version:      identity().String(),
 		SilenceUsage: true,
 		// The top level renders errors in the CLI's grammar. Cobra printing
