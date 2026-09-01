@@ -76,6 +76,30 @@ covenants — breaking any of them requires a major version.
 
 ### Fixed
 
+- **`kno export --destination tuning_set` produced files no provider can train
+  on.** `renderTuningSet` emitted one `user` message per Asset and no
+  `assistant` turn — every line was
+  `{"messages":[{"role":"user","content":"..."}]}`. Every hosted fine-tuning
+  API requires at least one assistant message per example, because without one
+  there is no target to train on; a provider's file-validation step exists
+  precisely to reject this. The artifact was a list of prompts wearing the
+  JSONL of a training set.
+
+  Content is now rendered one of two ways. Content that is already chat JSONL
+  passes through re-marshaled — and is **refused** if it carries no assistant
+  turn, rather than shipped as an untrainable line. Anything else is treated
+  as the demonstration itself and wrapped as an assistant message. Empty or
+  whitespace-only content is refused: a zero-example demonstration is not
+  trainable at any price, and paying a provider to discover that is a paid
+  no-op.
+
+  **Behaviour change**: the pinned output moves from `"role":"user"` to
+  `"role":"assistant"`, and an Asset whose content cannot become a trainable
+  example now fails the export with an actionable error instead of writing a
+  line that would be rejected later, further from the cause.
+
+### Fixed
+
 - **A confidence interval could collapse to a point, and report itself as a
   Student-t interval.** `stats/interval`'s degenerate-sample guard was
   `variance <= 0`, meant to catch "every pair identical" and hand it to the

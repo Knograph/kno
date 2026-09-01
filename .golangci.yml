@@ -86,6 +86,14 @@ linters:
             # as adapters/**/format.go. Scoped to the one file so it cannot
             # spread to code that touches kno.v1 types.
             - "!**/core/export.go"
+            # core/export_test.go marshals the same chatExample/chatMessage
+            # structs to pin the rendered grammar byte-for-byte — including
+            # that pretty-printed input is compacted to one line, which only
+            # the marshaled bytes can show. Same contract as export.go, and
+            # listed as its own path rather than widening the entry above to
+            # a glob, so a future core/export_something.go does not inherit
+            # the exemption by accident.
+            - "!**/core/export_test.go"
             # The LangSmith adapter is a wire-format parser: it decodes the
             # LangSmith REST envelopes into plain Go structs, a kno.v1 type is
             # never involved, and protojson would force the wire format to
