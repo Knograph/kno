@@ -74,6 +74,37 @@ covenants — breaking any of them requires a major version.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A confidence interval could collapse to a point, and report itself as a
+  Student-t interval.** `stats/interval`'s degenerate-sample guard was
+  `variance <= 0`, meant to catch "every pair identical" and hand it to the
+  sign bound, which is deliberately wide. Summing `(d-mean)²` over identical
+  **small-magnitude** deltas does not give zero: the mean of fifty copies of
+  `0.001` is not `0.001` in binary floating point, so each residual is about
+  `1e-19` and the variance is a positive number made entirely of rounding
+  noise. A positive variance takes the Student-t path, and `sqrt(1e-38/n)` is
+  a half-width around `1e-19` — so fifty identical observations produced an
+  interval of width `4e-19`, reported as method `t`.
+
+  That is a claim of perfect certainty from a sample with no spread at all,
+  which is precisely what the sign bound exists to prevent ("wide, honest, and
+  impossible to mistake for certainty") and what `build`'s zero-width guard
+  believes it enforces — `build` refuses only `half <= 0`, and `1e-19` is
+  greater than zero. It reached every caller: a Value delta, a Validate
+  holdout gain and a Select screening interval all compute through this path,
+  so any Asset whose per-Case differences came out identical and small carried
+  a CI that had collapsed. Prime directive 5 says no reported delta without
+  its CI; a CI of width `1e-19` is worse than none, because it reads as a
+  measurement rather than as the refusal it should be.
+
+  The guard now tests exact equality — the semantic condition, immune to how
+  residuals round — and, separately, whether the standard deviation is below
+  the floating-point resolution of the data it was computed from. Verified in
+  both directions: identical deltas across five magnitudes now take the sign
+  bound, and samples with genuine spread (including one dissenter among
+  identical values, and a real spread at `1e-6`) still take Student-t.
+
 ## v0.1.5 — in detail
 
 ### Fixed
