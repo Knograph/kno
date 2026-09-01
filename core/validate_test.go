@@ -212,7 +212,17 @@ func (s *scriptedSetAgent) Invoke(_ context.Context, c *core.Case) (*core.Respon
 	if right(c.GetId()) {
 		out = c.GetExpected()
 	}
-	return &core.Response{CaseId: c.GetId(), Output: out, ResolvedModel: "scripted"}, nil
+	// Token counts are emitted because Capabilities below declares
+	// TokenCounts, and an agent that claims the capability and reports zero
+	// makes every token assertion in this file vacuously true. Fixed values:
+	// the counts are asserted against a total, not a model's behaviour.
+	return &core.Response{
+		CaseId:           c.GetId(),
+		Output:           out,
+		ResolvedModel:    "scripted",
+		PromptTokens:     7,
+		CompletionTokens: 3,
+	}, nil
 }
 
 func (s *scriptedSetAgent) Capabilities() *core.Capabilities {
@@ -385,13 +395,24 @@ func TestValidateMeasuresBothArmsOverTheHoldout(t *testing.T) {
 		v.GetBaselineRunId() != "base-1" {
 		t.Error("the provenance chain was not recorded on the Validation")
 	}
-	// Spend is the guard's number and must equal what the store settled.
+	// Spend is the guard's number and must equal what the store settled, on
+	// every dimension a cap can be set on. Tokens are compared because
+	// SettledSpend is what a resumed run restores the guard from: a dimension
+	// the store drops is a dimension the resume stops enforcing, silently.
+	// This assertion skipped tokens once, and the Validate loop was dropping
+	// them (docs/debt.md#137's defect, in this stage).
 	settled, err := h.store.SettledSpend(context.Background(), "validate-1")
 	if err != nil {
 		t.Fatalf("SettledSpend: %v", err)
 	}
-	if res.Spent.CostUSDMicros != settled.CostUSDMicros || res.Spent.Calls != settled.Calls {
+	if res.Spent.CostUSDMicros != settled.CostUSDMicros ||
+		res.Spent.Calls != settled.Calls ||
+		res.Spent.Tokens != settled.Tokens {
 		t.Errorf("result spend %+v != settled spend %+v", res.Spent, settled)
+	}
+	if settled.Tokens == 0 {
+		t.Error("the store settled zero tokens for a run that measured both arms; " +
+			"a resume would restore a zero token total and stop enforcing --max-tokens")
 	}
 }
 

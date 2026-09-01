@@ -465,7 +465,20 @@ func (o ValidateOptions) sinkFunc(key store.MeasurementKey, counts *valueCounts)
 			Response: out.Response,
 			Score:    out.Score,
 			Err:      out.Err,
-			Spend:    budget.Spend{Calls: out.SettledCalls, CostUSDMicros: out.BilledUSDMicros},
+			// Tokens come from the Response, the same way Value's loop and
+			// Baseline's settledSpend compute them. Dropping them here is the
+			// defect docs/debt.md#137 named in the Value loop, reproduced in
+			// this one: SettledSpend sums measurements.tokens, openRun seeds
+			// Guard.Restore from that sum, so a resumed Validate run restored
+			// zero tokens for every measurement it had already paid for and
+			// under-enforced --max-tokens for the rest of the run.
+			// GetPromptTokens on a nil Response returns zero, which is right
+			// for an attempt that never reached a provider.
+			Spend: budget.Spend{
+				Calls:         out.SettledCalls,
+				CostUSDMicros: out.BilledUSDMicros,
+				Tokens:        out.Response.GetPromptTokens() + out.Response.GetCompletionTokens(),
+			},
 		}
 		if err := o.Store.RecordMeasurement(ctx, o.RunID, recorded); err != nil {
 			return fmt.Errorf("recording the %s measurement of %s (trial %d): %w",

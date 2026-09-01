@@ -98,34 +98,27 @@ func TestValueResultSpendEqualsSettledSpend(t *testing.T) {
 	assertMoneyAgrees(t, res.Spent, settled)
 }
 
-// assertMoneyAgrees pins the two readers of money to each other on the two
-// dimensions this plan reports and a cost cap enforces.
+// assertMoneyAgrees pins the two readers of money to each other on all three
+// dimensions a cap can be set on.
 //
-// Tokens are deliberately NOT compared, and the reason is a finding rather
-// than a convenience. The Value stage's sink records
-// budget.Spend{Calls, CostUSDMicros} and drops the token count
-// (core/value_loop.go's sinkFunc), while Baseline's settledSpend carries all
-// three — so Guard.Spent and Store.SettledSpend genuinely disagree on tokens
-// for a Value run, and a resumed Value run restores a token total of zero.
-// That is a budget-recording bug in core, pre-existing and one field wide,
-// and it is NOT fixed here: changing what a stage persists about money inside
-// a rendering PR is exactly the drive-by this repository's process exists to
-// prevent. It is ledgered with a trigger.
-//
-// Nothing this plan reports is wrong because of it: the in-process spend
-// block reads Guard.Spent, which counts tokens correctly, and kno report's
-// entries carry no token field at all.
+// Tokens were exempted here once, and the exemption carried an instruction:
+// the Value sink recorded budget.Spend{Calls, CostUSDMicros} and dropped the
+// token count, so Guard.Spent and Store.SettledSpend genuinely disagreed and
+// a resumed Value run restored zero tokens. docs/debt.md#137 tracked it and
+// the allowance said to delete itself once the sink recorded tokens. It does
+// now, so this compares all three — a stale allowance is a test that has
+// stopped asking its question.
 func assertMoneyAgrees(t *testing.T, guard, settled budget.Spend) {
 	t.Helper()
-	if guard.Calls != settled.Calls || guard.CostUSDMicros != settled.CostUSDMicros {
-		t.Errorf("the guard settled %d call(s) / %d micros, the store recorded %d / %d. "+
-			"The two readers of money must agree to the micro-dollar",
-			guard.Calls, guard.CostUSDMicros, settled.Calls, settled.CostUSDMicros)
-	}
-	if settled.Tokens != 0 || guard.Tokens == 0 {
-		t.Logf("token divergence changed: guard %d, store %d. If the Value sink now "+
-			"records tokens, delete this allowance and compare all three dimensions",
-			guard.Tokens, settled.Tokens)
+	if guard.Calls != settled.Calls || guard.CostUSDMicros != settled.CostUSDMicros ||
+		guard.Tokens != settled.Tokens {
+		t.Errorf("the guard settled %d call(s) / %d micros / %d tokens, the store "+
+			"recorded %d / %d / %d. The two readers of money must agree on every "+
+			"dimension a cap can be set on: SettledSpend is what a resume restores "+
+			"the guard from, so a dimension the store drops is a cap the resume "+
+			"stops enforcing",
+			guard.Calls, guard.CostUSDMicros, guard.Tokens,
+			settled.Calls, settled.CostUSDMicros, settled.Tokens)
 	}
 }
 

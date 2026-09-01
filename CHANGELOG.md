@@ -53,6 +53,22 @@ covenants — breaking any of them requires a major version.
 
 ### Bug Fixes
 
+- **A resumed Validate run restores its token spend too.** The fix below
+  landed in `core/value_loop.go` and its own note said why it could not
+  wait — `validate` had shipped as a second resuming spend stage on the
+  same `SettledSpend` path. Then it changed only the Value sink.
+  `core/validate_loop.go` was still recording
+  `budget.Spend{Calls, CostUSDMicros}`, so a resumed Validate run restored
+  zero tokens and under-enforced `--max-tokens` for the rest of the run,
+  identically. Nothing caught it because
+  `TestValidateMeasuresBothArmsOverTheHoldout` compared cost and calls and
+  skipped tokens, and the stage's scripted agent declared
+  `TokenCounts: true` while returning none — the dimension was
+  unobservable in the one stage that had it wrong. Both are fixed, and the
+  assertion is verified failing with the fix reverted. See docs/debt.md#137,
+  which is annotated with how a defect gets repaid as literally as it was
+  written.
+
 - **A resumed Value run restores its token spend.** `core/value_loop.go`'s
   sink recorded `budget.Spend{Calls, CostUSDMicros}` and dropped `Tokens`,
   while Baseline's `settledSpend` wrote all three. `Store.SettledSpend` sums
