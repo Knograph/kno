@@ -12,7 +12,7 @@ Publishing this is deliberate. A measurement tool that hides its epistemics is a
 | Δgoal on an Asset | The change on the slices that Asset was routed to, in the mode stated | That the same change happens in deployment, unless the mode is `knowledge_add` |
 | Δ on controls | Whether the Asset hurt slices it wasn't meant to help | That no regression exists outside the measured controls |
 | Portfolio dev estimate | The selected set's gain **on the slice it was selected against** | That you will see this gain. It is inflated. See below |
-| Holdout gain | The set's gain on Cases nothing had read before | Anything about Cases outside your eval set |
+| Holdout gain | The set's gain on Cases nothing had read before, reported only beside its interval | Anything about Cases outside your eval set. It is measured by injecting the set into the prompt, so it is still an upper bound |
 
 ## Why the dev estimate is inflated
 
@@ -25,6 +25,36 @@ This is the **winner's curse**, and it scales with how many assets you screen. S
 Kno names this field `dev_estimated_gain` rather than `expected_gain` so that an SDK user reaching for it by autocomplete is warned by the name and not only by the docs.
 
 **The holdout gain is the number that isn't inflated**, because nothing optimized against it.
+
+## What a holdout gain claims
+
+`kno validate` runs the holdout Cases twice inside one run: a **control arm** with nothing injected, and a **treatment arm** carrying the whole context-destination Portfolio, injected as a single ordered payload in the system position. The reported number is the mean paired difference between the two arms, sign-corrected by the Goal's direction, over the Cases that scored in both:
+
+```
+holdout_gain = mean over holdout Cases of ( score(treatment, c) - score(control, c) )
+```
+
+**Why the control arm is measured rather than read off the baseline.** It cannot be read off the baseline: `core.Baseline` is handed a sealed, dev-only view of your Evals, so no baseline run has ever scored a holdout Case, and there is no recorded holdout reference in the database to subtract. Subtracting the *dev* baseline mean instead would produce one number carrying three terms — the Portfolio's effect, plus a dev-versus-holdout population difference, plus provider drift between two runs on different days. The population term is not zero and not small: the split is a hash of the Case ID, so which Cases land where is random, and at a 20-Case holdout that randomness is easily larger than any Portfolio effect. Two arms cost twice the agent calls, and the consent quote shows the doubling (`n_holdout x 2 arms x trials`) rather than burying it. That is the price of the number meaning one thing instead of three.
+
+**What it is unbiased for:** the effect of *this* Portfolio on the holdout population. Nothing optimized against these Cases, so the selection effect that inflates `dev_estimated_gain` is absent.
+
+**What it is not unbiased for:** the effect of the best achievable portfolio. You selected one set out of your Pool, and the holdout says how that one did — not how close it came to the best one available. And it is **not a bias-corrected `dev_estimated_gain`**. The two are different measurements of different slices, not one quantity measured twice; the smaller number is not the "real version" of the bigger one.
+
+**Why the holdout number usually comes in under the dev estimate.** Three contributors, and Kno claims nothing about their relative sizes, because it cannot separate them:
+
+- **Winner's-curse shrinkage.** The dev estimate was computed on the slice the selection ran against, so it carries the inflation described above. Some of the gap is that inflation going away.
+- **Sampling noise on both slices.** Two finite samples, two intervals. The gap between two point estimates includes the noise in each of them, and at holdout sizes near `MinHoldout` that noise is the wider term.
+- **Estimand mismatch.** `dev_estimated_gain` is a dev-population figure built from per-entry deltas, each scaled by `PortfolioEntry.n_routed_scale` under the uniform-effect model described in [What a scaled delta claims](#what-a-scaled-delta-claims). `holdout_gain` is a direct, unscaled measurement of the whole set over every holdout Case. They are not the same quantity, so their difference is not a bias estimate.
+
+That third one is the single most likely misreading of the stage, which is why the report prints it in line beside the two numbers rather than leaving it on this page. The labelled difference between them is `shrinkage`, and shrinkage is the expected outcome of a correct pipeline — it is not evidence that your Assets interfere with each other.
+
+**Bonferroni is deliberately absent here.** `select` corrects every keep/reject interval for the family of decisions it made, because it screened `n_screened` Assets and kept the winners. Validate screens nothing: it makes one comparison, fixed before the holdout was read — this Portfolio, this holdout. A correction factor would widen the one interval in the product that has actually earned its nominal 95% coverage. If you go looking for `stats/portfolio.Correct` in the validate path, its absence is the decision; a test pins it so that a future reader cannot "fix" it.
+
+**The multiplicity that does apply is repeated holdout use, and it is counted rather than corrected.** A holdout is consumed once per Portfolio. The consumption is recorded before the first agent call, not at completion, because a validate run that died halfway has already peeked — recording at the end would be the leak. Re-validating the same Portfolio against the same holdout is refused outright and there is no flag for it; an interrupted run is resumed, which reads only the Cases the first process never reached. Validating a *different* Portfolio against the same holdout is allowed, with `--allow-repeat-holdout`, and every rendering carries the ordinal: `this holdout has now measured N portfolios`. Kno counts that and does not widen the interval for it, and you should read the Nth number with that in mind — validating N portfolios against one holdout re-introduces multiplicity at rate N, which is the thing the holdout existed to remove. The reason it is allowed at all is that refusing would push you to delete the database or re-split with `--split-seed`, turning a counted second peek into an invisible one.
+
+**The verdict keys on the interval, never on the sign** — the same rule as everywhere else on this page. An interval entirely above zero is `confirmed`; an interval crossing zero is `inconclusive`, which is "not enough evidence at this sample size" and does not fail a deploy gate unless you ask for proof with `--require-gain`; an interval entirely below zero is `not_confirmed` and blocks unconditionally. A holdout too small or too ragged to form an interval reports `unmeasured` and no number, never a bare point estimate.
+
+**And it is still an upper bound.** The treatment arm puts the Portfolio in the prompt, so this is a `context_injection` measurement and everything in [Context injection is an upper bound](#context-injection-is-an-upper-bound) applies to it — a ceiling on what a retriever would deliver, not a deployment prediction. A Portfolio whose entries span more than one Destination is refused rather than approximated; `--context-only` validates the context subset and labels the result as a number about a subset, which is a true number about part of what you are shipping.
 
 ## What a corrected interval claims
 

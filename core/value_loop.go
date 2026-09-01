@@ -95,11 +95,15 @@ func (c *valueCounts) models() []string {
 	return out
 }
 
-// valueEmitter serializes event writes with the same discipline Baseline's
+// stageEmitter serializes event writes with the same discipline Baseline's
 // aggregator enforces: sequence order and insertion order are the same, and
 // a hot-path write failure is remembered rather than returned — an
 // observability failure must not destroy a paid measurement.
-type valueEmitter struct {
+//
+// Shared by Value and Validate. It was named for Value when Value was the only
+// caller; Validate is the second stage to need exactly this, which is the
+// point at which a stage-specific name starts lying about the type.
+type stageEmitter struct {
 	mu     sync.Mutex
 	seq    int64
 	closed bool
@@ -112,7 +116,7 @@ type valueEmitter struct {
 // append writes one event under the lock, stamped with the run ID and the
 // next sequence. A hot-path caller (the invoker hooks) may discard the error;
 // the loop's own emits treat it as fatal.
-func (o ValueOptions) append(ctx context.Context, em *valueEmitter, build func() *knov1.Event, what string) error {
+func (o ValueOptions) append(ctx context.Context, em *stageEmitter, build func() *knov1.Event, what string) error {
 	em.mu.Lock()
 	defer em.mu.Unlock()
 
@@ -134,13 +138,13 @@ func (o ValueOptions) append(ctx context.Context, em *valueEmitter, build func()
 }
 
 // next hands out the next sequence under the append lock.
-func (em *valueEmitter) next() int64 {
+func (em *stageEmitter) next() int64 {
 	em.seq++
 	return em.seq
 }
 
 // recordEmitFailure keeps the first hot-path event-write failure.
-func (em *valueEmitter) recordEmitFailure(err error) {
+func (em *stageEmitter) recordEmitFailure(err error) {
 	if err != nil {
 		em.emitFailure.CompareAndSwap(nil, &err)
 	}
@@ -220,7 +224,7 @@ func (o ValueOptions) Value(ctx context.Context, pool Pool) (*ValueResult, error
 		GoalDirection: o.Goal.Direction(),
 	}
 
-	em := &valueEmitter{}
+	em := &stageEmitter{}
 	if !o.Resume {
 		if err := o.emitRunStarted(ctx, em, plan, scheduled); err != nil {
 			return o.failedResult(result, err)
@@ -499,7 +503,7 @@ func equalPlans(a, b *value.Plan) bool {
 // Valuation when every surviving measurement is durable.
 func (o ValueOptions) measureAsset(
 	ctx context.Context,
-	em *valueEmitter,
+	em *stageEmitter,
 	gate *modelGate,
 	routing value.AssetRouting,
 	plan *value.Plan,
@@ -649,7 +653,7 @@ func detached(ctx context.Context) (context.Context, context.CancelFunc) {
 // measurement.
 func (o ValueOptions) measureArm(
 	ctx context.Context,
-	em *valueEmitter,
+	em *stageEmitter,
 	gate *modelGate,
 	arm store.Arm,
 	agent Agent,
@@ -744,7 +748,7 @@ func casesSlice(cases []*Case) func(yield func(*Case, error) bool) {
 // invoker builds the shared budget-and-retry core with Value's hooks. Both
 // hooks are wired — debt #77's trigger — and they emit the money events with
 // the measurement key, which is what makes spend attributable to an Asset.
-func (o ValueOptions) invoker(key store.MeasurementKey, _ store.Arm, agent Agent, em *valueEmitter) invoker {
+func (o ValueOptions) invoker(key store.MeasurementKey, _ store.Arm, agent Agent, em *stageEmitter) invoker {
 	return invoker{
 		Agent:        agent,
 		AgentRef:     o.AgentRef,
@@ -939,7 +943,7 @@ func (o ValueOptions) retryBackoff() time.Duration {
 
 // emitRunStarted opens the stream with the run's identity and the shape of
 // the work ahead.
-func (o ValueOptions) emitRunStarted(ctx context.Context, em *valueEmitter, _ *value.Plan, scheduled int) error {
+func (o ValueOptions) emitRunStarted(ctx context.Context, em *stageEmitter, _ *value.Plan, scheduled int) error {
 	return o.append(ctx, em, func() *knov1.Event {
 		return &knov1.Event{
 			Payload: &knov1.Event_RunStarted{RunStarted: &knov1.RunStarted{
@@ -957,7 +961,7 @@ func (o ValueOptions) emitRunStarted(ctx context.Context, em *valueEmitter, _ *v
 // emitRunResumed opens a continuation: overall progress starts at
 // already_completed, and the session denominator is what remains — the two
 // coordinate systems the RunResumed godoc exists to keep separate.
-func (o ValueOptions) emitRunResumed(ctx context.Context, em *valueEmitter, plan *value.Plan, completed map[store.MeasurementKey]struct{}) error {
+func (o ValueOptions) emitRunResumed(ctx context.Context, em *stageEmitter, plan *value.Plan, completed map[store.MeasurementKey]struct{}) error {
 	total := int64(plan.Measurements())
 	already := int64(len(completed))
 	remaining := total - already
@@ -976,7 +980,7 @@ func (o ValueOptions) emitRunResumed(ctx context.Context, em *valueEmitter, plan
 
 // emitAssetRouted reports one Asset's routing decision before any of its
 // spend.
-func (o ValueOptions) emitAssetRouted(ctx context.Context, em *valueEmitter, routing value.AssetRouting, plan *value.Plan) error {
+func (o ValueOptions) emitAssetRouted(ctx context.Context, em *stageEmitter, routing value.AssetRouting, plan *value.Plan) error {
 	return o.append(ctx, em, func() *knov1.Event {
 		return &knov1.Event{
 			Payload: &knov1.Event_AssetRouted{AssetRouted: &knov1.AssetRouted{
@@ -993,7 +997,7 @@ func (o ValueOptions) emitAssetRouted(ctx context.Context, em *valueEmitter, rou
 }
 
 // emitAssetValued reports a finished Valuation's headline numbers.
-func (o ValueOptions) emitAssetValued(ctx context.Context, em *valueEmitter, v *Valuation) error {
+func (o ValueOptions) emitAssetValued(ctx context.Context, em *stageEmitter, v *Valuation) error {
 	return o.append(ctx, em, func() *knov1.Event {
 		ev := &knov1.AssetValued{
 			AssetId:     v.GetAssetId(),
@@ -1017,7 +1021,7 @@ func (o ValueOptions) emitAssetValued(ctx context.Context, em *valueEmitter, v *
 // status and counts, and writes RunFinished last.
 func (o ValueOptions) finishRun(
 	ctx context.Context,
-	em *valueEmitter,
+	em *stageEmitter,
 	run *knov1.Run,
 	status knov1.RunStatus,
 	plan *value.Plan,

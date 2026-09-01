@@ -131,6 +131,7 @@ beside them --- one declaration, not a copy of the list maintained here.`,
 	root.AddCommand(newMineCmd())
 	root.AddCommand(newValueCmd())
 	root.AddCommand(newSelectCmd())
+	root.AddCommand(newValidateCmd())
 	root.AddCommand(newExportCmd())
 	root.AddCommand(newReportCmd())
 	root.AddCommand(newDoctorCmd())

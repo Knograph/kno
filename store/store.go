@@ -23,6 +23,14 @@ var (
 	// ErrGapsNotFound means no gaps record is recorded for the given run.
 	// Absence is an answer: the run predates cluster data.
 	ErrGapsNotFound = errors.New("store: gaps not found")
+
+	// ErrValidationNotFound means no Validation is recorded for the given run.
+	//
+	// Absence is an answer and a load-bearing one: it is what makes the report
+	// keep its not-yet-validated caveat. A Validate run that was interrupted
+	// records no Validation, so it reads as "not validated" here — which is
+	// correct, because a partial peek is not a validation.
+	ErrValidationNotFound = errors.New("store: validation not found")
 )
 
 // Store is durable state for a run.
@@ -156,6 +164,34 @@ type Store interface {
 	// ErrGapsNotFound when the run recorded none — the report's "no cluster
 	// data for this run", never guessed.
 	Gaps(ctx context.Context, runID string) (*knov1.Gaps, error)
+
+	// WriteValidation records the Validation one Validate run produced. One
+	// row per run; rewriting the same run replaces the row, so a resumed run
+	// that reaches the end records the numbers over BOTH processes'
+	// measurements rather than pinning the first process's partial answer.
+	WriteValidation(ctx context.Context, runID string, v *knov1.Validation) error
+
+	// Validation loads a run's Validation. Returns ErrValidationNotFound when
+	// the run recorded none — which is what makes `kno report` keep the
+	// not-yet-validated caveat for an interrupted Validate run.
+	Validation(ctx context.Context, runID string) (*knov1.Validation, error)
+
+	// RecordHoldoutUse durably records that a Portfolio has met a holdout.
+	//
+	// Called BEFORE the first agent call of a Validate run, never at
+	// completion: a validate that crashed part-way through has already seen
+	// part of the holdout, and a record written at the end would let it look
+	// like it never looked. Idempotent on (eval fingerprint, select run), so a
+	// resume continues one look rather than counting a second.
+	RecordHoldoutUse(ctx context.Context, use *HoldoutUse) error
+
+	// HoldoutUses returns every recorded use of one holdout, oldest first.
+	//
+	// The count is what `--allow-repeat-holdout` gates and what the report
+	// discloses. Validating N portfolios against one holdout re-introduces the
+	// multiplicity the holdout existed to remove, at rate N; this is how the
+	// tool counts it rather than pretending it did not happen.
+	HoldoutUses(ctx context.Context, evalFingerprint string) ([]HoldoutUse, error)
 
 	// CompletedCases returns the IDs of every Case with a terminal outcome.
 	//

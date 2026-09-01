@@ -98,11 +98,17 @@ type Agent struct {
 // stage would refuse the Asset it was about to measure. KnowledgeWrite is false
 // because a Chat Completions endpoint has no index to write. Stream is false
 // per docs/debt.md#35.
+//
+// ContextSetInject is true because WithContextSet injects a whole Portfolio
+// through the SAME mechanism as WithContext — one joined system-position
+// payload — not a second one. Declaring it is a claim that this adapter can
+// hold the set, not that it has a separate injection path.
 func (a *Agent) Capabilities() *core.Capabilities {
 	return &knov1.Capabilities{
-		ContextInject:  true,
-		KnowledgeWrite: false,
-		Stream:         false,
+		ContextInject:    true,
+		ContextSetInject: true,
+		KnowledgeWrite:   false,
+		Stream:           false,
 
 		// The provider reports usage, so cost is MEASURED rather than
 		// predicted — on the calls where it does. A reply with no usage block

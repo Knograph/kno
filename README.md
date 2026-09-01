@@ -8,7 +8,7 @@ Instead of evaluating only models and prompts, Kno treats **data as an experimen
 
 Single Go binary. No infra. Works with any OpenAI-compatible endpoint, Anthropic, or your own agent behind a shell command.
 
-> **Status: early.** `baseline`, `value`, `select`, and `export` ship; `validate` is next. The default agent is a local fake that costs nothing, so you can see the whole loop work before pointing it at something that bills you. See [Status](#status) for what exists.
+> **Status: early.** `baseline`, `value`, `select`, `validate`, and `export` ship — the whole loop, including the holdout number. The default agent is a local fake that costs nothing, so you can see the whole loop work before pointing it at something that bills you. See [Status](#status) for what exists.
 
 ## Why Kno?
 
@@ -298,7 +298,7 @@ A CI gate branches on these, so they're a contract rather than an afterthought.
 | `0` | Completed | Continue |
 | `1` | Failed | Fail the build — something is broken |
 | `2` | Stopped at a budget cap | Not a failure. The run did what you configured |
-| `3` | Validation failed | Fail the build — the deploy gate (reserved for `kno validate`) |
+| `3` | Validation failed | Fail the build — `kno validate` returns it when the holdout interval sits at or below zero, or when `--require-gain` asks for a gain the interval does not show |
 | `4` | Interrupted by a signal or deadline | Not a failure. Resume it |
 
 `2` and `4` both leave a resumable run. Reporting either as `1` would train people to ignore `1`, which is the code that actually means something is wrong. Recipe: **[Gate a deploy on Kno in CI](https://github.com/uknoAI/kno-examples/blob/main/recipes/ci-gate.md)**.
@@ -316,10 +316,10 @@ Both tables are machine-checked against the code: [`docs/status.json`](docs/stat
 | **Baseline** | Run the agent over the dev Cases, score against the Goal, persist every result | **Shipped** |
 | **Value** | Route each Asset to the slices it could affect, inject, re-run against controls, record Δ with an interval | **Shipped** |
 | **Select** | Build a Portfolio under budget, with a rejection log; every decision at a Bonferroni-corrected interval | **Shipped** |
-| **Validate** | Measure the Portfolio as a set against the untouched holdout | Planned |
+| **Validate** | Measure the Portfolio as a set against the untouched holdout, in two arms, and report the gain with its interval | **Shipped** |
 | **Export** | Render the selected assets into the destination grammar: context pack, knowledge-base manifest, or tuning-set JSONL | **Shipped** |
 
-`Stage` carries `STAGE_VALIDATE` already, and that is not an oversight: the schema leads the implementation ([CLAUDE.md](CLAUDE.md), "proto first"), so enum membership does not mean shipped. Which stages ship is declared once, in `cli/status.go`, and cross-checked against this table, the enum, and the command tree.
+Enum membership does not mean shipped: the schema leads the implementation ([CLAUDE.md](CLAUDE.md), "proto first"), and `Stage` carried `STAGE_VALIDATE` for three milestones before anything read a holdout. Which stages ship is declared once, in `cli/status.go`, and cross-checked against this table, the enum, and the command tree.
 
 ### Commands
 
@@ -332,6 +332,7 @@ Both tables are machine-checked against the code: [`docs/status.json`](docs/stat
 | `kno baseline` | Run your agent over your evals and score it |
 | `kno value` | Measure the marginal value of each asset in a pool |
 | `kno select` | Choose the assets that earn their place, under budget |
+| `kno validate` | Measure the selected portfolio against the untouched holdout |
 | `kno export` | Write a portfolio's selected assets to a destination |
 | `kno report` | The one-page verdict across the recorded stages |
 | `kno doctor` | Print what this build supports |

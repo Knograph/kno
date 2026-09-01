@@ -87,7 +87,7 @@ func stageFacts() []stageFact {
 		{Stage: knov1.Stage_STAGE_BASELINE, State: stageShipped, Milestone: "v0.1"},
 		{Stage: knov1.Stage_STAGE_VALUE, State: stageShipped, Milestone: "v0.1"},
 		{Stage: knov1.Stage_STAGE_SELECT, State: stageShipped, Milestone: "v0.1"},
-		{Stage: knov1.Stage_STAGE_VALIDATE, State: stagePlanned, Milestone: "v0.2"},
+		{Stage: knov1.Stage_STAGE_VALIDATE, State: stageShipped, Milestone: "v0.2"},
 		{Stage: knov1.Stage_STAGE_EXPORT, State: stageShipped, Milestone: "v0.1"},
 	}
 }

@@ -1,0 +1,130 @@
+syntax = "proto3";
+
+package kno.v1;
+
+import "kno/v1/valuation.proto";
+
+// ValidationVerdict is what a Validate run concluded about a Portfolio, keyed
+// on the holdout interval and never on the sign of the point estimate.
+//
+// The distinction between INCONCLUSIVE and NOT_CONFIRMED is the whole reason
+// this is an enum rather than a bool. An interval that straddles zero means
+// "not enough evidence at this sample size"; an interval entirely at or below
+// zero means "this Portfolio demonstrably did not help". Collapsing them would
+// make a 20-Case holdout block every deploy forever, which trains people to
+// pass --force and stops the gate from meaning anything.
+enum ValidationVerdict {
+  // Unset: no verdict was reached, which is not the same as a negative one.
+  VALIDATION_VERDICT_UNSPECIFIED = 0;
+
+  // The interval's low bound is above zero: the Portfolio helped, and the
+  // holdout says so at the reported confidence level.
+  VALIDATION_VERDICT_CONFIRMED = 1;
+
+  // The interval straddles zero. Not a failure — an underpowered holdout.
+  VALIDATION_VERDICT_INCONCLUSIVE = 2;
+
+  // The interval's high bound is at or below zero: a demonstrated
+  // non-improvement.
+  VALIDATION_VERDICT_NOT_CONFIRMED = 3;
+
+  // No interval could be formed at all, so there is nothing to judge.
+  VALIDATION_VERDICT_UNMEASURED = 4;
+}
+
+// Validation is what one Validate run measured on the holdout.
+//
+// A message of its own rather than a partially-populated Report. Report is the
+// whole-loop deliverable — portfolio, gaps, costs, agent, goal — and Validate
+// computes one slice of it. Populating a Report here would make Validate
+// assert things it never computed, and Report's `optional` fields exist
+// precisely so that absence means "not run".
+//
+// Field names deliberately mirror Report's, so the vocabulary is identical
+// across both messages. The one rename is holdout_score to treatment_score:
+// Validate measures two arms and Report assumes one.
+message Validation {
+  // The Validate run that produced this.
+  string run_id = 1;
+
+  // The Select run whose Portfolio was validated.
+  string select_run_id = 2;
+
+  // The Value run that Portfolio was built from, carried so a reader can
+  // follow the chain without three more queries.
+  string value_run_id = 3;
+
+  // The Baseline run that Value paired against, carried for the same reason.
+  string baseline_run_id = 4;
+
+  // How many Cases the holdout yielded.
+  int32 holdout_case_count = 5;
+
+  // How many of those scored in BOTH arms. A Case that errored in either arm
+  // contributes to neither, so this is the denominator behind the interval.
+  int32 measured_case_count = 6;
+
+  // Cases dropped because one arm or the other failed. Ragged attrition is
+  // reported rather than absorbed: dropping the Cases where a long injected
+  // context timed out removes exactly the Cases the Portfolio hurt most.
+  int32 n_dropped = 7;
+
+  // Whether the holdout is below split.MinHoldout. The run still executes —
+  // refusing would make the tool unusable on a small eval set — but the
+  // number carries this rather than passing for a full-strength one.
+  bool holdout_underpowered = 8;
+
+  // Mean score of the control arm: the un-injected Agent over the holdout.
+  // ABSENT when no pair was measured.
+  optional double control_score = 9;
+
+  // Mean score of the treatment arm: the whole Portfolio injected.
+  // ABSENT when no pair was measured.
+  optional double treatment_score = 10;
+
+  // Mean paired difference, treatment minus control, sign-corrected for the
+  // Goal's direction so positive is better.
+  //
+  // Present if and only if holdout_interval is present. `optional` is
+  // load-bearing: a Validate run that could not form an interval reports NO
+  // gain rather than a gain of zero.
+  optional double holdout_gain = 11;
+
+  // Confidence interval on holdout_gain. ABSENT means no gain is reported;
+  // never present holdout_gain without it.
+  Interval holdout_interval = 12;
+
+  // The Portfolio's dev-slice estimate, copied so the comparison can be
+  // rendered without a second query. Winner's-curse inflated by construction.
+  double dev_estimated_gain = 13;
+
+  // Confidence interval on dev_estimated_gain, copied with it.
+  Interval dev_estimated_interval = 14;
+
+  // The verdict, and the thing a deploy gate branches on.
+  ValidationVerdict verdict = 15;
+
+  // How many times each measurement was repeated.
+  int32 trials = 16;
+
+  // Which portfolio this was for this holdout: 1 for the first, 2 for the
+  // second, and so on. Repeated use re-introduces the multiplicity the
+  // holdout existed to remove, at rate N; it is counted and disclosed here
+  // rather than corrected for.
+  int32 holdout_use_index = 17;
+
+  // Whether --context-only narrowed the validated set to the
+  // DESTINATION_CONTEXT entries. When true the number covers a SUBSET of the
+  // Portfolio, and every rendering says so.
+  bool context_only = 18;
+
+  // The entries excluded by --context-only, named so the subset is auditable.
+  repeated string excluded_asset_ids = 19;
+
+  // Why no number was produced, when none was. UNDERPOWERED when fewer than
+  // two usable pairs survived.
+  RejectionReason not_measured = 20;
+
+  // The source Select run's incomplete_reason, verbatim, when it had one.
+  string incomplete_reason = 21;
+}

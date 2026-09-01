@@ -22,7 +22,7 @@ import (
 //
 // Version 0 is the M1 schema. Every later version is a numbered step in
 // migrations below.
-const schemaVersion = 5
+const schemaVersion = 6
 
 // schema is the version-0 base, applied on open. It is idempotent.
 //
@@ -394,6 +394,40 @@ var migrations = []migration{{
 		    run_id  TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
 		    proto   BLOB NOT NULL,
 		    PRIMARY KEY (run_id)
+		)`,
+	},
+}, {
+	to: 6,
+	// M-V1. The Validate stage's two records.
+	//
+	// validations is portfolios' twin: one row per Validate run, INSERT OR
+	// REPLACE, holding the whole message. Absence is the first-class "this run
+	// produced no validation" answer that keeps `kno report`'s caveat.
+	//
+	// holdout_uses is different in kind, and it is the reason this migration
+	// exists at all. It is not derived from anything and it is not
+	// recomputable: it records that a holdout was LOOKED AT, keyed on the
+	// holdout's fingerprint and the Portfolio that met it. The primary key
+	// excludes the validate run deliberately, so a resumed Validate updates
+	// nothing and counts as one look; a DIFFERENT Portfolio against the same
+	// holdout is a second row, counted and disclosed rather than refused.
+	//
+	// Rows here are never deleted by any code path short of the run itself
+	// being deleted. Rolling back the code does not un-peek a holdout, and a
+	// tool that quietly dropped the record would be lying about its own
+	// history.
+	stmts: []string{
+		`CREATE TABLE IF NOT EXISTS validations (
+		    run_id  TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+		    proto   BLOB NOT NULL,
+		    PRIMARY KEY (run_id)
+		)`,
+		`CREATE TABLE IF NOT EXISTS holdout_uses (
+		    eval_fingerprint TEXT NOT NULL,
+		    select_run_id    TEXT NOT NULL,
+		    validate_run_id  TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+		    created_at       TEXT NOT NULL,
+		    PRIMARY KEY (eval_fingerprint, select_run_id)
 		)`,
 	},
 }}

@@ -110,15 +110,17 @@ func buildReportMarkdown(d *reportData) string {
 		} else {
 			p := d.Portfolio
 			if iv := p.GetDevEstimatedInterval(); iv != nil {
-				fmt.Fprintf(&b, "- dev-estimated gain **%+.4f** [%+.4f, %+.4f]\n",
+				fmt.Fprintf(&b, "- dev-estimated gain **%+.4f** [%+.4f, %+.4f]  (selection-time; "+
+					"winner's-curse inflated)\n",
 					p.GetDevEstimatedGain(), iv.GetLow(), iv.GetHigh())
-				// The caveat is mandatory, not decoration: the holdout is
-				// the only clean test of a selection, and nothing has
-				// validated this portfolio there. A headline number must
-				// not pretend otherwise.
-				fmt.Fprintf(&b, "- **not yet validated on holdout** — validate is not in this "+
-					"release; this is a selection-time estimate, winner's-curse "+
-					"inflation included\n")
+			}
+			// The holdout block prints beside a dev estimate, and also
+			// whenever a Validate run was named — but NOT for a Portfolio that
+			// selected nothing and was never validated. v0.1 printed no caveat
+			// there and it was right to: "not yet validated on holdout" over an
+			// empty selection is a caveat about a number that does not exist.
+			if p.GetDevEstimatedInterval() != nil || d.ValidateRun != nil {
+				writeHoldoutBlock(&b, d)
 			}
 			if reason := p.GetSourceIncompleteReason(); reason != "" {
 				fmt.Fprintf(&b, "- source Value run %s (%s): %s\n",
@@ -275,5 +277,55 @@ func gapVerdictWord(c *knov1.GapCluster) string {
 		return "unknown — routed but underpowered"
 	default:
 		return "unknown"
+	}
+}
+
+// writeHoldoutBlock renders what the holdout says, or says that nothing does.
+//
+// THE CAVEAT'S ABSENCE HAS TO BE EARNED. The v0.1 string is unchanged and is
+// still printed whenever there is no COMPLETED Validate run with a number for
+// this Portfolio — including for a validate run that was interrupted, which
+// adds a line rather than removing one. A partial peek is not a validation,
+// and a page that dropped the caveat because someone STARTED a validate would
+// be the exact dishonesty the caveat exists to prevent.
+func writeHoldoutBlock(b *strings.Builder, d *reportData) {
+	v := d.Validation
+	if v == nil || v.GetHoldoutInterval() == nil {
+		// Byte-identical to what v0.1 printed. The existing golden pins it,
+		// and the sentence about validate not being in this release is now
+		// wrong — so it is rewritten to say what is actually true, which is
+		// that this PORTFOLIO has no holdout number.
+		b.WriteString("- **not yet validated on holdout** — this is a selection-time " +
+			"estimate, winner's-curse inflation included. Run `kno validate` to " +
+			"measure this portfolio against the untouched holdout.\n")
+		if d.ValidateRun != nil {
+			fmt.Fprintf(b, "- a validation was attempted (run `%s`, %s) and produced no "+
+				"number; a partial peek is not a validation\n",
+				d.ValidateRun.GetId(), statusName(d.ValidateRun.GetStatus()))
+		}
+		return
+	}
+	iv := v.GetHoldoutInterval()
+	fmt.Fprintf(b, "- **holdout gain %+.4f** [%+.4f, %+.4f] — %d holdout Cases, %d trial(s), "+
+		"verdict %s\n",
+		v.GetHoldoutGain(), iv.GetLow(), iv.GetHigh(),
+		v.GetMeasuredCaseCount(), v.GetTrials(), strings.ToUpper(verdictName(v.GetVerdict())))
+	fmt.Fprintf(b, "- shrinkage %+.4f dev → holdout. Expected: the dev figure was chosen on "+
+		"the dev slice, and the two figures measure different populations. Not evidence "+
+		"of interaction.\n", v.GetDevEstimatedGain()-v.GetHoldoutGain())
+	if v.GetHoldoutUnderpowered() {
+		fmt.Fprintf(b, "- underpowered: %d holdout Cases is below the minimum for a "+
+			"full-strength interval\n", v.GetHoldoutCaseCount())
+	}
+	if v.GetContextOnly() {
+		fmt.Fprintf(b, "- **subset**: --context-only excluded %d entr(ies) (%s), so this "+
+			"number covers part of the Portfolio\n",
+			len(v.GetExcludedAssetIds()), strings.Join(v.GetExcludedAssetIds(), ", "))
+	}
+	if n := v.GetHoldoutUseIndex(); n > 1 {
+		fmt.Fprintf(b, "- this holdout has measured %d portfolios; the interval above is "+
+			"NOT corrected for that\n", n)
+	} else {
+		b.WriteString("- this holdout has measured 1 portfolio\n")
 	}
 }

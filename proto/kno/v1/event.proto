@@ -6,6 +6,7 @@ import "kno/v1/common.proto";
 import "kno/v1/valuation.proto";
 import "kno/v1/portfolio.proto";
 import "kno/v1/run.proto";
+import "kno/v1/validation.proto";
 
 // Event is one thing that happened during a Run.
 //
@@ -93,6 +94,13 @@ message Event {
 
     // Assets were written to a Destination.
     ExportWritten export_written = 25;
+
+    // The holdout was opened. Emitted once per Validate run, before the first
+    // agent call, because a run that peeked and then crashed still peeked.
+    HoldoutOpened holdout_opened = 26;
+
+    // The Portfolio's holdout measurement finished, with its verdict.
+    PortfolioValidated portfolio_validated = 27;
   }
 }
 
@@ -708,4 +716,56 @@ message AssetValued {
 
   // See n_pairs.
   int32 n_dropped = 8;
+}
+
+// HoldoutOpened reports that a Validate run consumed the holdout.
+//
+// Emitted once, before the first agent call, and after the durable
+// holdout_uses row is committed. That ordering is the honest one: an
+// interrupted Validate has already seen part of the holdout, and an event
+// emitted at completion would let a crashed run look like it never looked.
+//
+// Carries counts and ordinals only. Case content never reaches the event
+// stream.
+message HoldoutOpened {
+  // How many Cases the holdout yielded.
+  int32 holdout_case_count = 1;
+
+  // Whether the holdout is below split.MinHoldout.
+  bool underpowered = 2;
+
+  // Which portfolio this is for this holdout: 1 for the first.
+  int32 holdout_use_index = 3;
+
+  // The Select run whose Portfolio is about to be measured.
+  string select_run_id = 4;
+
+  // How many Assets are being injected as a set.
+  int32 asset_count = 5;
+}
+
+// PortfolioValidated reports the finished holdout measurement.
+//
+// The Validation is the durable record; this is what a dashboard renders as it
+// happens. Headline numbers only — an event stream that duplicates the store
+// is two things to keep consistent.
+message PortfolioValidated {
+  // The measured effect on the holdout and its interval. Both, or neither:
+  // holdout_interval is omitted exactly when not_measured is set.
+  double holdout_gain = 1;
+
+  // The interval on holdout_gain.
+  Interval holdout_interval = 2;
+
+  // The verdict a deploy gate branches on.
+  ValidationVerdict verdict = 3;
+
+  // How many Cases scored in BOTH arms, and how many were dropped.
+  int32 measured_case_count = 4;
+
+  // See measured_case_count.
+  int32 n_dropped = 5;
+
+  // Set when no interval could be formed.
+  RejectionReason not_measured = 6;
 }

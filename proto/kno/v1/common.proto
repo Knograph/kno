@@ -244,6 +244,18 @@ message Capabilities {
   // about the actual cause.
   bool generation_params = 6;
 
+  // The adapter can carry a WHOLE Portfolio — several Assets, in a given
+  // order — in one prompt (core.ContextSetInjector).
+  //
+  // Separate from context_inject rather than implied by it. Every
+  // ContextInjector in the tree refuses a SECOND Asset by design, because a
+  // per-Asset Valuation silently becoming a two-Asset one is the failure that
+  // refusal exists to stop. Validate needs the opposite operation, so it is a
+  // different capability and is declared separately; an adapter that supports
+  // one-Asset injection and not set injection says so, and Validate refuses
+  // it before any spend rather than measuring a subset.
+  bool context_set_inject = 7;
+
   // Capability names this schema version does not model, for forward
   // compatibility with adapters newer than the engine.
   repeated string extensions = 5;
