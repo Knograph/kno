@@ -455,6 +455,25 @@ func TestResumeDoesNotRePay(t *testing.T) {
 			"was not restored from SettledSpend and authorized the cap a second time",
 			spentAfterFirst.CostUSDMicros, spent.CostUSDMicros)
 	}
+
+	// 4. And the tokens came back with the dollars. SettledSpend sums a
+	// tokens column that Value did not write until docs/debt.md#137 was
+	// repaid: the measurements carried calls and cost, tokens stayed zero,
+	// and Guard.Restore therefore seeded a resumed run with no token history
+	// at all. A --max-tokens cap was under-enforced for the whole of the
+	// second process while the dollar cap held, which is the worse failure
+	// for being partial: the run looked guarded.
+	if spent.Tokens == 0 {
+		t.Errorf("SettledSpend reports zero tokens over %d calls costing %d "+
+			"micros; Value is not recording Response tokens on its "+
+			"measurements, so a resumed run restores no token spend",
+			spent.Calls, spent.CostUSDMicros)
+	}
+	if spent.Tokens != spentAfterFirst.Tokens {
+		t.Errorf("settled tokens grew from %d to %d across the resume, the same "+
+			"double-count the dollar assert above pins",
+			spentAfterFirst.Tokens, spent.Tokens)
+	}
 }
 
 // TestFirstProcessCatchesARepointedModel: the FIRST process arms its gate

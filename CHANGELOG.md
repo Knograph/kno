@@ -30,6 +30,19 @@ covenants — breaking any of them requires a major version.
 
 ## [Unreleased]
 
+### Bug Fixes
+
+- **A resumed Value run restores its token spend.** `core/value_loop.go`'s
+  sink recorded `budget.Spend{Calls, CostUSDMicros}` and dropped `Tokens`,
+  while Baseline's `settledSpend` wrote all three. `Store.SettledSpend` sums
+  a `tokens` column Value never populated, and `Guard.Restore` seeds from
+  that sum — so a resumed Value run restored zero tokens and a
+  `--max-tokens` cap went under-enforced for the whole second process while
+  the dollar cap held. Partial enforcement is the worse failure, because the
+  run looks guarded. Found while writing the equality test for the
+  stage-spend work; repaid ahead of its trigger because `validate` shipped
+  as a second resuming spend stage on the same path. `docs/debt.md#137`.
+
 ### Features
 
 * **`kno validate` — the holdout stage.** The Portfolio ships as a set, so it is measured as a
