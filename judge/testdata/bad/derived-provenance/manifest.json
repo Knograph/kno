@@ -1,0 +1,13 @@
+{
+  "name": "derived-provenance",
+  "version": 1,
+  "content_sha256": "792802b3fdd236c1e5cc45762ab897e249617ec11709cf0527310cd3e287f512",
+  "labelers": [
+    "labeler-a",
+    "labeler-b",
+    "adjudicator"
+  ],
+  "description": "One record declares a provenance that is neither authored nor synthetic. Traces are customer data and the set is public: a harvested record has no spelling here.",
+  "class_balance": "deliberately broken; see description",
+  "license": "Apache-2.0, original to this repository"
+}

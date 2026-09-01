@@ -1,12 +1,12 @@
 # Contributing to Kno
 
 Thanks for being here. Kno is built so that external contributors are the point, not an
-afterthought — Ring-1 adapters are the designed on-ramp, and every external PR gets a first
-response within 48 hours, even if it's "reviewing this week." (Judge prompts are named as a
-second on-ramp in DESIGN, and will be one: `judge/` is a package doc today, and the harness
-that would make a prompt contributable arrives with `judge calibrate` in v0.2. Until then the
-on-ramp is adapters and the curated issues below, and this file says so rather than pointing
-you at a door that does not open.)
+afterthought — Ring-1 adapters and **calibration records** are the designed on-ramps, and every
+external PR gets a first response within 48 hours, even if it's "reviewing this week." (Judge
+prompts are named as a third on-ramp in DESIGN, and become one when the first judge lands. The
+harness and the gate exist now — `kno judge calibrate` — so a prompt has something to be measured
+against the day it arrives; what does not exist yet is a judge to write a prompt for, and this
+file says so rather than pointing you at a door that does not open.)
 
 This is `CLAUDE.md` (our engineering operating manual) distilled for humans. Where the two
 disagree, `CLAUDE.md` wins and the disagreement is a bug — please file it.
@@ -176,7 +176,11 @@ Three rules, and the third is the one people meet first:
   terms*.
 - **Determinism first.** Anything LLM-dependent is tested against recorded fixtures in
   `testdata/fixtures/` (regenerate with `make record-fixtures`; secrets are scrubbed at record
-  time). Judges are tested against the human-labeled calibration set with agreement thresholds.
+  time). Judges are tested against the human-labeled calibration set with agreement thresholds:
+  `make judge-calibrate-check` runs in `make check`, gates Cohen's kappa against a derived floor
+  and a recorded baseline, and makes no provider call. That mechanism is real and, until the
+  first judge prompt lands, its coverage is vacuous — the only Goal it can calibrate today is
+  `exact-match`, which uses no model.
 - **Statistical code gets statistical tests** — property-based, with invariants like holdout
   isolation asserted directly.
 - **Golden files** for report rendering and CLI output; `make update-golden` regenerates, and the
@@ -309,9 +313,12 @@ none ever goes into telemetry.
 pointers, and a test to make pass. The natural on-ramp today is **Ring-1 adapters** — a new
 OpenAI-compatible endpoint, an Evals source, a pool format — because `coretest` already ships
 the conformance suite that defines correct for them, so the hard question is answered before
-you start. **Judge prompts** join that list when `judge calibrate` lands in v0.2 and gives a
-prompt something to be measured against. Several entries in [the Debt Ledger](docs/debt.md)
-are also well-scoped starting points.
+you start. **Calibration records** are the second on-ramp and are available now: one line of
+`judge/testdata/calibration/<set>/records.jsonl`, subject to the two-labeler rule, the 40%
+balance invariant and the provenance rules — see [Calibrate a
+judge](docs/cookbook/calibrate-a-judge.md). **Judge prompts** join that list when the first judge
+Goal lands; the gate that would measure one is already here. Several entries in [the Debt
+Ledger](docs/debt.md) are also well-scoped starting points.
 
 **Recipes are the second on-ramp available today, and they live in
 [`uknoAI/kno-examples`](https://github.com/uknoAI/kno-examples).** A recipe there declares in

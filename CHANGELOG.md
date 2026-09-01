@@ -66,6 +66,76 @@ covenants — breaking any of them requires a major version.
 
 ### Features
 
+* **`kno judge calibrate` — a judge is measured before it is trusted.** `CLAUDE.md` and
+  `CONTRIBUTING.md` have both stated, in the present tense, that "judges are tested against the
+  human-labeled calibration set with agreement thresholds — a judge prompt change that drops
+  agreement below threshold fails CI"; `DESIGN.md` listed the command; *What the numbers mean*
+  told you to run it before trusting a judged number. None of it existed. This ships the
+  mechanism those sentences describe: the harness, a committed calibration set, and a CI gate
+  (`make judge-calibrate-check`, now in `make check`, making no provider call). It deliberately
+  does **not** ship a judge — the gate is here first so the first judge prompt arrives with a
+  threshold already pointed at it, rather than the threshold arriving later and grandfathering
+  whatever shipped. Until then the mechanism is real and its coverage is vacuous, and the docs
+  say that in those words.
+
+  **The gated statistic is Cohen's kappa, and the floor is derived rather than borrowed.** Not
+  accuracy: on a set that is 85% "good" a judge that answers "good" unconditionally scores 0.85
+  raw agreement and is worthless — it scores kappa 0, exactly, and
+  `TestConstantJudgeScoresZeroKappaDespiteHighRawAgreement` is the test that carries the claim.
+  Raw agreement is still printed, with the constant judge's own score beside it. The floor is
+  **kappa ≥ 0.60**, and the argument is not Landis-Koch: on a balanced set with symmetric error,
+  kappa *is* the factor by which the judge attenuates every delta measured through it
+  (`kappa = 1 − 2ε`), and power scales with the square of the effect, so 0.60 is the point where
+  a judge costs at most 3× your eval budget. It is a published price, not a convention, and
+  `--min-kappa` is there for a user who thinks 3× is too generous. Both assumptions the
+  derivation rests on are checked rather than assumed: balance is enforced at load (the minority
+  class must be ≥ 40%, with the prevalence-sensitivity table pinned as a test), and symmetry is
+  measured — `|sensitivity − specificity| > 0.20` fails **even above the floor**, because a
+  direction-biased judge moves every delta the same way and kappa hides it.
+
+  **Three verdicts, and the third fails.** An interval entirely above the floor is `PASS`;
+  entirely below is `FAIL`; straddling it is `INDETERMINATE` and exits 1, because "we cannot
+  tell" is not "it is fine" — the same discipline `core/gaps.go` uses for `UNKNOWN`. Two further
+  verdicts blame something other than the judge: inter-human kappa below the floor reports that
+  the *labels* do not agree with each other, and a judge error rate above 5% reports "not a
+  usable calibration", the same threshold and the same words as the baseline gate. A graded
+  (`UNIT_INTERVAL`) Goal reports weighted kappa, Spearman's rho and MAE and prints
+  `GATE: not applicable` (`docs/debt.md#152`).
+
+* **A percentile bootstrap in `stats/interval` — the repository's first.** `Interval.method`'s
+  godoc has listed `"bootstrap"` since the schema landed, beside an implementation that shipped
+  adjusted-Wald, paired-t and sign intervals and no bootstrap at all. `interval.Percentile`
+  resamples the *units* a caller nominates, which is what makes it valid for kappa (the unit is
+  the record) and what makes the ratchet's difference interval **paired**: both runs are
+  recomputed on one index draw, so their co-movement is kept rather than discarded. It is
+  deterministic by seed — a gate whose verdict flips without a diff is not a gate — and it never
+  returns a zero-width interval: a degenerate resample takes its width from the sample size and
+  says so in its method name. Coverage is measured on the grid the decision actually lives in,
+  n ∈ {50, 100, 200} × kappa ∈ {0.55…0.65}, reading 0.923–0.970 against a nominal 0.95
+  (`docs/debt.md#153`).
+
+* **`goal.Registry` replaces `resolveGoal`'s hardcoded `if`, and it is default-deny.**
+  `--goal` was matched against `if name == "exact-match"`, whose own fix line could only ever
+  name that one Goal. The registry names what is actually available. It also carries the
+  containment for a P0 this feature would otherwise open: `core.Goal.Score` runs **outside** the
+  budget reservation — `core/invoke.go` brackets the agent call and `Score` runs after the
+  reservation settles — so a Goal that calls a provider inside `Score` spends money the guard
+  never authorized. Registration therefore refuses any Goal whose name is absent from a
+  compile-time self-contained allowlist, **whatever the Goal declares about itself**. A
+  must-affirm marker method was considered and rejected as strictly weaker: it is still a
+  self-report, so it catches the author who forgot and admits the one who writes
+  `SelfContained() { return true }` on a Goal that calls a provider. The accepted cost is that
+  an out-of-tree Goal cannot register at all (`docs/debt.md#150`, `#151`).
+
+  **The calibration set is public, permanent, and synthetic.** Question-and-answer records over a
+  fictional API, written from a human-authored template, two independent labels and an
+  adjudicated verdict each. No customer content, no trace content, no PII — and the format has no
+  spelling for a harvested record: the loader refuses any provenance that is not `authored` or
+  `synthetic`. A public set is contaminated for training purposes the day it ships, so it is a
+  regression instrument rather than evidence a judge generalizes, and *What the numbers mean*
+  says so (`docs/debt.md#154`). Adding records is a contributor on-ramp that exists before any
+  judge does.
+
 * **`kno validate` — the holdout stage.** The Portfolio ships as a set, so it is measured as a
   set, against the slice nothing has read. Validate runs the holdout twice inside one run: a
   **control arm** with nothing injected and a **treatment arm** carrying the whole Portfolio as

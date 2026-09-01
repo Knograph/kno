@@ -1,0 +1,59 @@
+# a point estimate above the floor whose interval spans it: the verdict that exists so "we cannot tell" does not read as "it is fine"
+
+
+Calibration: exact-match against straddle v1
+  source     computed locally (this goal calls no model)
+  records    30 scored, 0 errored
+
+  kappa              0.667        95% CI [0.356, 0.930] (bootstrap-percentile)
+  raw agreement      0.833        a constant judge scores 0.500 on this set
+  sensitivity        0.800        of the records humans passed
+  specificity        0.867        of the records humans failed
+  marginals          judge 0.467  humans 0.500
+  inter-human kappa  1.000        the ceiling: a judge cannot beat its own labelers
+
+  INDETERMINATE
+  kappa 0.667, 95% CI [0.356, 0.930], straddles the 0.60 floor
+  fix: the set is too small to decide. Add records. "We cannot tell" is not "it
+       is fine", which is why this fails rather than passing
+
+  5 record(s) disagree. --show-disagreements prints them.
+
+===== --json =====
+{
+  "calibrations": [
+    {
+      "goal": "exact-match",
+      "set": "straddle",
+      "set_version": 1,
+      "set_content_sha256": "577ec955f5b7af5f65d4c38d2e702dfa11ca35327daca61d6d246210cec8c53c",
+      "source": "local",
+      "prompt_sha": "no-prompt",
+      "n_records": 30,
+      "n_scored": 30,
+      "n_errored": 0,
+      "kappa": 0.6666666666666667,
+      "kappa_interval": {
+        "low": 0.35622317596566516,
+        "high": 0.929508759876331,
+        "level": 0.95,
+        "method": "bootstrap-percentile",
+        "n": 30
+      },
+      "raw_agreement": 0.8333333333333334,
+      "constant_judge_raw_agreement": 0.5,
+      "sensitivity": 0.8,
+      "specificity": 0.8666666666666667,
+      "symmetry_gap": 0.06666666666666665,
+      "judge_positive_rate": 0.4666666666666667,
+      "human_positive_rate": 0.5,
+      "inter_human_kappa": 1,
+      "min_kappa": 0.6,
+      "verdict": "INDETERMINATE",
+      "cause": "kappa 0.667, 95% CI [0.356, 0.930], straddles the 0.60 floor",
+      "fix": "the set is too small to decide. Add records. \"We cannot tell\" is not \"it is fine\", which is why this fails rather than passing"
+    }
+  ],
+  "verdict": "INDETERMINATE",
+  "failed": 1
+}

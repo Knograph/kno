@@ -1,0 +1,13 @@
+{
+  "name": "stale-hash",
+  "version": 1,
+  "content_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "labelers": [
+    "labeler-a",
+    "labeler-b",
+    "adjudicator"
+  ],
+  "description": "records.jsonl was edited without regenerating the manifest's content_sha256. Deleting the records a judge fails is the route around this gate, and the hash is what makes it visible.",
+  "class_balance": "deliberately broken; see description",
+  "license": "Apache-2.0, original to this repository"
+}

@@ -1,0 +1,13 @@
+{
+  "name": "straddle",
+  "version": 1,
+  "content_sha256": "577ec955f5b7af5f65d4c38d2e702dfa11ca35327daca61d6d246210cec8c53c",
+  "labelers": [
+    "labeler-a",
+    "labeler-b",
+    "adjudicator"
+  ],
+  "description": "Thirty synthetic records, written for this set from a human-authored template; no customer content, no trace content, no PII. exact-match agrees well enough on them that its kappa point estimate clears the floor and its interval does not \u2014 the set that makes INDETERMINATE a real verdict rather than a branch nothing reaches.",
+  "class_balance": "15 pass / 15 fail over 30 records",
+  "license": "Apache-2.0, original to this repository"
+}

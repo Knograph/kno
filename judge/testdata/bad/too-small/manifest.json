@@ -1,0 +1,13 @@
+{
+  "name": "too-small",
+  "version": 1,
+  "content_sha256": "9cba3ebbd3d9a0e6f4126f6333266dfa3b18307db097d71af0cdedca7688a8ef",
+  "labelers": [
+    "labeler-a",
+    "labeler-b",
+    "adjudicator"
+  ],
+  "description": "A single record. No interval is computable over one unit.",
+  "class_balance": "deliberately broken; see description",
+  "license": "Apache-2.0, original to this repository"
+}

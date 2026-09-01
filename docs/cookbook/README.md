@@ -20,6 +20,7 @@ not depend on a second repository being reachable.
 | Recipe | What it covers |
 |---|---|
 | [Check whether your evals can attribute anything](check-your-evals.md) | `kno eval inspect` before you spend — behaviors, separable effects, and the five checks |
+| [Calibrate a judge](calibrate-a-judge.md) | `kno judge calibrate` — what a judge's kappa claims, the 0.60 floor, and how to fix a prompt against the records it gets wrong |
 | [Score your agent for the first time](https://github.com/uknoAI/kno-examples/blob/main/recipes/first-baseline.md) | Getting from an eval file to a baseline, and reading what comes back |
 | [Point Kno at your own provider](https://github.com/uknoAI/kno-examples/blob/main/recipes/your-own-provider.md) | Keys, cost caps, local model servers, and the first run that can bill you |
 | [Score your agent against Claude](https://github.com/uknoAI/kno-examples/blob/main/recipes/anthropic.md) | The Anthropic agent — `ANTHROPIC_API_KEY`, the priced models, and a complete baseline-to-report run |
@@ -32,10 +33,11 @@ not depend on a second repository being reachable.
 | [Read the whole story with `kno report`](https://github.com/uknoAI/kno-examples/blob/main/recipes/read-the-whole-story.md) | One page across the stages — what each section means, what "no cluster data" says, and why the holdout caveat is mandatory |
 | [Delete stored conversation content](https://github.com/uknoAI/kno-examples/blob/main/recipes/retention.md) | What Kno keeps, what `kno purge` removes, and why it keeps the rest |
 
-`check-your-evals` is the one recipe still held here in full, and deliberately: it documents `kno
-eval inspect`, which is on `main` and in no release. `kno-examples` checks every command on every
-page against the binary you can download, so a page about an unreleased command can carry no
-honest tier there. It migrates in the release window that ships the command.
+`check-your-evals` and `calibrate-a-judge` are the two recipes still held here in full, and
+deliberately: they document `kno eval inspect` and `kno judge calibrate`, both on `main` and in no
+release. `kno-examples` checks every command on every page against the binary you can download, so
+a page about an unreleased command can carry no honest tier there. They migrate in the release
+window that ships the command.
 
 ## Vendor recipes
 

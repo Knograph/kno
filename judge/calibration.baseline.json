@@ -1,0 +1,15 @@
+{
+  "_note": "Regenerate with `make record-calibration`. Review the diff like code: lowering a recorded kappa is a deliberate trade and the PR must say what was traded.",
+  "entries": [
+    {
+      "set_name": "starter",
+      "set_version": 1,
+      "content_sha256": "8f3fcd006f6d89a1aca3904dc02f8d41c785c4d9faa856ec9ad0e4bf57d53b6e",
+      "goal_name": "exact-match",
+      "prompt_sha": "no-prompt",
+      "kappa": 0.8672566371681416,
+      "n_records": 60,
+      "verdicts": "011111101111111101111111011111110000000000000000000000000000"
+    }
+  ]
+}

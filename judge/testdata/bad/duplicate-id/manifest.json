@@ -1,0 +1,13 @@
+{
+  "name": "duplicate-id",
+  "version": 1,
+  "content_sha256": "da401ff814c71ec808f0dda8f8f4301aab08a3b9183dca87bf755fcbcb2e5cb2",
+  "labelers": [
+    "labeler-a",
+    "labeler-b",
+    "adjudicator"
+  ],
+  "description": "One record id appears twice, so every statistic counts it twice.",
+  "class_balance": "deliberately broken; see description",
+  "license": "Apache-2.0, original to this repository"
+}

@@ -1,0 +1,13 @@
+{
+  "name": "low-inter-human",
+  "version": 1,
+  "content_sha256": "498e8ac503a9e224f8ffe21e7582873ef13585b64fe9aec363a431a8ef3cf53a",
+  "labelers": [
+    "labeler-a",
+    "labeler-b",
+    "adjudicator"
+  ],
+  "description": "A well-balanced set whose two labelers agree only 60% of the time. It loads: the failure is a statement about the labels, and the command must say so rather than blaming the judge.",
+  "class_balance": "deliberately broken; see description",
+  "license": "Apache-2.0, original to this repository"
+}

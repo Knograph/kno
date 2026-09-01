@@ -45,3 +45,17 @@ func DecodeInspectJSON(b []byte) (InspectJSON, error) { return decodeInspectJSON
 
 // InspectJSON is `kno eval inspect --json`'s shape, exposed for tests.
 type InspectJSON = inspectJSON
+
+// DecodeJudgeCalibrateJSON parses a rendered `kno judge calibrate --json`
+// document.
+func DecodeJudgeCalibrateJSON(b []byte) (JudgeCalibrateJSON, error) {
+	return decodeJudgeCalibrateJSON(b)
+}
+
+// JudgeCalibrateJSON is `kno judge calibrate --json`'s shape, exposed for
+// tests.
+type JudgeCalibrateJSON = judgeCalibrateDocument
+
+// DecodeRawDocument parses any --json document into a map, for tests asserting
+// a key exists rather than what it holds.
+func DecodeRawDocument(b []byte) (map[string]any, error) { return decodeRawDocument(b) }

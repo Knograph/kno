@@ -148,7 +148,7 @@ define live_spend_guard
 endef
 
 .PHONY: check
-check: fmt-check lint test typecheck-proto generate-check vuln docs fuzz-short bench-diff ## The PR gate: everything CI runs on a pull request
+check: fmt-check lint test typecheck-proto generate-check vuln docs judge-calibrate-check fuzz-short bench-diff ## The PR gate: everything CI runs on a pull request
 	@printf '\033[32m  OK  \033[0m all gates passed\n'
 
 ## ─── Tools ──────────────────────────────────────────────────────────────────
@@ -276,6 +276,53 @@ record-fixtures: ## Re-record adapter fixtures against LIVE providers. Spends re
 .PHONY: update-golden
 update-golden: ## Regenerate golden files (review the diff like code)
 	@go test ./... -update
+
+## ─── Judge calibration ──────────────────────────────────────────────────────
+
+# CLAUDE.md and CONTRIBUTING.md both state, as present-tense fact, that "a
+# judge prompt change that drops agreement below threshold fails CI". This is
+# that gate.
+#
+# It is in `check` — the PR gate — and it makes NO provider call. `kno judge
+# calibrate --replay` scores from recorded judge responses, or, for a goal that
+# uses no model at all, computes locally. PR CI must never spend money
+# (test-integration hard-fails when KNO_LIVE_TESTS is set), so the live path is
+# a separate, capped target below.
+#
+# Two things are gated at once and a failure names which: the absolute FLOOR
+# (kappa >= 0.60, derived in docs/what-the-numbers-mean.md, not borrowed from
+# a 1977 paper about medical raters), and the RATCHET against
+# judge/calibration.baseline.json. A ratchet without a floor blesses whatever
+# the first prompt happened to score; a floor without a ratchet notices only
+# catastrophes.
+#
+# Folding this into `check` was gated on the bootstrap's measured coverage:
+# TestBootstrapCoverageOnTheDecisionGrid measures the percentile interval on
+# n in {50,100,200} x kappa in {0.55..0.65} — the box inside which
+# PASS/INDETERMINATE/FAIL is decided — and it passes. See docs/debt.md#153.
+.PHONY: judge-calibrate-check
+judge-calibrate-check: ## Gate every recorded (set, goal) calibration. Spends nothing
+	@go run ./cmd/kno judge calibrate --replay --all \
+		--baseline judge/calibration.baseline.json
+	@printf '\033[32m  OK  \033[0m judge calibration: every recorded pair clears its floor\n'
+
+# Recording calls the judge model, so it spends real money and passes the same
+# guard test-live and record-fixtures do. It rewrites both the fixtures and the
+# baseline; commit them together, and review the diff like code — the same
+# convention .coverage-baseline already carries.
+.PHONY: record-calibration
+record-calibration: ## Re-record judge responses and the kappa baseline against LIVE providers. Spends real money.
+	@$(SAFE) $(call live_spend_guard,record-calibration)
+	@KNO_LIVE_TESTS=1 go run ./cmd/kno judge calibrate --live --all --yes \
+		--baseline judge/calibration.baseline.json --write-baseline
+	@printf '\033[33m NOTE \033[0m review the baseline diff like code: a lower kappa is a\n'
+	@printf '        deliberate trade, and the PR body must say what was traded.\n'
+
+# The manifest attests to records.jsonl as committed. Run this in the SAME
+# commit that edits a set; `make check` fails otherwise and names this target.
+.PHONY: update-calibration-manifest
+update-calibration-manifest: ## Re-attest each calibration set's content_sha256
+	@$(SAFE) ./scripts/calibration-manifest.sh
 
 ## ─── Proto ──────────────────────────────────────────────────────────────────
 

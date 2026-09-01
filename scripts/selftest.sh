@@ -120,7 +120,15 @@ expect_output_lacks() {
 # for reasons nobody could see.
 DOCS_PROBE=.selftest-probe.md
 
-cleanup() { rm -f "$DOCS_PROBE"; }
+cleanup() {
+	rm -f "$DOCS_PROBE"
+	for f in judge/calibration.baseline.json \
+		judge/testdata/calibration/starter/records.jsonl \
+		judge/testdata/calibration/starter/manifest.json; do
+		[ -f "$f.selftest-bak" ] && mv "$f.selftest-bak" "$f"
+	done
+	return 0
+}
 trap cleanup EXIT INT TERM
 
 case_docs() {
@@ -151,12 +159,83 @@ case_ledger_check() {
 	expect_output_lacks ledger-check "a passing run names the ledger" ".goreleaser.yaml"
 }
 
+# judge-calibrate-check is the gate CLAUDE.md has claimed exists since before it
+# did: "a judge prompt change that drops agreement below threshold fails CI".
+# Three invariants, three breaks, each restored by the trap.
+#
+# The degenerate always-good judge — the fourth break the plan names — is NOT
+# driven from here, and the reason is the containment itself: goal.Registry is
+# default-deny, so no constant judge can be named on a command line at all.
+# That case lives where it can exist, as
+# TestConstantJudgeScoresZeroKappaDespiteHighRawAgreement.
+CALIB_BASELINE=judge/calibration.baseline.json
+CALIB_RECORDS=judge/testdata/calibration/starter/records.jsonl
+CALIB_MANIFEST=judge/testdata/calibration/starter/manifest.json
+
+restore_calibration() {
+	for f in "$CALIB_BASELINE" "$CALIB_RECORDS" "$CALIB_MANIFEST"; do
+		[ -f "$f.selftest-bak" ] || continue
+		mv "$f.selftest-bak" "$f"
+	done
+}
+
+case_judge_calibrate_check() {
+	for f in "$CALIB_BASELINE" "$CALIB_RECORDS" "$CALIB_MANIFEST"; do
+		if [ -e "$f.selftest-bak" ]; then
+			bad judge-calibrate-check "$f.selftest-bak already exists — a previous run was killed. Delete it and rerun."
+			return 0
+		fi
+		cp "$f" "$f.selftest-bak"
+	done
+
+	# 1. A recorded kappa the current run cannot reproduce: the ratchet.
+	python3 - "$CALIB_BASELINE" <<-'PY'
+		import json, sys
+		p = sys.argv[1]
+		d = json.load(open(p))
+		for e in d["entries"]:
+		    e["kappa"] = 1.0
+		    e["verdicts"] = "1" * e["verdicts"].count("1") + "0" * (len(e["verdicts"]) - e["verdicts"].count("1"))
+		    e["verdicts"] = "1" * 32 + "0" * (len(e["verdicts"]) - 32)
+		json.dump(d, open(p, "w"), indent=2)
+	PY
+	expect_break_caught judge-calibrate-check "a kappa regression against the recorded baseline" "regressed"
+	restore_calibration
+	for f in "$CALIB_BASELINE" "$CALIB_RECORDS" "$CALIB_MANIFEST"; do cp "$f" "$f.selftest-bak"; done
+
+	# 2. A set edited without re-attesting its manifest: the content hash.
+	printf '{"id":"selftest","case":{"input":"q","expected":"a"},"response":{"output":"a"},"labels":[{"labeler_id":"labeler-a","value":1,"passed":true},{"labeler_id":"labeler-b","value":1,"passed":true}],"adjudicated":{"labeler_id":"adjudicator","value":1,"passed":true},"provenance":{"source":"synthetic"}}\n' >>"$CALIB_RECORDS"
+	expect_break_caught judge-calibrate-check "records.jsonl edited without regenerating content_sha256" "hashes to"
+	restore_calibration
+	for f in "$CALIB_BASELINE" "$CALIB_RECORDS" "$CALIB_MANIFEST"; do cp "$f" "$f.selftest-bak"; done
+
+	# 3. A set whose minority class falls below the balance invariant.
+	python3 - "$CALIB_RECORDS" "$CALIB_MANIFEST" <<-'PY'
+		import hashlib, json, sys
+
+		records, manifest = sys.argv[1], sys.argv[2]
+		lines = open(records).read().splitlines(keepends=True)
+		kept = [l for l in lines if json.loads(l)["adjudicated"]["passed"]]
+		kept.append(lines[-1])
+		open(records, "w").write("".join(kept))
+		m = json.load(open(manifest))
+		m["content_sha256"] = hashlib.sha256(open(records, "rb").read()).hexdigest()
+		json.dump(m, open(manifest, "w"), indent=2)
+		open(manifest, "a").write("\n")
+	PY
+	expect_break_caught judge-calibrate-check "a minority class below the balance invariant" "minority class"
+	restore_calibration
+
+	expect_intact_passes judge-calibrate-check "the committed set and baseline"
+}
+
 # The gates a case exists for. Kept next to the calls so the count in the
 # summary cannot drift from what actually ran.
-COVERED="docs, ledger-check"
+COVERED="docs, ledger-check, judge-calibrate-check"
 
 case_docs
 case_ledger_check
+case_judge_calibrate_check
 
 ## ─── Uncovered gates ────────────────────────────────────────────────────────
 
@@ -183,6 +262,7 @@ UNCOVERED=$(
 		pr-ready|a feat: branch with no CHANGELOG entry
 		test-live|KNO_MAX_COST_USD unset, which must refuse to spend
 		record-fixtures|KNO_MAX_COST_USD unset, which must refuse to spend
+		record-calibration|KNO_MAX_COST_USD unset, which must refuse to spend
 	ROWS
 )
 

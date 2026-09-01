@@ -73,12 +73,144 @@ Every reported delta carries an interval, or the delta is not reported at all. A
 The interval covers **sampling variation across your eval set and across repeated trials**. It does not cover:
 
 - **Whether your eval set represents production.** If your Cases are unrepresentative, every number here is precise and wrong. Kno cannot detect this, and no confidence interval will warn you.
-- **Judge error.** When a Goal uses an LLM judge, judge disagreement is a source of error the interval does not include. Calibrate against a human-labeled set (`kno judge calibrate`) before trusting judged numbers.
+- **Judge error.** When a Goal uses an LLM judge, judge disagreement is a source of error the interval does not include — and it is not noise that averages out, it is a systematic *shrinkage* of every delta toward zero. `kno judge calibrate` measures how big it is; [What a judge's kappa claims](#what-a-judges-kappa-claims) says what the number means.
 - **Provider drift.** A model updated between your baseline and your validation makes the comparison invalid in a way no interval expresses.
 
 **An interval crossing zero means the effect is indistinguishable from nothing at your sample size.** It does not mean the asset is useless — it means you don't have enough evidence. More cases or more trials would narrow it.
 
 Kno colors deltas by whether the interval crosses zero, not by sign. A positive delta whose interval spans zero is not a positive result.
+
+## What a judge's kappa claims
+
+`kno judge calibrate` reports **Cohen's kappa** between a Goal's verdicts and a human-labeled
+calibration set, with a percentile-bootstrap confidence interval, and gates on it.
+
+**Not accuracy, and the reason is the failure it hides.** On a set that is 85% "good", a judge
+that answers "good" unconditionally scores **0.85 raw agreement** and is worthless. That same
+judge scores **kappa = 0, exactly**. Raw agreement is still printed — it is the number a
+non-statistician reads correctly at a glance — and the constant judge's score is printed
+beside it, because seeing the two together is the lesson.
+
+### Kappa is the factor your effects are multiplied by
+
+This is what makes kappa the right statistic here rather than a conventional one: it is
+denominated in the units of the thing Kno sells.
+
+Let the judge misclassify at rate ε in both directions, independently of which arm a Case is
+in. The observed pass rate is then `p* = ε + p(1 − 2ε)`, so for any two arms:
+
+    p*_treat − p*_control = (1 − 2ε) · (p_treat − p_control)
+
+**Every delta measured through this judge is attenuated by exactly (1 − 2ε).** On a balanced
+set the judge's own marginals are balanced too, so chance agreement `p_e` is 0.5 and observed
+agreement `p_o` is `1 − ε`:
+
+    kappa = (1 − ε − 0.5) / 0.5 = 1 − 2ε
+
+Kappa *is* the attenuation factor. A judge at kappa 0.80 shrinks a true 10-point improvement
+into an 8-point measured one.
+
+### Why the floor is 0.60, and what it costs you
+
+**It is not Landis and Koch.** Their "substantial" band starts at 0.61, and the near-coincidence
+is named here only so that nobody mistakes it for the argument. A threshold imported from a 1977
+paper about medical raters is an invented threshold wearing a citation.
+
+The floor is read off the attenuation instead. Power for a paired comparison scales with the
+*square* of the effect size, so attenuating an effect by a factor `a` requires `1/a²` times as
+many Cases to reach the same power. Setting the ceiling at **"a judge may cost at most 3× your
+eval budget"** gives `a ≥ 1/√3 = 0.577`, rounded up to **0.60**.
+
+So the floor is a published price: **using a judge at kappa 0.60 roughly triples what a
+measurement costs you**, relative to a perfect scorer, for the same statistical power. If 3× is
+too generous for what you are measuring, raise it — `--min-kappa 0.75` costs about 1.8× — and
+you now know what you are buying.
+
+### The assumptions are checked, not assumed
+
+The derivation above needs two things, and the command gates on both separately so a failure
+names which one broke.
+
+**Balance.** The identity `kappa = 1 − 2ε` holds exactly only on a perfectly balanced set. The
+calibration set's loader enforces a **minority class of at least 40%** and refuses a set that
+breaks it, which fixes the well-known kappa paradox at its cause rather than swapping in a
+statistic (Gwet's AC1, prevalence-adjusted kappa) that reports a flattering number on a lopsided
+set. Here is what balance actually costs, computed rather than asserted:
+
+| minority class p | p_e at ε = 0.20 | kappa | shortfall vs 1 − 2ε = 0.60 | kappa at ε = 0.10 | shortfall vs 0.80 |
+|---|---|---|---|---|---|
+| 0.50 | 0.500 | 0.600 | 0.0% | 0.800 | 0.0% |
+| 0.45 | 0.503 | 0.598 | 0.4% | 0.798 | 0.2% |
+| **0.40 — the invariant** | 0.512 | 0.590 | **1.6%** | 0.793 | 0.8% |
+| 0.30 | 0.548 | 0.558 | 7.1% | 0.771 | 3.7% |
+| 0.20 | 0.608 | 0.490 | 18.4% | 0.719 | 10.1% |
+
+At the invariant's boundary the identity holds to **1.6% near the floor**, which is where the
+decision is made; across the whole kappa range the worst case is 3.9%. Below the invariant it
+degrades fast — at a 20% minority class the identity is wrong by 18% — which is why balance is
+enforced when the set is written instead of corrected for afterwards. Every row of that table is
+a test (`TestPrevalenceSensitivityTable`), so this page and the arithmetic cannot drift apart.
+
+**Symmetry.** Non-differential error is *not* enforceable, so it is measured: the command fails
+when `|sensitivity − specificity| > 0.20`, **even when kappa is comfortably above the floor**.
+A judge biased in one direction is worse than a symmetric one with the same kappa, because it
+moves every measured delta the same way and the headline number does not show it.
+
+### Three verdicts, and the third one fails
+
+| Bootstrap CI on kappa vs the floor | Verdict | Exit |
+|---|---|---|
+| entirely at or above 0.60 | **PASS** | 0 |
+| entirely below 0.60 | **FAIL — below the floor** | 1 |
+| straddles 0.60 | **INDETERMINATE — the set is too small to decide** | 1 |
+
+INDETERMINATE fails, and the fix printed with it is *add records*. "We cannot tell" is not "it
+is fine" — the same discipline the gaps verdict uses for UNKNOWN. Gating on the point estimate
+alone would let a 40-record set flip a gate on noise; gating on the lower bound alone would fail
+every small set for being small, which is true and useless as a signal about the judge.
+
+Two more verdicts exist and neither is about the judge:
+
+- **The labels do not agree with each other.** Inter-human kappa is the *ceiling* — a judge
+  cannot be held to an agreement its own labelers do not reach. When the ceiling is below the
+  floor the run is INDETERMINATE and says the cause is the labels, so nobody goes and edits a
+  prompt.
+- **Not a usable calibration.** Above a 5% judge error rate the surviving records are a subset
+  chosen by which calls happened to work. Same threshold and the same words as the baseline
+  gate.
+
+A **graded** Goal (`SCORE_DOMAIN_UNIT_INTERVAL`) reports weighted kappa, Spearman's rho and mean
+absolute error, and prints `GATE: not applicable`. Kappa is undefined on continuous scores, and
+gating one needs an anchored scale the calibration format does not yet carry; inventing one here
+would be the invented threshold this command exists to avoid.
+
+### What the calibration set is, and what it is not
+
+The set that ships in the binary is **synthetic**: question-and-answer records over a fictional
+API, written from a human-authored template, each carrying two independent labels and an
+adjudicated reference verdict. It contains **no customer content, no trace content, and no PII**,
+and there is no spelling in the format for a record harvested from a real deployment — the
+loader refuses any provenance that is not `authored` or `synthetic`.
+
+Synthetic still calibrates something real, and it is worth being precise about what. The
+statistic measures whether a judge reproduces *stated human judgements about stated rubrics*. A
+synthetic record is a real instance of that as long as the rubric and the disagreement are real,
+and the near-miss records — answers that are correct but not byte-identical — are exactly the
+cases a judge exists to handle and a string comparison does not. What synthetic records cannot
+tell you is whether your *production* distribution is like this one. That is why the set is a
+regression instrument and an on-ramp, not a certificate: **add records from your own domain**,
+under the same two-labeler and balance rules, and the number starts describing your judge on
+your data.
+
+Two limits that do not go away:
+
+- **A public calibration set is contaminated for training purposes the day it is published.**
+  Any model released afterwards may have seen it. It detects a prompt change making things
+  worse; it is not evidence that a judge generalizes.
+- **Non-differential error is an assumption the symmetry gate only partly protects.** A judge
+  whose errors correlate with the *content* of an arm — it dislikes long outputs, and the
+  treatment arm makes outputs longer — violates it in a way no per-class recall reveals.
+
 
 ## When the holdout is too small
 

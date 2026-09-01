@@ -1,0 +1,13 @@
+{
+  "name": "unadjudicated",
+  "version": 1,
+  "content_sha256": "e5797eb33947037d77d5a83cca8aaf8094a1c7941cd3b76765168fbff6be9bb7",
+  "labelers": [
+    "labeler-a",
+    "labeler-b",
+    "adjudicator"
+  ],
+  "description": "The two labelers split on one record and no adjudicated reference verdict resolves it. The set may not contain an unresolved record.",
+  "class_balance": "deliberately broken; see description",
+  "license": "Apache-2.0, original to this repository"
+}

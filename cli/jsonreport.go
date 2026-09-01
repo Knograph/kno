@@ -1007,3 +1007,26 @@ func decodeDemoSelect(raw demoStageDoc) (selectReport, error) {
 	}
 	return rep, nil
 }
+
+// decodeJudgeCalibrateJSON parses a rendered `kno judge calibrate --json`
+// document.
+//
+// Here rather than in the test, because the encoding/json exemption is scoped
+// to this file: a test that decoded the document itself would widen it.
+func decodeJudgeCalibrateJSON(b []byte) (judgeCalibrateDocument, error) {
+	var doc judgeCalibrateDocument
+	if err := json.Unmarshal(b, &doc); err != nil {
+		return judgeCalibrateDocument{}, fmt.Errorf("decoding judge calibrate json: %w", err)
+	}
+	return doc, nil
+}
+
+// decodeRawDocument parses any rendered --json document into a map, for tests
+// that assert a key EXISTS rather than what it holds.
+func decodeRawDocument(b []byte) (map[string]any, error) {
+	var doc map[string]any
+	if err := json.Unmarshal(b, &doc); err != nil {
+		return nil, fmt.Errorf("decoding json: %w", err)
+	}
+	return doc, nil
+}

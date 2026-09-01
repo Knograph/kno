@@ -1,0 +1,13 @@
+{
+  "name": "imbalanced",
+  "version": 1,
+  "content_sha256": "6ddfd1e695e0cc44023870dbbb84ecca0ea25bcae2c1aa0600968e177fc57abb",
+  "labelers": [
+    "labeler-a",
+    "labeler-b",
+    "adjudicator"
+  ],
+  "description": "Nine passing records and one failing one: a minority class of 10%, below the 40% balance invariant. The loader must refuse it before any kappa is computed.",
+  "class_balance": "deliberately broken; see description",
+  "license": "Apache-2.0, original to this repository"
+}
