@@ -246,5 +246,52 @@ class ReDateIsNotImmunity(unittest.TestCase):
         self.assertFalse(ledger.redated("REPAID (2026)", "x"))
 
 
+class TheGateSeesTheMinorSeries(unittest.TestCase):
+    """A trigger naming "v0.2" or "before 1.0" is naming a release.
+
+    Found by the v0.2 ledger audit. The gate matched the full version string
+    only, so it read "0.2.0" and was blind to "v0.2" --- and blind to "before
+    1.0", which is how most of this table is written. At a 1.0.0 tag it
+    therefore matched NOTHING, because not one "before 1.0" entry spells the
+    patch digit, and would have waved through every 1.0 obligation in the
+    ledger. The gate CLAUDE.md rests on could not see the trigger form
+    CLAUDE.md's own examples use.
+    """
+
+    def _lapsed(self, trigger, version, what="something deferred"):
+        path = ledger_file(row(7, what=what, trigger=trigger))
+        try:
+            return ledger.check_release(version, path)
+        finally:
+            os.unlink(path)
+
+    def test_a_trigger_naming_the_minor_series_is_caught(self):
+        self.assertEqual(len(self._lapsed("v0.2's other half", "0.2.0")), 1)
+
+    def test_before_one_point_oh_is_caught_at_the_one_point_oh_tag(self):
+        self.assertEqual(len(self._lapsed("Before 1.0, or a user report", "1.0.0")), 1)
+
+    def test_a_disposed_row_still_passes(self):
+        self.assertEqual(self._lapsed("v0.2's other half", "0.2.0", what="**REPAID**"), [])
+
+    def test_a_decimal_that_is_not_a_release_is_not_a_trigger(self):
+        # docs/debt.md#33's feasibility constant. A substring match on "0.2"
+        # would read `f = 0.25` as naming the 0.2 series and fail a release on
+        # a number that is not a version.
+        self.assertEqual(self._lapsed("when live data shows `f = 0.25` is wrong", "0.2.0"), [])
+
+    def test_the_full_version_is_still_matched(self):
+        self.assertEqual(len(self._lapsed("before 0.2.0", "0.2.0")), 1)
+
+    def test_another_series_is_still_not_the_gates_business(self):
+        self.assertEqual(self._lapsed("when v0.3 lands", "0.2.0"), [])
+
+    def test_a_prerelease_tag_is_not_broadened(self):
+        # scripts/selftest.sh runs the pass path with VERSION=0.0.0-selftest,
+        # a version nothing names. Broadening it to the "0.0" series would
+        # match a dollar figure and turn that case red.
+        self.assertEqual(self._lapsed("when a run spends $0.00", "0.0.0-selftest"), [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=0, argv=[sys.argv[0], "-q"])
