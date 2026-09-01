@@ -163,6 +163,28 @@ def check_release(version, path=LEDGER):
     patterns = [re.escape(version)]
     if version == "0.0.1":
         patterns += ["first tagged release", "first release"]
+
+    # The MINOR SERIES, and this leg is why the gate was worth fixing. Until
+    # the v0.2 audit it matched the full version string only, so it could see
+    # a trigger that wrote "0.2.0" and was blind to every trigger that wrote
+    # "v0.2" or "before 1.0" --- which is how the ledger's authors actually
+    # write. The cost was not theoretical: at a 1.0.0 tag the old pattern
+    # matched NOTHING, because not one "before 1.0" entry spells the patch
+    # digit, so the gate CLAUDE.md rests on would have waved through every
+    # 1.0 obligation in the table. #142 was invisible to a 0.2.0 tag for the
+    # same reason.
+    #
+    # The lookahead is load-bearing twice over: it keeps "0.2" off "0.25"
+    # (entry #33's feasibility constant is not a release) and off "0.2.0",
+    # which the full-version pattern above already owns.
+    #
+    # Only a clean numeric X.Y.Z is broadened. A pre-release tag like
+    # 0.0.0-selftest keeps the narrow match, so scripts/selftest.sh's
+    # "a release nothing names" case still names nothing.
+    parts = version.split(".")
+    if len(parts) == 3 and all(p.isdigit() for p in parts):
+        patterns.append(re.escape(".".join(parts[:2])) + r"(?![\d.])")
+
     names_release = re.compile("|".join(patterns), re.IGNORECASE)
 
     lapsed = []

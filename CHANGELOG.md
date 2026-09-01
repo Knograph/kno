@@ -89,6 +89,37 @@ covenants — breaking any of them requires a major version.
 
 ### Changed
 
+- **The release gate reads a minor series, not only a patch-complete version —
+  and the whole ledger was audited against it before v0.2.**
+  `scripts/ledger-check.py` matched the exact version string it was given, so it
+  saw a trigger that wrote `0.2.0` and was blind to every trigger that wrote
+  `v0.2` or `before 1.0`. That is how the ledger's authors actually write, and
+  the cost was not theoretical: at a `1.0.0` tag the old pattern matched
+  **nothing**, because not one "before 1.0" entry spells the patch digit, so the
+  gate `CLAUDE.md` rests on would have waved through every 1.0 obligation in the
+  table. It now also matches the release's minor series, with a lookahead that
+  keeps `0.2` off `0.25` (entry #33's feasibility constant is not a version) and
+  a numeric-only guard that leaves a pre-release tag like `0.0.0-selftest`
+  narrow, so `scripts/selftest.sh`'s "a release nothing names" case still names
+  nothing. Seven tests cover the new leg, including the two false-positive
+  shapes.
+
+  The v0.2 audit that found it disposed all 65 open entries. Two are repaid
+  (`#88`, `#135` — both verified from the consuming repository rather than
+  taken on trust), three are partly repaid, two are re-dated with written
+  reasons, one (`#83`) is recorded as due work, and 57 are carried with a stated
+  reason each. Two entries had
+  triggers that had already fired unnoticed: `#139`'s at this release, and
+  `#79`'s **before the entry was written** — `costOf` has priced cache writes
+  in three adapters since 2026-08-22, so that leg was false the day it was
+  recorded. Five more rows (`#3`, `#33`, `#68`, `#70`, `#78`) had been re-dated
+  in the *What* column while the *Repayment trigger* cell still held the dead
+  trigger, and the gate reads only the trigger cell; those are now consistent.
+  `#83`'s parquet deferral is out of deferrals: its trigger has fired twice, a
+  third re-date is not available, abandoning it was considered and rejected on
+  the record, and it is now recorded as due work scoped in issue
+  [#154](https://github.com/uknoAI/kno/issues/154).
+
 - **The cookbook migration is finished: `calibrate-a-judge` has moved, and no
   recipe lives in this repository any more.** `docs/cookbook/calibrate-a-judge.md`
   is now a one-line tombstone pointing at
