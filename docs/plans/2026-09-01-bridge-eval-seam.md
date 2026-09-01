@@ -67,22 +67,61 @@ type ScoreResult struct {
 }
 ```
 
-`ScorePass` is a thin wrapper over the existing `invoker` and the existing
-concurrency helper. It does **not** create a Run, write measurements, or
-checkpoint — those belong to the stage that owns the run.
+**Amended after Phase 1 review (finding R4).** The first draft returned a bulk
+map and explicitly did not checkpoint. That is incompatible with how all three
+existing `invoker` callers work: `core/baseline_invoke.go`, `core/value_loop.go`
+and `core/validate_loop.go` each drive it through `executor.Run` with a `Skip`
+predicate and a per-Case sink recording durably **as each Case completes** —
+because the Case is the unit of spend. A bulk return cannot join that discipline,
+and it is what makes §6's resume hole unfixable.
 
-### 2. `bridge.evalRunner` — the implementation
+So `ScoreParams` gains the two fields that matter:
 
-Lives in `bridge/`, implements `bridge.EvalRunner`, and is roughly:
+```go
+    Skip     func(caseID string) bool
+    OnScored func(ctx context.Context, caseID string,
+                  score float64, spend budget.Spend) error
+```
 
-- build an `Agent` for the deployed `core.Endpoint` via
-  `adapters/agent/openaicompat` (Together's dedicated endpoints speak the
-  OpenAI-compatible API; the adapter already exists);
-- call `core.ScorePass` twice per group — once over `devCaseIDs`, once over
-  `ControlCaseIDs`;
-- pair each Case's score against the all-in baseline model's score for the same
-  Case, which `bridge.Run` already holds;
-- return the `[][]float64` shape `EvalRunner.Measure` specifies.
+`ScorePass` still creates no Run — that belongs to the stage — but it no longer
+treats checkpointing as someone else's problem. It calls `OnScored` before moving
+on, and an error from it stops the pass.
+
+### 2. Scoring the all-in model — the piece this plan originally got wrong
+
+**Amended after Phase 1 review (finding R1, a blocker).** The first draft said
+each group's deltas are paired against "the all-in baseline model's score for the
+same Case, which `bridge.Run` already holds." That is false, and checking it
+against `feat/tuner-bridge` is what caught it:
+
+- `deployMeasureTeardown` returns **early** for `q.Group == AllIn`
+  (`bridge/run.go:355-364`) without ever calling `p.Eval.Measure`. The all-in
+  model is deployed and torn down, never scored.
+- `baselineModel` (`bridge/run.go:180`) holds a `*knov1.AgentRef` — a model
+  pointer, never a score.
+- `--bridge-max-live-endpoints` defaults to 1 and deploy/teardown is serialised,
+  so by the time any leave-one-out group runs the all-in endpoint is **gone**.
+- `Measure`'s signature (`bridge/run.go:45`) takes no baseline scores.
+
+There is no channel through which an implementation could obtain the number the
+contract requires. Writing `evalRunner` to the original spec would leave an
+implementer two options, both wrong: re-invoke a torn-down endpoint, or quietly
+pair against nothing and emit a delta that means nothing.
+
+**Amended design.** The all-in group is scored like every other group, and its
+per-Case scores are the baseline the rest pair against:
+
+1. `deployMeasureTeardown`'s `AllIn` branch calls `Eval.Measure` over the
+   **union** of every group's dev Cases plus `ControlCaseIDs`, while the all-in
+   endpoint is live. That is the only moment it exists.
+2. Those scores are persisted — see §6; in-memory is not sufficient — and
+   `RunParams` carries them forward for subsequent groups.
+3. `EvalRunner.Measure` gains no baseline parameter. Pairing moves into
+   `bridge.Run`, the component that legitimately holds both sides.
+
+The cost consequence is explicit and must reach the quote (§7): the all-in pass
+scores the union of every group's Cases, making it the **largest** single scoring
+pass in the run, not a free extra.
 
 ### 3. `--evals` on `kno bridge`
 
@@ -104,6 +143,29 @@ Proposal: extract the combination into `stats/interval` as an exported
 `NetEffect(goal, control *Interval, nT, nC int, shared bool, level float64) *Interval`,
 and have both `core/select.go`'s `netInterval` and bridge call it.
 
+**Amended after Phase 1 review (findings R5, R8, R9).** Three corrections:
+
+- **`shared` is not an open parameter for bridge; it is `true`, always.** In
+  Select it comes from `Valuation.FreshControlArm`. Bridge has no fresh/recorded
+  distinction: under §2's amended design both Δ_group and Δ_control pair against
+  the *same* all-in scores, which is structurally the shared case. An implementer
+  reasoning "dev and control Cases are disjoint, therefore independent" would pass
+  `false`, **narrowing** the interval and manufacturing precisely the
+  false-confident-harm claim this extraction exists to prevent. Pinned here rather
+  than discovered in Phase 3.
+- **`NetEffect` performs the one-sided-to-two-sided widening internally** — the
+  `halfC` quantile-ratio computation inline at `core/select.go:504-511`.
+  `portfolio.NetDelta.Half`'s doc warns that silently reading a one-sided bound as
+  symmetric understates the interval; the signature must not leave which side of
+  that line it sits on to the caller.
+- **The counter-precedent is acknowledged.** `bridge/run.go` already duplicates
+  `core/value_measure.go`'s `perCaseMeans` deliberately, reasoning a divergence
+  "would show up immediately as a wrong-shaped interval, not as a silent drift."
+  That is sound *there* and does not transfer: a wrong `perCaseMeans` produces a
+  visibly wrong shape, whereas a wrong net-effect combination produces a plausible
+  interval of the wrong width. The distinction is observability of the error, not
+  the presence of interval math.
+
 This is an extraction at the **second** occurrence, which `CLAUDE.md` normally
 forbids ("extract on the third occurrence, not the second"). The exception is
 argued rather than assumed: the rule exists because a premature abstraction is
@@ -120,6 +182,71 @@ tests. The plan's Step 6 specifies on-disk `testdata/fixtures/poll-NN.json`
 sequences. Convert them, recorded via `make record-fixtures` with secrets
 scrubbed at record time, so the adapter's polling is pinned against real provider
 payloads rather than against our idea of them.
+
+### 6. Per-group measurement idempotency — resume must not re-pay
+
+**Added after Phase 1 review (finding R2, a blocker).** `bridge.Run`'s loop gates
+`deployMeasureTeardown` on one thing: the job reaching `JOB_STATUS_SUCCEEDED`
+(`bridge/run.go:210-215`). Nothing records that a group has already been
+**measured**.
+
+Concrete failure: `cluster-3`'s job succeeds, its endpoint deploys, 250 Cases are
+scored against a per-minute-billed endpoint, the verdict is emitted, the endpoint
+is torn down. The process is killed while measuring `cluster-4`. On resume,
+`cluster-3`'s job row is still terminal-succeeded so submission is correctly
+skipped — and `deployMeasureTeardown` runs again unconditionally. A second
+endpoint is deployed, all 250 Cases re-scored, and a second independently-sampled
+verdict emitted for a group already reported, with nothing reconciling the two.
+CLAUDE.md's "resume never re-pays", violated on the one path that bills by the
+minute while idle.
+
+Required: per-Case durable scores (§1's `OnScored`) plus a per-group completion
+check before deploy, mirroring `CompletedMeasurements`/`Skip` in Value and
+Validate. A resumed run re-deploys only if Cases remain unscored, and re-scores
+only those.
+
+### 7. The consent quote must include the eval pass
+
+**Added after Phase 1 review (finding R3, a blocker).** `cli/bridge.go:220-229`
+computes the quote as training plus a hosting cap. There is no inference line — in
+`bridge.GroupQuote`, `TotalEstimatedCostUSDMicros`, or `confirmAndStop` — because
+until now `confirmAndStop` always refused before any `EvalRunner` could spend.
+**This plan is the first to wire a spending EvalRunner**, so it inherits the
+obligation.
+
+A user consenting to "$47.20 training + $12.00 hosting" would have inference calls
+authorised and settled — the all-in union pass plus one per group over dev and
+control Cases — that they were never shown a number for. Prime directive 4,
+independent of whether `--max-cost-usd` eventually caps it.
+
+Required before any scoring pass ships: a third quote dimension, estimated from
+the Case count and the served model's price, rendered in the plan and included in
+the confirm total.
+
+### 8. Multiplicity across ablation groups
+
+**Added after Phase 1 review (finding R6, a blocker).** The parent tuner-bridge
+plan promises Bonferroni over N groups. `portfolio.Correct` appears **zero** times
+in `bridge/`: `groupMeasuredEvent` computes `interval.PairedTrials` at the raw
+level and decides off `goalIv.GetLow() > 0`. With six leave-one-out groups tested
+independently at a raw 95%, family-wise false-positive risk is roughly 26%.
+
+Bridge is in the **screening** regime, like Select (`core/select.go:298-305`
+corrects over `nScreened`), not the pre-registered regime Validate is deliberately
+in — it tests every group and reports the ones that clear. It takes the same
+correction, and it must land with the verdict logic rather than after it.
+
+### 9. Holdout isolation needs a choke point and a canary
+
+**Added after Phase 1 review (finding R7).** `ScoreParams.Cases` is a bare
+`iter.Seq2[*Case, error]`, unlike Baseline and Value which take `*SealedEvals` so
+that forgetting to seal is a **compile-time** error. `ScorePass` cannot enforce
+sealing on an arbitrary iterator.
+
+Required: name the choke point — whatever resolves `--evals` for bridge calls
+`core.Seal`, as `cli/baseline.go` and `cli/value.go` do — and add the bridge
+equivalent of `TestSelectHoldoutCanary`, which the parent plan's acceptance
+criterion 20 already promises and this plan's test list omitted.
 
 ## Alternatives considered
 
@@ -218,6 +345,25 @@ which is safe.
   `docs/cookbook/*`, which are tombstones enforced by
   `scripts/cookbook-stub-check.sh`.
 
+## Phase 1 review outcome
+
+The first draft was reviewed adversarially and **did not pass**. Six findings were
+blockers, and the lead one falsified the plan's central data-flow claim: the
+all-in model's per-Case scores, which §2 asserted `bridge.Run` "already holds", do
+not exist anywhere — the all-in group returns before `Eval.Measure` is ever
+called. Every blocker was verified against `feat/tuner-bridge` before amendment
+rather than accepted on the reviewer's word.
+
+Amendments: §2 rewritten around scoring the all-in model, §1's seam given `Skip`
+and `OnScored`, and four new sections (§6 resume idempotency, §7 the consent
+quote, §8 multiplicity, §9 holdout sealing).
+
+**This plan needs a second adversarial review before Phase 2.** The amendments are
+substantial enough that a review of the first draft says little about the second,
+and §2's redesign changes `bridge.Run`'s control flow rather than only adding to
+it.
+
 ## Accepted risks
 
-*To be filled by Phase 1 review, and mirrored to `docs/debt.md` with triggers.*
+*None yet. To be filled by the second Phase 1 review and mirrored to
+`docs/debt.md` with repayment triggers.*
