@@ -49,9 +49,15 @@ RED=$'\033[31m'
 GREEN=$'\033[32m'
 OFF=$'\033[0m'
 
-mapfile -t hits < <(
-	grep -rnE "$PATTERN" "${SURFACES[@]}" 2>/dev/null | grep -v '^docs/plans/' || true
-)
+# A `while read` loop rather than `mapfile`: mapfile is bash 4+, and macOS
+# ships bash 3.2, so `#!/usr/bin/env bash` on a developer's Mac — and on the
+# macos-latest CI runner — resolves to a shell that does not have it. This
+# script is a gate against "it worked in the place I ran it", so it does not
+# get to be an instance of that.
+hits=()
+while IFS= read -r line; do
+	[ -n "$line" ] && hits+=("$line")
+done < <(grep -rnE "$PATTERN" "${SURFACES[@]}" 2>/dev/null | grep -v '^docs/plans/' || true)
 
 if [ "${#hits[@]}" -eq 0 ]; then
 	printf '%s FAIL %s fixture-consistency: the refund fixture appears on no reader-facing surface.\n' "$RED" "$OFF" >&2
