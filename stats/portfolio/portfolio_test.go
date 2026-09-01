@@ -257,6 +257,10 @@ func TestCorrectRefusesWhatItCannotRescale(t *testing.T) {
 		{"student-t without pair count", noPairs, 10},
 		{"student-t with one pair", onePair, 10},
 		{"zero-width interval", twoSided(0.1, 0, interval.DefaultLevel, interval.MethodSign, 10), 10},
+		{"NaN level", twoSided(0.1, 0.02, math.NaN(), interval.MethodStudentT, 10), 10},
+		{"level at zero", twoSided(0.1, 0.02, 0, interval.MethodStudentT, 10), 10},
+		{"infinite bound", twoSided(math.Inf(1), 0.02, interval.DefaultLevel, interval.MethodStudentT, 10), 10},
+		{"NaN bound", twoSided(math.NaN(), 0.02, interval.DefaultLevel, interval.MethodStudentT, 10), 10},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -265,4 +269,18 @@ func TestCorrectRefusesWhatItCannotRescale(t *testing.T) {
 			require.Nil(t, Correct(tc.iv, tc.nScreened))
 		})
 	}
+}
+
+// TestValidRefusesNaNAndInfiniteInputsDirectly covers valid's own branches
+// beyond what Correct's callers happen to exercise — this package's helper,
+// not exported, but load-bearing for every refusal Correct makes.
+func TestValidRefusesNaNAndInfiniteInputsDirectly(t *testing.T) {
+	t.Parallel()
+	require.False(t, valid(math.NaN(), 0.1))
+	require.False(t, valid(0.3, 0.1)) // <= 0.5
+	require.False(t, valid(1.0, 0.1)) // >= 1
+	require.False(t, valid(0.95, math.NaN()))
+	require.False(t, valid(0.95, math.Inf(1)))
+	require.False(t, valid(0.95, math.Inf(-1)))
+	require.True(t, valid(0.95, 0.1, -0.2, 3.4))
 }

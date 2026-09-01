@@ -31,10 +31,18 @@
       "command": true,
       "shipped": "shipped",
       "milestone": "v0.1"
+    },
+    {
+      "name": "bridge",
+      "command": true,
+      "shipped": "partial",
+      "milestone": "v0.2",
+      "note": "`kno bridge` plans, prices, confirms, submits, polls, deploys, measures, and tears down a leave-one-group-out run: the un-armed plan renders every group's training file byte-identically to `kno export`; an armed, confirmed run submits each job, deploys the all-in and every leave-one-out model in turn, invokes each over Cases resolved from --evals, and reports Δ_group/Δ_control with intervals, including the interference verdict. Partial rather than shipped for two reasons: the deployed-endpoint inference route this build's `together` wiring assumes (docs/debt.md#161) is unconfirmed against a live endpoint, and a knowledge-kind Asset explicitly overridden into the tuning set is refused unconditionally rather than honored (bridge.Population's own doc) because no `user_overridden` field exists yet."
     }
   ],
   "commands": [
     "baseline",
+    "bridge",
     "demo",
     "doctor",
     "eval inspect",
@@ -111,8 +119,8 @@
   ],
   "price_table": "2026-08-28",
   "debt": {
-    "total": 117,
-    "open": 64,
+    "total": 124,
+    "open": 69,
     "skipped": 0
   }
 }

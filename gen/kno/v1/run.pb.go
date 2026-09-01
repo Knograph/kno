@@ -21,11 +21,11 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// Stage is which of the five pipeline stages produced a Run.
+// Stage is which pipeline stage produced a Run.
 //
-// The loop is Baseline, Value, Select, Validate, Export. Each stage reads what
-// the previous one wrote, so a Run's stage decides which artifacts it is
-// allowed to produce and which it may read.
+// The loop is Baseline, Value, Select, Validate, Export, Bridge. Each stage
+// reads what an earlier one wrote, so a Run's stage decides which artifacts
+// it is allowed to produce and which it may read.
 type Stage int32
 
 const (
@@ -43,6 +43,15 @@ const (
 	Stage_STAGE_VALIDATE Stage = 4
 	// Write the training set, report, and gaps.
 	Stage_STAGE_EXPORT Stage = 5
+	// Group-ablate the tuning-set behavior Assets on a proxy model: submit
+	// fine-tuning jobs, host the results, and measure leave-one-group-out
+	// deltas against the DEV Cases of each failure cluster.
+	//
+	// Not folded into STAGE_VALUE: a bridge run has its own budget dimensions
+	// (training tokens, serve minutes), its own resume semantics
+	// (adopt-by-suffix rather than re-submit), and its own terminal states.
+	// Reusing STAGE_VALUE would make `kno value --resume` adopt tuning jobs.
+	Stage_STAGE_BRIDGE Stage = 6
 )
 
 // Enum value maps for Stage.
@@ -54,6 +63,7 @@ var (
 		3: "STAGE_SELECT",
 		4: "STAGE_VALIDATE",
 		5: "STAGE_EXPORT",
+		6: "STAGE_BRIDGE",
 	}
 	Stage_value = map[string]int32{
 		"STAGE_UNSPECIFIED": 0,
@@ -62,6 +72,7 @@ var (
 		"STAGE_SELECT":      3,
 		"STAGE_VALIDATE":    4,
 		"STAGE_EXPORT":      5,
+		"STAGE_BRIDGE":      6,
 	}
 )
 
@@ -990,14 +1001,15 @@ const file_kno_v1_run_proto_rawDesc = "" +
 	"\x0fresolved_models\x18\n" +
 	" \x03(\tR\x0eresolvedModels\x12,\n" +
 	"\x0fvaluation_count\x18\v \x01(\x05H\x00R\x0evaluationCount\x88\x01\x01B\x12\n" +
-	"\x10_valuation_count*{\n" +
+	"\x10_valuation_count*\x8d\x01\n" +
 	"\x05Stage\x12\x15\n" +
 	"\x11STAGE_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eSTAGE_BASELINE\x10\x01\x12\x0f\n" +
 	"\vSTAGE_VALUE\x10\x02\x12\x10\n" +
 	"\fSTAGE_SELECT\x10\x03\x12\x12\n" +
 	"\x0eSTAGE_VALIDATE\x10\x04\x12\x10\n" +
-	"\fSTAGE_EXPORT\x10\x05*X\n" +
+	"\fSTAGE_EXPORT\x10\x05\x12\x10\n" +
+	"\fSTAGE_BRIDGE\x10\x06*X\n" +
 	"\x11ConcurrencyReason\x12\"\n" +
 	"\x1eCONCURRENCY_REASON_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bCONCURRENCY_REASON_COST_CAP\x10\x01By\n" +

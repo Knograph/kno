@@ -22,7 +22,7 @@ import (
 //
 // Version 0 is the M1 schema. Every later version is a numbered step in
 // migrations below.
-const schemaVersion = 6
+const schemaVersion = 8
 
 // schema is the version-0 base, applied on open. It is idempotent.
 //
@@ -430,6 +430,77 @@ var migrations = []migration{{
 		    PRIMARY KEY (eval_fingerprint, select_run_id)
 		)`,
 	},
+}, {
+	to: 7,
+	// M-BR1. The Bridge stage's job ledger.
+	//
+	// One row per ablation group, INSERT OR REPLACE, keyed (run_id,
+	// ablation_group) per the bridge plan's Step 2(g). The FIRST write for a
+	// group is write-ahead: state = 'submitting', with its estimate already
+	// in estimated_cost_usd_micros and train_tokens, durable BEFORE
+	// Tuner.Submit is entered — the row is the ledger, and reconciliation at
+	// terminal status is a true-up, never the first record. See
+	// store.TuningJobRecord and store.SQLite.WriteTuningJob.
+	//
+	// No training data and no Asset content: training_file_sha256 is the
+	// only trace of what was submitted. The training file is Asset content
+	// — customer data — and store.Purge does not reach this table, so
+	// nothing here needs purging in the first place.
+	//
+	// The plan's own table says "schemaVersion goes 5 -> 6"; by the time
+	// this migration landed, schemaVersion 6 already existed (M-V1, the
+	// Validate stage's tables, migration `to: 6` above) — the plan was
+	// written before that PR merged. This step is `to: 7` for that reason,
+	// not `to: 6`; the shape is otherwise exactly what the plan specifies.
+	stmts: []string{
+		`CREATE TABLE IF NOT EXISTS tuning_jobs (
+		    run_id                    TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+		    ablation_group            TEXT NOT NULL,
+		    state                     TEXT NOT NULL,
+		    provider                  TEXT NOT NULL DEFAULT '',
+		    provider_job_id           TEXT NOT NULL DEFAULT '',
+		    base_model                TEXT NOT NULL DEFAULT '',
+		    suffix                    TEXT NOT NULL DEFAULT '',
+		    training_file_sha256      TEXT NOT NULL DEFAULT '',
+		    train_tokens              INTEGER NOT NULL DEFAULT 0,
+		    epochs                    INTEGER NOT NULL DEFAULT 0,
+		    lora_rank                 INTEGER NOT NULL DEFAULT 0,
+		    estimated_cost_usd_micros INTEGER NOT NULL DEFAULT 0,
+		    actual_cost_usd_micros    INTEGER,
+		    status                    INTEGER NOT NULL DEFAULT 0,
+		    submitted_at              TEXT NOT NULL DEFAULT '',
+		    terminal_at               TEXT NOT NULL DEFAULT '',
+		    error_text                TEXT NOT NULL DEFAULT '',
+		    endpoint_id               TEXT,
+		    deployed_at               TEXT NOT NULL DEFAULT '',
+		    torn_down_at              TEXT,
+		    serve_minutes             INTEGER NOT NULL DEFAULT 0,
+		    serve_cost_usd_micros     INTEGER NOT NULL DEFAULT 0,
+		    PRIMARY KEY (run_id, ablation_group)
+		)`,
+	},
+}, {
+	to: 8,
+	// M-BR2. The bridge eval-seam plan's resume marker
+	// (docs/plans/2026-09-01-bridge-eval-seam.md §6): a group whose Cases
+	// are all durably scored but whose BridgeGroupMeasured event was never
+	// recorded (a crash between finishing the measurement and appending
+	// the event) must be RECOMPUTED from the stored per-Case scores and
+	// EMITTED on resume, not skipped — a paid-for measurement with a
+	// defensible interval is not something resume is allowed to lose. And
+	// a group whose verdict WAS already emitted must never emit it a
+	// second time, or the event stream carries two independently-sampled
+	// verdicts for one group.
+	//
+	// verdict_emitted_at is the durable marker deciding between those two
+	// cases: empty means "not yet reported" (recompute-and-emit is legal),
+	// non-empty means "already reported" (never re-measure, never
+	// re-emit). Written in the SAME statement as the rest of the row via
+	// UpdateTuningJob, so there is no separate write to lose to a crash
+	// between the two.
+	stmts: []string{
+		`ALTER TABLE tuning_jobs ADD COLUMN verdict_emitted_at TEXT NOT NULL DEFAULT ''`,
+	},
 }}
 
 // migrate brings the database up to schemaVersion.
@@ -832,13 +903,21 @@ func (s *SQLite) SettledSpend(ctx context.Context, runID string) (budget.Spend, 
 	}
 
 	var spend budget.Spend
-	// ALL THREE sources, in one statement. Money the guard settled for a Case
-	// that never produced an outcome lives on the run — see migration 2 — and
-	// a Value run's spend lives in measurements, where the outcomes table has
-	// no row at all.
+	// ALL FOUR sources, in one statement. Money the guard settled for a Case
+	// that never produced an outcome lives on the run — see migration 2 —
+	// and a Value run's spend lives in measurements, where the outcomes
+	// table has no row at all. tuning_jobs is the bridge's two spend
+	// dimensions: the training estimate, settled once a group's job leaves
+	// TuningJobStateSubmitting — expressed here as `state != 'submitting'`
+	// so this stays the atomic single-statement read every other source
+	// already is, at the cost of the predicate needing to be kept in sync
+	// by a reader rather than by the compiler if TuningJobState ever grows
+	// a state — and serve minutes settled forward per tick, which count
+	// unconditionally because a tick
+	// IS its own settlement.
 	//
-	// Omitting measurements here is a double-spend, not a reporting gap: this
-	// method is the only durable record of money spent, so a Value run killed
+	// Omitting any one of these is a double-spend, not a reporting gap: this
+	// method is the only durable record of money spent, so a run killed
 	// after $8 of a $10 cap would reseed the guard at zero and authorize
 	// another $10. An equality test on this method cannot catch that — before
 	// the measurements term existed the assertion was 0 == 0 — which is why
@@ -847,9 +926,9 @@ func (s *SQLite) SettledSpend(ctx context.Context, runID string) (budget.Spend, 
 	// COALESCE because SUM over zero rows is NULL, and a fresh run legitimately
 	// has none — that must read as zero spent, not as a scan error.
 	err = db.QueryRowContext(ctx,
-		`SELECT COALESCE(o.calls, 0)  + COALESCE(m.calls, 0)  + r.orphan_calls,
-		        COALESCE(o.cost, 0)   + COALESCE(m.cost, 0)   + r.orphan_cost_usd_micros,
-		        COALESCE(o.tokens, 0) + COALESCE(m.tokens, 0) + r.orphan_tokens
+		`SELECT COALESCE(o.calls, 0)  + COALESCE(m.calls, 0)  + COALESCE(t.calls, 0)  + r.orphan_calls,
+		        COALESCE(o.cost, 0)   + COALESCE(m.cost, 0)   + COALESCE(t.cost, 0)   + r.orphan_cost_usd_micros,
+		        COALESCE(o.tokens, 0) + COALESCE(m.tokens, 0) + COALESCE(t.tokens, 0) + r.orphan_tokens
 		 FROM runs r
 		 LEFT JOIN (
 		     SELECT run_id,
@@ -865,7 +944,15 @@ func (s *SQLite) SettledSpend(ctx context.Context, runID string) (budget.Spend, 
 		            SUM(tokens) AS tokens
 		     FROM measurements WHERE run_id = ?
 		 ) m ON m.run_id = r.id
-		 WHERE r.id = ?`, runID, runID, runID).
+		 LEFT JOIN (
+		     SELECT run_id,
+		            SUM(CASE WHEN state != 'submitting' THEN 1 ELSE 0 END) AS calls,
+		            SUM(CASE WHEN state != 'submitting' THEN estimated_cost_usd_micros ELSE 0 END)
+		              + SUM(serve_cost_usd_micros) AS cost,
+		            SUM(CASE WHEN state != 'submitting' THEN train_tokens ELSE 0 END) AS tokens
+		     FROM tuning_jobs WHERE run_id = ?
+		 ) t ON t.run_id = r.id
+		 WHERE r.id = ?`, runID, runID, runID, runID).
 		Scan(&spend.Calls, &spend.CostUSDMicros, &spend.Tokens)
 	if errors.Is(err, sql.ErrNoRows) {
 		// No run row yet. A fresh run has spent nothing, which is what the

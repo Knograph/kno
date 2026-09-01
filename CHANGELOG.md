@@ -87,6 +87,7 @@ covenants — breaking any of them requires a major version.
 
 ## [Unreleased]
 
+<<<<<<< HEAD
 ### Fixed
 
 - **`kno value` could not measure an Asset against any real provider.**
@@ -116,6 +117,68 @@ covenants — breaking any of them requires a major version.
   reference every later delta is computed against, so a sampling difference was
   attributed to the Asset. All three now default to NaN, asserted across every
   command that declares the flag rather than the three that have it today.
+=======
+### Added
+
+- **`kno bridge` measures instead of refusing to start.** The tuner-bridge
+  spine (submit, poll, reconcile, deploy, hosting settle-forward, teardown,
+  the resume-time endpoint sweep) shipped in `feat/tuner-bridge` (#184)
+  without a production `EvalRunner` — the seam that invokes a deployed
+  proxy model over Cases and scores it — so an armed run planned, priced,
+  confirmed, and then stopped with an actionable refusal (docs/debt.md#158).
+  This closes that loop:
+
+  - **`core.ScorePass`** (`core/score.go`), a new exported seam: invokes an
+    Agent once per Case and scores it, under the same budget-guarded,
+    retrying, panic-safe path Value and Validate already share
+    (`core.invoker`, unexported and unchanged). Takes a `*core.SealedEvals`
+    — the holdout cannot be reached through it — and `Skip`/`OnScored` so a
+    caller checkpoints per Case as it happens, the unit resume correctness
+    needs.
+  - **`kno bridge` gained `--evals`**, resolved and sealed once at the CLI
+    choke point, filtered to exactly the Case IDs the value.Plan names. A
+    Case ID the plan names with no Case behind it refuses the WHOLE run
+    before any job is submitted, naming the Case.
+  - **The all-in model is actually scored.** It is deployed, invoked over
+    the union of every group's dev Cases plus the reserved control
+    partition while its endpoint is live (the only moment it exists), and
+    its per-Case scores are durably persisted — never held only in memory —
+    so every leave-one-out group's delta, computed as
+    `Δ = groupScore[id] − allInScore[id]`, pairs against a real number
+    instead of a baseline that was torn down before it was ever measured.
+  - **`bridge.EvalRunner.Measure`** now returns `map[string]float64` keyed
+    by Case ID — raw scores, never deltas, never positional — because a
+    Case routed to two failure clusters (`core/value/route.go`'s
+    `cluster()` assigns per tag) sits in two groups' dev sets with
+    different membership and ordering than the all-in union pass. Pairing
+    moved into `bridge.Run`, the component that legitimately holds both
+    sides.
+  - **Resume never re-pays and never loses a paid-for verdict.** A group
+    whose Cases are all durably scored redeploys nothing; a group whose
+    Cases are scored but whose `BridgeGroupMeasured` event was never
+    recorded (a crash between the two) is recomputed from stored scores and
+    emitted, rather than silently dropped.
+  - **`BRIDGE_GROUP_VERDICT_INTERFERENCE` is now emitted.** A new exported
+    `stats/interval.NetEffect` combines a group's goal delta and its
+    control-partition delta into one net judgement — extracted from
+    `core/select.go`'s previously-unexported `netInterval`, which now
+    delegates to it, characterization-tested against the pre-extraction
+    formula for behavior preservation. Bonferroni correction is goal-only,
+    with `N` pinned at the group count planned at quote time.
+  - **`store.TuningJobRecord` gained `VerdictEmittedAt`** (schema version 7
+    → 8) — the durable marker the resume logic above reads.
+  - **`adapters/tuner/together`'s poll tests moved to on-disk fixture
+    sequences** (`testdata/fixtures/poll-sequence`,
+    `testdata/fixtures/poll-failed`): `poll-01.json` … `poll-NN.json`,
+    replaying the full `VALIDATING_FILES → QUEUED → RUNNING → DEPLOYING →
+    SUCCEEDED` state machine and a `FAILED` branch surfacing the
+    provider's error text verbatim, deterministically and with no network.
+
+  Known gap, tracked as docs/debt.md#161: the deployed-endpoint inference
+  route this PR's CLI wiring assumes (`together.DefaultBaseURL + "/v1"`,
+  OpenAI-compatible) is unconfirmed against a live Together dedicated
+  endpoint — this pass did not run a live (`KNO_LIVE_TESTS=1`) bridge run.
+>>>>>>> 1c792f1 (feat(bridge): close the eval seam so kno bridge actually measures)
 
 ### Changed
 
@@ -187,6 +250,27 @@ covenants — breaking any of them requires a major version.
   comment above it says why keeping it empty is the point. A name added there
   must come with the release that will ship its command.
 
+
+### Fixed
+
+- **A budget cap reached while a dedicated endpoint was hosting did not stop
+  the spending.** `bridge`'s hosting ticker settled minutes forward through
+  the budget guard and discarded the result as `_, _ =`. When the guard
+  refused — the cap reached mid-hosting — nothing observed it: the endpoint
+  went on billing by the minute until the measurement finished on its own.
+  Prime directive 4, and invisible to `errcheck`, because an explicit
+  two-blank discard is not an unchecked error.
+
+  The ticker now reports its first settle error and cancels the measurement's
+  context on a refusal, so the in-flight measurement returns and the deferred
+  teardown runs immediately rather than after work nobody can pay for. The
+  ticker itself keeps the parent context and goes on settling the minutes
+  actually consumed between refusal and teardown — those are real charges,
+  and recording them as orphan spend is the honest treatment; cancelling the
+  ticker too would simply lose them.
+
+  Pinned by `TestReachingTheCapMidServeStopsTheMeasurementAndTearsDown`,
+  verified failing without the fix with a measurement that never returns.
 
 ### Fixed
 
@@ -316,6 +400,21 @@ covenants — breaking any of them requires a major version.
   stage-spend work; repaid ahead of its trigger because `validate` shipped
   as a second resuming spend stage on the same path. `docs/debt.md#137`.
 
+- **The `tuning_set` export now emits a trainable example, not a promptless line. BEHAVIOR
+  CHANGE.** `renderTuningSet` (`core/export.go`) wrote one `user` message per selected Asset and
+  no `assistant` turn at all — every hosted fine-tuning API rejects a training example with no
+  target, so the artifact `kno export --destination tuning_set` produced was a list of prompts
+  wearing the JSONL of a training set, not a training set. It now parses content that is already
+  chat JSONL (re-marshaling it to compact single-line form) when it carries an assistant message,
+  and otherwise wraps the content as a single `assistant` turn. Content that is neither — empty,
+  or chat-shaped JSON with no assistant message — is refused at export, naming the Asset, rather
+  than silently shipped as an untrainable line. The golden in `TestExportTuningSetPinned` changed
+  accordingly; `TestRenderTuningSetRequiresAnAssistantTurn` and
+  `TestOldSingleUserMessageShapeIsNeverProducedAgain` pin the fix and its negative case. There is
+  no accessible Goal instruction at the Export stage today (`core.Goal` exposes `Score`/`Domain`/
+  `Direction` and no instruction text), so the wrapped example carries no `system` message — a
+  gap from the tuner-bridge plan's original description, noted rather than papered over.
+
 ### Features
 
 * **`kno judge calibrate` — a judge is measured before it is trusted.** `CLAUDE.md` and
@@ -398,6 +497,62 @@ covenants — breaking any of them requires a major version.
   records does not carry seventeen significant digits. `kno eval inspect` already did this for
   `separable_effect`; this generalizes the rule and adds a property test rather than trusting a
   golden to catch the next one.
+
+* **`kno bridge` — the tuner-bridge engine (partial; v0.2, DESIGN.md's Tier 3).** Group-ablates
+  the tuning set's behavior Assets on a proxy model: plans and prices every leave-one-group-out
+  fine-tuning job locally, with zero network calls and zero dollars spent, before anything is
+  armed. `AssignGroups`/`BuildGroups` (`bridge/`) compute each ablation group by the exclusive
+  intersection rule — the cluster an Asset shares the most **routed** dev Cases with, never by
+  cluster size — reusing the failure clusters `kno value` already persisted rather than
+  reclustering. `QuoteGroups` renders every group's training file **byte-identical** to what
+  `kno export --destination tuning_set` writes for the same Asset subset, and prices it against
+  `pricing.TrainPrice`. `SubmitGroup` (`bridge/submit.go`) implements the money-safety sequence a
+  fine-tuning job needs that no other spend path in Kno has had to: authorize through the budget
+  guard on all three dimensions (Calls/CostUSDMicros/Tokens — the same fix `#170`/`#172` shipped
+  for Value and Validate, not reintroduced here), write a durable `submitting` row **before** the
+  irreversible request leaves, and never retry a submit blind. `ReconcileTerminal` handles the
+  actual-vs-estimate true-up: an overrun goes through `RecordOrphanSpend` + `Guard.Restore`, an
+  underrun is never credited back, and an unreported actual leaves the estimate standing, labelled
+  `estimated`, never `billed`. `core.Tuner` gains `Deploy`/`Teardown` (additive) for Together's
+  second spend shape — a dedicated hosting endpoint billed per minute per replica, idle included,
+  which Together does not auto-serve — and `store` gains a `tuning_jobs` table (schema version 7)
+  whose two spend dimensions join `SettledSpend`'s existing three-way sum.
+  `adapters/tuner/together` is the first `core.Tuner` implementation, following the adapter
+  posture of `adapters/agent/anthropic` with a **local** security layer rather than a ported one —
+  `adapters/agent/internal/transport` is a Go `internal` package reachable only from
+  `adapters/agent/*`, so `adapters/tuner/together` cannot import it; see the package's `security.go`
+  for what that cost.
+
+  **This PR's own follow-up** finishes the orchestration loop: `bridge.Run` (`bridge/run.go`)
+  actually submits every group's job, polls it to a terminal status (`--bridge-timeout` stops
+  WAITING without cancelling, never re-submitting on resume), reconciles the actual-vs-estimate
+  true-up, deploys the finished model, and tears the endpoint down on **every** exit path. Crash
+  recovery upgrades from "always abandon" to **adopt-by-suffix**: `core.Tuner` gains
+  `ListJobs`/`ListEndpoints` (additive, beyond the original plan's "exactly two methods" framing —
+  Step 2(d)/2(g) always described listing as the mechanism), and a row a crash leaves
+  `submitting` is adopted when the provider confirms the job, abandoned only when it does not. The
+  hosting lifecycle is complete: a per-minute settle-forward tick (`SettleServeTick`,
+  `pricing.SettleServeMinutes`), a `--bridge-max-live-endpoints` semaphore (`LiveEndpointLimiter`),
+  and a resume-time sweep (`SweepEndpoints`) that tears down anything this run's own rows show
+  live — by recorded `EndpointID` first, by `ListEndpoints(suffix)` when a crash landed between
+  `Deploy` succeeding and that ID being recorded — settling at `--bridge-max-serve-minutes` when
+  the provider no longer lists the endpoint at all. `store.LeakedEndpoints` and `kno doctor --db`
+  report any row, across every run, carrying a non-null `EndpointID` with a null `TornDownAt`.
+  The consent quote gains a separately-labelled, cap-bounded hosting line
+  (`pricing.EstimateServeCap`), and `--bridge --help` now names every flag the plan specifies:
+  `--bridge-timeout`, `--bridge-cancel-on-timeout`, `--price-serve-per-minute`,
+  `--bridge-max-live-endpoints`, `--bridge-max-serve-minutes`.
+
+  **What still does not ship:** the per-group leave-one-out MEASUREMENT itself.
+  `bridge.Run` takes an `EvalRunner` — the seam that would invoke a deployed model over dev and
+  control Cases and score it — and refuses to start without one rather than deploying a paid
+  endpoint with nothing to measure it. No production `EvalRunner` ships in this PR: it needs an
+  Evals source `kno bridge`'s flags do not yet accept, and the same budget-guarded retrying invoke
+  path Value and Validate already share (`core.invoker`) is unexported from `core` today. So
+  `kno bridge --bridge --yes` still plans, prices, and confirms — now including the hosting line —
+  and stops with an actionable error, never a fake success. `docs/debt.md#156` (the leak risk) is
+  repaid at the mechanism level and stays open only pending this gap; `docs/debt.md#158` records it
+  with its trigger. `docs/status.json` still carries `bridge` as `partial`, not `shipped`.
 
 * **`kno validate` — the holdout stage.** The Portfolio ships as a set, so it is measured as a
   set, against the slice nothing has read. Validate runs the holdout twice inside one run: a

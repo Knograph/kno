@@ -133,6 +133,7 @@ beside them --- one declaration, not a copy of the list maintained here.`,
 	root.AddCommand(newSelectCmd())
 	root.AddCommand(newValidateCmd())
 	root.AddCommand(newExportCmd())
+	root.AddCommand(newBridgeCmd())
 	root.AddCommand(newReportCmd())
 	root.AddCommand(newJudgeCmd())
 	root.AddCommand(newDoctorCmd())

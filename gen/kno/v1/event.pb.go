@@ -156,6 +156,137 @@ func (RetryReason) EnumDescriptor() ([]byte, []int) {
 	return file_kno_v1_event_proto_rawDescGZIP(), []int{1}
 }
 
+// BridgeGroupVerdict is what a group's leave-one-group-out measurement
+// supports.
+type BridgeGroupVerdict int32
+
+const (
+	// Unset. An emitter that reached no verdict should set not_measured
+	// instead of leaving this UNSPECIFIED with a delta present.
+	BridgeGroupVerdict_BRIDGE_GROUP_VERDICT_UNSPECIFIED BridgeGroupVerdict = 0
+	// delta_group's interval excludes zero in the improving direction: the
+	// group's Assets measurably help the tuned model.
+	BridgeGroupVerdict_BRIDGE_GROUP_VERDICT_CONFIRMED BridgeGroupVerdict = 1
+	// delta_group's interval crosses zero: transfer under fine-tuning is not
+	// confirmed. This is REJECTION_REASON_BRIDGE_UNCONFIRMED's source.
+	BridgeGroupVerdict_BRIDGE_GROUP_VERDICT_UNCONFIRMED BridgeGroupVerdict = 2
+	// delta_control's interval excludes zero in the HARMFUL direction on a
+	// powered control: training on this group measurably regressed unrelated
+	// Cases.
+	BridgeGroupVerdict_BRIDGE_GROUP_VERDICT_INTERFERENCE BridgeGroupVerdict = 3
+	// The group's cluster had fewer than core.MinClusterCases dev Cases and
+	// was never tuned. Zero jobs for this group.
+	BridgeGroupVerdict_BRIDGE_GROUP_VERDICT_SKIPPED BridgeGroupVerdict = 4
+)
+
+// Enum value maps for BridgeGroupVerdict.
+var (
+	BridgeGroupVerdict_name = map[int32]string{
+		0: "BRIDGE_GROUP_VERDICT_UNSPECIFIED",
+		1: "BRIDGE_GROUP_VERDICT_CONFIRMED",
+		2: "BRIDGE_GROUP_VERDICT_UNCONFIRMED",
+		3: "BRIDGE_GROUP_VERDICT_INTERFERENCE",
+		4: "BRIDGE_GROUP_VERDICT_SKIPPED",
+	}
+	BridgeGroupVerdict_value = map[string]int32{
+		"BRIDGE_GROUP_VERDICT_UNSPECIFIED":  0,
+		"BRIDGE_GROUP_VERDICT_CONFIRMED":    1,
+		"BRIDGE_GROUP_VERDICT_UNCONFIRMED":  2,
+		"BRIDGE_GROUP_VERDICT_INTERFERENCE": 3,
+		"BRIDGE_GROUP_VERDICT_SKIPPED":      4,
+	}
+)
+
+func (x BridgeGroupVerdict) Enum() *BridgeGroupVerdict {
+	p := new(BridgeGroupVerdict)
+	*p = x
+	return p
+}
+
+func (x BridgeGroupVerdict) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (BridgeGroupVerdict) Descriptor() protoreflect.EnumDescriptor {
+	return file_kno_v1_event_proto_enumTypes[2].Descriptor()
+}
+
+func (BridgeGroupVerdict) Type() protoreflect.EnumType {
+	return &file_kno_v1_event_proto_enumTypes[2]
+}
+
+func (x BridgeGroupVerdict) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use BridgeGroupVerdict.Descriptor instead.
+func (BridgeGroupVerdict) EnumDescriptor() ([]byte, []int) {
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{2}
+}
+
+// TuningEndpointState is where a hosted endpoint stands.
+type TuningEndpointState int32
+
+const (
+	// Unset.
+	TuningEndpointState_TUNING_ENDPOINT_STATE_UNSPECIFIED TuningEndpointState = 0
+	// Deploy was called; the replica is not yet answering requests.
+	TuningEndpointState_TUNING_ENDPOINT_STATE_DEPLOYING TuningEndpointState = 1
+	// The endpoint is answering requests and billing.
+	TuningEndpointState_TUNING_ENDPOINT_STATE_READY TuningEndpointState = 2
+	// Teardown succeeded. The meter has stopped.
+	TuningEndpointState_TUNING_ENDPOINT_STATE_TORN_DOWN TuningEndpointState = 3
+	// Teardown was attempted and failed, or the process exited before it could
+	// be attempted. The meter may still be running. `kno doctor` reports any
+	// durable row carrying a non-null endpoint id and no teardown timestamp.
+	TuningEndpointState_TUNING_ENDPOINT_STATE_LEAKED TuningEndpointState = 4
+)
+
+// Enum value maps for TuningEndpointState.
+var (
+	TuningEndpointState_name = map[int32]string{
+		0: "TUNING_ENDPOINT_STATE_UNSPECIFIED",
+		1: "TUNING_ENDPOINT_STATE_DEPLOYING",
+		2: "TUNING_ENDPOINT_STATE_READY",
+		3: "TUNING_ENDPOINT_STATE_TORN_DOWN",
+		4: "TUNING_ENDPOINT_STATE_LEAKED",
+	}
+	TuningEndpointState_value = map[string]int32{
+		"TUNING_ENDPOINT_STATE_UNSPECIFIED": 0,
+		"TUNING_ENDPOINT_STATE_DEPLOYING":   1,
+		"TUNING_ENDPOINT_STATE_READY":       2,
+		"TUNING_ENDPOINT_STATE_TORN_DOWN":   3,
+		"TUNING_ENDPOINT_STATE_LEAKED":      4,
+	}
+)
+
+func (x TuningEndpointState) Enum() *TuningEndpointState {
+	p := new(TuningEndpointState)
+	*p = x
+	return p
+}
+
+func (x TuningEndpointState) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (TuningEndpointState) Descriptor() protoreflect.EnumDescriptor {
+	return file_kno_v1_event_proto_enumTypes[3].Descriptor()
+}
+
+func (TuningEndpointState) Type() protoreflect.EnumType {
+	return &file_kno_v1_event_proto_enumTypes[3]
+}
+
+func (x TuningEndpointState) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use TuningEndpointState.Descriptor instead.
+func (TuningEndpointState) EnumDescriptor() ([]byte, []int) {
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{3}
+}
+
 // Event is one thing that happened during a Run.
 //
 // The event stream is the single spine: the engine emits these, the TUI
@@ -209,6 +340,10 @@ type Event struct {
 	//	*Event_ExportWritten
 	//	*Event_HoldoutOpened
 	//	*Event_PortfolioValidated
+	//	*Event_TuningJobSubmitted
+	//	*Event_TuningJobStateChanged
+	//	*Event_BridgeGroupMeasured
+	//	*Event_TuningEndpointChanged
 	Payload       isEvent_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -434,6 +569,42 @@ func (x *Event) GetPortfolioValidated() *PortfolioValidated {
 	return nil
 }
 
+func (x *Event) GetTuningJobSubmitted() *TuningJobSubmitted {
+	if x != nil {
+		if x, ok := x.Payload.(*Event_TuningJobSubmitted); ok {
+			return x.TuningJobSubmitted
+		}
+	}
+	return nil
+}
+
+func (x *Event) GetTuningJobStateChanged() *TuningJobStateChanged {
+	if x != nil {
+		if x, ok := x.Payload.(*Event_TuningJobStateChanged); ok {
+			return x.TuningJobStateChanged
+		}
+	}
+	return nil
+}
+
+func (x *Event) GetBridgeGroupMeasured() *BridgeGroupMeasured {
+	if x != nil {
+		if x, ok := x.Payload.(*Event_BridgeGroupMeasured); ok {
+			return x.BridgeGroupMeasured
+		}
+	}
+	return nil
+}
+
+func (x *Event) GetTuningEndpointChanged() *TuningEndpointChanged {
+	if x != nil {
+		if x, ok := x.Payload.(*Event_TuningEndpointChanged); ok {
+			return x.TuningEndpointChanged
+		}
+	}
+	return nil
+}
+
 type isEvent_Payload interface {
 	isEvent_Payload()
 }
@@ -533,6 +704,30 @@ type Event_PortfolioValidated struct {
 	PortfolioValidated *PortfolioValidated `protobuf:"bytes,27,opt,name=portfolio_validated,json=portfolioValidated,proto3,oneof"`
 }
 
+type Event_TuningJobSubmitted struct {
+	// A bridge run submitted a fine-tuning job. Field numbers 28-31,
+	// continuing from 27 (holdout_opened/portfolio_validated took 26/27,
+	// which had been reserved for these when this section of the plan was
+	// written; the numbering here reflects the tree as it now stands, not the
+	// plan's table).
+	TuningJobSubmitted *TuningJobSubmitted `protobuf:"bytes,28,opt,name=tuning_job_submitted,json=tuningJobSubmitted,proto3,oneof"`
+}
+
+type Event_TuningJobStateChanged struct {
+	// A submitted tuning job's status changed.
+	TuningJobStateChanged *TuningJobStateChanged `protobuf:"bytes,29,opt,name=tuning_job_state_changed,json=tuningJobStateChanged,proto3,oneof"`
+}
+
+type Event_BridgeGroupMeasured struct {
+	// A bridge ablation group's leave-one-group-out measurement finished.
+	BridgeGroupMeasured *BridgeGroupMeasured `protobuf:"bytes,30,opt,name=bridge_group_measured,json=bridgeGroupMeasured,proto3,oneof"`
+}
+
+type Event_TuningEndpointChanged struct {
+	// A tuned model's serving endpoint changed state.
+	TuningEndpointChanged *TuningEndpointChanged `protobuf:"bytes,31,opt,name=tuning_endpoint_changed,json=tuningEndpointChanged,proto3,oneof"`
+}
+
 func (*Event_RunStarted) isEvent_Payload() {}
 
 func (*Event_CaseScored) isEvent_Payload() {}
@@ -568,6 +763,14 @@ func (*Event_ExportWritten) isEvent_Payload() {}
 func (*Event_HoldoutOpened) isEvent_Payload() {}
 
 func (*Event_PortfolioValidated) isEvent_Payload() {}
+
+func (*Event_TuningJobSubmitted) isEvent_Payload() {}
+
+func (*Event_TuningJobStateChanged) isEvent_Payload() {}
+
+func (*Event_BridgeGroupMeasured) isEvent_Payload() {}
+
+func (*Event_TuningEndpointChanged) isEvent_Payload() {}
 
 // PortfolioSelected reports that Select finished constructing a Portfolio.
 //
@@ -2473,11 +2676,432 @@ func (x *PortfolioValidated) GetNotMeasured() RejectionReason {
 	return RejectionReason_REJECTION_REASON_UNSPECIFIED
 }
 
+// TuningJobSubmitted reports that the bridge sent a fine-tuning job to a
+// provider.
+//
+// Emitted AFTER the durable job row is written write-ahead and Submit
+// returns successfully — see bridge's Step 2(b)-(e). Carries the estimate
+// that was just settled, never the actual (unknown at submission time) and
+// never TuningJob.training_data or any Asset content: CLAUDE.md forbids
+// trace/asset content above DEBUG and this stream feeds the TUI, the API,
+// and the logs alike.
+type TuningJobSubmitted struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Which ablation group this job belongs to ("all-in", or a cluster tag).
+	AblationGroup string `protobuf:"bytes,1,opt,name=ablation_group,json=ablationGroup,proto3" json:"ablation_group,omitempty"`
+	// Which provider: "openai", "together", "fireworks".
+	Provider string `protobuf:"bytes,2,opt,name=provider,proto3" json:"provider,omitempty"`
+	// Provider-assigned job identifier.
+	JobId string `protobuf:"bytes,3,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	// The base model being tuned.
+	BaseModel *AgentRef `protobuf:"bytes,4,opt,name=base_model,json=baseModel,proto3" json:"base_model,omitempty"`
+	// What was authorized and settled for this submission, in MICRO-USD. The
+	// estimate, not an actual — see JobState.actual_cost_usd_micros for that.
+	EstimatedCostUsdMicros int64 `protobuf:"varint,5,opt,name=estimated_cost_usd_micros,json=estimatedCostUsdMicros,proto3" json:"estimated_cost_usd_micros,omitempty"`
+	// Training tokens the estimate was computed from.
+	TrainTokens   int64 `protobuf:"varint,6,opt,name=train_tokens,json=trainTokens,proto3" json:"train_tokens,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TuningJobSubmitted) Reset() {
+	*x = TuningJobSubmitted{}
+	mi := &file_kno_v1_event_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TuningJobSubmitted) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TuningJobSubmitted) ProtoMessage() {}
+
+func (x *TuningJobSubmitted) ProtoReflect() protoreflect.Message {
+	mi := &file_kno_v1_event_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TuningJobSubmitted.ProtoReflect.Descriptor instead.
+func (*TuningJobSubmitted) Descriptor() ([]byte, []int) {
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *TuningJobSubmitted) GetAblationGroup() string {
+	if x != nil {
+		return x.AblationGroup
+	}
+	return ""
+}
+
+func (x *TuningJobSubmitted) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+func (x *TuningJobSubmitted) GetJobId() string {
+	if x != nil {
+		return x.JobId
+	}
+	return ""
+}
+
+func (x *TuningJobSubmitted) GetBaseModel() *AgentRef {
+	if x != nil {
+		return x.BaseModel
+	}
+	return nil
+}
+
+func (x *TuningJobSubmitted) GetEstimatedCostUsdMicros() int64 {
+	if x != nil {
+		return x.EstimatedCostUsdMicros
+	}
+	return 0
+}
+
+func (x *TuningJobSubmitted) GetTrainTokens() int64 {
+	if x != nil {
+		return x.TrainTokens
+	}
+	return 0
+}
+
+// TuningJobStateChanged reports a submitted job's status, as polled from the
+// provider.
+type TuningJobStateChanged struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Provider-assigned job identifier.
+	JobId string `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	// Which ablation group this job belongs to.
+	AblationGroup string `protobuf:"bytes,2,opt,name=ablation_group,json=ablationGroup,proto3" json:"ablation_group,omitempty"`
+	// Where the job stands.
+	Status JobStatus `protobuf:"varint,3,opt,name=status,proto3,enum=kno.v1.JobStatus" json:"status,omitempty"`
+	// Progress 0..1, when the provider reports it.
+	Progress *float64 `protobuf:"fixed64,4,opt,name=progress,proto3,oneof" json:"progress,omitempty"`
+	// Actual cost in MICRO-USD, once the provider reports one. Absent is not
+	// zero — see Step 2(c).
+	ActualCostUsdMicros *int64 `protobuf:"varint,5,opt,name=actual_cost_usd_micros,json=actualCostUsdMicros,proto3,oneof" json:"actual_cost_usd_micros,omitempty"`
+	// Provider error text when FAILED, verbatim.
+	Error         string `protobuf:"bytes,6,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TuningJobStateChanged) Reset() {
+	*x = TuningJobStateChanged{}
+	mi := &file_kno_v1_event_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TuningJobStateChanged) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TuningJobStateChanged) ProtoMessage() {}
+
+func (x *TuningJobStateChanged) ProtoReflect() protoreflect.Message {
+	mi := &file_kno_v1_event_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TuningJobStateChanged.ProtoReflect.Descriptor instead.
+func (*TuningJobStateChanged) Descriptor() ([]byte, []int) {
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *TuningJobStateChanged) GetJobId() string {
+	if x != nil {
+		return x.JobId
+	}
+	return ""
+}
+
+func (x *TuningJobStateChanged) GetAblationGroup() string {
+	if x != nil {
+		return x.AblationGroup
+	}
+	return ""
+}
+
+func (x *TuningJobStateChanged) GetStatus() JobStatus {
+	if x != nil {
+		return x.Status
+	}
+	return JobStatus_JOB_STATUS_UNSPECIFIED
+}
+
+func (x *TuningJobStateChanged) GetProgress() float64 {
+	if x != nil && x.Progress != nil {
+		return *x.Progress
+	}
+	return 0
+}
+
+func (x *TuningJobStateChanged) GetActualCostUsdMicros() int64 {
+	if x != nil && x.ActualCostUsdMicros != nil {
+		return *x.ActualCostUsdMicros
+	}
+	return 0
+}
+
+func (x *TuningJobStateChanged) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+// BridgeGroupMeasured reports one ablation group's leave-one-group-out
+// result: the measured effect of removing the group's Assets from the
+// training set, and the interference read on the control partition.
+//
+// Per prime directive 5, a delta is never carried here without its Interval
+// — see BridgeGroupVerdict and the not_measured-shaped omission used
+// elsewhere in this file (AssetValued, PortfolioValidated).
+type BridgeGroupMeasured struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The ablation group: "all-in", or the cluster tag it was leave-one-out
+	// for.
+	AblationGroup string `protobuf:"bytes,1,opt,name=ablation_group,json=ablationGroup,proto3" json:"ablation_group,omitempty"`
+	// score(all-in) - score(leave-group-out), over the group's dev Cases.
+	DeltaGroup float64 `protobuf:"fixed64,2,opt,name=delta_group,json=deltaGroup,proto3" json:"delta_group,omitempty"`
+	// The interval on delta_group. Omitted exactly when not_measured is set.
+	DeltaGroupInterval *Interval `protobuf:"bytes,3,opt,name=delta_group_interval,json=deltaGroupInterval,proto3" json:"delta_group_interval,omitempty"`
+	// The interference read: the same delta over the RESERVED control
+	// partition (value.Plan.ControlCaseIDs), the harm test's own slice.
+	DeltaControl float64 `protobuf:"fixed64,4,opt,name=delta_control,json=deltaControl,proto3" json:"delta_control,omitempty"`
+	// The interval on delta_control.
+	DeltaControlInterval *Interval `protobuf:"bytes,5,opt,name=delta_control_interval,json=deltaControlInterval,proto3" json:"delta_control_interval,omitempty"`
+	// Whether the control partition was too small to testify about
+	// interference. A group is never accused of interference on an
+	// underpowered control.
+	ControlUnderpowered bool `protobuf:"varint,6,opt,name=control_underpowered,json=controlUnderpowered,proto3" json:"control_underpowered,omitempty"`
+	// The verdict this measurement supports.
+	Verdict BridgeGroupVerdict `protobuf:"varint,7,opt,name=verdict,proto3,enum=kno.v1.BridgeGroupVerdict" json:"verdict,omitempty"`
+	// Set when no verdict could be reached — the job failed, the group was
+	// skipped for being below core.MinClusterCases, or a covering interval
+	// could not be formed.
+	NotMeasured   RejectionReason `protobuf:"varint,8,opt,name=not_measured,json=notMeasured,proto3,enum=kno.v1.RejectionReason" json:"not_measured,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BridgeGroupMeasured) Reset() {
+	*x = BridgeGroupMeasured{}
+	mi := &file_kno_v1_event_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BridgeGroupMeasured) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BridgeGroupMeasured) ProtoMessage() {}
+
+func (x *BridgeGroupMeasured) ProtoReflect() protoreflect.Message {
+	mi := &file_kno_v1_event_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BridgeGroupMeasured.ProtoReflect.Descriptor instead.
+func (*BridgeGroupMeasured) Descriptor() ([]byte, []int) {
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *BridgeGroupMeasured) GetAblationGroup() string {
+	if x != nil {
+		return x.AblationGroup
+	}
+	return ""
+}
+
+func (x *BridgeGroupMeasured) GetDeltaGroup() float64 {
+	if x != nil {
+		return x.DeltaGroup
+	}
+	return 0
+}
+
+func (x *BridgeGroupMeasured) GetDeltaGroupInterval() *Interval {
+	if x != nil {
+		return x.DeltaGroupInterval
+	}
+	return nil
+}
+
+func (x *BridgeGroupMeasured) GetDeltaControl() float64 {
+	if x != nil {
+		return x.DeltaControl
+	}
+	return 0
+}
+
+func (x *BridgeGroupMeasured) GetDeltaControlInterval() *Interval {
+	if x != nil {
+		return x.DeltaControlInterval
+	}
+	return nil
+}
+
+func (x *BridgeGroupMeasured) GetControlUnderpowered() bool {
+	if x != nil {
+		return x.ControlUnderpowered
+	}
+	return false
+}
+
+func (x *BridgeGroupMeasured) GetVerdict() BridgeGroupVerdict {
+	if x != nil {
+		return x.Verdict
+	}
+	return BridgeGroupVerdict_BRIDGE_GROUP_VERDICT_UNSPECIFIED
+}
+
+func (x *BridgeGroupMeasured) GetNotMeasured() RejectionReason {
+	if x != nil {
+		return x.NotMeasured
+	}
+	return RejectionReason_REJECTION_REASON_UNSPECIFIED
+}
+
+// TuningEndpointChanged reports a hosted tuned model's serving endpoint
+// changing state — Step 2(f)'s hosting dimension, which bills per minute per
+// replica, idle included, and is therefore user-visible state with money
+// attached.
+//
+// No endpoint URL and no credential: a URL could carry a token, and this
+// stream feeds logs, the API, and the TUI alike.
+type TuningEndpointChanged struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The job whose model this endpoint serves.
+	JobId string `protobuf:"bytes,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	// Provider-assigned endpoint identifier, for the user to find it in the
+	// provider's own console if Kno cannot tear it down.
+	EndpointId string `protobuf:"bytes,2,opt,name=endpoint_id,json=endpointId,proto3" json:"endpoint_id,omitempty"`
+	// Which ablation group this endpoint is serving.
+	AblationGroup string `protobuf:"bytes,3,opt,name=ablation_group,json=ablationGroup,proto3" json:"ablation_group,omitempty"`
+	// Where the endpoint stands.
+	State TuningEndpointState `protobuf:"varint,4,opt,name=state,proto3,enum=kno.v1.TuningEndpointState" json:"state,omitempty"`
+	// Serve minutes accrued and settled so far, this endpoint's lifetime.
+	ServeMinutes int32 `protobuf:"varint,5,opt,name=serve_minutes,json=serveMinutes,proto3" json:"serve_minutes,omitempty"`
+	// What those minutes cost, in MICRO-USD, at the settled rate.
+	ServeCostUsdMicros int64 `protobuf:"varint,6,opt,name=serve_cost_usd_micros,json=serveCostUsdMicros,proto3" json:"serve_cost_usd_micros,omitempty"`
+	// Provider error text, set when state is LEAKED because Teardown failed.
+	Error         string `protobuf:"bytes,7,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TuningEndpointChanged) Reset() {
+	*x = TuningEndpointChanged{}
+	mi := &file_kno_v1_event_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TuningEndpointChanged) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TuningEndpointChanged) ProtoMessage() {}
+
+func (x *TuningEndpointChanged) ProtoReflect() protoreflect.Message {
+	mi := &file_kno_v1_event_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TuningEndpointChanged.ProtoReflect.Descriptor instead.
+func (*TuningEndpointChanged) Descriptor() ([]byte, []int) {
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *TuningEndpointChanged) GetJobId() string {
+	if x != nil {
+		return x.JobId
+	}
+	return ""
+}
+
+func (x *TuningEndpointChanged) GetEndpointId() string {
+	if x != nil {
+		return x.EndpointId
+	}
+	return ""
+}
+
+func (x *TuningEndpointChanged) GetAblationGroup() string {
+	if x != nil {
+		return x.AblationGroup
+	}
+	return ""
+}
+
+func (x *TuningEndpointChanged) GetState() TuningEndpointState {
+	if x != nil {
+		return x.State
+	}
+	return TuningEndpointState_TUNING_ENDPOINT_STATE_UNSPECIFIED
+}
+
+func (x *TuningEndpointChanged) GetServeMinutes() int32 {
+	if x != nil {
+		return x.ServeMinutes
+	}
+	return 0
+}
+
+func (x *TuningEndpointChanged) GetServeCostUsdMicros() int64 {
+	if x != nil {
+		return x.ServeCostUsdMicros
+	}
+	return 0
+}
+
+func (x *TuningEndpointChanged) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 var File_kno_v1_event_proto protoreflect.FileDescriptor
 
 const file_kno_v1_event_proto_rawDesc = "" +
 	"\n" +
-	"\x12kno/v1/event.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/valuation.proto\x1a\x16kno/v1/portfolio.proto\x1a\x10kno/v1/run.proto\x1a\x17kno/v1/validation.proto\"\xf4\t\n" +
+	"\x12kno/v1/event.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/valuation.proto\x1a\x16kno/v1/portfolio.proto\x1a\x10kno/v1/run.proto\x1a\x17kno/v1/validation.proto\x1a\x12kno/v1/tuner.proto\"\xca\f\n" +
 	"\x05Event\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x1d\n" +
 	"\n" +
@@ -2504,7 +3128,11 @@ const file_kno_v1_event_proto_rawDesc = "" +
 	"\x12portfolio_selected\x18\x18 \x01(\v2\x19.kno.v1.PortfolioSelectedH\x00R\x11portfolioSelected\x12>\n" +
 	"\x0eexport_written\x18\x19 \x01(\v2\x15.kno.v1.ExportWrittenH\x00R\rexportWritten\x12>\n" +
 	"\x0eholdout_opened\x18\x1a \x01(\v2\x15.kno.v1.HoldoutOpenedH\x00R\rholdoutOpened\x12M\n" +
-	"\x13portfolio_validated\x18\x1b \x01(\v2\x1a.kno.v1.PortfolioValidatedH\x00R\x12portfolioValidatedB\t\n" +
+	"\x13portfolio_validated\x18\x1b \x01(\v2\x1a.kno.v1.PortfolioValidatedH\x00R\x12portfolioValidated\x12N\n" +
+	"\x14tuning_job_submitted\x18\x1c \x01(\v2\x1a.kno.v1.TuningJobSubmittedH\x00R\x12tuningJobSubmitted\x12X\n" +
+	"\x18tuning_job_state_changed\x18\x1d \x01(\v2\x1d.kno.v1.TuningJobStateChangedH\x00R\x15tuningJobStateChanged\x12Q\n" +
+	"\x15bridge_group_measured\x18\x1e \x01(\v2\x1b.kno.v1.BridgeGroupMeasuredH\x00R\x13bridgeGroupMeasured\x12W\n" +
+	"\x17tuning_endpoint_changed\x18\x1f \x01(\v2\x1d.kno.v1.TuningEndpointChangedH\x00R\x15tuningEndpointChangedB\t\n" +
 	"\apayload\"\xf4\x01\n" +
 	"\x11PortfolioSelected\x12\x1a\n" +
 	"\bselected\x18\x01 \x01(\x05R\bselected\x12\x1a\n" +
@@ -2657,7 +3285,43 @@ const file_kno_v1_event_proto_rawDesc = "" +
 	"\averdict\x18\x03 \x01(\x0e2\x19.kno.v1.ValidationVerdictR\averdict\x12.\n" +
 	"\x13measured_case_count\x18\x04 \x01(\x05R\x11measuredCaseCount\x12\x1b\n" +
 	"\tn_dropped\x18\x05 \x01(\x05R\bnDropped\x12:\n" +
-	"\fnot_measured\x18\x06 \x01(\x0e2\x17.kno.v1.RejectionReasonR\vnotMeasured*\x8a\x01\n" +
+	"\fnot_measured\x18\x06 \x01(\x0e2\x17.kno.v1.RejectionReasonR\vnotMeasured\"\xfd\x01\n" +
+	"\x12TuningJobSubmitted\x12%\n" +
+	"\x0eablation_group\x18\x01 \x01(\tR\rablationGroup\x12\x1a\n" +
+	"\bprovider\x18\x02 \x01(\tR\bprovider\x12\x15\n" +
+	"\x06job_id\x18\x03 \x01(\tR\x05jobId\x12/\n" +
+	"\n" +
+	"base_model\x18\x04 \x01(\v2\x10.kno.v1.AgentRefR\tbaseModel\x129\n" +
+	"\x19estimated_cost_usd_micros\x18\x05 \x01(\x03R\x16estimatedCostUsdMicros\x12!\n" +
+	"\ftrain_tokens\x18\x06 \x01(\x03R\vtrainTokens\"\x99\x02\n" +
+	"\x15TuningJobStateChanged\x12\x15\n" +
+	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12%\n" +
+	"\x0eablation_group\x18\x02 \x01(\tR\rablationGroup\x12)\n" +
+	"\x06status\x18\x03 \x01(\x0e2\x11.kno.v1.JobStatusR\x06status\x12\x1f\n" +
+	"\bprogress\x18\x04 \x01(\x01H\x00R\bprogress\x88\x01\x01\x128\n" +
+	"\x16actual_cost_usd_micros\x18\x05 \x01(\x03H\x01R\x13actualCostUsdMicros\x88\x01\x01\x12\x14\n" +
+	"\x05error\x18\x06 \x01(\tR\x05errorB\v\n" +
+	"\t_progressB\x19\n" +
+	"\x17_actual_cost_usd_micros\"\xb3\x03\n" +
+	"\x13BridgeGroupMeasured\x12%\n" +
+	"\x0eablation_group\x18\x01 \x01(\tR\rablationGroup\x12\x1f\n" +
+	"\vdelta_group\x18\x02 \x01(\x01R\n" +
+	"deltaGroup\x12B\n" +
+	"\x14delta_group_interval\x18\x03 \x01(\v2\x10.kno.v1.IntervalR\x12deltaGroupInterval\x12#\n" +
+	"\rdelta_control\x18\x04 \x01(\x01R\fdeltaControl\x12F\n" +
+	"\x16delta_control_interval\x18\x05 \x01(\v2\x10.kno.v1.IntervalR\x14deltaControlInterval\x121\n" +
+	"\x14control_underpowered\x18\x06 \x01(\bR\x13controlUnderpowered\x124\n" +
+	"\averdict\x18\a \x01(\x0e2\x1a.kno.v1.BridgeGroupVerdictR\averdict\x12:\n" +
+	"\fnot_measured\x18\b \x01(\x0e2\x17.kno.v1.RejectionReasonR\vnotMeasured\"\x97\x02\n" +
+	"\x15TuningEndpointChanged\x12\x15\n" +
+	"\x06job_id\x18\x01 \x01(\tR\x05jobId\x12\x1f\n" +
+	"\vendpoint_id\x18\x02 \x01(\tR\n" +
+	"endpointId\x12%\n" +
+	"\x0eablation_group\x18\x03 \x01(\tR\rablationGroup\x121\n" +
+	"\x05state\x18\x04 \x01(\x0e2\x1b.kno.v1.TuningEndpointStateR\x05state\x12#\n" +
+	"\rserve_minutes\x18\x05 \x01(\x05R\fserveMinutes\x121\n" +
+	"\x15serve_cost_usd_micros\x18\x06 \x01(\x03R\x12serveCostUsdMicros\x12\x14\n" +
+	"\x05error\x18\a \x01(\tR\x05error*\x8a\x01\n" +
 	"\fOrphanReason\x12\x1d\n" +
 	"\x19ORPHAN_REASON_UNSPECIFIED\x10\x00\x12!\n" +
 	"\x1dORPHAN_REASON_BUDGET_EXCEEDED\x10\x01\x12\x1b\n" +
@@ -2668,7 +3332,19 @@ const file_kno_v1_event_proto_rawDesc = "" +
 	"\x19RETRY_REASON_RATE_LIMITED\x10\x01\x12$\n" +
 	" RETRY_REASON_TRANSPORT_TRANSIENT\x10\x02\x12%\n" +
 	"!RETRY_REASON_PROVIDER_UNAVAILABLE\x10\x03\x12\x18\n" +
-	"\x14RETRY_REASON_TIMEOUT\x10\x04B{\n" +
+	"\x14RETRY_REASON_TIMEOUT\x10\x04*\xcd\x01\n" +
+	"\x12BridgeGroupVerdict\x12$\n" +
+	" BRIDGE_GROUP_VERDICT_UNSPECIFIED\x10\x00\x12\"\n" +
+	"\x1eBRIDGE_GROUP_VERDICT_CONFIRMED\x10\x01\x12$\n" +
+	" BRIDGE_GROUP_VERDICT_UNCONFIRMED\x10\x02\x12%\n" +
+	"!BRIDGE_GROUP_VERDICT_INTERFERENCE\x10\x03\x12 \n" +
+	"\x1cBRIDGE_GROUP_VERDICT_SKIPPED\x10\x04*\xc9\x01\n" +
+	"\x13TuningEndpointState\x12%\n" +
+	"!TUNING_ENDPOINT_STATE_UNSPECIFIED\x10\x00\x12#\n" +
+	"\x1fTUNING_ENDPOINT_STATE_DEPLOYING\x10\x01\x12\x1f\n" +
+	"\x1bTUNING_ENDPOINT_STATE_READY\x10\x02\x12#\n" +
+	"\x1fTUNING_ENDPOINT_STATE_TORN_DOWN\x10\x03\x12 \n" +
+	"\x1cTUNING_ENDPOINT_STATE_LEAKED\x10\x04B{\n" +
 	"\n" +
 	"com.kno.v1B\n" +
 	"EventProtoP\x01Z(github.com/knograph/kno/gen/kno/v1;knov1\xa2\x02\x03KXX\xaa\x02\x06Kno.V1\xca\x02\x06Kno\\V1\xe2\x02\x12Kno\\V1\\GPBMetadata\xea\x02\aKno::V1b\x06proto3"
@@ -2685,91 +3361,109 @@ func file_kno_v1_event_proto_rawDescGZIP() []byte {
 	return file_kno_v1_event_proto_rawDescData
 }
 
-var file_kno_v1_event_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_kno_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_kno_v1_event_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
+var file_kno_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
 var file_kno_v1_event_proto_goTypes = []any{
-	(OrphanReason)(0),           // 0: kno.v1.OrphanReason
-	(RetryReason)(0),            // 1: kno.v1.RetryReason
-	(*Event)(nil),               // 2: kno.v1.Event
-	(*PortfolioSelected)(nil),   // 3: kno.v1.PortfolioSelected
-	(*ExportWritten)(nil),       // 4: kno.v1.ExportWritten
-	(*EventError)(nil),          // 5: kno.v1.EventError
-	(*RunStarted)(nil),          // 6: kno.v1.RunStarted
-	(*CaseScored)(nil),          // 7: kno.v1.CaseScored
-	(*CaseErrored)(nil),         // 8: kno.v1.CaseErrored
-	(*StageProgress)(nil),       // 9: kno.v1.StageProgress
-	(*SpendRecorded)(nil),       // 10: kno.v1.SpendRecorded
-	(*RunFinished)(nil),         // 11: kno.v1.RunFinished
-	(*RunResumed)(nil),          // 12: kno.v1.RunResumed
-	(*RetryAttempted)(nil),      // 13: kno.v1.RetryAttempted
-	(*RateLimitWaiting)(nil),    // 14: kno.v1.RateLimitWaiting
-	(*SettlementOvershoot)(nil), // 15: kno.v1.SettlementOvershoot
-	(*OrphanSpend)(nil),         // 16: kno.v1.OrphanSpend
-	(*ConcurrencyReduced)(nil),  // 17: kno.v1.ConcurrencyReduced
-	(*AssetRouted)(nil),         // 18: kno.v1.AssetRouted
-	(*AssetValued)(nil),         // 19: kno.v1.AssetValued
-	(*HoldoutOpened)(nil),       // 20: kno.v1.HoldoutOpened
-	(*PortfolioValidated)(nil),  // 21: kno.v1.PortfolioValidated
-	(*Interval)(nil),            // 22: kno.v1.Interval
-	(Destination)(0),            // 23: kno.v1.Destination
-	(Stage)(0),                  // 24: kno.v1.Stage
-	(*AgentRef)(nil),            // 25: kno.v1.AgentRef
-	(Direction)(0),              // 26: kno.v1.Direction
-	(*Budget)(nil),              // 27: kno.v1.Budget
-	(ScoreDomain)(0),            // 28: kno.v1.ScoreDomain
-	(RunStatus)(0),              // 29: kno.v1.RunStatus
-	(Arm)(0),                    // 30: kno.v1.Arm
-	(*ConcurrencyDecision)(nil), // 31: kno.v1.ConcurrencyDecision
-	(RejectionReason)(0),        // 32: kno.v1.RejectionReason
-	(ValidationVerdict)(0),      // 33: kno.v1.ValidationVerdict
+	(OrphanReason)(0),             // 0: kno.v1.OrphanReason
+	(RetryReason)(0),              // 1: kno.v1.RetryReason
+	(BridgeGroupVerdict)(0),       // 2: kno.v1.BridgeGroupVerdict
+	(TuningEndpointState)(0),      // 3: kno.v1.TuningEndpointState
+	(*Event)(nil),                 // 4: kno.v1.Event
+	(*PortfolioSelected)(nil),     // 5: kno.v1.PortfolioSelected
+	(*ExportWritten)(nil),         // 6: kno.v1.ExportWritten
+	(*EventError)(nil),            // 7: kno.v1.EventError
+	(*RunStarted)(nil),            // 8: kno.v1.RunStarted
+	(*CaseScored)(nil),            // 9: kno.v1.CaseScored
+	(*CaseErrored)(nil),           // 10: kno.v1.CaseErrored
+	(*StageProgress)(nil),         // 11: kno.v1.StageProgress
+	(*SpendRecorded)(nil),         // 12: kno.v1.SpendRecorded
+	(*RunFinished)(nil),           // 13: kno.v1.RunFinished
+	(*RunResumed)(nil),            // 14: kno.v1.RunResumed
+	(*RetryAttempted)(nil),        // 15: kno.v1.RetryAttempted
+	(*RateLimitWaiting)(nil),      // 16: kno.v1.RateLimitWaiting
+	(*SettlementOvershoot)(nil),   // 17: kno.v1.SettlementOvershoot
+	(*OrphanSpend)(nil),           // 18: kno.v1.OrphanSpend
+	(*ConcurrencyReduced)(nil),    // 19: kno.v1.ConcurrencyReduced
+	(*AssetRouted)(nil),           // 20: kno.v1.AssetRouted
+	(*AssetValued)(nil),           // 21: kno.v1.AssetValued
+	(*HoldoutOpened)(nil),         // 22: kno.v1.HoldoutOpened
+	(*PortfolioValidated)(nil),    // 23: kno.v1.PortfolioValidated
+	(*TuningJobSubmitted)(nil),    // 24: kno.v1.TuningJobSubmitted
+	(*TuningJobStateChanged)(nil), // 25: kno.v1.TuningJobStateChanged
+	(*BridgeGroupMeasured)(nil),   // 26: kno.v1.BridgeGroupMeasured
+	(*TuningEndpointChanged)(nil), // 27: kno.v1.TuningEndpointChanged
+	(*Interval)(nil),              // 28: kno.v1.Interval
+	(Destination)(0),              // 29: kno.v1.Destination
+	(Stage)(0),                    // 30: kno.v1.Stage
+	(*AgentRef)(nil),              // 31: kno.v1.AgentRef
+	(Direction)(0),                // 32: kno.v1.Direction
+	(*Budget)(nil),                // 33: kno.v1.Budget
+	(ScoreDomain)(0),              // 34: kno.v1.ScoreDomain
+	(RunStatus)(0),                // 35: kno.v1.RunStatus
+	(Arm)(0),                      // 36: kno.v1.Arm
+	(*ConcurrencyDecision)(nil),   // 37: kno.v1.ConcurrencyDecision
+	(RejectionReason)(0),          // 38: kno.v1.RejectionReason
+	(ValidationVerdict)(0),        // 39: kno.v1.ValidationVerdict
+	(JobStatus)(0),                // 40: kno.v1.JobStatus
 }
 var file_kno_v1_event_proto_depIdxs = []int32{
-	6,  // 0: kno.v1.Event.run_started:type_name -> kno.v1.RunStarted
-	7,  // 1: kno.v1.Event.case_scored:type_name -> kno.v1.CaseScored
-	8,  // 2: kno.v1.Event.case_errored:type_name -> kno.v1.CaseErrored
-	9,  // 3: kno.v1.Event.stage_progress:type_name -> kno.v1.StageProgress
-	10, // 4: kno.v1.Event.spend_recorded:type_name -> kno.v1.SpendRecorded
-	11, // 5: kno.v1.Event.run_finished:type_name -> kno.v1.RunFinished
-	12, // 6: kno.v1.Event.run_resumed:type_name -> kno.v1.RunResumed
-	13, // 7: kno.v1.Event.retry_attempted:type_name -> kno.v1.RetryAttempted
-	14, // 8: kno.v1.Event.rate_limit_waiting:type_name -> kno.v1.RateLimitWaiting
-	15, // 9: kno.v1.Event.settlement_overshoot:type_name -> kno.v1.SettlementOvershoot
-	17, // 10: kno.v1.Event.concurrency_reduced:type_name -> kno.v1.ConcurrencyReduced
-	16, // 11: kno.v1.Event.orphan_spend:type_name -> kno.v1.OrphanSpend
-	18, // 12: kno.v1.Event.asset_routed:type_name -> kno.v1.AssetRouted
-	19, // 13: kno.v1.Event.asset_valued:type_name -> kno.v1.AssetValued
-	3,  // 14: kno.v1.Event.portfolio_selected:type_name -> kno.v1.PortfolioSelected
-	4,  // 15: kno.v1.Event.export_written:type_name -> kno.v1.ExportWritten
-	20, // 16: kno.v1.Event.holdout_opened:type_name -> kno.v1.HoldoutOpened
-	21, // 17: kno.v1.Event.portfolio_validated:type_name -> kno.v1.PortfolioValidated
-	22, // 18: kno.v1.PortfolioSelected.dev_estimated_interval:type_name -> kno.v1.Interval
-	23, // 19: kno.v1.ExportWritten.destination:type_name -> kno.v1.Destination
-	24, // 20: kno.v1.RunStarted.stage:type_name -> kno.v1.Stage
-	25, // 21: kno.v1.RunStarted.agent:type_name -> kno.v1.AgentRef
-	26, // 22: kno.v1.RunStarted.goal_direction:type_name -> kno.v1.Direction
-	27, // 23: kno.v1.RunStarted.budget:type_name -> kno.v1.Budget
-	28, // 24: kno.v1.RunStarted.goal_score_domain:type_name -> kno.v1.ScoreDomain
-	5,  // 25: kno.v1.CaseErrored.error:type_name -> kno.v1.EventError
-	24, // 26: kno.v1.StageProgress.stage:type_name -> kno.v1.Stage
-	29, // 27: kno.v1.RunFinished.status:type_name -> kno.v1.RunStatus
-	5,  // 28: kno.v1.RunFinished.error:type_name -> kno.v1.EventError
-	1,  // 29: kno.v1.RetryAttempted.reason:type_name -> kno.v1.RetryReason
-	30, // 30: kno.v1.RetryAttempted.arm:type_name -> kno.v1.Arm
-	30, // 31: kno.v1.SettlementOvershoot.arm:type_name -> kno.v1.Arm
-	0,  // 32: kno.v1.OrphanSpend.reason:type_name -> kno.v1.OrphanReason
-	30, // 33: kno.v1.OrphanSpend.arm:type_name -> kno.v1.Arm
-	31, // 34: kno.v1.ConcurrencyReduced.decision:type_name -> kno.v1.ConcurrencyDecision
-	32, // 35: kno.v1.AssetRouted.not_measured:type_name -> kno.v1.RejectionReason
-	22, // 36: kno.v1.AssetValued.delta_interval:type_name -> kno.v1.Interval
-	32, // 37: kno.v1.AssetValued.not_measured:type_name -> kno.v1.RejectionReason
-	22, // 38: kno.v1.PortfolioValidated.holdout_interval:type_name -> kno.v1.Interval
-	33, // 39: kno.v1.PortfolioValidated.verdict:type_name -> kno.v1.ValidationVerdict
-	32, // 40: kno.v1.PortfolioValidated.not_measured:type_name -> kno.v1.RejectionReason
-	41, // [41:41] is the sub-list for method output_type
-	41, // [41:41] is the sub-list for method input_type
-	41, // [41:41] is the sub-list for extension type_name
-	41, // [41:41] is the sub-list for extension extendee
-	0,  // [0:41] is the sub-list for field type_name
+	8,  // 0: kno.v1.Event.run_started:type_name -> kno.v1.RunStarted
+	9,  // 1: kno.v1.Event.case_scored:type_name -> kno.v1.CaseScored
+	10, // 2: kno.v1.Event.case_errored:type_name -> kno.v1.CaseErrored
+	11, // 3: kno.v1.Event.stage_progress:type_name -> kno.v1.StageProgress
+	12, // 4: kno.v1.Event.spend_recorded:type_name -> kno.v1.SpendRecorded
+	13, // 5: kno.v1.Event.run_finished:type_name -> kno.v1.RunFinished
+	14, // 6: kno.v1.Event.run_resumed:type_name -> kno.v1.RunResumed
+	15, // 7: kno.v1.Event.retry_attempted:type_name -> kno.v1.RetryAttempted
+	16, // 8: kno.v1.Event.rate_limit_waiting:type_name -> kno.v1.RateLimitWaiting
+	17, // 9: kno.v1.Event.settlement_overshoot:type_name -> kno.v1.SettlementOvershoot
+	19, // 10: kno.v1.Event.concurrency_reduced:type_name -> kno.v1.ConcurrencyReduced
+	18, // 11: kno.v1.Event.orphan_spend:type_name -> kno.v1.OrphanSpend
+	20, // 12: kno.v1.Event.asset_routed:type_name -> kno.v1.AssetRouted
+	21, // 13: kno.v1.Event.asset_valued:type_name -> kno.v1.AssetValued
+	5,  // 14: kno.v1.Event.portfolio_selected:type_name -> kno.v1.PortfolioSelected
+	6,  // 15: kno.v1.Event.export_written:type_name -> kno.v1.ExportWritten
+	22, // 16: kno.v1.Event.holdout_opened:type_name -> kno.v1.HoldoutOpened
+	23, // 17: kno.v1.Event.portfolio_validated:type_name -> kno.v1.PortfolioValidated
+	24, // 18: kno.v1.Event.tuning_job_submitted:type_name -> kno.v1.TuningJobSubmitted
+	25, // 19: kno.v1.Event.tuning_job_state_changed:type_name -> kno.v1.TuningJobStateChanged
+	26, // 20: kno.v1.Event.bridge_group_measured:type_name -> kno.v1.BridgeGroupMeasured
+	27, // 21: kno.v1.Event.tuning_endpoint_changed:type_name -> kno.v1.TuningEndpointChanged
+	28, // 22: kno.v1.PortfolioSelected.dev_estimated_interval:type_name -> kno.v1.Interval
+	29, // 23: kno.v1.ExportWritten.destination:type_name -> kno.v1.Destination
+	30, // 24: kno.v1.RunStarted.stage:type_name -> kno.v1.Stage
+	31, // 25: kno.v1.RunStarted.agent:type_name -> kno.v1.AgentRef
+	32, // 26: kno.v1.RunStarted.goal_direction:type_name -> kno.v1.Direction
+	33, // 27: kno.v1.RunStarted.budget:type_name -> kno.v1.Budget
+	34, // 28: kno.v1.RunStarted.goal_score_domain:type_name -> kno.v1.ScoreDomain
+	7,  // 29: kno.v1.CaseErrored.error:type_name -> kno.v1.EventError
+	30, // 30: kno.v1.StageProgress.stage:type_name -> kno.v1.Stage
+	35, // 31: kno.v1.RunFinished.status:type_name -> kno.v1.RunStatus
+	7,  // 32: kno.v1.RunFinished.error:type_name -> kno.v1.EventError
+	1,  // 33: kno.v1.RetryAttempted.reason:type_name -> kno.v1.RetryReason
+	36, // 34: kno.v1.RetryAttempted.arm:type_name -> kno.v1.Arm
+	36, // 35: kno.v1.SettlementOvershoot.arm:type_name -> kno.v1.Arm
+	0,  // 36: kno.v1.OrphanSpend.reason:type_name -> kno.v1.OrphanReason
+	36, // 37: kno.v1.OrphanSpend.arm:type_name -> kno.v1.Arm
+	37, // 38: kno.v1.ConcurrencyReduced.decision:type_name -> kno.v1.ConcurrencyDecision
+	38, // 39: kno.v1.AssetRouted.not_measured:type_name -> kno.v1.RejectionReason
+	28, // 40: kno.v1.AssetValued.delta_interval:type_name -> kno.v1.Interval
+	38, // 41: kno.v1.AssetValued.not_measured:type_name -> kno.v1.RejectionReason
+	28, // 42: kno.v1.PortfolioValidated.holdout_interval:type_name -> kno.v1.Interval
+	39, // 43: kno.v1.PortfolioValidated.verdict:type_name -> kno.v1.ValidationVerdict
+	38, // 44: kno.v1.PortfolioValidated.not_measured:type_name -> kno.v1.RejectionReason
+	31, // 45: kno.v1.TuningJobSubmitted.base_model:type_name -> kno.v1.AgentRef
+	40, // 46: kno.v1.TuningJobStateChanged.status:type_name -> kno.v1.JobStatus
+	28, // 47: kno.v1.BridgeGroupMeasured.delta_group_interval:type_name -> kno.v1.Interval
+	28, // 48: kno.v1.BridgeGroupMeasured.delta_control_interval:type_name -> kno.v1.Interval
+	2,  // 49: kno.v1.BridgeGroupMeasured.verdict:type_name -> kno.v1.BridgeGroupVerdict
+	38, // 50: kno.v1.BridgeGroupMeasured.not_measured:type_name -> kno.v1.RejectionReason
+	3,  // 51: kno.v1.TuningEndpointChanged.state:type_name -> kno.v1.TuningEndpointState
+	52, // [52:52] is the sub-list for method output_type
+	52, // [52:52] is the sub-list for method input_type
+	52, // [52:52] is the sub-list for extension type_name
+	52, // [52:52] is the sub-list for extension extendee
+	0,  // [0:52] is the sub-list for field type_name
 }
 
 func init() { file_kno_v1_event_proto_init() }
@@ -2782,6 +3476,7 @@ func file_kno_v1_event_proto_init() {
 	file_kno_v1_portfolio_proto_init()
 	file_kno_v1_run_proto_init()
 	file_kno_v1_validation_proto_init()
+	file_kno_v1_tuner_proto_init()
 	file_kno_v1_event_proto_msgTypes[0].OneofWrappers = []any{
 		(*Event_RunStarted)(nil),
 		(*Event_CaseScored)(nil),
@@ -2801,19 +3496,24 @@ func file_kno_v1_event_proto_init() {
 		(*Event_ExportWritten)(nil),
 		(*Event_HoldoutOpened)(nil),
 		(*Event_PortfolioValidated)(nil),
+		(*Event_TuningJobSubmitted)(nil),
+		(*Event_TuningJobStateChanged)(nil),
+		(*Event_BridgeGroupMeasured)(nil),
+		(*Event_TuningEndpointChanged)(nil),
 	}
 	file_kno_v1_event_proto_msgTypes[8].OneofWrappers = []any{}
 	file_kno_v1_event_proto_msgTypes[9].OneofWrappers = []any{}
 	file_kno_v1_event_proto_msgTypes[11].OneofWrappers = []any{}
 	file_kno_v1_event_proto_msgTypes[13].OneofWrappers = []any{}
 	file_kno_v1_event_proto_msgTypes[14].OneofWrappers = []any{}
+	file_kno_v1_event_proto_msgTypes[21].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kno_v1_event_proto_rawDesc), len(file_kno_v1_event_proto_rawDesc)),
-			NumEnums:      2,
-			NumMessages:   20,
+			NumEnums:      4,
+			NumMessages:   24,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

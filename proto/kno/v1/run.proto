@@ -5,11 +5,11 @@ package kno.v1;
 import "kno/v1/common.proto";
 import "kno/v1/portfolio.proto";
 
-// Stage is which of the five pipeline stages produced a Run.
+// Stage is which pipeline stage produced a Run.
 //
-// The loop is Baseline, Value, Select, Validate, Export. Each stage reads what
-// the previous one wrote, so a Run's stage decides which artifacts it is
-// allowed to produce and which it may read.
+// The loop is Baseline, Value, Select, Validate, Export, Bridge. Each stage
+// reads what an earlier one wrote, so a Run's stage decides which artifacts
+// it is allowed to produce and which it may read.
 enum Stage {
   // Unset.
   STAGE_UNSPECIFIED = 0;
@@ -30,6 +30,16 @@ enum Stage {
 
   // Write the training set, report, and gaps.
   STAGE_EXPORT = 5;
+
+  // Group-ablate the tuning-set behavior Assets on a proxy model: submit
+  // fine-tuning jobs, host the results, and measure leave-one-group-out
+  // deltas against the DEV Cases of each failure cluster.
+  //
+  // Not folded into STAGE_VALUE: a bridge run has its own budget dimensions
+  // (training tokens, serve minutes), its own resume semantics
+  // (adopt-by-suffix rather than re-submit), and its own terminal states.
+  // Reusing STAGE_VALUE would make `kno value --resume` adopt tuning jobs.
+  STAGE_BRIDGE = 6;
 }
 
 // RunStatus is how a Run ended, or that it has not.

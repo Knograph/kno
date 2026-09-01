@@ -285,6 +285,49 @@ func destinationEntries(p *knov1.Portfolio, dest knov1.Destination) []*Portfolio
 	return out
 }
 
+// LoadAssetsByID materializes a Pool into a map keyed by Asset ID.
+//
+// Exported for the bridge's group-ablation planning (bridge.QuoteGroups),
+// which needs the same map Export already builds internally to render a
+// group's training file — without re-implementing Pool.Assets's borrowing
+// contract (see Evals.Cases's godoc, which Pool.Assets shares) a second
+// time in a package above core. loadAssetsByID itself (core/select.go)
+// stays unexported; this is a thin wrapper.
+func LoadAssetsByID(ctx context.Context, pool Pool) (map[string]*Asset, error) {
+	return loadAssetsByID(ctx, pool)
+}
+
+// RenderTuningSetForAssets renders the tuning-set grammar for an explicit
+// subset of a Portfolio's DESTINATION_TUNING_SET entries — one ablation
+// group's training file, in the bridge's leave-one-group-out design.
+//
+// BYTE-IDENTICAL to what `kno export --destination tuning_set` writes for
+// the same Portfolio filtered to assetIDs, because both call this exact
+// renderTuningSet function — this IS that function, exported so the bridge
+// can call it without re-implementing the grammar. See the tuner-bridge
+// plan's acceptance criterion 3.
+//
+// entries are taken from p.Selected in Portfolio order, filtered to
+// assetIDs — the same "selection order" contract destinationEntries
+// documents. An Asset ID in assetIDs that names no entry in p is silently
+// omitted rather than erroring: the caller (bridge.QuoteGroups) computed
+// assetIDs from the same Portfolio's own routing, so a mismatch would be a
+// caller bug this function has no way to diagnose better than its result
+// having fewer lines than expected.
+func RenderTuningSetForAssets(p *knov1.Portfolio, assetIDs []string, assets map[string]*Asset) ([]byte, error) {
+	want := make(map[string]struct{}, len(assetIDs))
+	for _, id := range assetIDs {
+		want[id] = struct{}{}
+	}
+	var entries []*PortfolioEntry
+	for _, e := range p.GetSelected() {
+		if _, ok := want[e.GetAssetId()]; ok {
+			entries = append(entries, e)
+		}
+	}
+	return renderTuningSet(entries, assets)
+}
+
 // render produces the Destination's artifact and its manifest. Both are
 // deterministic: no timestamps, no absolute paths, no ordering that is not
 // the Portfolio's own — so a re-export is byte-identical.

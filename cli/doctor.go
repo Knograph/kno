@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/knograph/kno/adapters/agent/agentref"
 	"github.com/knograph/kno/adapters/agent/pricing"
+	"github.com/knograph/kno/store"
 )
 
 // `kno doctor` prints what this build can actually do.
@@ -35,6 +38,7 @@ func doctorVersion() string { return identity().Version }
 
 func newDoctorCmd() *cobra.Command {
 	var jsonOut bool
+	var dbPath string
 
 	cmd := &cobra.Command{
 		Use:   "doctor",
@@ -42,16 +46,21 @@ func newDoctorCmd() *cobra.Command {
 		Long: `Print the adapters, goals, and generation parameters this build supports,
 and where its price table came from.
 
+Also reports any bridge tuning job whose dedicated endpoint was deployed and
+never confirmed torn down — a leaked endpoint keeps billing after Kno exits,
+so this is the one thing here that DOES read local state, from --db.
+
 Nothing here contacts a provider or reads a credential, so it is safe to run
 while diagnosing a run that failed.`,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runDoctor(cmd.OutOrStdout(), jsonOut)
+			return runDoctor(cmd.Context(), cmd.OutOrStdout(), jsonOut, dbPath)
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOut, "json", false, "machine-readable output")
+	cmd.Flags().StringVar(&dbPath, "db", "kno.db", "where runs and traces are stored, for the leaked-endpoint report")
 	return cmd
 }
 
@@ -144,6 +153,24 @@ type doctorReport struct {
 		Bedrock   []string `json:"bedrock"`
 		Vertex    []string `json:"vertex"`
 	} `json:"priced_models"`
+
+	// LeakedEndpoints is every bridge tuning job, across every run in --db,
+	// whose dedicated endpoint has no recorded teardown. See
+	// store.LeakedEndpoint and docs/debt.md#156.
+	LeakedEndpoints []leakedEndpointFact `json:"leaked_endpoints,omitempty"`
+}
+
+// leakedEndpointFact is doctorReport's --json shape for one leaked
+// endpoint — hand-written for the same ADR-0001 reason doctorReport itself
+// is, and because store.LeakedEndpoint is not a stability-promised type.
+type leakedEndpointFact struct {
+	RunID              string `json:"run_id"`
+	AblationGroup      string `json:"ablation_group"`
+	Provider           string `json:"provider"`
+	EndpointID         string `json:"endpoint_id"`
+	DeployedAt         string `json:"deployed_at"`
+	ServeMinutes       int32  `json:"serve_minutes"`
+	ServeCostUSDMicros int64  `json:"serve_cost_usd_micros"`
 }
 
 // doctorGoals is every Goal this build can score against.
@@ -155,7 +182,7 @@ func doctorGoals() []string {
 }
 
 // runDoctor renders the matrix.
-func runDoctor(out io.Writer, jsonOut bool) error {
+func runDoctor(ctx context.Context, out io.Writer, jsonOut bool, dbPath string) error {
 	rep := doctorReport{
 		Version:    doctorVersion(),
 		Adapters:   adapterFacts(),
@@ -167,10 +194,48 @@ func runDoctor(out io.Writer, jsonOut bool) error {
 	rep.PricedModels.Bedrock = pricing.Models(agentref.SchemeBedrock)
 	rep.PricedModels.Vertex = pricing.Models(agentref.SchemeVertex)
 
+	leaks, err := leakedEndpoints(ctx, dbPath)
+	if err != nil {
+		return err
+	}
+	rep.LeakedEndpoints = leaks
+
 	if jsonOut {
 		return writeJSON(out, rep)
 	}
 	return renderDoctor(out, rep)
+}
+
+// leakedEndpoints opens dbPath and reads every un-torn-down endpoint —
+// docs/debt.md#156's leaked-endpoint report, the one thing runDoctor reads
+// local state for. A database that does not exist yet reports no leaks
+// rather than erroring OR CREATING ONE: the overwhelmingly common case is a
+// user who has never run `kno bridge`, and doctor is documented as
+// read-only and free — it must not have the side effect of creating a
+// kno.db file in whatever directory it happens to be run from.
+func leakedEndpoints(ctx context.Context, dbPath string) ([]leakedEndpointFact, error) {
+	if _, err := os.Stat(dbPath); err != nil {
+		return nil, nil //nolint:nilerr // no db yet: nothing to report, not an error
+	}
+	db, err := store.NewSQLite(ctx, dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("opening %s: %w", dbPath, err)
+	}
+	defer func() { _ = db.Close() }()
+
+	leaks, err := db.LeakedEndpoints(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("reading leaked endpoints from %s: %w", dbPath, err)
+	}
+	out := make([]leakedEndpointFact, 0, len(leaks))
+	for _, l := range leaks {
+		out = append(out, leakedEndpointFact{
+			RunID: l.RunID, AblationGroup: l.AblationGroup, Provider: l.Provider,
+			EndpointID: l.EndpointID, DeployedAt: l.DeployedAt,
+			ServeMinutes: l.ServeMinutes, ServeCostUSDMicros: l.ServeCostUSDMicros,
+		})
+	}
+	return out, nil
 }
 
 // renderDoctor writes the human matrix.
@@ -213,6 +278,21 @@ func renderDoctor(out io.Writer, rep doctorReport) error {
 		len(rep.PricedModels.Bedrock), len(rep.PricedModels.Vertex))
 	b.WriteString("        an unpriced model needs --price-input-per-mtok and " +
 		"--price-output-per-mtok under a cost cap\n")
+
+	if len(rep.LeakedEndpoints) > 0 {
+		b.WriteString("\nLEAKED ENDPOINTS — still billing, teardown was never confirmed\n")
+		ltw := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(ltw, "  run\tgroup\tprovider\tendpoint id\tdeployed at\tminutes\tcost") //nolint:errcheck // strings.Builder cannot fail
+		for _, l := range rep.LeakedEndpoints {
+			fmt.Fprintf(ltw, "  %s\t%s\t%s\t%s\t%s\t%d\t$%.2f\n", //nolint:errcheck // strings.Builder cannot fail
+				l.RunID, l.AblationGroup, l.Provider, l.EndpointID, l.DeployedAt,
+				l.ServeMinutes, float64(l.ServeCostUSDMicros)/1_000_000)
+		}
+		if err := ltw.Flush(); err != nil {
+			return fmt.Errorf("rendering the leaked-endpoint table: %w", err)
+		}
+		b.WriteString("  check the provider's console — Kno cannot stop billing without a live process to sweep it\n")
+	}
 
 	_, err := io.WriteString(out, b.String())
 	return err

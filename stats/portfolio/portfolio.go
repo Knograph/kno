@@ -16,112 +16,27 @@ import (
 	"github.com/knograph/kno/stats/interval"
 )
 
-// Method strings recorded on the intervals this package produces. They join
-// the list on Interval.method (see proto/kno/v1/valuation.proto), and a
-// reader comparing methods across runs sees the combination for what it is.
+// Method strings recorded on the intervals NetLoss produces.
+//
+// MOVED to stats/interval by the bridge eval-seam plan
+// (docs/plans/2026-09-01-bridge-eval-seam.md §4): bridge needs the same
+// net-loss combination for its interference read (stats/interval.NetEffect),
+// and this package already imports stats/interval for Quantile, so a
+// stats/interval -> stats/portfolio import would cycle. Aliased here,
+// unchanged, so every existing caller and test in this package compiles
+// without modification — see stats/interval/neteffect.go for the real
+// definitions and their doc comments.
 const (
-	// MethodNetLossShared is a net-loss interval combined under the
-	// assumption that the two deltas are perfectly correlated — the shape a
-	// shared recorded baseline draw produces.
-	MethodNetLossShared = "net-loss-shared"
-
-	// MethodNetLossIndep is a net-loss interval combined under the
-	// assumption that the two deltas are independent — the shape a fresh
-	// control arm produces, or the best case a recorded baseline allows.
-	MethodNetLossIndep = "net-loss-indep"
+	MethodNetLossShared = interval.MethodNetLossShared
+	MethodNetLossIndep  = interval.MethodNetLossIndep
 )
 
-// NetDelta is one arm of the net-loss judgement: a point estimate, its
-// interval half-width, and the population the mean is over.
-//
-// A NetDelta is deliberately the few numbers a recorded Valuation can supply
-// (delta_goal or delta_control, their interval width, and n_routed or
-// n_control) rather than the raw pairs, because the combination must be
-// computable for a run that is already in the store.
-type NetDelta struct {
-	// Mean is the point estimate.
-	Mean float64
-
-	// Half is the half-width of a TWO-SIDED interval at the level NetLoss is
-	// called with. A one-sided bound must be widened by the caller first —
-	// its center is unknown, so this package cannot reconstruct the far side,
-	// and silently reading a one-sided bound as symmetric would understate
-	// the interval in exactly the direction a REGRESSION verdict cares about.
-	Half float64
-
-	// N is the population the mean was measured over.
-	N int
-}
+// NetDelta is one arm of the net-loss judgement. See interval.NetDelta.
+type NetDelta = interval.NetDelta
 
 // NetLoss combines a treatment delta and a control delta into one net
-// judgement, weighted by their populations, with an interval that accounts
-// for the shared recorded-baseline draw conservatively.
-//
-// The point estimate is the population-weighted mean:
-//
-//	net = (nT*meanT + nC*meanC) / (nT + nC)
-//
-// The interval is where the covariance shows up. The two deltas both pair
-// against the recorded baseline draw (docs/debt.md#66 names the correlation),
-// which makes their errors positively correlated — the variance of the net is
-// LARGER than the independent combination, by up to the full product term.
-// The exact covariance is not recoverable from the recorded aggregates, so:
-//
-//   - sharedDraw=true (the control arm read the recorded baseline) takes the
-//     perfectly-correlated bound, the widest the unknown covariance allows:
-//     half = (nT*halfT + nC*halfC) / (nT + nC).
-//   - sharedDraw=false (a fresh control arm) takes the independent bound:
-//     half = sqrt((nT*halfT)^2 + (nC*halfC)^2) / (nT + nC).
-//
-// The shared bound is always at least as wide as the independent one, and the
-// caller who cannot say which scheme a run used must pass sharedDraw=true —
-// the conservative direction, and the one this package documents.
-//
-// Returns nil when any input is unusable (non-positive population, non-finite
-// or non-positive half-width, non-finite mean, invalid level) rather than
-// laundering a bad input into an interval.
-func NetLoss(treatment, control NetDelta, sharedDraw bool, level float64) *knov1.Interval {
-	if treatment.N <= 0 || control.N <= 0 {
-		return nil
-	}
-	if treatment.Half <= 0 || control.Half <= 0 {
-		// A zero-width arm would drag the combined interval toward certainty
-		// regardless of the other arm's width — the exact failure this
-		// package refuses to manufacture.
-		return nil
-	}
-	if !valid(level, treatment.Mean, treatment.Half, control.Mean, control.Half) {
-		return nil
-	}
-	nT, nC := float64(treatment.N), float64(control.N)
-	total := nT + nC
-	mean := (nT*treatment.Mean + nC*control.Mean) / total
-
-	var half float64
-	method := MethodNetLossIndep
-	if sharedDraw {
-		// Perfectly-correlated bound: the covariance term is maximal, so the
-		// half-widths combine linearly.
-		half = (nT*treatment.Half + nC*control.Half) / total
-		method = MethodNetLossShared
-	} else {
-		// Independent bound: variances add.
-		half = math.Sqrt(nT*nT*treatment.Half*treatment.Half+nC*nC*control.Half*control.Half) / total
-	}
-	if math.IsInf(half, 0) || half <= 0 {
-		return nil
-	}
-
-	nn := int32(total)
-	return &knov1.Interval{
-		Low:       mean - half,
-		High:      mean + half,
-		Level:     level,
-		Method:    method,
-		Sidedness: knov1.Sidedness_SIDEDNESS_TWO_SIDED,
-		NPairs:    &nn,
-	}
-}
+// judgement. See interval.NetLoss.
+var NetLoss = interval.NetLoss
 
 // Correct applies the Bonferroni correction to one interval, dividing the
 // error budget across nScreened comparisons:
