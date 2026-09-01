@@ -62,6 +62,21 @@ type SelectOptions struct {
 	// Level is the confidence level every interval this stage decides with
 	// is computed at. Zero means the stage default, 0.95.
 	Level float64
+
+	// RedundancyMargin is the user's floor for Condition 1's equivalence
+	// margin (--redundancy-margin). Zero — the default — means the sample's
+	// own resolution decides; a user may only raise it, never buy a finer
+	// claim than the data supports.
+	RedundancyMargin float64
+
+	// RedundancyMaxMargin ceilings the equivalence margin
+	// (--redundancy-max-margin). Zero means the stage default, 0.10.
+	RedundancyMaxMargin float64
+
+	// RedundancyMinCoImprovement is the user's floor for Condition 2's
+	// co-improvement Jaccard (--redundancy-min-coimprovement). Zero — the
+	// default — means "beyond chance" (J_chance) decides.
+	RedundancyMinCoImprovement float64
 }
 
 // SelectResult is what a Select run produced.
@@ -157,7 +172,7 @@ func (o SelectOptions) Select(ctx context.Context) (*SelectResult, error) {
 		return nil, err
 	}
 
-	p, degraded, err := o.decide(ctx, valuations, assets, level)
+	p, degraded, err := o.decide(ctx, valuations, assets, level, source.GetBaselineRunId(), source.GetGoalDirection())
 	if err != nil {
 		return nil, err
 	}
@@ -248,13 +263,6 @@ func loadAssetsByID(ctx context.Context, pool Pool) (map[string]*Asset, error) {
 	return out, nil
 }
 
-// decidedKnowledge is one selected knowledge Asset, kept by content so the
-// REDUNDANT rule has what it compares against.
-type decidedKnowledge struct {
-	assetID string
-	content []byte
-}
-
 // spend is the greedy run's accumulated budget accounting, keyed by
 // destination so each cap is charged what that destination actually costs.
 type spend struct {
@@ -269,11 +277,22 @@ type spend struct {
 // with the reason Value recorded. Deterministic by construction — every
 // ordering below ends in the Asset ID — so two runs over the same store
 // produce byte-identical Portfolios.
+//
+// The redundancy rule (core/redundancy.go) needs the run this counts against
+// twice over: once to reconstruct per-Case delta vectors (store.Measurements
+// for o.ValueRunID, store.CaseScores for baselineRunID — both legitimate
+// under the holdout canary's run-scoped guard) and once to Bonferroni-correct
+// the redundancy tests' own intervals against how many were actually
+// performed. The second count is a function of the decisions it corrects —
+// a REDUNDANT verdict removes an Asset from later comparisons — so this runs
+// a bounded fixed-point search (runRedundancyPass) rather than one pass.
 func (o SelectOptions) decide(
-	_ context.Context,
+	ctx context.Context,
 	valuations []*Valuation,
 	assets map[string]*Asset,
 	level float64,
+	baselineRunID string,
+	direction knov1.Direction,
 ) (*knov1.Portfolio, []string, error) {
 	var degraded []string
 	if o.Pool == nil {
@@ -296,80 +315,48 @@ func (o SelectOptions) decide(
 	})
 
 	nScreened := len(measured)
-	p := &knov1.Portfolio{}
-	spent := spend{}
-	var selectedKnowledge []decidedKnowledge
 
-	for _, v := range measured {
-		asset := assets[v.GetAssetId()]
-		corrected := portfolio.Correct(v.GetDeltaInterval(), nScreened)
-		if corrected == nil {
-			// A recorded interval this stage cannot correct gets no decision
-			// from it — the refusal is the honest answer.
-			p.Rejected = append(p.Rejected, &Rejection{
-				AssetId:   v.GetAssetId(),
-				Reason:    knov1.RejectionReason_REJECTION_REASON_UNDERPOWERED,
-				Detail:    "the recorded interval cannot be corrected for multiplicity",
-				Valuation: v,
-			})
-			continue
+	// The baseline this Value run recorded, read ONCE for the whole decide()
+	// pass. Legitimate under the holdout canary's run-scoped guard because
+	// baselineRunID is exactly the run the gated Value run named — never a
+	// Validate run's ID, which is what the canary exists to catch.
+	var baseline map[string]store.CaseScore
+	if baselineRunID != "" {
+		var err error
+		baseline, err = o.Store.CaseScores(ctx, baselineRunID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("reading baseline scores for %s: %w", baselineRunID, err)
 		}
-
-		dest := destinationFor(asset, v)
-		reason, detail, redundantWith := rejectReason(v, corrected, asset, dest, selectedKnowledge, level, o.Budget, spent)
-
-		if reason == knov1.RejectionReason_REJECTION_REASON_UNSPECIFIED {
-			// Fits the budget under every rule: select, and charge what the
-			// destination costs.
-			charge(v, asset, dest, &spent)
-			rank := int32(len(p.GetSelected()) + 1) //nolint:gosec // bounded by the pool
-			entry := &PortfolioEntry{
-				AssetId:     v.GetAssetId(),
-				Destination: dest,
-				Valuation:   proto.Clone(v).(*Valuation),
-				Rank:        rank,
-			}
-			if scale, ok := routedScale(v); ok {
-				entry.NRoutedScale = &scale
-			}
-			// The content hash Validate checks before it spends anything.
-			//
-			// Without it, a Pool edited between `select` and `validate`
-			// produces a holdout number for a set that is not the set the
-			// report names, undetectably — Asset carries no content hash of
-			// its own. Written only when a Pool was supplied: absence disables
-			// the check rather than failing it, because a Portfolio selected
-			// without a Pool is not evidence of tampering.
-			if asset != nil {
-				sum := sha256.Sum256(asset.GetContent())
-				entry.ContentHash = sum[:]
-			}
-			p.Selected = append(p.Selected, entry)
-			if asset != nil && kindOf(v) == knov1.Kind_KIND_KNOWLEDGE {
-				selectedKnowledge = append(selectedKnowledge, decidedKnowledge{
-					assetID: v.GetAssetId(),
-					content: asset.GetContent(),
-				})
-			}
-			continue
-		}
-		rej := &Rejection{
-			AssetId:   v.GetAssetId(),
-			Reason:    reason,
-			Detail:    detail,
-			Valuation: v,
-		}
-		if reason == knov1.RejectionReason_REJECTION_REASON_REDUNDANT {
-			rej.RedundantWithAssetIds = redundantWith
-		}
-		p.Rejected = append(p.Rejected, rej)
 	}
-	for _, v := range unmeasured {
-		p.Rejected = append(p.Rejected, &Rejection{
-			AssetId:   v.GetAssetId(),
-			Reason:    v.GetNotMeasured(),
-			Valuation: v,
-		})
+	reader := newCaseDeltaReader(ctx, o.Store, o.ValueRunID, baseline, direction)
+	cfg := redundancyConfig{
+		margin:           o.RedundancyMargin,
+		maxMargin:        o.RedundancyMaxMargin,
+		minCoImprovement: o.RedundancyMinCoImprovement,
+	}
+
+	var run *redundancyRun
+	assumed := 1
+	for pass := 0; pass < maxRedundancyMultiplicityPasses; pass++ {
+		got, err := o.runGreedy(measured, unmeasured, assets, level, nScreened, reader, cfg, assumed)
+		if err != nil {
+			return nil, nil, err
+		}
+		run = got
+		if got.nRedundancyTests == assumed || pass == maxRedundancyMultiplicityPasses-1 {
+			break
+		}
+		assumed = got.nRedundancyTests
+		if assumed < 1 {
+			assumed = 1
+		}
+	}
+
+	p := &knov1.Portfolio{
+		Selected: run.selected,
+		Rejected: run.rejected,
+		//nolint:gosec // bounded by the number of pairwise comparisons a pool can produce
+		NRedundancyTests: int32(run.nRedundancyTests),
 	}
 
 	// The portfolio-level claim: one corrected interval over the whole
@@ -413,11 +400,236 @@ func (o SelectOptions) decide(
 	return p, degraded, nil
 }
 
-// rejectReason decides one measured Asset in precedence order and returns
-// the reason to reject it with, or UNSPECIFIED to select it. Precedence is
-// REGRESSION, NO_EFFECT, REDUNDANT, COST_DOMINATED, WRONG_MECHANISM — the
-// strongest claim wins, and an Asset rejected by an earlier rule never gets
-// a weaker reason.
+// redundancyRun is one greedy pass's outcome: the Portfolio's Selected and
+// Rejected entries, and how many pairwise redundancy tests it performed.
+type redundancyRun struct {
+	selected         []*PortfolioEntry
+	rejected         []*Rejection
+	nRedundancyTests int
+}
+
+// runGreedy is one pass of the greedy decision loop, run under the
+// ASSUMPTION that nTestsAssumed pairwise redundancy tests will be performed
+// (which corrects every TOST and co-improvement interval this pass computes)
+// and reporting how many were ACTUALLY performed, for decide()'s fixed-point
+// search.
+//
+// Precedence is REGRESSION, NO_EFFECT, REDUNDANT, COST_DOMINATED,
+// WRONG_MECHANISM, unchanged from the shipped rule — the strongest claim
+// wins, and an Asset rejected by an earlier rule never gets a weaker reason.
+// REDUNDANT is no longer a simple reject: per finding F2, a measurement-
+// equivalent pair is decided by carrying cost (inside the docs/debt.md#68
+// bias band, by Asset ID instead), so a later, cheaper candidate can EVICT an
+// earlier, more expensive already-selected Asset it is equivalent to.
+// Eviction refunds the evicted Asset's charge before this candidate's own
+// COST_DOMINATED/WRONG_MECHANISM checks run, and both survive selection order
+// bookkeeping: ranks are renumbered at the end of this pass to the final
+// selected order, so an evicted Asset leaves no permanent gap.
+func (o SelectOptions) runGreedy(
+	measured, unmeasured []*Valuation,
+	assets map[string]*Asset,
+	level float64,
+	nScreened int,
+	reader *caseDeltaReader,
+	cfg redundancyConfig,
+	nTestsAssumed int,
+) (*redundancyRun, error) {
+	run := &redundancyRun{}
+	spent := spend{}
+	var selectedAssets []selectedForRedundancy
+
+	for _, v := range measured {
+		asset := assets[v.GetAssetId()]
+		corrected := portfolio.Correct(v.GetDeltaInterval(), nScreened)
+		if corrected == nil {
+			// A recorded interval this stage cannot correct gets no decision
+			// from it — the refusal is the honest answer.
+			run.rejected = append(run.rejected, &Rejection{
+				AssetId:   v.GetAssetId(),
+				Reason:    knov1.RejectionReason_REJECTION_REASON_UNDERPOWERED,
+				Detail:    "the recorded interval cannot be corrected for multiplicity",
+				Valuation: v,
+			})
+			continue
+		}
+		dest := destinationFor(asset, v)
+
+		if reason, detail := earlyReject(v, corrected, level); reason != knov1.RejectionReason_REJECTION_REASON_UNSPECIFIED {
+			run.rejected = append(run.rejected, &Rejection{
+				AssetId: v.GetAssetId(), Reason: reason, Detail: detail, Valuation: v,
+			})
+			continue
+		}
+
+		outcome, err := o.evaluateRedundancyForCandidate(v, asset, dest, selectedAssets, reader, cfg, level, nTestsAssumed)
+		if err != nil {
+			return nil, err
+		}
+		run.nRedundancyTests += outcome.testsPerformed
+
+		if outcome.candidateLoses {
+			run.rejected = append(run.rejected, &Rejection{
+				AssetId:               v.GetAssetId(),
+				Reason:                knov1.RejectionReason_REJECTION_REASON_REDUNDANT,
+				Detail:                redundancyDetail(outcome.evidence),
+				Valuation:             v,
+				RedundantWithAssetIds: outcome.withIDs,
+				RedundancyEvidence:    outcome.evidence,
+			})
+			// Decided, and not selected: its delta vector is never read
+			// again this pass. See caseDeltaReader.forget's own doc for why
+			// this bounds memory at pool scale rather than materializing
+			// every Asset's vector for the whole run.
+			reader.forget(v.GetAssetId())
+			continue
+		}
+		if len(outcome.evictIDs) > 0 {
+			run.selected, selectedAssets = evict(run.selected, selectedAssets, outcome.evictIDs, &spent)
+			for _, id := range outcome.evictIDs {
+				run.rejected = append(run.rejected, &Rejection{
+					AssetId:               id,
+					Reason:                knov1.RejectionReason_REJECTION_REASON_REDUNDANT,
+					Detail:                redundancyDetail([]*knov1.RedundancyEvidence{outcome.evictEvidence[id]}),
+					RedundantWithAssetIds: []string{v.GetAssetId()},
+					RedundancyEvidence:    []*knov1.RedundancyEvidence{outcome.evictEvidence[id]},
+				})
+				// The evicted Asset is no longer in selectedAssets, so
+				// nothing will compare against it again this pass.
+				reader.forget(id)
+			}
+		}
+
+		if over := overBudget(v, asset, dest, o.Budget, spent); over != "" {
+			run.rejected = append(run.rejected, &Rejection{
+				AssetId: v.GetAssetId(), Reason: knov1.RejectionReason_REJECTION_REASON_COST_DOMINATED,
+				Detail: over, Valuation: v,
+			})
+			reader.forget(v.GetAssetId())
+			continue
+		}
+		if asset != nil && kindOf(v) == knov1.Kind_KIND_KNOWLEDGE && dest == knov1.Destination_DESTINATION_TUNING_SET {
+			run.rejected = append(run.rejected, &Rejection{
+				AssetId: v.GetAssetId(), Reason: knov1.RejectionReason_REJECTION_REASON_WRONG_MECHANISM,
+				Detail:    "a knowledge Asset in the tuning set would be unreliably retained and cannot be patched when stale",
+				Valuation: v,
+			})
+			reader.forget(v.GetAssetId())
+			continue
+		}
+
+		// Fits the budget under every rule: select, and charge what the
+		// destination costs.
+		charge(v, asset, dest, &spent)
+		entry := &PortfolioEntry{
+			AssetId:     v.GetAssetId(),
+			Destination: dest,
+			Valuation:   proto.Clone(v).(*Valuation),
+		}
+		if scale, ok := routedScale(v); ok {
+			entry.NRoutedScale = &scale
+		}
+		// The content hash Validate checks before it spends anything.
+		//
+		// Without it, a Pool edited between `select` and `validate`
+		// produces a holdout number for a set that is not the set the
+		// report names, undetectably — Asset carries no content hash of
+		// its own. Written only when a Pool was supplied: absence disables
+		// the check rather than failing it, because a Portfolio selected
+		// without a Pool is not evidence of tampering.
+		if asset != nil {
+			sum := sha256.Sum256(asset.GetContent())
+			entry.ContentHash = sum[:]
+		}
+		run.selected = append(run.selected, entry)
+		selectedAssets = append(selectedAssets, selectedForRedundancy{
+			assetID: v.GetAssetId(), dest: dest, kind: kindOf(v), valuation: v, asset: asset,
+		})
+	}
+	for _, v := range unmeasured {
+		run.rejected = append(run.rejected, &Rejection{
+			AssetId:   v.GetAssetId(),
+			Reason:    v.GetNotMeasured(),
+			Valuation: v,
+		})
+	}
+
+	// Ranks reflect the FINAL selection order — the order Assets remain
+	// selected in after every eviction this pass made — rather than raw
+	// decision order, so an evicted Asset leaves no permanent gap.
+	for i, e := range run.selected {
+		e.Rank = int32(i + 1)
+	}
+	return run, nil
+}
+
+// evict removes the named already-selected Assets from both the Portfolio's
+// selected list and the redundancy comparison pool, refunding their carrying
+// cost so the candidate that beat them can be charged against the freed
+// room.
+func evict(
+	selected []*PortfolioEntry,
+	pool []selectedForRedundancy,
+	ids []string,
+	spent *spend,
+) ([]*PortfolioEntry, []selectedForRedundancy) {
+	evictSet := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		evictSet[id] = struct{}{}
+	}
+	keptSelected := selected[:0:0] // deliberate: never mutate the caller's backing array in place
+	for _, e := range selected {
+		if _, out := evictSet[e.GetAssetId()]; out {
+			uncharge(e.GetValuation(), poolAsset(pool, e.GetAssetId()), e.GetDestination(), spent)
+			continue
+		}
+		keptSelected = append(keptSelected, e)
+	}
+	keptPool := pool[:0:0] // same reason
+	for _, sel := range pool {
+		if _, out := evictSet[sel.assetID]; out {
+			continue
+		}
+		keptPool = append(keptPool, sel)
+	}
+	return keptSelected, keptPool
+}
+
+// poolAsset finds one Asset's carried *Asset pointer in the redundancy
+// comparison pool, for evict's uncharge call — the pool is the only place
+// that pairing survives once an entry is being removed from run.selected.
+func poolAsset(pool []selectedForRedundancy, assetID string) *Asset {
+	for _, sel := range pool {
+		if sel.assetID == assetID {
+			return sel.asset
+		}
+	}
+	return nil
+}
+
+// uncharge reverses charge: subtracts one evicted Asset's carrying cost from
+// the running spend, the exact inverse accounting so the candidate that
+// evicted it can be charged against the freed room.
+func uncharge(v *Valuation, asset *Asset, dest knov1.Destination, spent *spend) {
+	cost := v.GetCost()
+	var contextTokens, acquire int64
+	if cost != nil {
+		contextTokens, acquire = cost.GetContextTokens(), cost.GetAcquisitionUsdMicros()
+	}
+	spent.costUsdMicros -= acquire
+	switch dest {
+	case knov1.Destination_DESTINATION_TUNING_SET:
+		spent.training--
+	case knov1.Destination_DESTINATION_KNOWLEDGE_BASE:
+		if asset != nil {
+			spent.knowledgeBytes -= int64(len(asset.GetContent()))
+		}
+	default: // CONTEXT
+		spent.contextTokens -= contextTokens
+	}
+}
+
+// earlyReject decides REGRESSION and NO_EFFECT, the two precedence steps
+// that outrank redundancy and never change with it.
 //
 // Interval bounds print at four decimal places, matching the value table and
 // the report. They used to print with %v, i.e. all 17 digits — which was
@@ -427,16 +639,7 @@ func (o SelectOptions) decide(
 // digits genuinely differ by platform. uknoAI/kno-benchmarks caught that as a
 // cross-platform diff on identical inputs. Four places is more precision than
 // the measurement carries and is the same on every machine.
-func rejectReason(
-	v *Valuation,
-	corrected *Interval,
-	asset *Asset,
-	dest knov1.Destination,
-	selectedKnowledge []decidedKnowledge,
-	level float64,
-	budget *knov1.Budget,
-	spent spend,
-) (knov1.RejectionReason, string, []string) {
+func earlyReject(v *Valuation, corrected *Interval, level float64) (knov1.RejectionReason, string) {
 	// REGRESSION: the whole net interval sits at or below zero — the Asset
 	// helped its slice and hurt the controls — AND the control arm was
 	// powered. An underpowered harm test that looks like a passed one is
@@ -447,7 +650,7 @@ func rejectReason(
 			return knov1.RejectionReason_REJECTION_REASON_REGRESSION, fmt.Sprintf(
 				"net delta %+.4f, CI [%+.4f, %+.4f] at or below zero",
 				netCenter(net), net.GetLow(), net.GetHigh(),
-			), nil
+			)
 		}
 	}
 	// NO_EFFECT: the corrected interval crosses zero — the measurement this
@@ -456,33 +659,9 @@ func rejectReason(
 		return knov1.RejectionReason_REJECTION_REASON_NO_EFFECT, fmt.Sprintf(
 			"delta %+.4f, CI [%+.4f, %+.4f] crosses zero",
 			v.GetDeltaGoal(), corrected.GetLow(), corrected.GetHigh(),
-		), nil
+		)
 	}
-	// REDUNDANT: within knowledge-kind only, and only against Assets already
-	// selected — shingle overlap on content is meaningless across kinds and
-	// across destinations, and first-seen-wins keeps the selection
-	// deterministic.
-	if asset != nil && kindOf(v) == knov1.Kind_KIND_KNOWLEDGE {
-		if with := redundantWith(asset.GetContent(), selectedKnowledge); len(with) > 0 {
-			return knov1.RejectionReason_REJECTION_REASON_REDUNDANT,
-				"shingle overlap above the redundancy threshold", with
-		}
-	}
-	// COST_DOMINATED: does not fit the budget, or a better-ranked Asset took
-	// the room it would need. Feasibility is checked per item, so a later,
-	// cheaper Asset can still fit — greedy has no shortcut here.
-	if over := overBudget(v, asset, dest, budget, spent); over != "" {
-		return knov1.RejectionReason_REJECTION_REASON_COST_DOMINATED, over, nil
-	}
-	// WRONG_MECHANISM: real effect, wrong vehicle. A knowledge Asset destined
-	// for the tuning set would need retention it does not have and could not
-	// patch staleness in.
-	if asset != nil && kindOf(v) == knov1.Kind_KIND_KNOWLEDGE &&
-		dest == knov1.Destination_DESTINATION_TUNING_SET {
-		return knov1.RejectionReason_REJECTION_REASON_WRONG_MECHANISM,
-			"a knowledge Asset in the tuning set would be unreliably retained and cannot be patched when stale", nil
-	}
-	return knov1.RejectionReason_REJECTION_REASON_UNSPECIFIED, "", nil
+	return knov1.RejectionReason_REJECTION_REASON_UNSPECIFIED, ""
 }
 
 // netInterval combines the treatment and control deltas into one corrected
@@ -654,25 +833,6 @@ func rankLess(a, b *Valuation) bool {
 		return a.GetDeltaGoal() > b.GetDeltaGoal()
 	}
 	return a.GetAssetId() < b.GetAssetId()
-}
-
-// redundantWith reports which already-selected contents this Asset's content
-// duplicates, by Jaccard overlap of 3-gram shingles.
-func redundantWith(content []byte, selected []decidedKnowledge) []string {
-	if len(content) == 0 {
-		return nil
-	}
-	mine := shingles(content)
-	var with []string
-	for _, other := range selected {
-		if len(other.content) == 0 {
-			continue
-		}
-		if shingleOverlap(mine, shingles(other.content)) >= defaultShingleOverlap {
-			with = append(with, other.assetID)
-		}
-	}
-	return with
 }
 
 // shingles tokenizes content into lowercase word 3-grams.

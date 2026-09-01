@@ -463,6 +463,14 @@ type selectReport struct {
 	GainHigh      *float64   `json:"dev_estimated_high,omitempty"`
 	DegradedRules []string   `json:"degraded_rules,omitempty"`
 	TotalCost     costReport `json:"total_cost"`
+
+	// NRedundancyTests is how many pairwise redundancy tests this run
+	// actually performed. Omitted when zero — a poolless run with no
+	// measurement overlap performs none, and that is not the same fact as
+	// "this build predates the field", but the two read identically to a
+	// consumer, which is the same choice every other zero-value omission in
+	// this document makes.
+	NRedundancyTests int32 `json:"n_redundancy_tests,omitempty"`
 }
 
 // selectReportBudget carries the caps the Portfolio was built under, as the
@@ -490,10 +498,82 @@ type selectReportEntry struct {
 // selectReportRejection is one excluded Asset and why. RedundantWith names
 // the already-selected Assets it duplicates when the reason is "redundant".
 type selectReportRejection struct {
-	AssetID       string   `json:"asset_id"`
-	Reason        string   `json:"reason"`
-	Detail        string   `json:"detail,omitempty"`
-	RedundantWith []string `json:"redundant_with,omitempty"`
+	AssetID            string                 `json:"asset_id"`
+	Reason             string                 `json:"reason"`
+	Detail             string                 `json:"detail,omitempty"`
+	RedundantWith      []string               `json:"redundant_with,omitempty"`
+	RedundancyEvidence []selectReportEvidence `json:"redundancy_evidence,omitempty"`
+}
+
+// selectReportEvidence is one RedundancyEvidence entry, structured rather
+// than folded into Detail's prose — the repo's standing preference (prose
+// parsed by a reader is a schema by accident), and what acceptance
+// criterion 16 asks for.
+type selectReportEvidence struct {
+	WithAssetID string `json:"with_asset_id"`
+	Kind        string `json:"kind"`
+
+	// NOverlap is meaningful, and always > 0, only for MEASUREMENT evidence
+	// (MinOverlapCases floors it at 5) — 0 for CONTENT_SHINGLE unambiguously
+	// means "not applicable", so omitempty is safe here without a pointer.
+	NOverlap int32 `json:"n_overlap,omitempty"`
+
+	// PairedDifference, Margin, CoImprovement, and CoImprovementFloor are
+	// pointers rather than omitempty float64s. A MEASUREMENT-decided pair can
+	// genuinely compute a paired difference or a co-improvement of EXACTLY
+	// 0.0 — acceptance criterion 2's disjoint-improvement complements are
+	// the case this exists for — and omitempty would drop that key rather
+	// than emit a real, meaningful zero. nil is what CONTENT_SHINGLE
+	// evidence reports instead, distinguishing "not applicable" from
+	// "measured, and it was zero".
+	PairedDifference   *float64 `json:"paired_difference,omitempty"`
+	Margin             *float64 `json:"margin,omitempty"`
+	CoImprovement      *float64 `json:"co_improvement,omitempty"`
+	CoImprovementFloor *float64 `json:"co_improvement_floor,omitempty"`
+
+	DifferenceLow            *float64 `json:"difference_low,omitempty"`
+	DifferenceHigh           *float64 `json:"difference_high,omitempty"`
+	DifferenceLevel          float64  `json:"difference_level,omitempty"`
+	MarginSource             string   `json:"margin_source,omitempty"`
+	CoImprovementLow         *float64 `json:"co_improvement_low,omitempty"`
+	CoImprovementHigh        *float64 `json:"co_improvement_high,omitempty"`
+	CoImprovementFloorSource string   `json:"co_improvement_floor_source,omitempty"`
+
+	// ShingleOverlap and CostRatio: 0 unambiguously means "not computed" for
+	// both — a real shingle overlap or cost ratio the tie-break decided on is
+	// never exactly 0 in practice (costTieBreak treats a 0 cost as
+	// "unavailable" itself, never as a ratio), so omitempty is safe without
+	// a pointer.
+	ShingleOverlap float64 `json:"shingle_overlap,omitempty"`
+	CostRatio      float64 `json:"cost_ratio,omitempty"`
+	DecidedBy      string  `json:"decided_by,omitempty"`
+}
+
+// redundancyEvidenceReport converts one proto RedundancyEvidence to its
+// --json shape.
+func redundancyEvidenceReport(ev *knov1.RedundancyEvidence) selectReportEvidence {
+	rep := selectReportEvidence{
+		WithAssetID:              ev.GetWithAssetId(),
+		Kind:                     redundancyEvidenceKindName(ev.GetKind()),
+		NOverlap:                 ev.GetNOverlap(),
+		MarginSource:             marginSourceName(ev.GetMarginSource()),
+		CoImprovementFloorSource: coImprovementFloorSourceName(ev.GetCoImprovementFloorSource()),
+		ShingleOverlap:           ev.GetShingleOverlap(),
+		CostRatio:                ev.GetCostRatio(),
+		DecidedBy:                redundancyDecidedByName(ev.GetDecidedBy()),
+	}
+	if ev.GetKind() == knov1.RedundancyEvidenceKind_REDUNDANCY_EVIDENCE_KIND_MEASUREMENT {
+		pd, m, ci, cif := ev.GetPairedDifference(), ev.GetMargin(), ev.GetCoImprovement(), ev.GetCoImprovementFloor()
+		rep.PairedDifference, rep.Margin, rep.CoImprovement, rep.CoImprovementFloor = &pd, &m, &ci, &cif
+	}
+	if iv := ev.GetDifferenceInterval(); iv != nil {
+		rep.DifferenceLow, rep.DifferenceHigh = &iv.Low, &iv.High
+		rep.DifferenceLevel = iv.GetLevel()
+	}
+	if iv := ev.GetCoImprovementInterval(); iv != nil {
+		rep.CoImprovementLow, rep.CoImprovementHigh = &iv.Low, &iv.High
+	}
+	return rep
 }
 
 // costReport is the carrying cost of the selected set, dollars rendered like
@@ -523,6 +603,7 @@ func renderSelectJSON(out io.Writer, res *core.SelectResult) error {
 			FTTokens:       p.GetTotalCost().GetFtTokens(),
 			AcquisitionUSD: formatUSD(p.GetTotalCost().GetAcquisitionUsdMicros()),
 		},
+		NRedundancyTests: p.GetNRedundancyTests(),
 	}
 	if b := p.GetBudget(); b.GetMaxCostUsdMicros() > 0 {
 		rep.Budget.MaxCostUSD = formatUSD(b.GetMaxCostUsdMicros())
@@ -543,12 +624,16 @@ func renderSelectJSON(out io.Writer, res *core.SelectResult) error {
 		rep.Selected = append(rep.Selected, row)
 	}
 	for _, r := range p.GetRejected() {
-		rep.Rejected = append(rep.Rejected, selectReportRejection{
+		row := selectReportRejection{
 			AssetID:       r.GetAssetId(),
 			Reason:        rejectReasonName(r.GetReason()),
 			Detail:        r.GetDetail(),
 			RedundantWith: r.GetRedundantWithAssetIds(),
-		})
+		}
+		for _, ev := range r.GetRedundancyEvidence() {
+			row.RedundancyEvidence = append(row.RedundancyEvidence, redundancyEvidenceReport(ev))
+		}
+		rep.Rejected = append(rep.Rejected, row)
 	}
 	if iv := p.GetDevEstimatedInterval(); iv != nil {
 		rep.DevGain, rep.GainLow, rep.GainHigh = &p.DevEstimatedGain, &iv.Low, &iv.High

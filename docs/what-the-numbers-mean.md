@@ -378,6 +378,120 @@ when more than one cluster was evaluated. A run with no cluster data (it
 predates the snapshot, or nothing failed, or routing was off) reports "no
 cluster data for this run" rather than a guessed verdict.
 
+## What a redundancy claim claims
+
+`REJECTION_REASON_REDUNDANT` is Select's strongest exclusion after
+REGRESSION and NO_EFFECT, and it is worth being precise about what it does
+and does not assert.
+
+**It is an inference from two independent measurements, not a measurement of
+marginal contribution.** Nothing in the pipeline ever measures Asset A and
+Asset B *together*. The Value stage measures each Asset against the baseline
+independently, so the redundancy rule infers substitutability rather than
+observing it: two Assets that each fix the same Cases alone might, together,
+fix no more than either alone (redundant — the inference is right) or might
+interact (they are not, and the inference would be wrong). The claim behind
+a REDUNDANT verdict is **"their measured effects are equivalent and
+co-located"**, never **"adding the second buys nothing"** — the tool does not
+have evidence for the second, stronger sentence, and does not print it. See
+[debt.md#155](debt.md).
+
+**Three verdicts, and which way the tool errs.** Two already-selected-scope
+Assets are compared over the Cases they were BOTH routed to and measured on
+(`C`). When `|C|` is at least 5 Cases (`core.MinClusterCases`, the same
+"did we look?" floor the gaps verdict uses — [debt.md#160](debt.md)), the
+comparison decides REDUNDANT or DISTINCT; below that floor, or when a delta
+vector cannot be reconstructed at all (a purged or never-measured Asset), the
+verdict is UNKNOWN. **UNKNOWN selects both Assets.** The costs of the two
+possible mistakes are not symmetric: a missed redundancy costs budget — a
+capped, visible, recoverable resource — while a false redundancy silently
+deletes a real gain from the portfolio with no signal that it happened. The
+detector's posture is therefore *select unless proven redundant*.
+
+**Two conditions, both required, and why one alone is dangerous.**
+REDUNDANT requires BOTH: **Condition 1**, an equivalence test (not a
+difference test) showing the paired per-Case difference between the two
+Assets' deltas lies entirely inside a margin `delta`; and **Condition 2**, a
+chance-corrected co-improvement Jaccard showing the two Assets improved the
+*same* Cases, not merely Cases at the same rate. Condition 1 alone is
+actively dangerous: two Assets with identical mean deltas that fix
+*disjoint* Cases are perfect complements, and dropping either loses half the
+gain. It takes two conditions to make the claim and one to refuse it.
+
+- `delta` is **derived, never invented**: `max(--redundancy-margin,
+  MinDetectableEffect(|C|, level))`. The default is 0 — the sample's own
+  resolution decides, and a user may only raise the bar, never buy a finer
+  claim than the data can support. When the required `delta` would exceed
+  `--redundancy-max-margin` (default 0.10 — a tenth of the Goal's range is
+  not "the same effect" for any Goal this tool has shipped), the verdict is
+  UNKNOWN rather than resting on a margin wide enough to swallow the effect.
+- The co-improvement floor is **derived, never invented**: `max(
+  --redundancy-min-coimprovement, J_chance)`, where `J_chance` is the
+  co-improvement two *unrelated* Assets with the same observed improvement
+  rates would produce by coincidence. A raw agreement number is
+  uninterpretable until chance agreement is subtracted — the same correction
+  `judge calibrate`'s kappa makes, for the same reason. Two Assets that each
+  improve 80% of a slice overlap on ~64% of it while sharing nothing but
+  prevalence; a fixed constant would call that co-located. When both Assets
+  improve (nearly) everything in `C`, `J_chance` approaches 1 and no interval
+  can clear it — co-location carries no information when everything is
+  co-located — so the verdict is UNKNOWN, correctly.
+
+**Read this before relying on a default run to catch duplicates.** At the
+routed-slice sizes a default run typically produces (`MinClusterCases` and
+`value.DefaultMinSample` are both 5), a typical shared slice sits at or just
+above the equivalence-test floor, where the test has almost no power — at 20
+shared Cases, `MinDetectableEffect` is already ~0.33, above the *default*
+`--redundancy-max-margin` ceiling of 0.10. That pushes most default-sized
+comparisons to UNKNOWN rather than a verdict either way. That is the correct
+and safe outcome, but it means the tuning-set duplication cost this feature
+exists to catch will often go undetected on a default run unless
+`--redundancy-max-margin` is widened deliberately. See
+[debt.md#162](debt.md).
+
+**The multiplicity correction is data-dependent.** `Portfolio.n_redundancy_tests`
+counts the pairwise redundancy tests Select's greedy decision actually
+performed — not the worst-case `k(k-1)/2`, which would correct every
+interval to a level so extreme that no pair is ever equivalent. Every
+redundancy interval is Bonferroni-corrected against this count. Because the
+count is itself a function of which pairs were found redundant — which is a
+function of the corrected interval — the guarantee is slightly weaker than a
+pre-registered correction. It is conservative in the direction that matters:
+it admits FEWER redundancy claims, never more. See [debt.md#157](debt.md).
+
+**A measurement-equivalent pair is resolved by carrying cost, not by which
+one a noisy ranking saw first — inside a bias band.** Once Condition 1 has
+passed, the two Assets' measured deltas cannot, by construction, distinguish
+them — so the old first-seen-wins tie-break was breaking the tie on noise.
+The cheaper Asset now survives, **unless** the two carrying costs differ by
+less than 2.4x, the content-type spread [debt.md#68](debt.md) already names
+in `context_tokens`: inside that band the estimate cannot support a cost
+claim, and the tie falls to Asset ID instead — deterministic and unbiased,
+rather than a guess dressed as a measurement. `RedundancyEvidence.decided_by`
+and `.cost_ratio` make this auditable per rejection. See
+[debt.md#161](debt.md).
+
+**Content similarity decides only when measurement evidence does not
+exist.** The 3-gram shingle rule this tool shipped in v0.1 (a 0.6 Jaccard
+threshold, unargued and unchanged — [debt.md#159](debt.md)) still runs, but
+only for two `KIND_KNOWLEDGE` Assets, destination-blind, exactly as before —
+byte-compatible with the Portfolio a poolless-content run produced
+previously. When a measured comparison IS available, it decides, and the
+shingle number is recorded only as corroborating evidence.
+
+**Nothing here measures A and B together, and redundancy needs measurement
+overlap that routing does not aim for today.** Two genuinely duplicate
+Assets routed to disjoint Case clusters are UNKNOWN forever, no matter how
+much is spent measuring them separately. See [debt.md#155](debt.md) and
+[debt.md#156](debt.md).
+
+**Check a claim you disagree with.** `kno select --explain <asset-id>` is
+free, read-only, and makes no provider call: it prints the per-Case table
+behind every REDUNDANT verdict the Asset carries — the baseline score, each
+Asset's delta, and whether each counted as an improvement — so a user who
+believes two Assets are complements can see the disjoint columns for
+themselves.
+
 ## What a cost figure claims
 
 Every cost figure Kno reports claims exactly this: **reported usage at rates as published on `<date>`** — the token counts the provider reported, multiplied by the rates in the price table, where `<date>` is the day those rates were read, carried on the table as `pricing.Version`. The figure is an estimate, not an invoice: settlement reconciles against the provider's own reported usage, and the two can differ — discounts and committed-use pricing are things your provider knows and this table does not. If a price is wrong or missing for your model, you do not have to wait for a release: `--price-input-per-mtok` and `--price-output-per-mtok` state the rates for a run.

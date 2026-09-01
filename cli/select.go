@@ -34,6 +34,17 @@ type selectFlags struct {
 	maxTrainingExamples int64
 	maxCostUSD          float64
 
+	// Redundancy knobs, all zero by default — no invented number ships in
+	// the default path. See core.SelectOptions's own godoc for what each
+	// zero means.
+	redundancyMargin           float64
+	redundancyMaxMargin        float64
+	redundancyMinCoImprovement float64
+
+	// explainAssetID is the Asset --explain prints the per-Case redundancy
+	// table for, when set. Free, read-only: makes no provider call.
+	explainAssetID string
+
 	jsonOut bool
 }
 
@@ -92,6 +103,14 @@ acquisition_usd is the carrying cost of the selected assets.`,
 		"carrying cap: examples the tuning set may hold (0 is unset)")
 	flags.Float64Var(&f.maxCostUSD, "max-cost-usd", 0,
 		"carrying cap: acquisition dollars for the selected assets (0 is unset)")
+	flags.Float64Var(&f.redundancyMargin, "redundancy-margin", 0,
+		"floor for the redundancy equivalence margin; 0 means the sample's own resolution decides (a user may only raise it)")
+	flags.Float64Var(&f.redundancyMaxMargin, "redundancy-max-margin", 0,
+		"ceiling on the redundancy equivalence margin; 0 means the stage default, 0.10")
+	flags.Float64Var(&f.redundancyMinCoImprovement, "redundancy-min-coimprovement", 0,
+		"floor for the redundancy co-improvement Jaccard; 0 means beyond-chance (J_chance) decides")
+	flags.StringVar(&f.explainAssetID, "explain", "",
+		"print the per-Case redundancy table for this asset ID and exit; free, read-only, no provider call")
 	flags.BoolVar(&f.jsonOut, "json", false, "machine-readable output")
 
 	if err := cmd.MarkFlagRequired("value-run-id"); err != nil {
@@ -144,6 +163,13 @@ func runSelect(ctx context.Context, out io.Writer, f selectFlags) error {
 			MaxTrainingExamples: f.maxTrainingExamples,
 			MaxCostUsdMicros:    usdToMicros(f.maxCostUSD),
 		},
+		RedundancyMargin:           f.redundancyMargin,
+		RedundancyMaxMargin:        f.redundancyMaxMargin,
+		RedundancyMinCoImprovement: f.redundancyMinCoImprovement,
+	}
+
+	if f.explainAssetID != "" {
+		return runExplain(ctx, out, opts, f)
 	}
 
 	res, runErr := opts.Select(ctx)
@@ -155,4 +181,14 @@ func runSelect(ctx context.Context, out io.Writer, f selectFlags) error {
 		return runErr
 	}
 	return renderErr
+}
+
+// runExplain prints the per-Case redundancy table for one Asset and exits —
+// free, read-only, no provider call, no Run created, no Portfolio written.
+func runExplain(ctx context.Context, out io.Writer, opts core.SelectOptions, f selectFlags) error {
+	cmps, err := opts.Explain(ctx, f.explainAssetID, 0)
+	if err != nil {
+		return err
+	}
+	return renderExplain(out, f.jsonOut, f.explainAssetID, cmps)
 }

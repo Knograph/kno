@@ -153,6 +153,55 @@ covenants — breaking any of them requires a major version.
   contributor met a red gate with no visible cause. A fresh empty
   `[Unreleased]` is now written above the folded heading.
 
+### Features
+
+- **Redundancy detection now covers behavior Assets, and Select decides it
+  by measurement rather than by reading content.** Previously the REDUNDANT
+  rule only ever fired for two `KIND_KNOWLEDGE` Assets whose 3-gram shingle
+  overlap crossed an unaudited 0.6 threshold — a behavior Asset could never
+  be rejected as redundant, by construction, and the rejection detail named
+  no number a user could check. `kno select` now reconstructs each Asset's
+  per-Case delta vector from the Value run's recorded measurements and its
+  baseline, and declares two Assets redundant only when their measured
+  effects are BOTH statistically equivalent (a TOST-style test against a
+  margin derived from the sample's own resolution, never invented) AND
+  co-located on the same Cases (a chance-corrected co-improvement Jaccard,
+  not a fixed constant). The comparison is kind-agnostic and scoped within
+  destination — the mechanism argument, not the kind label — so a behavior
+  Asset pinned to `--destination context` now competes with knowledge
+  Assets for the same cap. The shipped shingle rule is unchanged and still
+  decides when no measurement evidence exists, exactly as `main` computes
+  it today, for byte compatibility.
+
+  **This is a behavior change.** A poolless `kno select` now emits
+  REDUNDANT rejections it did not emit before — measurement evidence needs
+  only the store, not a `--pool`. Every REDUNDANT verdict now carries typed
+  `RedundancyEvidence` (the shared Case count, the paired difference and its
+  corrected interval, the margin and which term produced it, the
+  co-improvement Jaccard and its chance floor, and — for a
+  measurement-equivalent pair — which criterion, cost or Asset ID, decided
+  which Asset survives) in place of the old unauditable
+  "shingle overlap above the redundancy threshold" string.
+  `Portfolio.n_redundancy_tests` records how many pairwise tests were
+  Bonferroni-corrected together. `kno select --explain <asset-id>` is new:
+  free, read-only, no provider call, and prints the per-Case table a
+  REDUNDANT verdict rests on, so a user who disagrees can check it. Three
+  new flags — `--redundancy-margin`, `--redundancy-max-margin` (default
+  0.10), `--redundancy-min-coimprovement` — ship with defaults of zero,
+  so no invented number is in the default path.
+
+  **Read this before relying on a default run to catch duplicates.** At the
+  routed-slice sizes a default run typically produces, the equivalence
+  test's own resolution (`interval.MinDetectableEffect`) is *wider* than the
+  0.10 default margin ceiling — at 20 shared Cases it measures ~0.33 — so
+  most default-sized comparisons report `UNKNOWN` (both Assets kept, safely,
+  rather than a guessed verdict) unless `--redundancy-max-margin` is raised
+  deliberately. `docs/what-the-numbers-mean.md` and `docs/debt.md#162` say
+  so plainly rather than leaving it to be discovered. `docs/debt.md`
+  entries 155–162 record the risks accepted to ship this; entry 163 closes
+  the `select/export` plan's A12 ("within-kind redundancy only") that this
+  work repays.
+
 ### Tests
 
 - **The holdout canary is scoped to a run ID, not a method name.**

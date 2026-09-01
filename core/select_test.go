@@ -81,6 +81,96 @@ func seedValueRun(t *testing.T, st store.Store, runID string, vals ...*Valuation
 	}
 }
 
+// seedValueRunWithBaseline is seedValueRun plus a recorded baseline_run_id,
+// for tests that need store.CaseScores to be a legitimate read against this
+// Value run — the redundancy rule's per-Case delta reconstruction, and the
+// holdout canary's own required widening (redundancy-detection plan, F5).
+func seedValueRunWithBaseline(t *testing.T, st store.Store, runID, baselineRunID string, direction knov1.Direction, vals ...*Valuation) {
+	t.Helper()
+	createValueRun(t, st, runID, baselineRunID, direction)
+	writeValuations(t, st, runID, vals...)
+}
+
+// createValueRun creates a completed Value run's ROW ONLY — no Valuations —
+// so a caller can record measurements against it (measurements.run_id is a
+// foreign key to runs.id) before writing the Valuations that reference them.
+func createValueRun(t testing.TB, st store.Store, runID, baselineRunID string, direction knov1.Direction) {
+	t.Helper()
+	run := &knov1.Run{
+		Id:              runID,
+		Stage:           knov1.Stage_STAGE_VALUE,
+		Status:          knov1.RunStatus_RUN_STATUS_COMPLETED,
+		GoalName:        "test-goal",
+		GoalDirection:   direction,
+		GoalScoreDomain: knov1.ScoreDomain_SCORE_DOMAIN_BINARY,
+		DevCaseCount:    100,
+		BaselineRunId:   baselineRunID,
+	}
+	if err := st.CreateRun(context.Background(), run); err != nil {
+		t.Fatalf("seeding run: %v", err)
+	}
+}
+
+func writeValuations(t testing.TB, st store.Store, runID string, vals ...*Valuation) {
+	t.Helper()
+	for _, v := range vals {
+		if err := st.WriteValuation(context.Background(), runID, v); err != nil {
+			t.Fatalf("seeding valuation %s: %v", v.GetAssetId(), err)
+		}
+	}
+}
+
+// seedBaselineRun creates a completed Baseline run whose recorded outcomes
+// carry the given per-Case scores — the reference a Value run's redundancy
+// evidence pairs against via store.CaseScores.
+func seedBaselineRun(t testing.TB, st store.Store, runID string, scores map[string]float64) {
+	t.Helper()
+	run := &knov1.Run{
+		Id:              runID,
+		Stage:           knov1.Stage_STAGE_BASELINE,
+		Status:          knov1.RunStatus_RUN_STATUS_COMPLETED,
+		GoalName:        "test-goal",
+		GoalDirection:   knov1.Direction_DIRECTION_MAXIMIZE,
+		GoalScoreDomain: knov1.ScoreDomain_SCORE_DOMAIN_BINARY,
+	}
+	if err := st.CreateRun(context.Background(), run); err != nil {
+		t.Fatalf("seeding baseline run: %v", err)
+	}
+	for caseID, score := range scores {
+		err := st.RecordOutcome(context.Background(), runID, &store.Outcome{
+			CaseID: caseID,
+			Score:  &knov1.Score{CaseId: caseID, Value: score, Passed: score > 0},
+		})
+		if err != nil {
+			t.Fatalf("seeding outcome %s: %v", caseID, err)
+		}
+	}
+}
+
+// seedTreatmentMeasurement records one Asset's treatment-arm measurement for
+// one Case, trial 1 — the per-Case reads the redundancy rule reconstructs
+// from.
+func seedTreatmentMeasurement(t testing.TB, st store.Store, runID, assetID, caseID string, score float64) {
+	t.Helper()
+	err := st.RecordMeasurement(context.Background(), runID, &store.Measurement{
+		Key:   store.MeasurementKey{AssetID: assetID, CaseID: caseID, Arm: store.ArmTreatment, Trial: 1},
+		Score: &knov1.Score{CaseId: caseID, Value: score, Passed: score > 0},
+	})
+	if err != nil {
+		t.Fatalf("seeding measurement %s/%s: %v", assetID, caseID, err)
+	}
+}
+
+// caseIDs returns n deterministic Case IDs, "c0".."c<n-1>", for redundancy
+// fixtures that need a shared routed slice of a known size.
+func caseIDs(n int) []string {
+	ids := make([]string, n)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("c%d", i)
+	}
+	return ids
+}
+
 func selectOpts(st store.Store, valueRun string, budget *knov1.Budget, pool Pool) SelectOptions {
 	return SelectOptions{
 		RunID:      "sel-1",
@@ -719,14 +809,20 @@ func (h *holdoutCanaryStore) Purge(_ context.Context, _ string) (int64, error) {
 func TestSelectHoldoutCanary(t *testing.T) {
 	t.Parallel()
 
-	// baselineRunID is left empty deliberately: seedValueRun records no
-	// baseline, so no CaseScores read is legitimate for this run and every one
-	// fails — the same strictness the method-name forbid had. A Select that
-	// legitimately needs per-Case deltas must seed a baseline here first, which
-	// makes the widening visible in the diff rather than silent.
-	st := &holdoutCanaryStore{Store: openTestStore(t), t: t, valueRunID: "val"}
-	seedValueRun(
-		t, st, "val",
+	// The redundancy rule (redundancy-detection plan, finding F5) needs
+	// store.CaseScores to reconstruct per-Case control deltas under
+	// PAIRING_SCHEME_RECORDED_BASELINE, so the canary's Value run now seeds a
+	// real baseline and records baselineRunID on the canary store — the
+	// widening the plan requires be visible in the diff, not silent. A
+	// baseline containing no scores at all (rather than omitting it) keeps
+	// this test's Valuations exactly as they were: neither carries case_ids,
+	// so the redundancy rule still reads nothing beyond the CaseScores read
+	// itself, and the canary's job is only to confirm that read is scoped to
+	// THIS baseline.
+	st := &holdoutCanaryStore{Store: openTestStore(t), t: t, valueRunID: "val", baselineRunID: "base"}
+	seedBaselineRun(t, st, "base", nil)
+	seedValueRunWithBaseline(
+		t, st, "val", "base", knov1.Direction_DIRECTION_MAXIMIZE,
 		testValuation("a", 0.5, 0.2),
 		testValuation("b", 0.0, 0.2),
 	)
@@ -781,6 +877,24 @@ func (f *failStore) GetRun(ctx context.Context, id string) (*knov1.Run, error) {
 		}
 	}
 	return f.Store.GetRun(ctx, id)
+}
+
+func (f *failStore) CaseScores(ctx context.Context, id string) (map[string]store.CaseScore, error) {
+	if f.fail != nil {
+		if err := f.fail("CaseScores"); err != nil {
+			return nil, err
+		}
+	}
+	return f.Store.CaseScores(ctx, id)
+}
+
+func (f *failStore) Measurements(ctx context.Context, runID, assetID string) ([]store.RecordedMeasurement, error) {
+	if f.fail != nil {
+		if err := f.fail("Measurements"); err != nil {
+			return nil, err
+		}
+	}
+	return f.Store.Measurements(ctx, runID, assetID)
 }
 
 func (f *failStore) Valuations(ctx context.Context, id string) ([]*Valuation, error) {
@@ -1005,10 +1119,6 @@ func TestSelectDecisionUnits(t *testing.T) {
 	a2.DeltaPerCost = 9
 	require.True(t, rankLess(a, a2)) // same ratio, same delta: Asset ID asc
 
-	// redundantWith: a selected entry with no content is skipped, never a
-	// duplicate of nothing.
-	require.Empty(t, redundantWith([]byte("x"), []decidedKnowledge{{assetID: "a"}}))
-
 	// overBudget: a budget with no cap refuses nothing.
 	noCaps := &knov1.Budget{}
 	require.Empty(t, overBudget(testValuation("a", 0.5, 0.2), nil, knov1.Destination_DESTINATION_CONTEXT, noCaps, spend{}))
@@ -1032,9 +1142,6 @@ func TestSelectDecisionUnits(t *testing.T) {
 	// shingleOverlap: either empty set overlaps nothing.
 	require.Zero(t, shingleOverlap(map[string]struct{}{}, map[string]struct{}{"x y z": {}}))
 	require.Zero(t, shingleOverlap(map[string]struct{}{"x y z": {}}, map[string]struct{}{}))
-
-	// redundantWith: no content duplicates nothing.
-	require.Nil(t, redundantWith(nil, []decidedKnowledge{{assetID: "a", content: []byte("x")}}))
 
 	// combineCost: a nil cost vector adds nothing.
 	total := &knov1.CostVector{ContextTokens: 5}

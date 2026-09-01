@@ -392,7 +392,7 @@ func TestSingleModelBaselinePassesTheGate(t *testing.T) {
 }
 
 // openTestStore builds an in-memory-backed store in a temp directory.
-func openTestStore(t *testing.T) store.Store {
+func openTestStore(t testing.TB) store.Store {
 	t.Helper()
 	st, err := store.NewSQLite(context.Background(), t.TempDir()+"/kno.db")
 	if err != nil {

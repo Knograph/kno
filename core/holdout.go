@@ -60,7 +60,8 @@ func openHoldout(e Evals) (*holdoutEvals, error) {
 		return nil, errs.ErrHoldoutSealed.Wrap(fmt.Errorf(
 			"validate: the eval source handed to the holdout opener is already sealed to " +
 				"its dev split; iterating it would yield no Cases at all, which reads " +
-				"downstream as an eval set with no holdout rather than as this mistake"))
+				"downstream as an eval set with no holdout rather than as this mistake",
+		))
 	}
 	return &holdoutEvals{inner: e}, nil
 }

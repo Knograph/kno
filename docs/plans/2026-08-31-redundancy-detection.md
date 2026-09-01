@@ -755,3 +755,55 @@ Each mirrored to `docs/debt.md` with a trigger.
    characterization of equivalence-test power at n = 5 (shared with risk 6). If the measured
    `REDUNDANT` rate on a realistic store is near zero, the answer is routing support (risk 2),
    not a wider margin.*
+
+## Implementation-phase addendum (2026-09-01)
+
+Three interpretation calls the implementation had to make that this plan left open, recorded here
+per the same discipline as the Phase-1 amendments above — decided in the code, but the argument
+belongs where a reviewer reading the plan will look for it, not only in a handoff message.
+
+**Criterion 13 is scoped to `MEASUREMENT` evidence.** "Every REDUNDANT rejection carries at least
+one `RedundancyEvidence` with a non-nil `difference_interval`" reads, taken alone, as a requirement
+on every REDUNDANT verdict regardless of which evidence path decided it — and criterion 7's
+compatibility fixture is a pure content-decided REDUNDANT verdict with no measurement overlap at
+all, for which no `difference_interval` can exist (Condition 1's paired-difference machinery needs
+a measured delta vector on both sides). The two criteria are reconciled by reading criterion 13 as
+the docs/debt.md#1 discipline ("no delta without its interval") applied to what it protects: a
+**delta claim**. `RedundancyEvidence.paired_difference` is a delta; `shingle_overlap` is not — it
+asserts textual similarity, not a measured effect — so a `CONTENT_SHINGLE` evidence entry makes no
+claim that entry #1's discipline has anything to guard. `core/redundancy.go`'s
+`evaluateRedundancyForCandidate` enforces this by construction (a `CONTENT_SHINGLE` evidence is
+only ever built without a `DifferenceInterval` field set), and
+`TestRedundantBehaviorAssetsWithDisjointShingles` / `TestContentPathIsDestinationBlindAcrossDestinations`
+pin both halves: `MEASUREMENT` evidence always carries a non-nil interval, `CONTENT_SHINGLE`
+evidence never does.
+
+**Condition 1's TOST is computed under `SCORE_DOMAIN_CONTINUOUS_UNBOUNDED`, never the Goal's own
+declared domain.** The quantity under test, `d_with(c) − d_this(c)`, is a difference of two
+already-sign-corrected per-Case deltas, not a raw paired score — for a `SCORE_DOMAIN_BINARY` Goal,
+each delta itself lives in `{-1, 0, +1}` (treatment score minus baseline score), so their
+difference lives in `{-2, -1, 0, +1, +2}`, a five-point set a binary-domain interval method has no
+warrant to treat as a McNemar-style discordant-pair problem. `stats/interval.compute` dispatches
+`adjustedWald` — the paired-binary method — only when `domain == SCORE_DOMAIN_BINARY`, and that
+method's variance formula is derived from differences constrained to `{-1, 0, +1}`; handing it a
+`{-2,...,+2}`-valued series would still run without error (it only inspects the SIGN of each
+difference, discarding magnitude) but would silently be answering a different, narrower question
+than "is the mean difference within `±δ`". `SCORE_DOMAIN_CONTINUOUS_UNBOUNDED` routes to
+`interval.paired`'s t-interval-with-`signBound`-fallback path unconditionally, which makes no
+assumption about the value range and is the correct instrument for a bounded-but-not-binary
+difference series regardless of the Goal's own domain. This choice is unconditional — it does not
+change per Goal — so a `CONTINUOUS_UNBOUNDED`-domain Goal's redundancy comparisons go through the
+identical code path as a `BINARY`-domain Goal's, which is what keeps the redundancy rule
+kind-and-domain-agnostic as designed. See the finding this addendum resolved:
+`core/redundancy_test.go`'s `TestRedundancyMonotonicityUnderShrinkingOverlap` and
+`docs/debt.md#165` show that this same `signBound` fallback has a real, separate small-sample
+weakness — orthogonal to the domain question, present regardless of which domain routes into it.
+
+**The cost tie-break's ledger trigger (`docs/debt.md#156`) is real, not "someday".** It is stated
+as "when `docs/debt.md#68` is repaid with real token counting" — `#68` is itself an open, tracked,
+FIRED entry (fired 2026-08-29 by the Hugging Face adapters PR, per its own row), not a hypothetical
+future event; its repayment is a concrete PR that replaces the byte-based `context_tokens` estimate
+with a real tokenizer count, and `#156`'s trigger fires automatically the day that PR lands, because
+`redundancyCostBiasBand`'s 2.4x band is *defined* as the spread `#68` measures — repaying `#68`
+mechanically collapses the band toward 1 and the guard becomes checkable dead code, not a judgment
+call someone has to remember to revisit.
