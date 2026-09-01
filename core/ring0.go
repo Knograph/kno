@@ -286,6 +286,43 @@ type Tuner interface {
 	// loud (see docs — a leaked endpoint is reported, never swallowed), not
 	// as a retryable nuisance.
 	Teardown(ctx context.Context, ep *Endpoint) error
+
+	// ListJobs lists the provider's fine-tuning jobs whose submitted suffix
+	// matches suffix exactly, most-recently-submitted first.
+	//
+	// This is the tuner-bridge plan's Step 2(d) adopt-by-suffix mechanism,
+	// used ONLY to recover a row a resume finds still in the write-ahead
+	// "submitting" state after a crash: the caller does not know whether the
+	// prior process's Submit request reached the provider before the process
+	// died, and the answer changes what "resume" means for that group — poll
+	// an adopted job, or accept the group as abandoned with its estimate
+	// still settled. Never called to discover work; SubmitGroup is the only
+	// caller.
+	//
+	// This is an ADDITIVE method the tuner-bridge plan's Step 0 did not
+	// originally scope (it named "exactly two" additions, Deploy and
+	// Teardown) — Step 2(d)'s own text already described "the adapter lists
+	// the provider's jobs and adopts one whose model-name suffix matches" as
+	// the mechanism, so the omission from Step 0's count was the plan's
+	// error, not a reason to skip building the recovery path Step 2(d)
+	// requires. See this PR's report.
+	ListJobs(ctx context.Context, suffix string) ([]*JobRef, error)
+
+	// ListEndpoints lists the provider's dedicated endpoints whose served
+	// model name carries suffix, most-recently-created first.
+	//
+	// This is the tuner-bridge plan's Step 2(g) resume-time sweep mechanism
+	// — used ONLY when a resume finds a durable tuning-job row whose
+	// EndpointID is unset but whose DeployedAt is set: Deploy may have
+	// succeeded at the provider before the write recording its EndpointID
+	// landed, in which case the row alone cannot say whether an endpoint is
+	// live and billing. When a row's EndpointID IS recorded, the sweep tears
+	// that endpoint down directly and never calls this.
+	//
+	// Additive for the same reason ListJobs is: Step 2(g)'s own text says
+	// "list the provider's endpoints", and Step 0's "exactly two" count did
+	// not anticipate that mechanism either.
+	ListEndpoints(ctx context.Context, suffix string) ([]*Endpoint, error)
 }
 
 // Endpoint is a tuned model's live serving location.

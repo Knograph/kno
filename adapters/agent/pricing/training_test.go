@@ -88,6 +88,34 @@ func TestEstimateServeCapMultipliesAllThreeTerms(t *testing.T) {
 	}
 }
 
+// TestSettleServeMinutesMultipliesAllThreeTerms is SettleServeMinutes' own
+// version of TestEstimateServeCapMultipliesAllThreeTerms: same shape, but
+// this is the settle-forward per-tick arithmetic bridge.SettleServeTick
+// actually spends against, not the cap-bounded consent-quote worst case.
+func TestSettleServeMinutesMultipliesAllThreeTerms(t *testing.T) {
+	t.Parallel()
+
+	price := pricing.ServePrice{PerMinuteUSDMicros: 100_000} // $0.10/replica/minute
+	got := pricing.SettleServeMinutes(price, 7, 1)           // 7 minutes, 1 replica
+	want := int64(700_000)                                   // $0.70
+	if got != want {
+		t.Errorf("SettleServeMinutes = %d, want %d", got, want)
+	}
+
+	got = pricing.SettleServeMinutes(price, 4, 2) // 4 minutes, 2 replicas
+	want = 800_000                                // $0.80
+	if got != want {
+		t.Errorf("SettleServeMinutes(2 replicas) = %d, want %d", got, want)
+	}
+
+	if got := pricing.SettleServeMinutes(price, 0, 1); got != 0 {
+		t.Errorf("zero minutes must report zero, got %d", got)
+	}
+	if got := pricing.SettleServeMinutes(price, 7, 0); got != 0 {
+		t.Errorf("zero replicas must report zero, got %d", got)
+	}
+}
+
 // TestPriceArithmeticSaturatesRatherThanWraps guards the overflow direction
 // every other money helper in this package guards: a wrapped product can
 // land small and positive, which authorizes spend a human never quoted.

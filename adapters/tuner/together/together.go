@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -239,6 +240,39 @@ type deployResponse struct {
 	Model string `json:"model"`
 }
 
+// jobListItem is one entry in jobsPath's list response. (verify — Together's
+// exact list shape; this is the best-effort reading of the published docs at
+// the time of writing, per the plan's Step 6 discipline.) Suffix is the field
+// ListJobs matches against: OpenAI's job-list endpoint, which Together's
+// format largely mirrors per the plan's Step 5 counter-argument, echoes the
+// submitted suffix back on each listed job.
+type jobListItem struct {
+	ID        string `json:"id"`
+	Status    string `json:"status"`
+	Suffix    string `json:"suffix,omitempty"`
+	CreatedAt string `json:"created_at"`
+}
+
+// jobListResponse is jobsPath's GET (list) 2xx body (verify).
+type jobListResponse struct {
+	Data []jobListItem `json:"data"`
+}
+
+// endpointListItem is one entry in endpointsPath's list response. (verify)
+// Model is what ListEndpoints matches suffix against, the same way the
+// submit request's Suffix ends up baked into the tuned model's own name — see
+// Deploy's use of state.GetTunedModel().
+type endpointListItem struct {
+	ID    string `json:"id"`
+	State string `json:"state"`
+	Model string `json:"model"`
+}
+
+// endpointListResponse is endpointsPath's GET (list) 2xx body (verify).
+type endpointListResponse struct {
+	Data []endpointListItem `json:"data"`
+}
+
 // --- core.Tuner --------------------------------------------------------
 
 // Submit sends a tuning job to Together.
@@ -407,6 +441,89 @@ func (t *Tuner) Teardown(ctx context.Context, ep *core.Endpoint) error {
 		return fromStatus(resp.StatusCode, resp.Body)
 	}
 	return nil
+}
+
+// ListJobs lists Together's fine-tuning jobs whose suffix matches exactly,
+// most-recently-submitted first — the tuner-bridge plan's Step 2(d)
+// adopt-by-suffix mechanism. Called only by a resume recovering a row a
+// crash left in the write-ahead "submitting" state; see core.Tuner.ListJobs.
+func (t *Tuner) ListJobs(ctx context.Context, suffix string) ([]*core.JobRef, error) {
+	if suffix == "" {
+		return nil, errs.ErrInvalidInput.Wrap(fmt.Errorf("together: ListJobs requires a suffix"))
+	}
+	resp, err := t.client.do(ctx, http.MethodGet, jobsPath, nil, t.headers)
+	if err != nil {
+		return nil, fromTransport(err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fromStatus(resp.StatusCode, resp.Body)
+	}
+	var out jobListResponse
+	if err := json.Unmarshal(resp.Body, &out); err != nil {
+		return nil, ErrProvider.
+			WithFix("Together returned a 2xx that is not a job list response").
+			Wrap(err)
+	}
+
+	var refs []*core.JobRef
+	for _, item := range out.Data {
+		if item.Suffix != suffix {
+			continue
+		}
+		refs = append(refs, &core.JobRef{
+			Id:          item.ID,
+			Provider:    Scheme,
+			SubmittedAt: item.CreatedAt,
+		})
+	}
+	// Most-recently-submitted first: CreatedAt is an RFC 3339 string, which
+	// sorts lexically in timestamp order.
+	sort.Slice(refs, func(i, j int) bool { return refs[i].GetSubmittedAt() > refs[j].GetSubmittedAt() })
+	return refs, nil
+}
+
+// ListEndpoints lists Together's dedicated endpoints whose served model
+// carries suffix, most-recently-created first — the tuner-bridge plan's Step
+// 2(g) resume-time sweep mechanism. Called only when a durable row's Deploy
+// may have succeeded at the provider before the row recorded its
+// EndpointID; see core.Tuner.ListEndpoints.
+func (t *Tuner) ListEndpoints(ctx context.Context, suffix string) ([]*core.Endpoint, error) {
+	if suffix == "" {
+		return nil, errs.ErrInvalidInput.Wrap(fmt.Errorf("together: ListEndpoints requires a suffix"))
+	}
+	resp, err := t.client.do(ctx, http.MethodGet, endpointsPath, nil, t.headers)
+	if err != nil {
+		return nil, fromTransport(err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fromStatus(resp.StatusCode, resp.Body)
+	}
+	var out endpointListResponse
+	if err := json.Unmarshal(resp.Body, &out); err != nil {
+		return nil, ErrProvider.
+			WithFix("Together returned a 2xx that is not an endpoint list response").
+			Wrap(err)
+	}
+
+	var eps []*core.Endpoint
+	for _, item := range out.Data {
+		if !strings.Contains(item.Model, suffix) {
+			continue
+		}
+		ready := strings.EqualFold(item.State, "started") || strings.EqualFold(item.State, "ready")
+		eps = append(eps, &core.Endpoint{
+			ID:       item.ID,
+			Provider: Scheme,
+			Served:   item.Model,
+			Replicas: 1,
+			Ready:    ready,
+		})
+	}
+	// Most-recently-created is unknowable from this shape (verify — no
+	// created_at surfaces on the list item above); returned in the provider's
+	// own listing order, which callers must not depend on ordering beyond
+	// "if more than one exists, sweep all of them" — see bridge's sweep.
+	return eps, nil
 }
 
 // mapStatus translates Together's status strings onto JobStatus. (verify —

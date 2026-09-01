@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -36,6 +37,15 @@ type bridgeFlags struct {
 	maxCostUSD    float64
 	priceTrainUSD float64 // dollars per million TRAINING tokens; the --price-train-per-mtok escape hatch
 
+	// bridgeTimeout is --bridge-timeout: how long a job may run before
+	// bridge.Run stops WAITING on it (never cancels) — acceptance
+	// criterion 24.
+	bridgeTimeout    time.Duration
+	cancelOnTimeout  bool
+	priceServeUSD    float64 // dollars per replica per minute; the --price-serve-per-minute escape hatch
+	maxLiveEndpoints int
+	maxServeMinutes  int32
+
 	yes     bool
 	jsonOut bool
 }
@@ -61,17 +71,23 @@ spent. That is the whole of the un-armed run: read the plan before you
 decide whether to pay for it.
 
 WITH --bridge, the plan is the same and a job is submitted for every group
-in it once confirmed. Every job is charged when it is submitted and cannot
-be un-submitted.
+in it once confirmed. Each job is charged when it is submitted and cannot be un-submitted.
+Hosting a tuned model for its eval passes is charged per minute per endpoint,
+including while idle, capped by --bridge-max-serve-minutes and serialized to
+--bridge-max-live-endpoints live endpoints at once.
 
-NOT YET IMPLEMENTED IN THIS BUILD: actual job submission, polling, and the
-per-group leave-one-out measurement. --bridge plans, prices, and asks for
-confirmation; it stops before submitting anything and says so.`,
+NOT YET IMPLEMENTED IN THIS BUILD: the per-group leave-one-out MEASUREMENT.
+Submission, polling, reconciliation, deployment, the hosting settle-forward
+tick loop, teardown, and the resume-time endpoint sweep are all implemented
+(bridge.Run) but this build ships no way to actually invoke a deployed
+model over Cases and score it, so --bridge plans, prices, and asks for
+confirmation, then stops before calling bridge.Run rather than deploying a
+paid endpoint with nothing to measure it.`,
 		Example: `  # See the plan and the price, without spending anything
-  kno bridge --select-run-id <id> --pool assets.jsonl --tuner together:meta-llama/Llama-3-8b --price-train-per-mtok 1.50
+  kno bridge --select-run-id <id> --pool assets.jsonl --tuner together:meta-llama/Llama-3-8b --price-train-per-mtok 1.50 --price-serve-per-minute 0.02
 
-  # Arm it (submission is not yet implemented; this still stops before spending)
-  kno bridge --select-run-id <id> --pool assets.jsonl --tuner together:meta-llama/Llama-3-8b --price-train-per-mtok 1.50 --bridge --yes`,
+  # Arm it (measurement is not yet implemented; this still stops before spending)
+  kno bridge --select-run-id <id> --pool assets.jsonl --tuner together:meta-llama/Llama-3-8b --price-train-per-mtok 1.50 --price-serve-per-minute 0.02 --bridge --yes`,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -96,6 +112,16 @@ confirmation; it stops before submitting anything and says so.`,
 	flags.Float64Var(&f.maxCostUSD, "max-cost-usd", 0, "total spend cap in USD across every job; 0 means unlimited")
 	flags.Float64Var(&f.priceTrainUSD, "price-train-per-mtok", 0,
 		"dollars per million TRAINING tokens for an unpriced base model; required until a pricing table row exists for --tuner")
+	flags.DurationVar(&f.bridgeTimeout, "bridge-timeout", 60*time.Minute,
+		"how long to wait for one job to reach a terminal status before giving up on WAITING; the job is never cancelled and --resume keeps polling it")
+	flags.BoolVar(&f.cancelOnTimeout, "bridge-cancel-on-timeout", false,
+		"cancel a job that outlives --bridge-timeout instead of leaving it running")
+	flags.Float64Var(&f.priceServeUSD, "price-serve-per-minute", 0,
+		"dollars per replica per minute for an unpriced served model; required until a pricing table row exists for --tuner")
+	flags.IntVar(&f.maxLiveEndpoints, "bridge-max-live-endpoints", 1,
+		"at most this many dedicated endpoints live at once; each one bills per minute per replica, including while idle")
+	flags.Int32Var(&f.maxServeMinutes, "bridge-max-serve-minutes", 30,
+		"tear an endpoint down and report its group unknown after this many served minutes, per endpoint")
 	flags.BoolVar(&f.yes, "yes", false, "skip the confirmation prompt")
 	flags.BoolVar(&f.jsonOut, "json", false, "machine-readable output")
 
@@ -174,20 +200,33 @@ func runBridgeCore(ctx context.Context, in io.Reader, out io.Writer, f bridgeFla
 	if err != nil {
 		return err
 	}
+	// Refused exactly like an unpriced training rate — Step 2(f): "There is
+	// no --accept-unknown-cost escape for the bridge", extended to hosting.
+	// Resolved up front, at planning time, so the un-armed plan can print
+	// the hosting cap even though nothing has been deployed yet.
+	servePrice, err := resolveServePrice(scheme, model, f.priceServeUSD)
+	if err != nil {
+		return err
+	}
 
 	quotes, err := bridge.QuoteGroups(p, groups, assets, model, price, f.epochs)
 	if err != nil {
 		return err
 	}
+	// N+1 endpoints (one per group), sequentially by default
+	// (--bridge-max-live-endpoints), each capped at
+	// --bridge-max-serve-minutes — Step 4's cap-bounded worst case, never a
+	// prediction: hosting is stoppable and usually costs less.
+	hostingCapUSDMicros := pricing.EstimateServeCap(servePrice, int(f.maxServeMinutes), 1) * int64(len(quotes))
 
-	if err := renderBridgePlan(out, f, quotes, groups); err != nil {
+	if err := renderBridgePlan(out, f, quotes, groups, hostingCapUSDMicros); err != nil {
 		return err
 	}
 
 	if !f.bridgeArmed {
 		return nil
 	}
-	return confirmAndStop(ctx, in, out, f, quotes)
+	return confirmAndStop(ctx, in, out, f, quotes, hostingCapUSDMicros)
 }
 
 // confirmAndStop runs the SAME budget-confirmation machinery every other
@@ -198,8 +237,8 @@ func runBridgeCore(ctx context.Context, in io.Reader, out io.Writer, f bridgeFla
 // measurement are not implemented in this build (see newBridgeCmd's Long
 // description and this PR's report), so a confirmed run stops here rather
 // than pretending to have submitted anything.
-func confirmAndStop(ctx context.Context, _ io.Reader, out io.Writer, f bridgeFlags, quotes []bridge.GroupQuote) error {
-	total := bridge.TotalEstimatedCostUSDMicros(quotes)
+func confirmAndStop(ctx context.Context, _ io.Reader, out io.Writer, f bridgeFlags, quotes []bridge.GroupQuote, hostingCapUSDMicros int64) error {
+	total := bridge.TotalEstimatedCostUSDMicros(quotes) + hostingCapUSDMicros
 	var totalTokens int64
 	for _, q := range quotes {
 		totalTokens += q.TrainTokens
@@ -224,16 +263,30 @@ func confirmAndStop(ctx context.Context, _ io.Reader, out io.Writer, f bridgeFla
 		return err
 	}
 	// Nothing was actually authorized against real work: this build never
-	// calls Tuner.Submit. Release rather than Settle — a Settle here would
+	// calls bridge.Run. Release rather than Settle — a Settle here would
 	// record spend for nothing, which is exactly the silent-spend failure
 	// prime directive 4 exists to prevent.
 	res.Release()
 
+	// Submission, polling, reconciliation, deployment, the settle-forward
+	// hosting tick loop, teardown, and the resume-time endpoint sweep are
+	// ALL implemented and tested — see bridge.Run (bridge/run.go) and
+	// bridge/hosting.go. What stops here is the per-group MEASUREMENT:
+	// bridge.Run requires an EvalRunner (bridge/run.go's EvalRunner
+	// interface) to invoke each group's deployed model over dev and
+	// control Cases, and this build ships no production implementation of
+	// one — see EvalRunner's doc for exactly why (core.invoker, the
+	// budget-guarded retrying invoke path Value and Validate share, is
+	// unexported from core) and this PR's report for the scope decision.
+	// Confirming and then deploying a paid endpoint with nothing to
+	// measure it would spend real hosting money for zero information, so
+	// this stops here rather than doing that.
 	return errs.ErrInvalidInput.
-		WithFix("this build plans, prices, and confirms a bridge run, but does not yet submit jobs; " +
-			"bridge.SubmitGroup is implemented and tested (see bridge/submit.go) for a caller that " +
-			"wires its own orchestration loop").
-		Wrap(fmt.Errorf("bridge: job submission is not implemented in this build; nothing was spent"))
+		WithFix("this build plans, prices, and confirms a bridge run, and its submission/polling/deploy/" +
+			"teardown/sweep machinery is implemented and tested (see bridge.Run in bridge/run.go); it " +
+			"stops before calling bridge.Run because no EvalRunner ships in this build to measure a " +
+			"deployed model — see EvalRunner's doc for the specific gap and this PR's report").
+		Wrap(fmt.Errorf("bridge: no EvalRunner is configured; nothing was submitted or spent"))
 }
 
 // parseTunerRef splits --tuner's scheme:model grammar.
@@ -263,6 +316,23 @@ func resolveTrainPrice(scheme, model string, priceUSDPerMTok float64) (pricing.T
 		WithFix(fmt.Sprintf("pass --price-train-per-mtok, naming the training rate for %s:%s "+
 			"(pricing.Version %s carries no row for it)", scheme, model, pricing.Version)).
 		Wrap(fmt.Errorf("%s:%s has no training price", scheme, model))
+}
+
+// resolveServePrice mirrors resolveTrainPrice for the hosting dimension —
+// Step 2(f): "an unpriced serve rate is refused exactly as an unpriced
+// train rate is", with --price-serve-per-minute as the same explicit
+// escape and no --accept-unknown-cost path.
+func resolveServePrice(scheme, model string, priceUSDPerMinute float64) (pricing.ServePrice, error) {
+	if p, ok := pricing.LookupServePrice(scheme, model); ok {
+		return p, nil
+	}
+	if priceUSDPerMinute > 0 {
+		return pricing.ServePrice{PerMinuteUSDMicros: usdToMicros(priceUSDPerMinute)}, nil
+	}
+	return pricing.ServePrice{}, errs.ErrInvalidInput.
+		WithFix(fmt.Sprintf("pass --price-serve-per-minute, naming the hosting rate for %s:%s "+
+			"(pricing.Version %s carries no row for it)", scheme, model, pricing.Version)).
+		Wrap(fmt.Errorf("%s:%s has no serve price", scheme, model))
 }
 
 // loadValuePlan decodes the source Value run's persisted value.Plan.

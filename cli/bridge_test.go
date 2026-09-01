@@ -108,12 +108,15 @@ func bridgeFixture(t *testing.T) (dbPath string, pool core.Pool) {
 
 func bridgeTestFlags(dbPath string) bridgeFlags {
 	return bridgeFlags{
-		dbPath:        dbPath,
-		selectRunID:   "sel-1",
-		tuner:         "together:meta-llama/Llama-3-8b",
-		maxGroups:     6,
-		epochs:        3,
-		priceTrainUSD: 1.50,
+		dbPath:           dbPath,
+		selectRunID:      "sel-1",
+		tuner:            "together:meta-llama/Llama-3-8b",
+		maxGroups:        6,
+		epochs:           3,
+		priceTrainUSD:    1.50,
+		priceServeUSD:    0.02,
+		maxLiveEndpoints: 1,
+		maxServeMinutes:  30,
 	}
 }
 
@@ -179,8 +182,11 @@ func TestBridgeArmedWithoutYesDeclines(t *testing.T) {
 
 // TestBridgeArmedWithYesStopsBeforeSubmitting pins that --yes clears
 // confirmation but the command still refuses to claim success: this build
-// does not submit jobs, and it says so rather than exiting 0 having done
-// nothing spendable.
+// ships no EvalRunner to measure a deployed model, so it stops before
+// calling bridge.Run rather than exiting 0 having done nothing spendable —
+// see confirmAndStop's doc for what IS implemented (submission, polling,
+// deploy, teardown, the hosting tick loop, the resume sweep) versus what
+// is not (the per-group measurement).
 func TestBridgeArmedWithYesStopsBeforeSubmitting(t *testing.T) {
 	dbPath, pool := bridgeFixture(t)
 	f := bridgeTestFlags(dbPath)
@@ -190,13 +196,13 @@ func TestBridgeArmedWithYesStopsBeforeSubmitting(t *testing.T) {
 	var out bytes.Buffer
 	err := runBridgeCore(context.Background(), &bytes.Buffer{}, &out, f, pool)
 	if err == nil {
-		t.Fatal("want an error: job submission is not implemented in this build")
+		t.Fatal("want an error: no EvalRunner ships in this build")
 	}
 	if !errors.Is(err, errs.ErrInvalidInput) {
 		t.Errorf("err = %v, want errs.ErrInvalidInput", err)
 	}
-	if !strings.Contains(err.Error(), "not implemented") {
-		t.Errorf("error does not say submission is unimplemented: %q", err.Error())
+	if !strings.Contains(err.Error(), "EvalRunner") {
+		t.Errorf("error does not say what is missing: %q", err.Error())
 	}
 	// The plan was still printed before the stop.
 	if !strings.Contains(out.String(), "Total") {
@@ -261,13 +267,9 @@ func TestBridgeRefusesKnowledgeAssetInTuningSet(t *testing.T) {
 	}
 }
 
-// TestBridgeCommandHelpMentionsItsFlags is a scoped version of acceptance
-// criterion 25: `kno bridge --help` names the flags this build actually
-// implements. --bridge-timeout, --price-serve-per-minute,
-// --bridge-max-live-endpoints, and --bridge-max-serve-minutes are NOT
-// asserted here because this build does not implement the hosting
-// lifecycle or job-submission wait loop those flags belong to — see this
-// PR's report.
+// TestBridgeCommandHelpMentionsItsFlags is acceptance criterion 25:
+// `kno bridge --help` mentions every flag the plan names, plus the two
+// literal sentences about irreversibility and per-minute hosting billing.
 func TestBridgeCommandHelpMentionsItsFlags(t *testing.T) {
 	cmd := newBridgeCmd()
 	var out bytes.Buffer
@@ -277,9 +279,18 @@ func TestBridgeCommandHelpMentionsItsFlags(t *testing.T) {
 		t.Fatalf("--help: %v", err)
 	}
 	help := out.String()
-	for _, flag := range []string{"--bridge", "--tuner", "--bridge-max-groups", "--price-train-per-mtok"} {
+	for _, flag := range []string{
+		"--bridge", "--tuner", "--bridge-max-groups", "--bridge-timeout",
+		"--price-train-per-mtok", "--price-serve-per-minute",
+		"--bridge-max-live-endpoints", "--bridge-max-serve-minutes",
+	} {
 		if !strings.Contains(help, flag) {
 			t.Errorf("--help does not mention %s", flag)
+		}
+	}
+	for _, phrase := range []string{"cannot be un-submitted", "per minute", "idle"} {
+		if !strings.Contains(help, phrase) {
+			t.Errorf("--help does not mention %q (the irreversibility / per-minute-hosting sentence)", phrase)
 		}
 	}
 }

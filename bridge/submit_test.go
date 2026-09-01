@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/knograph/kno/bridge"
 	"github.com/knograph/kno/core"
@@ -25,6 +26,35 @@ type fakeTuner struct {
 	// TestSubmitGroupWriteAheadBeforeSubmit uses to query the store from the
 	// same vantage point a real adapter's Submit implementation would have.
 	onSubmit func()
+
+	// listJobsCalls, listJobsResult and listJobsErr drive the adopt-by-suffix
+	// tests: a "submitting" row found on entry calls ListJobs before deciding
+	// adopt or abandon.
+	listJobsCalls  int
+	listJobsResult []*core.JobRef
+	listJobsErr    error
+
+	// deployCalls, deployResult, deployErr and teardownCalls/teardownErr
+	// drive hosting_test.go. deployTimestamps and teardownTimestamps record
+	// wall-clock call times for the non-overlap assertion.
+	deployCalls        int
+	deployResult       *core.Endpoint
+	deployErr          error
+	deployTimestamps   []time.Time
+	teardownCalls      int
+	teardownErr        error
+	teardownTimestamps []time.Time
+
+	// listEndpointsResult and listEndpointsErr drive the sweep tests.
+	listEndpointsCalls  int
+	listEndpointsResult []*core.Endpoint
+	listEndpointsErr    error
+
+	// statusSequence drives run_test.go's poll loop: each Status call pops
+	// the next entry, repeating the last once exhausted.
+	statusCalls    int
+	statusSequence []*core.JobState
+	statusErr      error
 }
 
 func (f *fakeTuner) Submit(_ context.Context, _ *core.TuningJob) (*core.JobRef, error) {
@@ -39,7 +69,18 @@ func (f *fakeTuner) Submit(_ context.Context, _ *core.TuningJob) (*core.JobRef, 
 }
 
 func (f *fakeTuner) Status(context.Context, *core.JobRef) (*core.JobState, error) {
-	return nil, errors.New("fakeTuner.Status not implemented")
+	if f.statusErr != nil {
+		return nil, f.statusErr
+	}
+	if len(f.statusSequence) == 0 {
+		return nil, errors.New("fakeTuner.Status not implemented")
+	}
+	idx := f.statusCalls
+	if idx >= len(f.statusSequence) {
+		idx = len(f.statusSequence) - 1
+	}
+	f.statusCalls++
+	return f.statusSequence[idx], nil
 }
 
 func (f *fakeTuner) Model(context.Context, *core.JobRef) (*core.AgentRef, error) {
@@ -47,11 +88,40 @@ func (f *fakeTuner) Model(context.Context, *core.JobRef) (*core.AgentRef, error)
 }
 
 func (f *fakeTuner) Deploy(context.Context, *core.JobRef) (*core.Endpoint, error) {
+	f.deployCalls++
+	f.deployTimestamps = append(f.deployTimestamps, time.Now())
+	if f.deployErr != nil {
+		return nil, f.deployErr
+	}
+	if f.deployResult != nil {
+		return f.deployResult, nil
+	}
 	return nil, errors.New("fakeTuner.Deploy not implemented")
 }
 
 func (f *fakeTuner) Teardown(context.Context, *core.Endpoint) error {
-	return errors.New("fakeTuner.Teardown not implemented")
+	f.teardownCalls++
+	f.teardownTimestamps = append(f.teardownTimestamps, time.Now())
+	if f.teardownErr != nil {
+		return f.teardownErr
+	}
+	return nil
+}
+
+func (f *fakeTuner) ListJobs(context.Context, string) ([]*core.JobRef, error) {
+	f.listJobsCalls++
+	if f.listJobsErr != nil {
+		return nil, f.listJobsErr
+	}
+	return f.listJobsResult, nil
+}
+
+func (f *fakeTuner) ListEndpoints(context.Context, string) ([]*core.Endpoint, error) {
+	f.listEndpointsCalls++
+	if f.listEndpointsErr != nil {
+		return nil, f.listEndpointsErr
+	}
+	return f.listEndpointsResult, nil
 }
 
 var _ core.Tuner = (*fakeTuner)(nil)
@@ -274,11 +344,11 @@ func TestSubmitGroupNeverResubmitsAnAlreadySubmittedGroup(t *testing.T) {
 	}
 }
 
-// TestSubmitGroupAbandonsACrashedWriteAheadRow is acceptance criterion 9's
-// safe subset: a row left "submitting" by a crash inside the request window
-// is closed abandoned, Submit is never called, and the estimate stays
-// settled. See the package doc for why this build does not attempt
-// adopt-by-suffix first.
+// TestSubmitGroupAbandonsACrashedWriteAheadRow covers acceptance criterion
+// 9's no-match branch: a row left "submitting" by a crash, with no suffix to
+// adopt by (this row predates the Suffix column, the same shape a pre-adopt
+// build wrote), is closed abandoned, Submit is never called, and the
+// estimate stays settled.
 func TestSubmitGroupAbandonsACrashedWriteAheadRow(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -332,6 +402,121 @@ func TestSubmitGroupAbandonsACrashedWriteAheadRow(t *testing.T) {
 	want := budget.Spend{Calls: 1, CostUSDMicros: 6_000_000, Tokens: 500_000}
 	if settled != want {
 		t.Errorf("SettledSpend for an abandoned job = %+v, want %+v (estimate stays settled)", settled, want)
+	}
+}
+
+// TestSubmitGroupAdoptsAMatchingSuffixOnResume covers acceptance criterion
+// 9's match branch: a row left "submitting" by a crash, whose suffix a
+// ListJobs call finds on the provider, is adopted — moved straight to
+// TuningJobStateSubmitted with the discovered JobRef — and Submit is never
+// called.
+func TestSubmitGroupAdoptsAMatchingSuffixOnResume(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := newBridgeTestStore(t)
+	guard := budget.New(budget.Limits{}, nil, 0)
+
+	if err := st.CreateRun(ctx, &knov1.Run{Id: "run-1", Stage: knov1.Stage_STAGE_BRIDGE, Status: knov1.RunStatus_RUN_STATUS_RUNNING}); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	if err := st.WriteTuningJob(ctx, "run-1", &store.TuningJobRecord{
+		AblationGroup:          "all-in",
+		State:                  store.TuningJobStateSubmitting,
+		Suffix:                 "kno-run-1-all-in",
+		EstimatedCostUSDMicros: 6_000_000,
+		TrainTokens:            500_000,
+	}); err != nil {
+		t.Fatalf("WriteTuningJob: %v", err)
+	}
+	guard.Restore(budget.Spend{})
+
+	adopted := &core.JobRef{Id: "job-adopted", Provider: "together", SubmittedAt: "2026-08-31T00:00:00Z"}
+	tuner := &fakeTuner{listJobsResult: []*core.JobRef{adopted}}
+	res, err := bridge.SubmitGroup(ctx, bridge.SubmitGroupParams{
+		RunID: "run-1", AblationGroup: "all-in",
+		Store: st, Guard: guard, Tuner: tuner,
+		Job: testJob("all-in", 6_000_000, 500_000), TrainTokens: 500_000,
+		TrainingFileSHA256: "deadbeef", Provider: "together",
+	})
+	if err != nil {
+		t.Fatalf("SubmitGroup: %v", err)
+	}
+	if res.Outcome != bridge.SubmitOutcomeAdopted {
+		t.Errorf("Outcome = %v, want SubmitOutcomeAdopted", res.Outcome)
+	}
+	if res.Ref.GetId() != "job-adopted" {
+		t.Errorf("Ref.Id = %q, want %q", res.Ref.GetId(), "job-adopted")
+	}
+	if tuner.submitCalls != 0 {
+		t.Errorf("Submit called %d times, want 0 — an adopted job must never be re-submitted", tuner.submitCalls)
+	}
+	if tuner.listJobsCalls != 1 {
+		t.Errorf("ListJobs called %d times, want 1", tuner.listJobsCalls)
+	}
+
+	jobs, err := st.TuningJobs(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("TuningJobs: %v", err)
+	}
+	if len(jobs) != 1 || jobs[0].State != store.TuningJobStateSubmitted || jobs[0].ProviderJobID != "job-adopted" {
+		t.Fatalf("got %+v, want one submitted row carrying the adopted job id", jobs)
+	}
+
+	// The estimate was already durable on the write-ahead row; adoption must
+	// not double-record it. SettledSpend counts it exactly once, the same
+	// figure the abandon test asserts for its own path.
+	settled, err := st.SettledSpend(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("SettledSpend: %v", err)
+	}
+	want := budget.Spend{Calls: 1, CostUSDMicros: 6_000_000, Tokens: 500_000}
+	if settled != want {
+		t.Errorf("SettledSpend for an adopted job = %+v, want %+v (the estimate exactly once)", settled, want)
+	}
+}
+
+// TestSubmitGroupAbandonsWhenListJobsFindsNoMatch is the same crash-recovery
+// shape as TestSubmitGroupAdoptsAMatchingSuffixOnResume, but ListJobs
+// returns no match for this row's suffix — the row must still abandon
+// safely, exactly as it would have if the suffix had never been recorded.
+func TestSubmitGroupAbandonsWhenListJobsFindsNoMatch(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := newBridgeTestStore(t)
+	guard := budget.New(budget.Limits{}, nil, 0)
+
+	if err := st.CreateRun(ctx, &knov1.Run{Id: "run-1", Stage: knov1.Stage_STAGE_BRIDGE, Status: knov1.RunStatus_RUN_STATUS_RUNNING}); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	if err := st.WriteTuningJob(ctx, "run-1", &store.TuningJobRecord{
+		AblationGroup:          "all-in",
+		State:                  store.TuningJobStateSubmitting,
+		Suffix:                 "kno-run-1-all-in",
+		EstimatedCostUSDMicros: 6_000_000,
+		TrainTokens:            500_000,
+	}); err != nil {
+		t.Fatalf("WriteTuningJob: %v", err)
+	}
+	guard.Restore(budget.Spend{})
+
+	tuner := &fakeTuner{} // listJobsResult nil: no match
+	res, err := bridge.SubmitGroup(ctx, bridge.SubmitGroupParams{
+		RunID: "run-1", AblationGroup: "all-in",
+		Store: st, Guard: guard, Tuner: tuner,
+		Job: testJob("all-in", 6_000_000, 500_000), TrainTokens: 500_000,
+		TrainingFileSHA256: "deadbeef", Provider: "together",
+	})
+	if err != nil {
+		t.Fatalf("SubmitGroup: %v", err)
+	}
+	if res.Outcome != bridge.SubmitOutcomeAbandoned {
+		t.Errorf("Outcome = %v, want SubmitOutcomeAbandoned", res.Outcome)
+	}
+	if tuner.submitCalls != 0 {
+		t.Errorf("Submit called %d times, want 0", tuner.submitCalls)
+	}
+	if tuner.listJobsCalls != 1 {
+		t.Errorf("ListJobs called %d times, want 1", tuner.listJobsCalls)
 	}
 }
 
@@ -410,5 +595,50 @@ func TestSubmitGroupDoesNotSettleOnSubmitFailure(t *testing.T) {
 	// not left holding a phantom reservation.
 	if rem := guard.Remaining(); rem.CostUSDMicros != 6_000_000 {
 		t.Errorf("Remaining().CostUSDMicros = %d, want the full cap restored", rem.CostUSDMicros)
+	}
+}
+
+// TestSubmitGroupParamsValidation covers every SubmitGroupParams.validate
+// branch: each required field, missing in isolation, is refused before any
+// store or Tuner call.
+func TestSubmitGroupParamsValidation(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	newBase := func(t *testing.T) (store.Store, *budget.Guard, core.Tuner, *core.TuningJob) {
+		t.Helper()
+		st := newBridgeTestStore(t)
+		guard := budget.New(budget.Limits{}, nil, 0)
+		tuner := &fakeTuner{ref: &core.JobRef{Id: "job-1"}}
+		job := testJob("all-in", 6_000_000, 500_000)
+		return st, guard, tuner, job
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(p *bridge.SubmitGroupParams)
+	}{
+		{"missing run id", func(p *bridge.SubmitGroupParams) { p.RunID = "" }},
+		{"missing ablation group", func(p *bridge.SubmitGroupParams) { p.AblationGroup = "" }},
+		{"missing store", func(p *bridge.SubmitGroupParams) { p.Store = nil }},
+		{"missing guard", func(p *bridge.SubmitGroupParams) { p.Guard = nil }},
+		{"missing tuner", func(p *bridge.SubmitGroupParams) { p.Tuner = nil }},
+		{"missing job", func(p *bridge.SubmitGroupParams) { p.Job = nil }},
+		{"zero estimate", func(p *bridge.SubmitGroupParams) { p.Job.EstimatedCostUsdMicros = 0 }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			st, guard, tuner, job := newBase(t)
+			p := bridge.SubmitGroupParams{
+				RunID: "run-x", AblationGroup: "all-in",
+				Store: st, Guard: guard, Tuner: tuner, Job: job,
+				TrainTokens: 500_000, TrainingFileSHA256: "deadbeef", Provider: "together",
+			}
+			tc.mutate(&p)
+			if _, err := bridge.SubmitGroup(ctx, p); err == nil {
+				t.Fatalf("want an error for %s", tc.name)
+			}
+		})
 	}
 }

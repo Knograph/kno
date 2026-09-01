@@ -200,6 +200,112 @@ func TestNoHeadersInAnyError(t *testing.T) {
 	}
 }
 
+// TestListJobsMatchesOnlyBySuffix pins the adopt-by-suffix mechanism's
+// filtering: a list carrying jobs with several suffixes returns only the
+// one matching exactly, most-recently-submitted first when more than one
+// matches.
+func TestListJobsMatchesOnlyBySuffix(t *testing.T) {
+	t.Setenv("TOGETHER_API_KEY", "sk-test")
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/fine-tunes", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("method = %s, want GET", r.Method)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"id": "ft-old", "status": "succeeded", "suffix": "kno-run-1-all-in", "created_at": "2026-08-30T00:00:00Z"},
+				{"id": "ft-new", "status": "running", "suffix": "kno-run-1-all-in", "created_at": "2026-08-31T00:00:00Z"},
+				{"id": "ft-other", "status": "running", "suffix": "kno-run-1-cluster-x", "created_at": "2026-08-31T01:00:00Z"},
+			},
+		})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	tuner, err := together.New(together.Options{BaseURL: srv.URL, AllowPrivateAddress: true, AllowInsecureBaseURL: true, KeyEnv: bindKey(t, srv.URL)})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	refs, err := tuner.ListJobs(context.Background(), "kno-run-1-all-in")
+	if err != nil {
+		t.Fatalf("ListJobs: %v", err)
+	}
+	if len(refs) != 2 {
+		t.Fatalf("got %d refs, want 2 (only the matching suffix)", len(refs))
+	}
+	if refs[0].GetId() != "ft-new" {
+		t.Errorf("refs[0].Id = %q, want %q (most recent first)", refs[0].GetId(), "ft-new")
+	}
+}
+
+// TestListJobsRequiresASuffix guards against a caller accidentally matching
+// every job on the account.
+func TestListJobsRequiresASuffix(t *testing.T) {
+	t.Setenv("TOGETHER_API_KEY", "sk-test")
+
+	tuner, err := together.New(together.Options{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := tuner.ListJobs(context.Background(), ""); err == nil {
+		t.Fatal("want an error for an empty suffix")
+	}
+}
+
+// TestListEndpointsMatchesOnlyBySuffix pins the resume-time sweep's
+// filtering: a list carrying endpoints for several served models returns
+// only the one whose model name carries the run's suffix.
+func TestListEndpointsMatchesOnlyBySuffix(t *testing.T) {
+	t.Setenv("TOGETHER_API_KEY", "sk-test")
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/endpoints", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("method = %s, want GET", r.Method)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"id": "ep-mine", "state": "started", "model": "meta-llama/Llama-3-8b-kno-run-1-all-in"},
+				{"id": "ep-other", "state": "started", "model": "meta-llama/Llama-3-8b-kno-run-2-all-in"},
+			},
+		})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	tuner, err := together.New(together.Options{BaseURL: srv.URL, AllowPrivateAddress: true, AllowInsecureBaseURL: true, KeyEnv: bindKey(t, srv.URL)})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	eps, err := tuner.ListEndpoints(context.Background(), "kno-run-1-all-in")
+	if err != nil {
+		t.Fatalf("ListEndpoints: %v", err)
+	}
+	if len(eps) != 1 || eps[0].ID != "ep-mine" {
+		t.Fatalf("got %+v, want exactly the matching endpoint", eps)
+	}
+	if !eps[0].Ready {
+		t.Errorf("Ready = false for state %q, want true", "started")
+	}
+}
+
+// TestListEndpointsRequiresASuffix mirrors TestListJobsRequiresASuffix for
+// the endpoint sweep's own filter.
+func TestListEndpointsRequiresASuffix(t *testing.T) {
+	t.Setenv("TOGETHER_API_KEY", "sk-test")
+
+	tuner, err := together.New(together.Options{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := tuner.ListEndpoints(context.Background(), ""); err == nil {
+		t.Fatal("want an error for an empty suffix")
+	}
+}
+
 func containsSecret(s string) bool {
 	const secret = "sk-super-secret-value"
 	for i := 0; i+len(secret) <= len(s); i++ {
