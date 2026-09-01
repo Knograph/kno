@@ -28,6 +28,19 @@ covenants — breaking any of them requires a major version.
      At release time the hand-written heading is renamed from [Unreleased] to
      the version. See docs/debt.md#76 for why that is still a manual step. -->
 
+## [0.1.6](https://github.com/uknoAI/kno/compare/v0.1.5...v0.1.6) (2026-09-01)
+
+
+### Bug Fixes
+
+* **export:** a tuning set carries an assistant turn to train on ([#183](https://github.com/uknoAI/kno/issues/183)) ([5cf4ab2](https://github.com/uknoAI/kno/commit/5cf4ab23e203515624a36554fa7ae291c75c22af))
+* **stats:** a sample with no spread no longer reports certainty ([#182](https://github.com/uknoAI/kno/issues/182)) ([9e88389](https://github.com/uknoAI/kno/commit/9e88389f36fdbee6e2fff048b11b542d3b706221))
+
+
+### Documentation
+
+* fold the hand-written changelog into v0.1.5 ([#180](https://github.com/uknoAI/kno/issues/180)) ([76fb335](https://github.com/uknoAI/kno/commit/76fb33589109d5be0a5cc2de2b623f032c2cf091))
+
 ## [0.1.5](https://github.com/uknoAI/kno/compare/v0.1.4...v0.1.5) (2026-09-01)
 
 
