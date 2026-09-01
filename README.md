@@ -270,7 +270,7 @@ It reports how many distinct behaviors your tags describe, how small an effect e
 Cases could separate from noise, how much of the set sits under one catch-all tag, and whether
 the holdout is large enough for `validate`. It calls no model, writes nothing, and exits 0
 whatever it finds. [Check whether your evals can attribute
-anything](docs/cookbook/check-your-evals.md).
+anything](https://github.com/uknoAI/kno-examples/blob/main/recipes/check-your-evals.md).
 
 > **Rule of thumb:** your eval defines what "better" means. Kno tells you which data caused
 > that metric to move.
