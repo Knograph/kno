@@ -266,6 +266,10 @@ covenants — breaking any of them requires a major version.
   Pinned by `TestReachingTheCapMidServeStopsTheMeasurementAndTearsDown`,
   verified failing without the fix with a measurement that never returns.
 
+## v0.1.6 — in detail
+
+### Fixed
+
 - **`kno export --destination tuning_set` produced files no provider can train
   on.** `renderTuningSet` emitted one `user` message per Asset and no
   `assistant` turn — every line was
