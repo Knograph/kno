@@ -497,6 +497,7 @@ status-check: ## Fail if regenerating docs/status.json would change it
 .PHONY: docs
 docs: status-check ## Regenerate OpenAPI, check godoc coverage, verify links, gate docs/status.json
 	@go run ./internal/cmd/godoccheck
+	@$(SAFE) ./scripts/conflict-marker-check.sh
 	@$(SAFE) ./scripts/cookbook-stub-check.sh
 	@$(SAFE) ./scripts/fixture-consistency.sh
 	@$(call pending,OpenAPI generation,the first proto service definition)
