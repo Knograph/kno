@@ -28,6 +28,35 @@ covenants — breaking any of them requires a major version.
      At release time the hand-written heading is renamed from [Unreleased] to
      the version. See docs/debt.md#76 for why that is still a manual step. -->
 
+## [0.1.7](https://github.com/uknoAI/kno/compare/v0.1.6...v0.1.7) (2026-09-01)
+
+
+### Features
+
+* **bridge:** the tuner bridge, and the eval seam that closes the loop ([#184](https://github.com/uknoAI/kno/issues/184)) ([f900312](https://github.com/uknoAI/kno/commit/f90031281b3e649b372dc794573a32979c5ef921))
+
+
+### Bug Fixes
+
+* **build:** the ledger gate reads a minor series, and the v0.2 audit disposes every open entry ([#193](https://github.com/uknoAI/kno/issues/193)) ([099a82f](https://github.com/uknoAI/kno/commit/099a82fd79b37cf5ebbe2199fce278305a57e26b))
+* **docs:** repair the CHANGELOG, and refuse conflict markers in future ([#196](https://github.com/uknoAI/kno/issues/196)) ([c0f5692](https://github.com/uknoAI/kno/commit/c0f5692287c7dfb7b6020dabc139750453f76581))
+* **value:** the treatment arm carries the Asset's content ([#190](https://github.com/uknoAI/kno/issues/190)) ([8f09b10](https://github.com/uknoAI/kno/commit/8f09b10eb652392b02bd6139a14e949848e8ab16))
+
+
+### Documentation
+
+* **adr:** measured redundancy is cut from v0.2 ([#191](https://github.com/uknoAI/kno/issues/191)) ([cea92c6](https://github.com/uknoAI/kno/commit/cea92c65cb73c96870eef77203599c1862200128))
+* correct the v0.2 scope after two cuts ([#192](https://github.com/uknoAI/kno/issues/192)) ([3726be0](https://github.com/uknoAI/kno/commit/3726be0f652f30cbbd5bbd827f6f15f371878cb5))
+* fold the hand-written changelog into v0.1.6 ([#197](https://github.com/uknoAI/kno/issues/197)) ([66c2a18](https://github.com/uknoAI/kno/commit/66c2a185a977792b1e17f1cd0c08c2a226f5883a))
+* **plans:** the bridge measurement seam ([#189](https://github.com/uknoAI/kno/issues/189)) ([ae955db](https://github.com/uknoAI/kno/commit/ae955dbfe50ee404ee6728cff38ee22876c4c034))
+* tombstone calibrate-a-judge — the cookbook migration is finished ([#188](https://github.com/uknoAI/kno/issues/188)) ([6ab9937](https://github.com/uknoAI/kno/commit/6ab9937cc797accaae8699db5c35d4252e118639))
+* tombstone check-your-evals, and fix the README's self-contradicting example ([#185](https://github.com/uknoAI/kno/issues/185)) ([c8e0d62](https://github.com/uknoAI/kno/commit/c8e0d624e518407ec608d039e8e1cfae3e00fa6d))
+
+
+### Build & Dependencies
+
+* the link check walks this checkout, not agent worktrees ([#194](https://github.com/uknoAI/kno/issues/194)) ([1acbc74](https://github.com/uknoAI/kno/commit/1acbc749a8a01913eb4e46fb07f503c7a24b3250))
+
 ## [0.1.6](https://github.com/uknoAI/kno/compare/v0.1.5...v0.1.6) (2026-09-01)
 
 
