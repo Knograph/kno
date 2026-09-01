@@ -158,8 +158,30 @@ func TestHoldoutOpenerIsUnreachableOutsideCore(t *testing.T) {
 			return err
 		}
 		if d.IsDir() {
+			if path == root {
+				return nil
+			}
 			switch d.Name() {
-			case ".git", "bin", "testdata":
+			case "bin", "testdata":
+				return filepath.SkipDir
+			}
+			// Any dot-directory, not just .git. This test walks the filesystem
+			// rather than the module, so it descends into anything sitting in
+			// the tree — and `.claude/worktrees/` holds COMPLETE checkouts of
+			// this repository, one per concurrent agent. Each carries its own
+			// core/holdout.go, whose path relative to root is
+			// ".claude/worktrees/<id>/core/holdout.go" and therefore does not
+			// start with "core/", so every copy of the opener read as an
+			// offender. The test failed intermittently, depending only on
+			// whether a sibling worktree happened to exist while it ran, which
+			// is the worst kind of flake: it accuses real code of a real
+			// violation and the accusation is an artifact of the walk.
+			if strings.HasPrefix(d.Name(), ".") {
+				return filepath.SkipDir
+			}
+			// A nested module is not this module. Belt to the same suspender,
+			// for a checkout that is not dot-prefixed.
+			if _, statErr := os.Stat(filepath.Join(path, "go.mod")); statErr == nil {
 				return filepath.SkipDir
 			}
 			return nil
