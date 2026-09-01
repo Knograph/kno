@@ -87,6 +87,8 @@ covenants — breaking any of them requires a major version.
 
 ## [Unreleased]
 
+## v0.1.6 — in detail
+
 ### Fixed
 
 - **`kno export --destination tuning_set` produced files no provider can train
