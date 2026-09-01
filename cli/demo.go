@@ -216,10 +216,14 @@ func demoPathsFor(dir string, jsonOut bool) demoPaths {
 // instead — silently, with no compiler signal. The parity test in
 // cli/demo_defaults_test.go is what keeps this list honest as flags are added.
 //
-// The two structs legitimately differ on --temperature: `baseline` registers
-// math.NaN() ("leave the provider default alone") and `value` registers 0.
-// Copying one into the other would be the exact divergence the test exists to
-// catch, in the other direction.
+// The structs used to differ on --temperature, and this comment used to call
+// that legitimate: `baseline` registered math.NaN() ("leave the provider
+// default alone") while `value` and `validate` registered 0. It was not
+// legitimate, and writing it down as intended is how it survived. optionalFloat
+// treats only NaN as unset, so value and validate sent an explicit
+// temperature=0 on every run while baseline sent nothing — the same model
+// measured under different sampling settings, with baseline as the reference
+// every later delta is computed against. All three now register NaN.
 
 func demoBaselineFlags(p demoPaths) baselineFlags {
 	return baselineFlags{
@@ -260,7 +264,7 @@ func demoValueFlags(p demoPaths) valueFlags {
 			// No holdoutFrac: `value` registers no --holdout-frac, and
 			// runValue passes 0 to jsonl.New itself. Setting it here would
 			// look like parity with baseline and mean nothing.
-			// temperature stays 0: that is what `value` registers.
+			temperature: math.NaN(),
 		},
 		poolPath:      p.pool,
 		baselineRunID: demoBaselineRunID,
