@@ -363,7 +363,87 @@ substantial enough that a review of the first draft says little about the second
 and §2's redesign changes `bridge.Run`'s control flow rather than only adding to
 it.
 
+## Second Phase 1 review outcome — Phase 2 remains blocked
+
+The amended plan was reviewed again and **also did not pass**. Two of the new
+blockers were introduced *by the first round of amendments*, which is the signal
+worth recording: each amend cycle has added unreviewed design at the same rate it
+retired reviewed design.
+
+**B1 — `EvalRunner.Measure` cannot express §2.** Its signature returns
+`(goalDeltas, controlDeltas [][]float64)` (`bridge/run.go:45`) — positional
+slices carrying no Case ID. §2 moves pairing into `bridge.Run`, which therefore
+needs the all-in pass's per-Case scores *keyed by Case*. The union pass's ID list
+has different membership and order from any single group's, and the divergence is
+guaranteed rather than hypothetical: `core/value/route.go:638-646` assigns a Case
+to one cluster **per tag**, so a Case tagged `["refunds","billing"]` is in both
+groups' dev sets. Aligning "slot i of the union pass" with "slot j of group G's
+pass" is then wrong, and wrong in the worst way — a plausible interval of the
+wrong width, which §4 itself names as the failure mode that justifies extracting
+`NetEffect` at all.
+
+**Δ_group is not well-defined as specified.** `Measure` must return Case-ID-keyed
+scores (mirroring §1's own `ScoreResult.Scores`) before any Phase 2 workstream
+can start, because `core`, `bridge` and the store question below all depend on
+that shape. This is the "proto first" rule applied to an interface that is not a
+wire type.
+
+**B2 — §7's inference estimate collides with a deliberate engine rule.**
+`core/ring0.go:122-124`: *"a zero estimate makes a dollar cap unenforceable, so
+the engine treats a zero-cost answer under a cost cap exactly as it treats an
+error."* A dedicated endpoint is reserved capacity billed per minute, which is
+what `ServePrice`/`EstimateServeCap` already assume. If inference on it carries no
+separate per-call charge, the honest per-Case estimate is **zero** — and the
+engine will run-fatal-refuse every Case under a cost cap. §7 asked for "a third
+quote dimension" without establishing that a third dimension exists.
+
+The question is empirical and must be answered before any CLI or quote work:
+**does a Together dedicated endpoint bill per token on top of per minute?**
+
+- If **no**: there is no third quote dimension; the existing training + hosting
+  quote is already complete, and the real problem is that the scoring pass must
+  not be charged twice — the ticker already meters it. That needs a stated
+  mechanism for running `ScorePass` whose spend is accounted elsewhere, without
+  tripping the zero-cost refusal.
+- If **yes**: new price tables keyed by **base** model are required, since a
+  per-run-generated endpoint id can never appear in a static table
+  (`adapters/agent/pricing/table.go`), plus a two-rate CLI escape hatch, since
+  `openaicompat`'s `applyPrice` requires input *and* output rates rather than the
+  single scalar `resolveTrainPrice`/`resolveServePrice` use.
+
+Refusing until priced is right for the second branch and actively wrong for the
+first — it would make the feature unshippable against exactly the provider shape
+the parent plan targets.
+
+**Also to fix, one level down from where the first review looked:** resume must
+recompute and emit the verdict for a group whose Cases are all durably scored but
+whose event was never recorded, or a paid-for measurement silently vanishes
+(prime directive 5 by omission); the store schema for per-Case bridge scores is
+unspecified and the obvious reuse stuffs a group name into `MeasurementKey.AssetID`,
+which is vocabulary rather than a free string; §8 must state that the Bonferroni
+family is **goal-only** (`portfolio.Correct` refuses one-sided input, so it
+structurally cannot touch the control interval) and that N is pinned at quote
+time, since a dynamic N makes a group's verdict depend on how many *other* groups
+had failed by the time it was measured; and §9's convention-plus-canary is the
+design `core/seal.go`'s own history records as tried and rejected, when
+`ScoreParams.Cases` could simply take `*SealedEvals` for the price of one internal
+call.
+
+## Status
+
+**Phase 2 does not start.** Two questions must be answered first, and neither is a
+plan-text edit:
+
+1. `EvalRunner.Measure`'s return shape — Case-ID-keyed, decided and written down.
+2. Whether dedicated-endpoint inference is a real cost dimension or zero by
+   construction.
+
+Two review rounds have each surfaced blockers of the same class — an unreviewed
+data-flow or pricing claim that does not survive contact with the types. A third
+amend-and-review cycle is not obviously the cheapest way to converge; reducing
+scope is worth considering, starting with whether the union-pass optimisation
+earns its complexity against simply scoring the all-in model once per group.
+
 ## Accepted risks
 
-*None yet. To be filled by the second Phase 1 review and mirrored to
-`docs/debt.md` with repayment triggers.*
+*None yet. The plan is not approved, so there is nothing to accept.*
