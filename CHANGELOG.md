@@ -87,6 +87,46 @@ covenants — breaking any of them requires a major version.
 
 ## [Unreleased]
 
+### Changed
+
+- **The cookbook migration is finished: `calibrate-a-judge` has moved, and no
+  recipe lives in this repository any more.** `docs/cookbook/calibrate-a-judge.md`
+  is now a one-line tombstone pointing at
+  [`kno-examples/recipes/calibrate-a-judge.md`](https://github.com/uknoAI/kno-examples/blob/main/recipes/calibrate-a-judge.md),
+  which is where every other recipe already was.
+
+  It was the last page held back, and the reason it was held back has a shape
+  worth recording. `kno-examples` checks every command on every page against
+  the **released** binary, so a page documenting a command that is on `main`
+  and in no release can carry no honest tier there — and there is no tier for
+  "documents an unreleased command", because inventing one would let any page
+  claim verification against a binary that cannot run it. v0.1.5 shipped
+  `kno judge calibrate` and the reason expired.
+
+  The page did not settle for a hand-checked tier on arrival. `--replay` is
+  the default and makes no provider call, the 60-record calibration set is
+  built into the binary, and repeated runs produce byte-identical output — so
+  it migrated as `executed`, with a scenario that asserts kappa 0.867, the
+  bootstrap interval, the sensitivity/specificity split, and that the gate
+  **still exits 1** at two floors it must refuse: one where the interval
+  contains the floor, and one where the floor is above the inter-human kappa
+  the labelers themselves reach.
+
+  **Reader-visible**: a bookmark or an issue link to
+  `docs/cookbook/calibrate-a-judge.md` now lands on a redirect line rather
+  than on the page. That is what every tombstone here is for — nothing in
+  either repository reports an inbound link 404ing, since `make docs` skips
+  `https://` targets and the website's crawl skips external hrefs.
+
+  `CONTRIBUTING.md` and `docs/evaluation-design.md` linked at the old path and
+  now link at the real page: a link this repository controls should point at
+  the thing rather than at the redirect.
+
+  `scripts/cookbook-stub-check.sh`'s RESIDENT list is now empty, and the
+  comment above it says why keeping it empty is the point. A name added there
+  must come with the release that will ship its command.
+
+
 ### Fixed
 
 - **`kno export --destination tuning_set` produced files no provider can train

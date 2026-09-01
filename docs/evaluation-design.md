@@ -49,7 +49,7 @@ Use a judge Goal when the behavior is genuinely semantic ("tone", "helpfulness")
   isn't the thing being measured — and judge error is not noise that averages out, it shrinks
   every effect you measure toward zero by a factor you can put a number on. `kno judge
   calibrate` reports that number (Cohen's kappa, with an interval, against a derived floor);
-  [Calibrate a judge](cookbook/calibrate-a-judge.md) is the recipe and [What a judge's kappa
+  [Calibrate a judge](https://github.com/uknoAI/kno-examples/blob/main/recipes/calibrate-a-judge.md) is the recipe and [What a judge's kappa
   claims](what-the-numbers-mean.md#what-a-judges-kappa-claims) is the arithmetic.
 
 ## 4. Multi-dimensional Goals

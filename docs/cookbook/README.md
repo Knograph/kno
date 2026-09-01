@@ -19,7 +19,7 @@ not depend on a second repository being reachable.
 
 | Recipe | What it covers |
 |---|---|
-| [Calibrate a judge](calibrate-a-judge.md) | `kno judge calibrate` — what a judge's kappa claims, the 0.60 floor, and how to fix a prompt against the records it gets wrong |
+| [Calibrate a judge](https://github.com/uknoAI/kno-examples/blob/main/recipes/calibrate-a-judge.md) | `kno judge calibrate` — what a judge's kappa claims, the 0.60 floor, and how to fix a prompt against the records it gets wrong |
 | [Check whether your evals can attribute anything](https://github.com/uknoAI/kno-examples/blob/main/recipes/check-your-evals.md) | `kno eval inspect` before you spend — behaviors, separable effects, and the five checks |
 | [Score your agent for the first time](https://github.com/uknoAI/kno-examples/blob/main/recipes/first-baseline.md) | Getting from an eval file to a baseline, and reading what comes back |
 | [Point Kno at your own provider](https://github.com/uknoAI/kno-examples/blob/main/recipes/your-own-provider.md) | Keys, cost caps, local model servers, and the first run that can bill you |
@@ -33,17 +33,17 @@ not depend on a second repository being reachable.
 | [Read the whole story with `kno report`](https://github.com/uknoAI/kno-examples/blob/main/recipes/read-the-whole-story.md) | One page across the stages — what each section means, what "no cluster data" says, and why the holdout caveat is mandatory |
 | [Delete stored conversation content](https://github.com/uknoAI/kno-examples/blob/main/recipes/retention.md) | What Kno keeps, what `kno purge` removes, and why it keeps the rest |
 
-`calibrate-a-judge` is the one recipe still held here in full. A page is held here only while
-its commands are unreleased, because `kno-examples` checks every command on every page against
-the binary you can download and a page about an unreleased command can carry no honest tier
-there.
+**Every recipe has moved.** `docs/cookbook/` keeps this index and one stub per old path; the
+recipes themselves live in
+[`uknoAI/kno-examples`](https://github.com/uknoAI/kno-examples/tree/main/recipes), where every
+command on every page is checked against the binary you can download.
 
-**That reason has expired for this page.** v0.1.5 ships `kno judge calibrate`, so it is here now
-only because it has not been migrated yet — and the migration is worth doing rather than
-deferring: the command defaults to `--replay`, calls no model, and prints a deterministic kappa
-with a PASS/FAIL gate, so the page can be verified end to end rather than by hand.
-
-`check-your-evals` was the other one, and left when v0.1.4 shipped `kno eval inspect`.
+The last two took longest, for one reason each: `check-your-evals` documents `kno eval inspect`
+and `calibrate-a-judge` documents `kno judge calibrate`, and neither command was in a release. A
+page about an unreleased command can carry no honest tier over there, and there is no tier for
+"documents an unreleased command". v0.1.4 shipped the first and v0.1.5 the second, and both pages
+migrated as `executed` — verified end to end against committed expectations — rather than settling
+for a hand-checked tier.
 
 ## Vendor recipes
 
