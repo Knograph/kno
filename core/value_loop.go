@@ -868,7 +868,20 @@ func (o ValueOptions) sinkFunc(key store.MeasurementKey, counts *valueCounts) ex
 			Response: out.Response,
 			Score:    out.Score,
 			Err:      out.Err,
-			Spend:    budget.Spend{Calls: out.SettledCalls, CostUSDMicros: out.BilledUSDMicros},
+			// Tokens come from the Response, exactly as Baseline's
+			// settledSpend computes them. Dropping them here made the
+			// measurements table disagree with the outcomes table about what
+			// the same kind of call cost, and the disagreement was not
+			// cosmetic: SettledSpend sums this column, Guard.Restore seeds
+			// from that sum, so a resumed Value run restored zero tokens and
+			// a --max-tokens cap was under-enforced for the rest of the run.
+			// GetPromptTokens on a nil Response returns zero, which is the
+			// right answer for an attempt that never reached a provider.
+			Spend: budget.Spend{
+				Calls:         out.SettledCalls,
+				CostUSDMicros: out.BilledUSDMicros,
+				Tokens:        out.Response.GetPromptTokens() + out.Response.GetCompletionTokens(),
+			},
 		}
 		if err := o.Store.RecordMeasurement(ctx, o.RunID, recorded); err != nil {
 			return fmt.Errorf("recording measurement %s/%s (trial %d): %w", k.AssetID, k.CaseID, k.Trial, err)
