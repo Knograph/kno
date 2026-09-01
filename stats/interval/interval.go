@@ -244,7 +244,7 @@ func paired(deltas []float64, level float64, side knov1.Sidedness) *knov1.Interv
 	}
 	variance := ss / (n - 1)
 
-	if variance <= 0 {
+	if degenerate(deltas, mean, variance) {
 		// Every pair identical. The sign test bounds how confident that can
 		// make us: with n agreeing observations and no disagreement, the
 		// interval is the one a distribution-free rule allows, which is never
@@ -255,6 +255,69 @@ func paired(deltas []float64, level float64, side knov1.Sidedness) *knov1.Interv
 	q := studentTQuantile(quantileFor(level, side), n-1)
 	half := q * math.Sqrt(variance/n)
 	return build(mean, half, level, side, MethodStudentT, len(deltas))
+}
+
+// degenerate reports whether a sample carries no real spread.
+//
+// The test used to be `variance <= 0`, and that missed the case it most needed
+// to catch. Summing (d-mean)^2 over IDENTICAL small-magnitude deltas does not
+// give exactly zero: the mean of fifty copies of 0.001 is not 0.001 in binary
+// floating point, so each residual is around 1e-19 and the variance is a
+// positive number made entirely of rounding noise.
+//
+// The consequence was not a rounding artifact. A positive variance takes the
+// Student-t path, and sqrt(1e-38/n) is a half-width around 1e-19 — so fifty
+// identical observations produced an interval of width 4e-19 reported as
+// method "t". That is a claim of perfect certainty, which is exactly what
+// signBound exists to prevent ("wide, honest, and impossible to mistake for
+// certainty") and what build's zero-width guard believes it is enforcing —
+// build only refuses half <= 0, and 1e-19 is greater than zero.
+//
+// It reached every caller: a Value delta, a Validate holdout gain and a Select
+// screening interval all run through here, and any Asset whose per-Case
+// differences came out identical and small was reported with a confidence
+// interval that had collapsed to a point. Prime directive 5 says no reported
+// delta without its CI; a CI of width 1e-19 is worse than none, because it
+// reads as a measurement rather than as a refusal.
+//
+// Two conditions, because they catch different things. Exact equality is the
+// semantic case signBound's doc describes and is immune to how the residuals
+// happen to round. The relative test catches spread that exists but is pure
+// noise: a standard deviation below the floating-point resolution of the data
+// it was computed from is not evidence of anything.
+func degenerate(deltas []float64, mean, variance float64) bool {
+	if variance <= 0 {
+		return true
+	}
+	if allIdentical(deltas) {
+		return true
+	}
+	// Scale from the data's own magnitude, not from 1.0: the resolution of a
+	// sample around 1e6 is coarser than one around 1e-6, and a fixed epsilon
+	// would be wrong at both ends.
+	scale := math.Abs(mean)
+	for _, d := range deltas {
+		if a := math.Abs(d); a > scale {
+			scale = a
+		}
+	}
+	if scale == 0 {
+		return true
+	}
+	// A few ULPs of headroom: residuals from summing n terms accumulate more
+	// error than a single operation does.
+	noise := scale * 1e-12
+	return math.Sqrt(variance) <= noise
+}
+
+// allIdentical reports whether every delta is bit-for-bit the same value.
+func allIdentical(deltas []float64) bool {
+	for _, d := range deltas[1:] {
+		if d != deltas[0] {
+			return false
+		}
+	}
+	return true
 }
 
 // signBound handles a sample with no observed variance.
