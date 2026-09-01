@@ -139,6 +139,19 @@ func EstimateServeCap(price ServePrice, maxServeMinutes int, maxReplicas int) in
 	return saturatingMul(perMinuteAllReplicas, int64(maxServeMinutes))
 }
 
+// SettleServeMinutes reports what minutes actually accrued cost, at price's
+// rate — the settle-forward counterpart to EstimateServeCap's worst-case
+// quote. Called once per tick with the WHOLE-MINUTE delta since the last
+// settled tick (never a running total), so a caller settling incrementally
+// never re-prices minutes it already settled.
+func SettleServeMinutes(price ServePrice, minutes int, replicas int) int64 {
+	if minutes <= 0 || replicas <= 0 {
+		return 0
+	}
+	perMinuteAllReplicas := saturatingMul(price.PerMinuteUSDMicros, int64(replicas))
+	return saturatingMul(perMinuteAllReplicas, int64(minutes))
+}
+
 // saturatingMul multiplies two non-negative int64s, saturating at
 // math.MaxInt64 rather than wrapping. A wrapped product can land small and
 // positive, which reads as a cheap call rather than as an error — the same

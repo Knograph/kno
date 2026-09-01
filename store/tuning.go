@@ -264,6 +264,62 @@ func (s *SQLite) TuningJobs(ctx context.Context, runID string) ([]*TuningJobReco
 	return out, nil
 }
 
+// LeakedEndpoint is one row LeakedEndpoints reports: a tuning job whose
+// endpoint was deployed and never confirmed torn down.
+type LeakedEndpoint struct {
+	// RunID and AblationGroup identify which run and group deployed this
+	// endpoint.
+	RunID         string
+	AblationGroup string
+
+	// Provider and EndpointID are what a user needs to find and stop the
+	// meter in the provider's own console.
+	Provider   string
+	EndpointID string
+
+	// DeployedAt is when the endpoint was recorded live.
+	DeployedAt string
+
+	// ServeMinutes and ServeCostUSDMicros are what Kno last settled for it
+	// — a floor, not the true total, since a leaked endpoint keeps billing
+	// after the last tick this row recorded.
+	ServeMinutes       int32
+	ServeCostUSDMicros int64
+}
+
+// LeakedEndpoints returns every tuning-job row, across every run, carrying
+// a non-null endpoint_id with a null torn_down_at. See the Store interface
+// godoc.
+func (s *SQLite) LeakedEndpoints(ctx context.Context) ([]LeakedEndpoint, error) {
+	db, err := s.conn()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := db.QueryContext(ctx,
+		`SELECT run_id, ablation_group, provider, endpoint_id, deployed_at, serve_minutes, serve_cost_usd_micros
+		 FROM tuning_jobs
+		 WHERE endpoint_id IS NOT NULL AND torn_down_at IS NULL
+		 ORDER BY run_id, ablation_group`)
+	if err != nil {
+		return nil, fmt.Errorf("listing leaked endpoints: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []LeakedEndpoint
+	for rows.Next() {
+		var le LeakedEndpoint
+		if err := rows.Scan(&le.RunID, &le.AblationGroup, &le.Provider, &le.EndpointID,
+			&le.DeployedAt, &le.ServeMinutes, &le.ServeCostUSDMicros); err != nil {
+			return nil, fmt.Errorf("scanning a leaked endpoint: %w", err)
+		}
+		out = append(out, le)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating leaked endpoints: %w", err)
+	}
+	return out, nil
+}
+
 // settled reports whether j's training estimate has been confirmed spent.
 //
 // SettledSpend embeds this SAME predicate directly in SQL

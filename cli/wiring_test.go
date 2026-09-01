@@ -1,6 +1,8 @@
 package cli_test
 
 import (
+	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -8,6 +10,8 @@ import (
 
 	"github.com/knograph/kno/cli"
 	"github.com/knograph/kno/core/errs"
+	knov1 "github.com/knograph/kno/gen/kno/v1"
+	"github.com/knograph/kno/store"
 )
 
 // TestABaseURLIsValidatedByOneParser.
@@ -361,6 +365,78 @@ func TestDoctorPrintsTheMatrixWithoutSpendingOrReadingACredential(t *testing.T) 
 		t.Errorf("--json version = %q; this field is the bare version, not the human "+
 			"string with its commit and date — `jq -r .version` is a documented "+
 			"contract and a parenthetical breaks every consumer of it", version)
+	}
+}
+
+// TestDoctorReportsALeakedEndpoint covers acceptance criterion 36: `kno
+// doctor` lists a tuning_jobs row carrying a non-null endpoint id and a null
+// teardown timestamp, naming the run, the group, and the endpoint id.
+func TestDoctorReportsALeakedEndpoint(t *testing.T) {
+	t.Parallel()
+
+	dbPath := filepath.Join(t.TempDir(), "kno.db")
+	ctx := context.Background()
+	db, err := store.NewSQLite(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("opening store: %v", err)
+	}
+	if err := db.CreateRun(ctx, &knov1.Run{Id: "run-leak", Stage: knov1.Stage_STAGE_BRIDGE, Status: knov1.RunStatus_RUN_STATUS_RUNNING}); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	endpointID := "ep-leaked-123"
+	if err := db.WriteTuningJob(ctx, "run-leak", &store.TuningJobRecord{
+		AblationGroup: "cluster-x", State: store.TuningJobStateSubmitted,
+		Provider: "together", EndpointID: &endpointID, DeployedAt: "2026-08-31T00:00:00Z",
+		ServeMinutes: 45, ServeCostUSDMicros: 4_500_000,
+	}); err != nil {
+		t.Fatalf("WriteTuningJob: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("closing store: %v", err)
+	}
+
+	stdout, _, code := run(t, "doctor", "--db", dbPath)
+	if code != errs.ExitOK {
+		t.Fatalf("exit = %d:\n%s", code, stdout)
+	}
+	for _, want := range []string{"run-leak", "cluster-x", "together", "ep-leaked-123"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the leaked-endpoint report omits %q:\n%s", want, stdout)
+		}
+	}
+
+	jsonOut, _, code := run(t, "doctor", "--json", "--db", dbPath)
+	if code != errs.ExitOK {
+		t.Fatalf("--json exit = %d", code)
+	}
+	rep, err := cli.DecodeRaw([]byte(jsonOut))
+	if err != nil {
+		t.Fatalf("decoding: %v\n%s", err, jsonOut)
+	}
+	leaks, ok := rep["leaked_endpoints"].([]any)
+	if !ok || len(leaks) != 1 {
+		t.Fatalf("--json leaked_endpoints = %v, want exactly one entry", rep["leaked_endpoints"])
+	}
+}
+
+// TestDoctorReportsNoLeaksForAFreshDatabase guards the read-only-and-free
+// contract: a database with no bridge activity (or no database at all)
+// reports zero leaks and creates nothing.
+func TestDoctorReportsNoLeaksForAFreshDatabase(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "kno.db")
+
+	stdout, _, code := run(t, "doctor", "--db", dbPath)
+	if code != errs.ExitOK {
+		t.Fatalf("exit = %d:\n%s", code, stdout)
+	}
+	if strings.Contains(stdout, "LEAKED ENDPOINTS") {
+		t.Errorf("a fresh database reports a leak:\n%s", stdout)
+	}
+	if _, err := os.Stat(dbPath); err == nil {
+		t.Error("doctor created a kno.db file for a path that did not exist; it must be read-only")
 	}
 }
 

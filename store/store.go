@@ -302,6 +302,18 @@ type Store interface {
 	// has not reached its first write-ahead row yet.
 	TuningJobs(ctx context.Context, runID string) ([]*TuningJobRecord, error)
 
+	// LeakedEndpoints returns every tuning-job row, ACROSS EVERY RUN, that
+	// carries a non-null EndpointID with a null TornDownAt — the shape a
+	// failed Teardown or a killed process that never resumed leaves behind.
+	// `kno doctor` reads this to surface a leak that keeps billing after Kno
+	// exits with nobody watching; see the tuner-bridge plan's Step 2(g) and
+	// docs/debt.md#156.
+	//
+	// Deliberately run-agnostic: a leaked endpoint is a real-money problem
+	// independent of whether its run is still "current", and a user running
+	// `kno doctor` days later must still be told about it.
+	LeakedEndpoints(ctx context.Context) ([]LeakedEndpoint, error)
+
 	// Close releases resources. Safe to call more than once, and safe to call
 	// while other calls are in flight — those return an error rather than
 	// racing, which is what the executor's drain-then-close shutdown needs.

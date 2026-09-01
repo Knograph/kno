@@ -437,12 +437,38 @@ covenants — breaking any of them requires a major version.
   posture of `adapters/agent/anthropic` with a **local** security layer rather than a ported one —
   `adapters/agent/internal/transport` is a Go `internal` package reachable only from
   `adapters/agent/*`, so `adapters/tuner/together` cannot import it; see the package's `security.go`
-  for what that cost. **What does not ship in this PR:** actual job submission from the CLI
-  (`kno bridge --bridge --yes` plans, prices, and confirms, then stops and says so rather than
-  claiming success), polling, the per-group leave-one-out measurement and its Δ_group/Δ_control
-  statistics, the hosting settle-forward tick loop, the resume-time endpoint sweep, and `kno
-  doctor`'s leaked-endpoint report. `docs/debt.md#155` and `#156` record the hosting gaps with
-  their triggers; `docs/status.json` carries `bridge` as `partial`, not `shipped`.
+  for what that cost.
+
+  **This PR's own follow-up** finishes the orchestration loop: `bridge.Run` (`bridge/run.go`)
+  actually submits every group's job, polls it to a terminal status (`--bridge-timeout` stops
+  WAITING without cancelling, never re-submitting on resume), reconciles the actual-vs-estimate
+  true-up, deploys the finished model, and tears the endpoint down on **every** exit path. Crash
+  recovery upgrades from "always abandon" to **adopt-by-suffix**: `core.Tuner` gains
+  `ListJobs`/`ListEndpoints` (additive, beyond the original plan's "exactly two methods" framing —
+  Step 2(d)/2(g) always described listing as the mechanism), and a row a crash leaves
+  `submitting` is adopted when the provider confirms the job, abandoned only when it does not. The
+  hosting lifecycle is complete: a per-minute settle-forward tick (`SettleServeTick`,
+  `pricing.SettleServeMinutes`), a `--bridge-max-live-endpoints` semaphore (`LiveEndpointLimiter`),
+  and a resume-time sweep (`SweepEndpoints`) that tears down anything this run's own rows show
+  live — by recorded `EndpointID` first, by `ListEndpoints(suffix)` when a crash landed between
+  `Deploy` succeeding and that ID being recorded — settling at `--bridge-max-serve-minutes` when
+  the provider no longer lists the endpoint at all. `store.LeakedEndpoints` and `kno doctor --db`
+  report any row, across every run, carrying a non-null `EndpointID` with a null `TornDownAt`.
+  The consent quote gains a separately-labelled, cap-bounded hosting line
+  (`pricing.EstimateServeCap`), and `--bridge --help` now names every flag the plan specifies:
+  `--bridge-timeout`, `--bridge-cancel-on-timeout`, `--price-serve-per-minute`,
+  `--bridge-max-live-endpoints`, `--bridge-max-serve-minutes`.
+
+  **What still does not ship:** the per-group leave-one-out MEASUREMENT itself.
+  `bridge.Run` takes an `EvalRunner` — the seam that would invoke a deployed model over dev and
+  control Cases and score it — and refuses to start without one rather than deploying a paid
+  endpoint with nothing to measure it. No production `EvalRunner` ships in this PR: it needs an
+  Evals source `kno bridge`'s flags do not yet accept, and the same budget-guarded retrying invoke
+  path Value and Validate already share (`core.invoker`) is unexported from `core` today. So
+  `kno bridge --bridge --yes` still plans, prices, and confirms — now including the hosting line —
+  and stops with an actionable error, never a fake success. `docs/debt.md#156` (the leak risk) is
+  repaid at the mechanism level and stays open only pending this gap; `docs/debt.md#158` records it
+  with its trigger. `docs/status.json` still carries `bridge` as `partial`, not `shipped`.
 
 * **`kno validate` — the holdout stage.** The Portfolio ships as a set, so it is measured as a
   set, against the slice nothing has read. Validate runs the holdout twice inside one run: a

@@ -379,3 +379,53 @@ func TestWriteTuningJobRefusesAnEmptyAblationGroup(t *testing.T) {
 		t.Error("want an error for an empty ablation group")
 	}
 }
+
+// TestLeakedEndpointsReportsOnlyUntornDownRowsAcrossRuns pins the shape
+// `kno doctor` reads: a non-null endpoint id with a null teardown timestamp,
+// across EVERY run, never scoped to one — a leaked endpoint is a real-money
+// problem independent of which run created it.
+func TestLeakedEndpointsReportsOnlyUntornDownRowsAcrossRuns(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	s := newStore(t)
+	for _, id := range []string{"run-1", "run-2"} {
+		if err := s.CreateRun(ctx, newRun(id)); err != nil {
+			t.Fatalf("CreateRun(%s): %v", id, err)
+		}
+	}
+
+	leakedID := "ep-leaked"
+	tornDownID, tornDownAt := "ep-fine", "2026-08-31T02:00:00Z"
+	if err := s.WriteTuningJob(ctx, "run-1", &store.TuningJobRecord{
+		AblationGroup: "all-in", State: store.TuningJobStateSubmitted,
+		Provider: "together", EndpointID: &leakedID, DeployedAt: "2026-08-31T00:00:00Z",
+		ServeMinutes: 12, ServeCostUSDMicros: 1_200_000,
+	}); err != nil {
+		t.Fatalf("WriteTuningJob (leaked): %v", err)
+	}
+	if err := s.WriteTuningJob(ctx, "run-2", &store.TuningJobRecord{
+		AblationGroup: "cluster-x", State: store.TuningJobStateSubmitted,
+		Provider: "together", EndpointID: &tornDownID, TornDownAt: &tornDownAt,
+	}); err != nil {
+		t.Fatalf("WriteTuningJob (torn down): %v", err)
+	}
+	if err := s.WriteTuningJob(ctx, "run-2", &store.TuningJobRecord{
+		AblationGroup: "all-in", State: store.TuningJobStateSubmitted,
+	}); err != nil {
+		t.Fatalf("WriteTuningJob (never deployed): %v", err)
+	}
+
+	leaks, err := s.LeakedEndpoints(ctx)
+	if err != nil {
+		t.Fatalf("LeakedEndpoints: %v", err)
+	}
+	if len(leaks) != 1 {
+		t.Fatalf("got %d leaks, want 1: %+v", len(leaks), leaks)
+	}
+	if leaks[0].RunID != "run-1" || leaks[0].AblationGroup != "all-in" || leaks[0].EndpointID != "ep-leaked" {
+		t.Errorf("got %+v, want the run-1/all-in/ep-leaked row", leaks[0])
+	}
+	if leaks[0].ServeMinutes != 12 || leaks[0].ServeCostUSDMicros != 1_200_000 {
+		t.Errorf("got ServeMinutes=%d ServeCostUSDMicros=%d, want 12 and 1200000", leaks[0].ServeMinutes, leaks[0].ServeCostUSDMicros)
+	}
+}

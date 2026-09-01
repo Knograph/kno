@@ -27,9 +27,19 @@ const (
 
 	// SubmitOutcomeAbandoned means the row was found in
 	// TuningJobStateSubmitting on entry — a prior process crashed inside the
-	// request window — and was closed TuningJobStateAbandoned by this call.
+	// request window — Tuner.ListJobs found no job matching this group's
+	// suffix, and the row was closed TuningJobStateAbandoned by this call.
 	// Submit was NOT called. The estimate stays settled.
 	SubmitOutcomeAbandoned
+
+	// SubmitOutcomeAdopted means the row was found in
+	// TuningJobStateSubmitting on entry, Tuner.ListJobs found a job matching
+	// this group's suffix, and the row was updated TuningJobStateSubmitted
+	// with the discovered JobRef. Submit was NOT called. The estimate stays
+	// settled — it already counts once the row leaves "submitting", see
+	// store.SettledSpend — and no additional spend is recorded for the
+	// adoption itself.
+	SubmitOutcomeAdopted
 )
 
 // SubmitGroupParams bundles one ablation group's submission.
@@ -100,19 +110,18 @@ var ErrAlreadyAbandoned = errors.New("bridge: this ablation group's job was alre
 //
 //     The plan's Step 2(d) describes recovering that case by having the
 //     adapter "list the provider's jobs and adopt one whose model-name
-//     suffix matches". THIS BUILD DOES NOT IMPLEMENT THAT: core.Tuner
-//     exposes Submit/Status/Model/Deploy/Teardown and no job-listing or
-//     adopt-by-suffix method, and the plan's own Step 0 scopes its
-//     core.Tuner addition to exactly Deploy and Teardown. Adding a further
-//     interface method to recover this case was judged out of scope for
-//     this pass; see this PR's report. Instead, a row found in
-//     TuningJobStateSubmitting is unconditionally closed
-//     TuningJobStateAbandoned — the SAFE subset of the specified behavior:
-//     it never re-submits (never risks a double spend) and its estimate
-//     stays settled (never under-counts), it simply forgoes recovering a
-//     job that may have been submitted successfully. A future Tuner method
-//     can upgrade this path to attempt adoption first without changing this
-//     function's contract.
+//     suffix matches". core.Tuner now carries ListJobs for exactly this —
+//     an additive method beyond the plan's Step 0 "exactly two" framing
+//     (Deploy and Teardown); see core.Tuner.ListJobs's doc and this PR's
+//     report for why that framing undercounted. A row found in
+//     TuningJobStateSubmitting calls ListJobs(ctx, Job.Suffix): a match
+//     ADOPTS the discovered JobRef (the row moves straight to
+//     TuningJobStateSubmitted, Submit is never called, and the estimate —
+//     already settled once the row leaves "submitting", see
+//     store.SettledSpend's predicate — is not re-recorded); no match closes
+//     TuningJobStateAbandoned, the same safe fallback this build shipped
+//     before ListJobs existed: never re-submits, never under-counts, simply
+//     cannot recover a job the provider will not confirm.
 //
 //  2. Authorize the estimate through the Guard: Calls: 1, CostUSDMicros:
 //     Job.EstimatedCostUsdMicros, Tokens: TrainTokens — all three
@@ -156,11 +165,7 @@ func SubmitGroup(ctx context.Context, p SubmitGroupParams) (*SubmitGroupResult, 
 		case store.TuningJobStateAbandoned:
 			return nil, fmt.Errorf("%w: run %s group %s", ErrAlreadyAbandoned, p.RunID, p.AblationGroup)
 		case store.TuningJobStateSubmitting:
-			rec, err := abandon(ctx, p.Store, p.RunID, existing)
-			if err != nil {
-				return nil, err
-			}
-			return &SubmitGroupResult{Outcome: SubmitOutcomeAbandoned, Record: rec}, nil
+			return adoptOrAbandon(ctx, p.Store, p.Tuner, p.RunID, existing)
 		}
 	}
 
@@ -259,13 +264,42 @@ func findRecord(ctx context.Context, st store.Store, runID, ablationGroup string
 	return nil, nil
 }
 
-// abandon closes a TuningJobStateSubmitting row TuningJobStateAbandoned,
-// leaving its estimate settled. See SubmitGroup's doc for why this build
-// does not attempt adopt-by-suffix first.
-func abandon(ctx context.Context, st store.Store, runID string, rec *store.TuningJobRecord) (*store.TuningJobRecord, error) {
+// adoptOrAbandon resolves a row found in TuningJobStateSubmitting on entry:
+// the plan's Step 2(d) adopt-by-suffix recovery. See SubmitGroup's doc point
+// 1.
+//
+// tuner.ListJobs is called with rec.Suffix, never with the caller's fresh
+// Job — the row IS the record of what was submitted (or attempted), and its
+// suffix is what a real provider job would carry if the prior process's
+// request reached it. A match adopts; no match (or an empty suffix, which
+// means this row predates the suffix column and can never be matched)
+// abandons.
+func adoptOrAbandon(
+	ctx context.Context, st store.Store, tuner core.Tuner, runID string, rec *store.TuningJobRecord,
+) (*SubmitGroupResult, error) {
+	if rec.Suffix != "" {
+		refs, err := tuner.ListJobs(ctx, rec.Suffix)
+		if err != nil {
+			return nil, fmt.Errorf("listing provider jobs to adopt %s: %w", rec.AblationGroup, err)
+		}
+		if len(refs) > 0 {
+			// refs is most-recent-first per core.Tuner.ListJobs's contract;
+			// the newest match is the one this run's most recent submission
+			// attempt would have produced.
+			ref := refs[0]
+			rec.State = store.TuningJobStateSubmitted
+			rec.ProviderJobID = ref.GetId()
+			rec.SubmittedAt = ref.GetSubmittedAt()
+			if err := st.UpdateTuningJob(ctx, runID, rec); err != nil {
+				return nil, fmt.Errorf("adopting tuning job for %s: %w", rec.AblationGroup, err)
+			}
+			return &SubmitGroupResult{Outcome: SubmitOutcomeAdopted, Ref: ref, Record: rec}, nil
+		}
+	}
+
 	rec.State = store.TuningJobStateAbandoned
 	if err := st.UpdateTuningJob(ctx, runID, rec); err != nil {
 		return nil, fmt.Errorf("abandoning tuning job for %s: %w", rec.AblationGroup, err)
 	}
-	return rec, nil
+	return &SubmitGroupResult{Outcome: SubmitOutcomeAbandoned, Record: rec}, nil
 }
