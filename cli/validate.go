@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"math"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -159,7 +160,7 @@ stopped the run, 4 if it was interrupted; both are resumable.`,
 		"generation ceiling, which also bounds every cost estimate")
 	flags.Int64Var(&f.maxPromptBytes, "max-prompt-bytes", 0,
 		"refuse a Case whose prompt exceeds this (the injected portfolio is bounded separately, and charged on top)")
-	flags.Float64Var(&f.temperature, "temperature", 0,
+	flags.Float64Var(&f.temperature, "temperature", math.NaN(),
 		"sampling temperature (unset leaves the provider default)")
 	flags.Int64Var(&f.seed, "seed", 0, "sampling seed, where the provider supports one")
 	flags.StringVar(&f.system, "system", "", "system prompt prepended to every Case")

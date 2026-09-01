@@ -549,7 +549,20 @@ func (o ValueOptions) measureAsset(
 	// runs — not the receiver. The receiver passes validate()'s check; this
 	// asserts the wrapped agent declares what it does, before any spend on
 	// this Asset.
-	treatment, err := o.Agent.(ContextInjector).WithContext(&Asset{Id: routing.AssetID})
+	// The POOL's Asset, not a fresh &Asset{Id: ...}. Reconstructing one from
+	// the routing carried the ID and no Content, which made the treatment arm
+	// byte-identical to the control's — every paired difference exactly zero,
+	// with a tight interval around it, indistinguishable in the report from
+	// "measured, and inert". That is the one conclusion this stage exists to
+	// reach honestly, and openaicompat's assetContent refuses an empty Asset
+	// precisely to stop it: so `kno value` could not run against any adapter
+	// that validates what it is handed, and produced a meaningless zero
+	// against any adapter that did not. It was invisible because the pipeline
+	// had only ever been driven end to end against `fake:`.
+	//
+	// asset is already this routing's Asset — measureAsset's caller passes
+	// assetsByID[routing.AssetID] — so the content was in scope the whole time.
+	treatment, err := o.Agent.(ContextInjector).WithContext(asset)
 	if err != nil {
 		return fmt.Errorf("building the treatment arm for %s: %w", routing.AssetID, err)
 	}

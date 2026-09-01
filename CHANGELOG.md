@@ -87,6 +87,36 @@ covenants — breaking any of them requires a major version.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`kno value` could not measure an Asset against any real provider.**
+  `measureAsset` built its treatment arm from a freshly constructed
+  `&Asset{Id: routing.AssetID}` — the ID and no content — while the Pool's real
+  Asset was already in scope as its own parameter. Against an adapter that
+  validates what it is handed (`openaicompat`, which refuses an empty Asset
+  precisely to prevent the other failure) every measurement was refused and the
+  stage could not run. Against one that does not validate, the treatment request
+  was byte-identical to the control's: every paired difference exactly zero with
+  a tight interval around it, which reads in the report as *"measured, and
+  inert"* — the one conclusion the stage exists to reach honestly.
+
+  It survived because the pipeline had only ever been driven end to end against
+  `fake:`, and because `stubAgent.WithContext` ignores its argument — a test
+  double more permissive than every adapter it stands in for cannot fail where
+  they would. Found by the first live run against a real provider.
+
+- **`kno value` and `kno validate` sent an explicit `temperature=0` on every
+  run.** Their `--temperature` flags defaulted to `0` while `baseline`'s
+  defaulted to `math.NaN()`, and `optionalFloat` treats only NaN as unset — so
+  the help text's *"unset leaves the provider default"* was true of one stage
+  and false of two. Visibly, a model that rejects sampling parameters became
+  unusable in both, with a refusal naming a flag the user never passed. More
+  seriously, baseline measured a model at the provider's default temperature
+  while value and validate measured the same model at 0 — and baseline is the
+  reference every later delta is computed against, so a sampling difference was
+  attributed to the Asset. All three now default to NaN, asserted across every
+  command that declares the flag rather than the three that have it today.
+
 ### Changed
 
 - **The release gate reads a minor series, not only a patch-complete version —

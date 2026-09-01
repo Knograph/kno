@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -144,7 +145,7 @@ spend object reads the durable record rather than the lost guard.`,
 		"generation ceiling, which also bounds every cost estimate")
 	flags.Int64Var(&f.maxPromptBytes, "max-prompt-bytes", 0,
 		"refuse a Case whose prompt exceeds this (an injected Asset is bounded separately, and charged on top)")
-	flags.Float64Var(&f.temperature, "temperature", 0,
+	flags.Float64Var(&f.temperature, "temperature", math.NaN(),
 		"sampling temperature (unset leaves the provider default)")
 	flags.Int64Var(&f.seed, "seed", 0, "sampling seed, where the provider supports one")
 	flags.StringVar(&f.system, "system", "", "system prompt prepended to every Case")
