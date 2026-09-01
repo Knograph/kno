@@ -429,7 +429,86 @@ design `core/seal.go`'s own history records as tried and rejected, when
 `ScoreParams.Cases` could simply take `*SealedEvals` for the price of one internal
 call.
 
-## Status
+## Both blockers resolved — Phase 2 is unblocked
+
+**B1 — `EvalRunner.Measure` returns Case-ID-keyed scores, and the union pass
+survives.**
+
+```go
+Measure(ctx context.Context, group string, model *knov1.AgentRef,
+        caseIDs []string) (map[string]float64, error)
+```
+
+Raw scores keyed by Case, not deltas, and not positional. Every alignment
+problem B1 identified was a consequence of the positional shape; with keys,
+`bridge.Run` computes `Δ = groupScores[id] − allInScores[id]` for exactly the
+IDs in that group's dev set, and the union pass's different membership and
+ordering stop mattering. A Case in two clusters is looked up twice, correctly,
+which is what a multi-tag Case should do.
+
+Deltas move out of the runner and into `bridge.Run`, which is the component that
+legitimately holds both sides — the change §2 wanted and could not express.
+`Measure` also loses its `devCaseIDs`/`controlCaseIDs` split: it scores whatever
+IDs it is handed, and the caller decides what the set means. The doc claiming
+"paired against the all-in model" is deleted rather than reworded; the runner no
+longer pairs anything.
+
+**B2 — there is no third quote dimension. Inference on a dedicated endpoint is
+zero-marginal, and the engine already has a word for that.**
+
+The question was empirical and the codebase has already answered it: a dedicated
+endpoint is reserved capacity billed per minute per replica, including while
+idle — that is what `pricing.ServePrice{PerMinuteUSDMicros}` and
+`EstimateServeCap` model, and what the parent plan's Step 2(f) states. Tokens
+pushed through capacity already paid for cost nothing extra. So the existing
+training + hosting quote is **complete**, and §7's "third dimension" was asking
+for a line item that does not exist.
+
+That leaves only the collision with `core/ring0.go`'s rule that a zero estimate
+under a cost cap is refused like an unknown one — and the engine already
+distinguishes the two. `cli/baseline.go:346` does
+`AcceptUnknownCost: f.acceptUnknownCost || f.costPerCallSet`, because *"an
+explicit zero is a claim that the calls are free; an absent flag is no claim"*
+(`cli/baseline.go:65-68`). Bridge's scoring pass makes exactly that claim, and it
+is true rather than convenient: the money is metered by the hosting ticker, which
+settles through the same guard every minute the endpoint is live. Charging
+per-call as well would **double-count** the same dollars.
+
+So: `ScorePass` is constructed with an explicit free-call assertion, the hosting
+ticker remains the sole accountant for endpoint spend, and §7 is withdrawn. The
+consent quote is unchanged.
+
+### Resolved with it, from the second review's secondary findings
+
+- **Resume re-emits a lost verdict.** A group whose Cases are all durably scored
+  but whose event was never recorded is recomputed from the stored scores and
+  emitted, rather than skipped. Skipping loses a paid-for measurement that has a
+  defensible interval — prime directive 5 by omission rather than fabrication.
+- **The store convention is named, not invented in Phase 2.** Per-Case bridge
+  scores reuse the measurements table with the ablation group in
+  `MeasurementKey.AssetID`, the same repurposing `core/validate_loop.go` already
+  makes for `SelectRunID` — and like that one, it carries a comment saying so.
+  Prime directive 2 makes that field vocabulary, so the reuse is documented at
+  the call site or it is a review finding.
+- **Bonferroni is goal-only, with N pinned at quote time.** `portfolio.Correct`
+  requires `SIDEDNESS_TWO_SIDED` and `HarmBound` always returns
+  `SIDEDNESS_LOWER`, so the correction structurally cannot touch the control
+  interval — the family is N groups, not N×2, exactly as `core/select.go`
+  corrects the goal interval and reads control raw. N is the planned group count
+  fixed at quote time, never a count of groups that happened to reach a verdict:
+  a dynamic N would make one group's correction depend on how many *other*
+  groups' jobs had failed, so the same group could get a different verdict on a
+  resume. `NetEffect` takes the **pre-corrected** goal interval and the **raw**
+  level, matching what `netInterval` already does.
+- **`ScoreParams.Cases` becomes `*SealedEvals`.** §9 proposed convention plus a
+  canary, which is the design `core/seal.go:19-22` records as tried and rejected:
+  *"A canary test would then have proven only that one call site behaved on the
+  day it was written."* `core/baseline.go` already takes the sealed type and
+  calls `.Cases(ctx)` internally; `ScorePass` does the same, for the price of one
+  internal call, and forgetting to seal becomes a compile error rather than a
+  test someone has to remember to write.
+
+## Superseded status
 
 **Phase 2 does not start.** Two questions must be answered first, and neither is a
 plan-text edit:
@@ -438,12 +517,26 @@ plan-text edit:
 2. Whether dedicated-endpoint inference is a real cost dimension or zero by
    construction.
 
-Two review rounds have each surfaced blockers of the same class — an unreviewed
-data-flow or pricing claim that does not survive contact with the types. A third
-amend-and-review cycle is not obviously the cheapest way to converge; reducing
-scope is worth considering, starting with whether the union-pass optimisation
-earns its complexity against simply scoring the all-in model once per group.
+Two review rounds each surfaced blockers of the same class — an unreviewed
+data-flow or pricing claim that did not survive contact with the types. Both were
+then answered from the code rather than by another round of design: the return
+shape by making it keyed, and the pricing question by finding that the codebase
+had already decided it. **Resolved above; this section is retained as the record
+of how, not as a live status.**
 
 ## Accepted risks
 
-*None yet. The plan is not approved, so there is nothing to accept.*
+1. **Bridge asserts its scoring calls are free, and that assertion is only as
+   true as the provider's billing model.** If a provider bills tokens on top of
+   reserved capacity, the hosting ticker would under-count and the cap would
+   under-enforce. Mitigated by the assertion being explicit and per-adapter
+   rather than global. *Trigger: when a second Tuner adapter lands, or the first
+   time a provider's dedicated pricing carries a per-token line — whichever is
+   first.*
+2. **The ablation group travels in `MeasurementKey.AssetID`.** A documented
+   repurposing of a vocabulary field, with one prior instance
+   (`core/validate_loop.go`). A third instance means the key needs a real
+   dimension instead. *Trigger: the third caller to repurpose `AssetID`, or
+   before 1.0 — whichever is first.*
+
+Both to be mirrored to `docs/debt.md` with these triggers when Phase 2 lands.
