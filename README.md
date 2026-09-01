@@ -158,7 +158,7 @@ Scores and traces are recorded. `kno purge` removes trace content when you no lo
 **3. Write a pool of candidate assets:**
 
 ```jsonl
-{"id":"refund-policy-v3","content":"Refunds are processed within 5 business days.","kind":"knowledge"}
+{"id":"refund-policy-v3","content":"Refunds are issued within 5 business days.","kind":"knowledge"}
 {"id":"refund-example-17","content":"Example: a 30-day-old refund request is declined.","kind":"knowledge"}
 {"id":"brand-guide","content":"Use sentence case everywhere.","kind":"knowledge"}
 ```
@@ -270,7 +270,7 @@ It reports how many distinct behaviors your tags describe, how small an effect e
 Cases could separate from noise, how much of the set sits under one catch-all tag, and whether
 the holdout is large enough for `validate`. It calls no model, writes nothing, and exits 0
 whatever it finds. [Check whether your evals can attribute
-anything](docs/cookbook/check-your-evals.md).
+anything](https://github.com/uknoAI/kno-examples/blob/main/recipes/check-your-evals.md).
 
 > **Rule of thumb:** your eval defines what "better" means. Kno tells you which data caused
 > that metric to move.

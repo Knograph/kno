@@ -39,6 +39,7 @@ MIGRATED="
 anthropic
 bedrock
 braintrust
+check-your-evals
 ci-gate
 confluence
 export-a-tuning-set
@@ -63,13 +64,28 @@ your-own-provider
 zendesk
 "
 
-# Pages that still live here, in full. Both document commands that are on main
-# and in no release — `kno eval inspect` and `kno judge calibrate` — and
-# kno-examples checks every command against the RELEASED binary, so migrating
-# either would report the whole page as broken. They move in the release window
-# that ships the command.
+# Pages that still live here, in full.
+#
+# RESIDENT is not a parking space. A page belongs here only while its commands
+# are unreleased, because kno-examples checks every command against the
+# RELEASED binary and a page about an unreleased command can carry no honest
+# tier there. The claim expires when the command ships, and then the page
+# moves and leaves a stub.
+#
+# `check-your-evals` ran that course: held here until v0.1.4 shipped
+# `kno eval inspect`, then migrated.
+#
+# `calibrate-a-judge` is at the same point. v0.1.5 ships `kno judge calibrate`,
+# so its blocker is gone — it is here now because it has not been migrated yet,
+# which is a different and weaker reason than the one that put it here. Its
+# migration is straightforward and worth doing: the command defaults to
+# `--replay`, calls no model, and prints a deterministic kappa with a PASS/FAIL
+# gate, so the page can be verified `executed` rather than by hand.
+#
+# If you are reading this comment because you are adding a third name below:
+# do not. Add it only for a command that has not shipped, and say which
+# release will ship it.
 RESIDENT="
-check-your-evals
 calibrate-a-judge
 "
 
