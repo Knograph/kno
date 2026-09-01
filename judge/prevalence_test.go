@@ -81,7 +81,14 @@ func TestTheWorstCaseShortfallAtTheInvariant(t *testing.T) {
 	var worstEps float64
 	for eps := 0.01; eps < 0.50; eps += 0.01 {
 		judged, human := exactPopulation(judge.MinMinorityShare, eps)
-		got := judge.Agree(judged, human).Kappa
+		// KappaOver, not Agree: the sweep runs to epsilon = 0.49, where the
+		// ideal kappa is 0.02 and the four-decimal quantum Agree rounds its
+		// REPORTED statistic to is a 0.5-point relative error on its own. This
+		// test pins the derivation the floor rests on — a statement about the
+		// quantity, not about how it is printed — so it reads the unrounded
+		// statistic. The table above stays on Agree, where the tolerances are
+		// three orders of magnitude wider than the quantum.
+		got := judge.KappaOver(judged, human, allIndices(len(judged)))
 		ideal := 1 - 2*eps
 		if shortfall := (ideal - got) / ideal * 100; shortfall > worst {
 			worst, worstEps = shortfall, eps
@@ -92,6 +99,15 @@ func TestTheWorstCaseShortfallAtTheInvariant(t *testing.T) {
 		t.Errorf("the identity is off by %.1f%% at the balance invariant (epsilon = %.2f); "+
 			"the published bound is 4%%", worst, worstEps)
 	}
+}
+
+// allIndices is the identity resample: every unit, once.
+func allIndices(n int) []int {
+	idx := make([]int, n)
+	for i := range idx {
+		idx[i] = i
+	}
+	return idx
 }
 
 // exactPopulation builds a confusion matrix with EXACTLY the stated minority

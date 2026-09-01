@@ -136,6 +136,17 @@ covenants — breaking any of them requires a major version.
   says so (`docs/debt.md#154`). Adding records is a contributor on-ramp that exists before any
   judge does.
 
+  **Every reported statistic is rounded to four decimal places where it is computed.** Not
+  cosmetic, and now a stated rule rather than a local habit ([ADR-0006](docs/adr/0006-the-json-contract.md)
+  rule 6): Go may fuse a multiply-add into an FMA, which arm64 does and amd64 does not, and a
+  bootstrap bound additionally passes through interpolation and `math.Log`. An unrounded
+  `kappa_interval.high` read `0.929508759876331` on darwin/arm64 and `0.9295087598763309` on
+  linux/amd64 — one ULP apart, with the human rendering byte-identical, and no golden can hold
+  both. Rounding at the source is also the honest reading: a percentile bootstrap over thirty
+  records does not carry seventeen significant digits. `kno eval inspect` already did this for
+  `separable_effect`; this generalizes the rule and adds a property test rather than trusting a
+  golden to catch the next one.
+
 * **`kno validate` — the holdout stage.** The Portfolio ships as a set, so it is measured as a
   set, against the slice nothing has read. Validate runs the holdout twice inside one run: a
   **control arm** with nothing injected and a **treatment arm** carrying the whole Portfolio as

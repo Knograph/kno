@@ -3,7 +3,91 @@ package judge
 import (
 	"math"
 	"sort"
+
+	knov1 "github.com/knograph/kno/gen/kno/v1"
 )
+
+// Every statistic this package REPORTS is rounded to four decimal places at
+// the point it is computed, so the human line, the --json document and the
+// goldens all carry one number.
+//
+// This is correctness, not presentation, and it is the same treatment
+// cli/evalinspect.go applies to separable_effect for the same reason. Two
+// distinct forces put the tail digits of these numbers outside our control:
+//
+//   - Go permits fusing a multiply-add into a single FMA instruction. Chance
+//     agreement is `jp*hp + (1-jp)*(1-hp)` — textbook FMA shape — and arm64
+//     fuses it where amd64 does not, so kappa's last bits genuinely differ by
+//     architecture. It happened to agree on the committed set; "it agreed on
+//     this input" is not "it is stable", and the resample sweeps this package
+//     runs will find a less lucky value.
+//   - The bootstrap's bounds come from linear interpolation between order
+//     statistics, and the degenerate path goes through math.Log, which is
+//     architecture-specific outright. That is the one that actually broke:
+//     a golden holding 0.929508759876331 on arm64 read 0.9295087598763309 on
+//     amd64, one ULP apart, and no re-recording can satisfy both.
+//
+// The second half of evalinspect's argument applies here with MORE force, not
+// less. A percentile bootstrap over thirty records does not carry seventeen
+// significant digits. Emitting them is a false precision claim, in a document
+// whose entire job is honest reporting.
+
+// round4 rounds a POINT ESTIMATE to four decimal places.
+func round4(f float64) float64 {
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return f
+	}
+	return math.Round(f*1e4) / 1e4
+}
+
+// roundInterval rounds an interval's bounds to four decimal places.
+//
+// TO NEAREST, the same rule cli/evalinspect.go applies to separable_effect,
+// which is also a bound. Rounding a bound OUTWARD is the tempting choice —
+// it can only ever widen, and this repository does not err toward claiming
+// confidence — and it was rejected, for two reasons that point the same way.
+//
+// It is less stable at exactly the values that occur. Floor and Ceil break at
+// grid points; round-to-nearest breaks at half-grid points. A kappa that is a
+// small rational — 0.35, 0.5, the order statistics a bootstrap quantile lands
+// on when it does not interpolate — sits ON the 1e-4 grid and nowhere near a
+// half-grid point, so a 1-ULP difference between architectures flips Floor and
+// leaves Round alone. Choosing the outward form would trade a cosmetic
+// property for a reappearance of the exact bug this rounding exists to kill.
+//
+// And the property being bought is not worth anything. Rounding to nearest can
+// narrow an interval by at most 1e-4, against typical widths near 0.5 — while
+// the percentile bootstrap's own measured coverage error on the decision grid
+// is about 0.03 (TestBootstrapCoverageOnTheDecisionGrid). Insisting on the
+// conservative direction at 1e-4 optimizes a rounding artifact three orders of
+// magnitude below the method's real uncertainty.
+//
+// It returns a new message rather than mutating in place: the caller's
+// interval may already be recorded elsewhere, and a rounding pass is not a
+// reason for a value to change under someone.
+func roundInterval(iv *knov1.Interval) *knov1.Interval {
+	if iv == nil {
+		return nil
+	}
+	out := &knov1.Interval{
+		Level:     iv.GetLevel(),
+		Method:    iv.GetMethod(),
+		Sidedness: iv.GetSidedness(),
+		Low:       round4(iv.GetLow()),
+		High:      round4(iv.GetHigh()),
+	}
+	if n := iv.GetNPairs(); n != 0 {
+		out.NPairs = &n
+	}
+	// build() writes zero rather than an infinity for the unbounded side of a
+	// one-sided bound, and round4(0) is 0, so nothing to restore.
+	//
+	// A two-sided interval cannot collapse here: build() and buildBounds()
+	// both refuse a zero-width interval, and the narrowest either can produce
+	// is the degenerate bootstrap's rule-of-three width, 3/n, which stays
+	// above 1e-4 for any record count a calibration set can reach.
+	return out
+}
 
 // Agreement is how two binary verdict vectors agree, reported six ways.
 //
@@ -47,7 +131,10 @@ type Agreement struct {
 // judge, so the assumption is measured rather than assumed, and this is the
 // measurement.
 func (a Agreement) SymmetryGap() float64 {
-	return math.Abs(a.Sensitivity - a.Specificity)
+	// Rounded, because subtracting two four-place floats does not produce a
+	// four-place float: 1.0 - 0.875 is exact, but 0.8751 - 0.7502 is not, and
+	// the residue would reach --json as symmetry_gap's tail digits.
+	return round4(math.Abs(a.Sensitivity - a.Specificity))
 }
 
 // Agree computes the agreement of a judge's verdicts against a human
@@ -78,12 +165,20 @@ func Agree(judge, human []bool) Agreement {
 	}
 
 	n := float64(a.N)
-	a.Raw = float64(a.TP+a.TN) / n
-	a.JudgePositiveRate = float64(a.TP+a.FP) / n
-	a.HumanPositiveRate = float64(a.TP+a.FN) / n
-	a.Sensitivity = ratio(a.TP, a.TP+a.FN)
-	a.Specificity = ratio(a.TN, a.TN+a.FP)
-	a.Kappa = kappaFrom(a.Raw, a.JudgePositiveRate, a.HumanPositiveRate)
+	raw := float64(a.TP+a.TN) / n
+	judgePositive := float64(a.TP+a.FP) / n
+	humanPositive := float64(a.TP+a.FN) / n
+
+	// Kappa is computed from the UNROUNDED marginals and then rounded once.
+	// Rounding the inputs first would propagate a 1e-4 quantum through a
+	// division by (1 - p_e), which is small near the kappa paradox and turns
+	// a display convention into an arithmetic error.
+	a.Kappa = round4(kappaFrom(raw, judgePositive, humanPositive))
+	a.Raw = round4(raw)
+	a.JudgePositiveRate = round4(judgePositive)
+	a.HumanPositiveRate = round4(humanPositive)
+	a.Sensitivity = round4(ratio(a.TP, a.TP+a.FN))
+	a.Specificity = round4(ratio(a.TN, a.TN+a.FP))
 	return a
 }
 
@@ -119,7 +214,13 @@ func ratio(num, den int) float64 {
 
 // KappaOver recomputes kappa over a subset of record indices.
 //
-// This is the resample statistic the percentile bootstrap draws on. It takes
+// UNROUNDED, unlike every statistic Agree reports, and the split is
+// deliberate: this is a resample statistic, not a reported one. Quantizing it
+// to four places would quantize the bootstrap's own distribution, and the
+// quantiles read off it are then a claim about the rounding rather than about
+// the data. The bounds are rounded once, at the end, by roundInterval.
+//
+// This is the percentile bootstrap's draw. It takes
 // INDICES rather than a filtered slice because the bootstrap draws with
 // replacement: an index appearing twice must contribute twice to both
 // marginals, which is the dependence between the judge's rate and the human's
@@ -208,14 +309,14 @@ func InterHuman(records []Record) Agreement {
 	// volume behind the ceiling; the kappa is the MEAN of the pairwise
 	// kappas, because pooling confusion counts across pairs and computing one
 	// kappa mixes marginals from different people.
-	pooled.Kappa = sum / float64(pairs)
+	pooled.Kappa = round4(sum / float64(pairs))
 	if pooled.N > 0 {
 		n := float64(pooled.N)
-		pooled.Raw = float64(pooled.TP+pooled.TN) / n
-		pooled.JudgePositiveRate = float64(pooled.TP+pooled.FP) / n
-		pooled.HumanPositiveRate = float64(pooled.TP+pooled.FN) / n
-		pooled.Sensitivity = ratio(pooled.TP, pooled.TP+pooled.FN)
-		pooled.Specificity = ratio(pooled.TN, pooled.TN+pooled.FP)
+		pooled.Raw = round4(float64(pooled.TP+pooled.TN) / n)
+		pooled.JudgePositiveRate = round4(float64(pooled.TP+pooled.FP) / n)
+		pooled.HumanPositiveRate = round4(float64(pooled.TP+pooled.FN) / n)
+		pooled.Sensitivity = round4(ratio(pooled.TP, pooled.TP+pooled.FN))
+		pooled.Specificity = round4(ratio(pooled.TN, pooled.TN+pooled.FP))
 	}
 	return pooled
 }

@@ -90,6 +90,12 @@ because "we cannot tell" is not "it is fine". Exit 2 is a live run stopped by it
 kno judge calibrate --json | jq -r '.verdict, .calibrations[0].kappa'
 ```
 
+Every statistic in it carries at most four decimal places. That is the contract
+([ADR-0006](../adr/0006-the-json-contract.md) rule 6), not a formatting accident: a bootstrap
+over a few dozen records does not carry seventeen significant digits, and the tail digits of one
+that printed them would differ between an arm64 and an amd64 machine. Round your own comparisons
+to the same place.
+
 ## Change a prompt
 
 A prompt edit changes the prompt's hash, so the recorded judge responses no longer apply and the

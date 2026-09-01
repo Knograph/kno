@@ -142,11 +142,15 @@ func gradeAll(set *Set, scores []*core.Score, errored []bool) *Graded {
 	for i := range judged {
 		sum += math.Abs(judged[i] - human[i])
 	}
+	// Rounded at the source, like every other reported statistic here.
+	// Spearman's rho goes through math.Sqrt and the weighted kappa through a
+	// double sum over bins; neither carries the digits an unrounded float64
+	// would print, and both are architecture-sensitive in their tail.
 	bins := anchorBins(human)
 	return &Graded{
-		WeightedKappa: quadraticWeightedKappa(judged, human, bins),
-		Spearman:      spearman(judged, human),
-		MAE:           sum / float64(len(judged)),
+		WeightedKappa: round4(quadraticWeightedKappa(judged, human, bins)),
+		Spearman:      round4(spearman(judged, human)),
+		MAE:           round4(sum / float64(len(judged))),
 		NBins:         len(bins),
 	}
 }

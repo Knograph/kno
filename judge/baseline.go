@@ -136,9 +136,14 @@ func CompareToBaseline(prev BaselineEntry, set *Set, judge []bool, errored []boo
 
 	r.Comparable = true
 	r.Kappa = Agree(a, human).Kappa
-	r.Diff = interval.Percentile(len(a), func(idx []int) float64 {
+	// Rounded like every other bound this package reports, and the ratchet
+	// reads the rounded value: a paired difference whose upper bound rounds to
+	// zero stops being called a regression, and a drop of under 1e-4 is not
+	// one. The alternative — deciding on a number the report does not show —
+	// is a gate whose failure cannot be reproduced from its own output.
+	r.Diff = roundInterval(interval.Percentile(len(a), func(idx []int) float64 {
 		return KappaOver(a, human, idx) - KappaOver(b, human, idx)
-	}, opts)
+	}, opts))
 	if r.Diff != nil && r.Diff.GetHigh() < 0 {
 		r.Regressed = true
 	}

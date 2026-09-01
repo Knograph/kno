@@ -225,14 +225,18 @@ func Calibrate(ctx context.Context, opts Options) (*Result, error) {
 		reference = append(reference, human[i])
 	}
 	res.Agreement = Agree(judged, reference)
-	res.KappaInterval = interval.Percentile(len(judged), func(idx []int) float64 {
+	// Rounded outward at the source, so the human line, the --json document
+	// and the goldens carry one number, and so an interval built through
+	// interpolation and math.Log does not ship seventeen architecture-specific
+	// digits. See kappa.go's rounding note.
+	res.KappaInterval = roundInterval(interval.Percentile(len(judged), func(idx []int) float64 {
 		return KappaOver(judged, reference, idx)
 	}, interval.Bootstrap{
 		Resamples: opts.Resamples,
 		Level:     opts.Level,
 		Seed:      opts.Seed,
 		Support:   &interval.Support{Low: -1, High: 1},
-	})
+	}))
 
 	decide(res)
 	return res, nil

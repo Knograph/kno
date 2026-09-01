@@ -6,6 +6,15 @@
 // of it. Every number the human page prints is a key here, including the ones
 // that qualify a verdict — a caveat that survives in one renderer and not the
 // other is the drift the equivalence rule exists to catch.
+//
+// Every float here carries at most four decimal places, and nothing in this
+// file rounds: the rounding happens in judge/, where the statistic is
+// computed, so the human line, this document and the goldens carry one number
+// rather than three renderings of an unrounded one. That is ADR-0006 rule 6,
+// and it is enforced as a property by
+// TestNoJudgeJSONFloatCarriesMoreThanFourPlaces rather than by these goldens
+// alone — a golden only fails on the architecture CI happens to run, which is
+// how the unrounded version reached main's CI in the first place.
 
 package cli
 

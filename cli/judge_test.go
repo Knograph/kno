@@ -1,6 +1,8 @@
 package cli_test
 
 import (
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -228,5 +230,68 @@ func TestDoctorReportsTheRegistrysGoals(t *testing.T) {
 	goals, ok := raw["goals"].([]any)
 	if !ok || len(goals) != 1 || goals[0] != "exact-match" {
 		t.Errorf("doctor reports goals %v", raw["goals"])
+	}
+}
+
+// TestNoJudgeJSONFloatCarriesMoreThanFourPlaces is the gate that would have
+// caught the golden drift before CI did.
+//
+// `kappa_interval.high` was recorded as 0.929508759876331 on darwin/arm64 and
+// read 0.9295087598763309 on linux/amd64 — one ULP apart, and re-recording the
+// golden only moves the failure to the other architecture. The fix is rounding
+// at the source (see judge/kappa.go); this asserts the PROPERTY across every
+// scenario and every float in the document, so a statistic added later without
+// the treatment fails here rather than on whichever runner CI picks.
+//
+// It walks the raw document rather than the decoded struct, because the
+// contract is the emitted JSON.
+func TestNoJudgeJSONFloatCarriesMoreThanFourPlaces(t *testing.T) {
+	t.Parallel()
+
+	scenarios := [][]string{
+		{"judge", "calibrate", "--json"},
+		{"judge", "calibrate", "--set-name", "straddle", "--json"},
+		{"judge", "calibrate", "--show-disagreements", "--json"},
+		{
+			"judge", "calibrate", "--all", "--json",
+			"--baseline", filepath.Join("..", "judge", "calibration.baseline.json"),
+		},
+	}
+	for _, args := range scenarios {
+		t.Run(strings.Join(args[2:], " "), func(t *testing.T) {
+			t.Parallel()
+
+			out, _, _ := run(t, args...)
+			raw, err := cli.DecodeRawDocument([]byte(out))
+			if err != nil {
+				t.Fatalf("not a JSON document: %v\n%s", err, out)
+			}
+			walkFloats(t, "", raw)
+		})
+	}
+}
+
+// walkFloats asserts every float in a decoded document is its own four-place
+// rounding.
+func walkFloats(t *testing.T, path string, v any) {
+	t.Helper()
+
+	switch typed := v.(type) {
+	case map[string]any:
+		for k, child := range typed {
+			walkFloats(t, path+"."+k, child)
+		}
+	case []any:
+		for i, child := range typed {
+			walkFloats(t, fmt.Sprintf("%s[%d]", path, i), child)
+		}
+	case float64:
+		if want := math.Round(typed*1e4) / 1e4; typed != want {
+			t.Errorf("%s = %v carries more than four decimal places.\n"+
+				"An unrounded statistic differs between arm64 and amd64 in its tail "+
+				"digits, so no golden can hold it — and a bootstrap over a few dozen "+
+				"records does not carry seventeen significant figures anyway. Round it "+
+				"at the source, as judge/kappa.go does.", strings.TrimPrefix(path, "."), typed)
+		}
 	}
 }

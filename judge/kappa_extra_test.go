@@ -7,7 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/knograph/kno/goal/exactmatch"
 	"github.com/knograph/kno/judge"
+	"github.com/knograph/kno/stats/interval"
 )
 
 // TestKappaIsUndefinedRatherThanZeroWhenChanceIsCertain.
@@ -172,5 +174,117 @@ func TestTheCommittedBaselineMatchesTheCommittedSet(t *testing.T) {
 			t.Errorf("the baseline's verdict vector covers %d records; %s holds %d",
 				len(e.Verdicts), e.SetName, len(set.Records))
 		}
+	}
+}
+
+// TestEveryReportedStatisticIsRoundedAtTheSource is the regression test for a
+// bug the goldens caught on linux and darwin could not.
+//
+// `kappa_interval.high` was recorded as 0.929508759876331 on arm64 and read
+// 0.9295087598763309 on amd64 — one ULP apart, and no re-recording satisfies
+// both. Go may fuse a multiply-add into an FMA, which arm64 has and amd64 does
+// not, and the bootstrap's bounds additionally pass through interpolation and
+// math.Log; the tail digits of these numbers are simply not ours.
+//
+// Rounding at the source fixes it, and this test is what keeps it fixed: it
+// asserts the PROPERTY (every reported float is its own four-place rounding)
+// rather than a set of literals, so a statistic added later without the
+// treatment fails here rather than on whichever architecture CI happens to
+// run.
+func TestEveryReportedStatisticIsRoundedAtTheSource(t *testing.T) {
+	t.Parallel()
+
+	set := starterSet(t)
+	res := calibrate(t, judge.Options{
+		Goal: &exactmatch.Goal{}, GoalName: "exact-match", Set: set,
+	})
+
+	reported := map[string]float64{
+		"kappa":               res.Agreement.Kappa,
+		"raw":                 res.Agreement.Raw,
+		"sensitivity":         res.Agreement.Sensitivity,
+		"specificity":         res.Agreement.Specificity,
+		"judge_positive_rate": res.Agreement.JudgePositiveRate,
+		"human_positive_rate": res.Agreement.HumanPositiveRate,
+		"symmetry_gap":        res.Agreement.SymmetryGap(),
+		"inter_human_kappa":   res.InterHuman.Kappa,
+		"kappa_interval.low":  res.KappaInterval.GetLow(),
+		"kappa_interval.high": res.KappaInterval.GetHigh(),
+	}
+	for name, got := range reported {
+		if math.IsNaN(got) {
+			continue
+		}
+		if want := math.Round(got*1e4) / 1e4; got != want {
+			t.Errorf("%s = %v carries more than four decimal places (%v). "+
+				"An unrounded statistic here differs by architecture and cannot "+
+				"be pinned by a golden.", name, got, want)
+		}
+	}
+}
+
+// TestIntervalBoundsAreRoundedWithoutCollapsing.
+//
+// Rounding a bound is only safe while it cannot turn an interval into a point:
+// a zero-width interval reads as certainty, which stats/interval's package
+// comment names as one of the two failures worse than a wide interval.
+func TestIntervalBoundsAreRoundedWithoutCollapsing(t *testing.T) {
+	t.Parallel()
+
+	set := starterSet(t)
+	res := calibrate(t, judge.Options{
+		Goal: &exactmatch.Goal{}, GoalName: "exact-match", Set: set,
+	})
+	raw := interval.Percentile(res.Agreement.N, func(idx []int) float64 {
+		return judge.KappaOver(res.Judge, set.Reference(), idx)
+	}, interval.Bootstrap{Support: &interval.Support{Low: -1, High: 1}})
+	if raw == nil {
+		t.Fatal("no unrounded interval to compare against")
+	}
+
+	if res.KappaInterval.GetHigh() <= res.KappaInterval.GetLow() {
+		t.Fatal("rounding collapsed the interval; a zero-width interval reads as certainty")
+	}
+	for _, tc := range []struct {
+		name     string
+		got, was float64
+	}{
+		{"low", res.KappaInterval.GetLow(), raw.GetLow()},
+		{"high", res.KappaInterval.GetHigh(), raw.GetHigh()},
+	} {
+		if math.Abs(tc.got-tc.was) > 5e-5 {
+			t.Errorf("%s moved from %.9f to %.9f, further than rounding to four "+
+				"places can move it", tc.name, tc.was, tc.got)
+		}
+	}
+}
+
+// TestTheVerdictIsDecidedOnTheNumbersItPrints.
+//
+// The verdict compares the interval against the floor. If it compared the
+// UNROUNDED bound while the report printed the rounded one, a run could print
+// a bound at the floor and call itself INDETERMINATE, and nobody could
+// reproduce the decision from the output.
+func TestTheVerdictIsDecidedOnTheNumbersItPrints(t *testing.T) {
+	t.Parallel()
+
+	set := starterSet(t)
+	res := calibrate(t, judge.Options{
+		Goal: &exactmatch.Goal{}, GoalName: "exact-match", Set: set,
+	})
+
+	low, high := res.KappaInterval.GetLow(), res.KappaInterval.GetHigh()
+	var want string
+	switch {
+	case low >= res.MinKappa:
+		want = judge.VerdictPass
+	case high < res.MinKappa:
+		want = judge.VerdictFail
+	default:
+		want = judge.VerdictIndeterminate
+	}
+	if res.Verdict != want {
+		t.Errorf("verdict %s, but the printed interval [%.4f, %.4f] against a %.2f "+
+			"floor says %s", res.Verdict, low, high, res.MinKappa, want)
 	}
 }

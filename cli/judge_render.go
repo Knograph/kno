@@ -171,8 +171,11 @@ func prevalence(res *judge.Result) float64 {
 	if res.NScored == 0 {
 		return math.NaN()
 	}
+	// roundTo4 for the same reason judge rounds at the source: 1 - 0.4667 is
+	// not 0.5333 in binary, and this value is emitted as
+	// constant_judge_raw_agreement.
 	p := res.Agreement.HumanPositiveRate
-	return math.Max(p, 1-p)
+	return roundTo4(math.Max(p, 1-p))
 }
 
 func ciText(res *judge.Result) string {
