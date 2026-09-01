@@ -17,7 +17,10 @@ import (
 // argument), which is exactly why nothing caught the defect this file exists
 // for. A test double more permissive than every adapter it stands in for
 // cannot fail where they would.
-type contentDemandingAgent struct{ got *Asset }
+// got holds the Asset by POINTER rather than by value: an Asset is a protobuf
+// message carrying a sync.Mutex in its MessageState, so copying one trips
+// govet's copylocks. The test only needs to observe what was handed over.
+type contentDemandingAgent struct{ got **Asset }
 
 func (contentDemandingAgent) Invoke(context.Context, *Case) (*Response, error) {
 	return &Response{}, nil
@@ -28,7 +31,7 @@ func (a contentDemandingAgent) WithContext(asset *Asset) (Agent, error) {
 		return nil, errors.New("asset has no content to measure")
 	}
 	if a.got != nil {
-		*a.got = *asset
+		*a.got = asset
 	}
 	return contentDemandingAgent{}, nil
 }
@@ -59,7 +62,7 @@ func TestTheTreatmentArmCarriesTheAssetsContent(t *testing.T) {
 	writeBaselineOutcome(t, st, "base-1", "c1", 1)
 	writeBaselineOutcome(t, st, "base-1", "c2", 1)
 
-	var seen Asset
+	var seen *Asset
 	cases := &caseSource{list: []*Case{
 		{Id: "c1", Input: "q", Expected: "a", Split: knov1.Split_SPLIT_DEV},
 		{Id: "c2", Input: "q", Expected: "a", Split: knov1.Split_SPLIT_DEV},
