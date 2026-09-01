@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/knograph/kno/adapters/agent/pricing"
@@ -368,12 +369,34 @@ func deployMeasureTeardown(
 		return nil, model, measureErr
 	}
 
-	stopTick := startServeTicker(ctx, p, q.Group, ep)
-	defer stopTick()
+	// measureCtx, not ctx: a hosting tick that the budget guard REFUSES has
+	// to reach the measurement and stop it. The endpoint bills by the minute
+	// whether or not anything is measuring it, so a cap reached mid-measure
+	// means every further minute is spend the user did not authorize. The
+	// ticker cancels this context on refusal, Measure returns, and the
+	// deferred teardown above runs immediately instead of after a
+	// measurement nobody can pay for.
+	//
+	// The ticker itself keeps the parent ctx: it must go on settling the
+	// minutes actually consumed between the refusal and teardown. Those are
+	// real charges, and recording them as orphan spend is the honest
+	// treatment — cancelling the ticker too would simply lose them.
+	measureCtx, cancelMeasure := context.WithCancel(ctx)
+	defer cancelMeasure()
+
+	stopTick := startServeTicker(ctx, cancelMeasure, p, q.Group, ep)
+	defer func() {
+		if err := stopTick(); err != nil && measureErr == nil {
+			measureErr = err
+		}
+	}()
 
 	devCaseIDs := p.DevCaseIDs[q.Group]
-	goalDeltas, controlDeltas, err := p.Eval.Measure(ctx, q.Group, model, devCaseIDs, p.ControlCaseIDs)
+	goalDeltas, controlDeltas, err := p.Eval.Measure(measureCtx, q.Group, model, devCaseIDs, p.ControlCaseIDs)
 	if err != nil {
+		// A refusal surfaces through stopTick in the deferred block above and
+		// takes precedence: "the cap stopped this" is the useful report, not
+		// the context cancellation it caused.
 		measureErr = fmt.Errorf("measuring the %s group: %w", q.Group, err)
 		return nil, model, measureErr
 	}
@@ -383,35 +406,81 @@ func deployMeasureTeardown(
 }
 
 // startServeTicker starts a background goroutine settling hosting minutes
-// forward at p.TickInterval and returns a function that stops it. The
-// caller must call the stop function before returning so the goroutine
+// forward at p.TickInterval and returns a function that stops it, waits for
+// the final tick, and reports the first settle error observed.
+//
+// The error is RETURNED rather than discarded, and onRefusal is called when
+// one occurs, because the failure that matters here is the budget guard
+// refusing: the endpoint bills by the minute regardless of whether anything
+// is measuring it, so a cap reached mid-hosting means every subsequent
+// minute is unauthorized spend. Swallowing the error left the endpoint
+// running to the end of a measurement nobody could pay for — prime
+// directive 4, and invisible because `_, _ =` is an explicit discard that
+// errcheck accepts.
+//
+// The caller must call the stop function before returning so the goroutine
 // never outlives the endpoint it is billing for.
-func startServeTicker(ctx context.Context, p RunParams, group string, ep *core.Endpoint) func() {
+func startServeTicker(
+	ctx context.Context,
+	onRefusal context.CancelFunc,
+	p RunParams,
+	group string,
+	ep *core.Endpoint,
+) func() error {
 	done := make(chan struct{})
+	finished := make(chan struct{})
+
+	var mu sync.Mutex
+	var firstErr error
+
+	settle := func() error {
+		_, err := SettleServeTick(ctx, SettleServeParams{
+			RunID: p.RunID, AblationGroup: group, Store: p.Store, Guard: p.Guard,
+			Price: p.ServePrice, Replicas: p.ServeReplicas, ReadyAt: ep.ReadyAt,
+		})
+		if err == nil {
+			return nil
+		}
+		mu.Lock()
+		if firstErr == nil {
+			firstErr = fmt.Errorf("settling hosting minutes for the %s group: %w", group, err)
+		}
+		mu.Unlock()
+		return err
+	}
+
 	go func() {
+		defer close(finished)
 		ticker := time.NewTicker(p.TickInterval)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ticker.C:
-				_, _ = SettleServeTick(ctx, SettleServeParams{
-					RunID: p.RunID, AblationGroup: group, Store: p.Store, Guard: p.Guard,
-					Price: p.ServePrice, Replicas: p.ServeReplicas, ReadyAt: ep.ReadyAt,
-				})
+				if err := settle(); err != nil {
+					// Stop the measurement now. Teardown is the caller's
+					// deferred responsibility and runs as soon as Measure
+					// returns.
+					onRefusal()
+				}
 			case <-done:
 				// A final tick on the way out, so the last partial minute
-				// before Teardown is not lost.
-				_, _ = SettleServeTick(ctx, SettleServeParams{
-					RunID: p.RunID, AblationGroup: group, Store: p.Store, Guard: p.Guard,
-					Price: p.ServePrice, Replicas: p.ServeReplicas, ReadyAt: ep.ReadyAt,
-				})
+				// before Teardown is not lost. No onRefusal here: the run is
+				// already unwinding, and the charge is recorded either way.
+				_ = settle()
 				return
 			case <-ctx.Done():
 				return
 			}
 		}
 	}()
-	return func() { close(done) }
+
+	return func() error {
+		close(done)
+		<-finished
+		mu.Lock()
+		defer mu.Unlock()
+		return firstErr
+	}
 }
 
 // groupMeasuredEvent computes Δ_group and Δ_control with their intervals

@@ -3,9 +3,11 @@ package bridge_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/knograph/kno/adapters/agent/pricing"
 	"github.com/knograph/kno/bridge"
 	"github.com/knograph/kno/core"
 	knov1 "github.com/knograph/kno/gen/kno/v1"
@@ -485,5 +487,104 @@ func TestLiveEndpointLimiterAcquireRespectsContextCancellation(t *testing.T) {
 	cancel()
 	if err := limiter.Acquire(cancelled); err == nil {
 		t.Fatal("want an error from Acquire on an already-cancelled context")
+	}
+}
+
+// blockingEvalRunner blocks until its context is cancelled, so a test can
+// observe whether anything is able to interrupt a measurement in flight.
+type blockingEvalRunner struct {
+	started  chan struct{}
+	returned chan struct{}
+	once     sync.Once
+}
+
+func (b *blockingEvalRunner) Measure(ctx context.Context, _ string, _ *knov1.AgentRef, _, _ []string) ([][]float64, [][]float64, error) {
+	b.once.Do(func() { close(b.started) })
+	<-ctx.Done()
+	close(b.returned)
+	return nil, nil, ctx.Err()
+}
+
+// TestReachingTheCapMidServeStopsTheMeasurementAndTearsDown is acceptance
+// criterion 34, and it is a spend-safety test rather than a lifecycle one.
+//
+// A dedicated endpoint bills by the minute whether or not anything is
+// measuring it. So a budget cap reached DURING hosting means every further
+// minute is spend the user never authorized, and the only correct response
+// is to stop and tear down — not to finish a measurement nobody can pay for.
+//
+// This failed before the fix, invisibly. startServeTicker discarded
+// SettleServeTick's error as `_, _ =`, which is an EXPLICIT discard and so
+// passes errcheck: the guard refused, nothing observed it, and the endpoint
+// kept running until the measurement finished on its own. Prime directive 4.
+func TestReachingTheCapMidServeStopsTheMeasurementAndTearsDown(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := newBridgeTestStore(t)
+	if err := st.CreateRun(ctx, &knov1.Run{Id: "run-1", Stage: knov1.Stage_STAGE_BRIDGE, Status: knov1.RunStatus_RUN_STATUS_RUNNING}); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	// Exactly both groups' training cost (6,000,000 + 5,000,000) and not one
+	// micro more, so every submission and deploy is authorized and the FIRST
+	// hosting tick is what gets refused. A tighter cap would block submission
+	// and test the wrong thing — the run would never reach an endpoint at all.
+	guard := budget.New(budget.Limits{MaxCostUSDMicros: 11_000_000}, nil, 0)
+	tuner := &fakeTuner{
+		ref:            &core.JobRef{Id: "job-1", Provider: "together", SubmittedAt: "2026-08-31T00:00:00Z"},
+		statusSequence: []*core.JobState{succeeded("job-1")},
+		deployResult: &core.Endpoint{
+			ID: "ep-1", Provider: "together", Served: "meta-llama/Llama-3-8b-ft",
+			Ready: true, ReadyAt: time.Now().Add(-5 * time.Minute),
+		},
+	}
+	em, err := bridge.NewEmitter(ctx, st, "run-1")
+	if err != nil {
+		t.Fatalf("NewEmitter: %v", err)
+	}
+	eval := &blockingEvalRunner{started: make(chan struct{}), returned: make(chan struct{})}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = bridge.Run(ctx, bridge.RunParams{
+			RunID: "run-1", Store: st, Guard: guard, Tuner: tuner, Emitter: em, Provider: "together",
+			Quotes:    testQuotes(),
+			BaseModel: &knov1.AgentRef{Ref: "together:meta-llama/Llama-3-8b", Scheme: "together", Target: "meta-llama/Llama-3-8b"},
+			Epochs:    3, GoalDomain: knov1.ScoreDomain_SCORE_DOMAIN_UNIT_INTERVAL,
+			PollInterval: time.Millisecond,
+			// Short enough that a tick lands while the measurement blocks.
+			TickInterval:     time.Millisecond,
+			ServePrice:       pricing.ServePrice{PerMinuteUSDMicros: 100_000},
+			ServeReplicas:    1,
+			Eval:             eval,
+			MaxLiveEndpoints: 1, MaxServeMinutes: 30,
+		})
+	}()
+
+	select {
+	case <-eval.started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the measurement never started")
+	}
+
+	// The refusal must reach the measurement. Without it this blocks forever
+	// and the endpoint bills the whole time.
+	select {
+	case <-eval.returned:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the budget guard refused a hosting tick and the measurement " +
+			"was never interrupted — the endpoint keeps billing past the cap")
+	}
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run never returned after the measurement was interrupted")
+	}
+
+	if tuner.teardownCalls == 0 {
+		t.Error("the endpoint was never torn down after the cap was reached; " +
+			"it keeps billing until something else notices")
 	}
 }
