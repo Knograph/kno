@@ -316,7 +316,7 @@ the conformance suite that defines correct for them, so the hard question is ans
 you start. **Calibration records** are the second on-ramp and are available now: one line of
 `judge/testdata/calibration/<set>/records.jsonl`, subject to the two-labeler rule, the 40%
 balance invariant and the provenance rules — see [Calibrate a
-judge](docs/cookbook/calibrate-a-judge.md). **Judge prompts** join that list when the first judge
+judge](https://github.com/uknoAI/kno-examples/blob/main/recipes/calibrate-a-judge.md). **Judge prompts** join that list when the first judge
 Goal lands; the gate that would measure one is already here. Several entries in [the Debt
 Ledger](docs/debt.md) are also well-scoped starting points.
 

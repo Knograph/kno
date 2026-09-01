@@ -39,6 +39,7 @@ MIGRATED="
 anthropic
 bedrock
 braintrust
+calibrate-a-judge
 check-your-evals
 ci-gate
 confluence
@@ -64,30 +65,27 @@ your-own-provider
 zendesk
 "
 
-# Pages that still live here, in full.
+# Pages that still live here, in full. THIS LIST IS EMPTY, and keeping it
+# empty is the point rather than an accident of timing.
 #
 # RESIDENT is not a parking space. A page belongs here only while its commands
 # are unreleased, because kno-examples checks every command against the
 # RELEASED binary and a page about an unreleased command can carry no honest
-# tier there. The claim expires when the command ships, and then the page
-# moves and leaves a stub.
+# tier there. The claim expires when the command ships, and then the page moves
+# and leaves a stub.
 #
-# `check-your-evals` ran that course: held here until v0.1.4 shipped
-# `kno eval inspect`, then migrated.
+# Both pages that were ever on this list ran that course within a day of each
+# other: `check-your-evals` left when v0.1.4 shipped `kno eval inspect`, and
+# `calibrate-a-judge` left when v0.1.5 shipped `kno judge calibrate`. Neither
+# needed to settle for a hand-checked tier — both commands turned out to be
+# free, offline and deterministic, so both migrated as `executed` pages with
+# scenarios behind them.
 #
-# `calibrate-a-judge` is at the same point. v0.1.5 ships `kno judge calibrate`,
-# so its blocker is gone — it is here now because it has not been migrated yet,
-# which is a different and weaker reason than the one that put it here. Its
-# migration is straightforward and worth doing: the command defaults to
-# `--replay`, calls no model, and prints a deterministic kappa with a PASS/FAIL
-# gate, so the page can be verified `executed` rather than by hand.
-#
-# If you are reading this comment because you are adding a third name below:
-# do not. Add it only for a command that has not shipped, and say which
-# release will ship it.
-RESIDENT="
-calibrate-a-judge
-"
+# If you are adding a name below: it must be a page whose commands are not in
+# any release, and the comment you add with it must name the release that will
+# ship them. Anything else is a page rotting here unchecked, which is what the
+# migration was for.
+RESIDENT=""
 
 # README.md is the index — a pointer page, not a recipe and not a stub.
 INDEX=README.md
