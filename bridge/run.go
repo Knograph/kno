@@ -12,38 +12,45 @@ import (
 	"github.com/knograph/kno/core/errs"
 	knov1 "github.com/knograph/kno/gen/kno/v1"
 	"github.com/knograph/kno/stats/budget"
-	"github.com/knograph/kno/stats/interval"
 	"github.com/knograph/kno/store"
 )
 
-// EvalRunner runs one ablation group's proxy model over its dev and control
-// Cases and returns per-Case score deltas, already sign-corrected for the
-// Goal's direction — the SAME contract core/value_measure.go's internal
-// `pairs` helper produces for Value, one vector per Case (bridge measures
-// each group's model exactly once per Case, so there is no trial dimension
-// to average within a Case the way Value's ragged-trial pairing has to).
+// EvalRunner invokes one ablation group's deployed proxy model over a set
+// of Cases and returns each Case's RAW score, direction-normalised, keyed
+// by Case ID — never a delta, and never positional.
 //
-// This is an INJECTION SEAM, not a convenience wrapper: computing a real
-// answer means invoking a deployed model through the same budget-guarded,
-// retrying, panic-safe path core.invoker already implements for Value and
-// Validate (core/invoke.go) — six separately-discovered money and
-// correctness defects live in that type's retry loop, per its own doc, and
-// bridge does not re-implement them a third time. That type is UNEXPORTED
-// from core today. Run refuses to start without an EvalRunner (see
-// RunParams.validate) rather than deploying a paid endpoint and then
-// silently skipping the measurement it exists to buy — see this PR's
-// report for the scope decision and what wiring a real implementation
-// needs (an Evals source the current `kno bridge` flags do not accept, and
-// an Agent built from the deployed Endpoint via adapters/agent/openaicompat).
+// core.ScorePass (core/score.go) is the production implementation's
+// injection seam: computing a real answer means invoking a deployed model
+// through the same budget-guarded, retrying, panic-safe path
+// core.invoker already implements for Value and Validate — six
+// separately-discovered money and correctness defects live in that type's
+// retry loop, per its own doc, and bridge does not re-implement them a
+// third time. See NewEvalRunner.
+//
+// KEYED BY CASE ID, NOT POSITIONAL, and that shape is load-bearing rather
+// than a style choice. core/value/route.go's cluster() assigns a Case to
+// EVERY matching cluster, so a Case tagged with two failure tags sits in
+// two groups' dev sets with different membership and different ordering
+// from the all-in union pass. Pairing "slot i of the union pass" against
+// "slot j of group G's pass" is wrong, and wrong in the worst way — a
+// plausible interval of the wrong width. Keyed lookups make that alignment
+// problem not exist: a Case in two clusters is looked up twice, correctly,
+// which is what a multi-tag Case should do. bridge.Run computes
+// Δ = groupScores[id] − allInScores[id] over exactly the group's own dev
+// Case IDs (see computeVerdict, bridge/measure.go) — pairing is Run's
+// job, the component that legitimately holds both sides, never Measure's.
+//
+// Run refuses to start without an EvalRunner (see RunParams.validate)
+// rather than deploying a paid endpoint and then silently skipping the
+// measurement it exists to buy.
 type EvalRunner interface {
-	// Measure returns goalDeltas (paired against the all-in model, over the
-	// group's dev Cases — empty for the "all-in" group itself, which IS the
-	// baseline) and controlDeltas (paired against the same baseline over
-	// value.Plan.ControlCaseIDs). Each inner slice is exactly one value: the
-	// dimension core/value_measure.go's perCaseMeans expects, kept ragged-
-	// shape-compatible with stats/interval's PairedTrials rather than
-	// introducing a second interval entry point for a single-trial case.
-	Measure(ctx context.Context, group string, model *knov1.AgentRef, devCaseIDs, controlCaseIDs []string) (goalDeltas, controlDeltas [][]float64, err error)
+	// Measure invokes model once per Case in caseIDs and returns each
+	// Case's score. caseIDs carries no dev/control distinction — the
+	// caller (bridge.Run) decides what the set means and which Cases it
+	// pairs against which baseline. A Case Measure cannot score (a
+	// transport error, a refused capability) is simply absent from the
+	// returned map; that alone is not an error.
+	Measure(ctx context.Context, group string, model *knov1.AgentRef, caseIDs []string) (map[string]float64, error)
 }
 
 // RunParams bundles one full bridge run: every group's submission, polling,
@@ -72,14 +79,26 @@ type RunParams struct {
 	JobTimeout time.Duration
 
 	// GoalDomain and Level parameterize the interval methods Run calls once
-	// an EvalRunner reports deltas.
+	// an EvalRunner reports scores.
 	GoalDomain knov1.ScoreDomain
 	Level      float64
 
+	// NGroups is the Bonferroni multiplicity N — the bridge eval-seam
+	// plan's §8: the PLANNED leave-one-out group count, fixed at quote
+	// time (len(Quotes)-1, excluding AllIn), never a count of groups that
+	// happened to reach a verdict. A dynamic N would make one group's
+	// correction, and therefore its verdict, depend on how many OTHER
+	// groups' jobs had failed by the time it was measured — the same
+	// group could then get a different verdict on a resume depending on
+	// unrelated failures. Values below 2 apply no correction (Bonferroni
+	// over a single comparison is a no-op; portfolio.Correct itself
+	// refuses nScreened < 2).
+	NGroups int
+
 	// DevCaseIDs maps each leave-one-out group's name to its cluster's dev
 	// Case IDs — value.Plan.Clusters[i].CaseIDs, keyed by tag. The AllIn
-	// group needs no entry: it is the baseline every other group's Eval
-	// call is paired against.
+	// group needs no entry: its own Case set is the union of every other
+	// group's (see unionCaseIDs, bridge/measure.go).
 	DevCaseIDs map[string][]string
 
 	// ControlCaseIDs is the reserved control partition every group's
@@ -102,6 +121,10 @@ type RunParams struct {
 	// TickInterval bounds how often SettleServeTick runs while an
 	// endpoint is live. Defaults to 1 minute.
 	TickInterval time.Duration
+
+	// Now reads the current time, stamped on VerdictEmittedAt. Nil uses
+	// time.Now. Injected so a resume test can drive the clock.
+	Now func() time.Time
 }
 
 func (p *RunParams) validate() error {
@@ -138,6 +161,13 @@ func (p *RunParams) validate() error {
 	return nil
 }
 
+func (p RunParams) now() time.Time {
+	if p.Now != nil {
+		return p.Now()
+	}
+	return time.Now().UTC()
+}
+
 // ErrJobTimedOut is returned when a job does not reach a terminal status
 // within RunParams.JobTimeout — acceptance criterion 24: stops WAITING,
 // never cancels, the row stays non-terminal, and resume polls the same
@@ -154,8 +184,11 @@ type RunResult struct {
 // group in p.Quotes, in order: the resume-time endpoint sweep FIRST (Step
 // 2(g): "a resumed bridge run's first act, before any deploy and before any
 // submit"), then per group — submit-or-adopt-or-resume, poll to terminal,
-// reconcile, deploy, settle-forward while Eval measures, teardown
-// (unconditional), and emit BridgeGroupMeasured.
+// reconcile, then measure per groupCompletion's decision (deploy only what
+// is still needed, or recompute a lost verdict from stored scores, or skip
+// entirely if this group already has a durable verdict), teardown
+// (unconditional whenever a deploy happened), and emit BridgeGroupMeasured
+// exactly once per group.
 //
 // A group whose job does not reach JOB_STATUS_SUCCEEDED is reported
 // unknown and Run continues to the next group — Step 3's "all-in job
@@ -175,10 +208,9 @@ func Run(ctx context.Context, p RunParams) (*RunResult, error) {
 	limiter := NewLiveEndpointLimiter(p.MaxLiveEndpoints)
 	result := &RunResult{}
 
-	// AllIn runs first (Groups() already orders it first) and its measured
-	// scores become every leave-one-out group's baseline.
-	var baselineModel *knov1.AgentRef
-
+	// AllIn runs first (Groups() already orders it first), so every
+	// leave-one-out group below can read its scores back from the store —
+	// never from an in-memory value, which would not survive a resume.
 	for _, q := range p.Quotes {
 		ref, err := submitOrResumeGroup(ctx, p, q)
 		if err != nil {
@@ -212,19 +244,233 @@ func Run(ctx context.Context, p RunParams) (*RunResult, error) {
 			continue
 		}
 
-		measured, model, err := deployMeasureTeardown(ctx, p, q, ref, limiter, baselineModel)
+		// Reload: ReconcileTerminal may have updated the row (State,
+		// Status, ActualCostUSDMicros) since findRecord above.
+		rec, err = findRecord(ctx, p.Store, p.RunID, q.Group)
 		if err != nil {
 			return result, err
 		}
-		if q.Group == AllIn {
-			baselineModel = model
-		}
-		result.Measured = append(result.Measured, measured)
-		if err := p.Emitter.GroupMeasured(ctx, measured); err != nil {
+
+		ev, err := measureGroup(ctx, p, q, ref, rec, limiter)
+		if err != nil {
 			return result, err
+		}
+		if ev != nil {
+			result.Measured = append(result.Measured, ev)
 		}
 	}
 	return result, nil
+}
+
+// measureGroup is one group's measurement, dispatched by
+// groupCompletion's read of the durable state — the bridge eval-seam
+// plan's §6 resume idempotency: never re-deploy a group that is already
+// fully scored and reported, never lose a paid-for verdict whose event
+// never made it to the stream, and only ever pay for the Cases still
+// missing when partial progress exists.
+func measureGroup(
+	ctx context.Context, p RunParams, q GroupQuote, ref *core.JobRef,
+	rec *store.TuningJobRecord, limiter *LiveEndpointLimiter,
+) (*knov1.BridgeGroupMeasured, error) {
+	needed := groupNeededCaseIDs(p, q.Group)
+	have, err := loadGroupScores(ctx, p.Store, p.RunID, q.Group)
+	if err != nil {
+		return nil, err
+	}
+
+	switch {
+	case q.Group == AllIn:
+		if err := ensureMeasured(ctx, p, q, ref, limiter, needed, have); err != nil {
+			return nil, err
+		}
+		// The all-in group IS the baseline every leave-one-out group is
+		// compared against; it has no delta or verdict of its own.
+		return nil, nil
+
+	case rec.VerdictEmittedAt != "":
+		// Already reported in a prior process (or earlier in this one, for
+		// a duplicate Quotes entry — Groups() never produces one, but
+		// nothing enforces that on RunParams directly). Never re-measure,
+		// never re-emit; recompute the event from durable state purely so
+		// THIS process's RunResult is complete.
+		return recomputeVerdict(ctx, p, q.Group)
+
+	default:
+		if err := ensureMeasured(ctx, p, q, ref, limiter, needed, have); err != nil {
+			return nil, err
+		}
+		return emitVerdict(ctx, p, q.Group, rec)
+	}
+}
+
+// ensureMeasured deploys and measures only the Cases group still needs,
+// when it needs any — a resumed group whose Cases are already all durably
+// scored costs nothing here, per §6: "A resumed run re-deploys only if
+// Cases remain unscored, and re-scores only those".
+func ensureMeasured(
+	ctx context.Context, p RunParams, q GroupQuote, ref *core.JobRef,
+	limiter *LiveEndpointLimiter, needed []string, have map[string]float64,
+) error {
+	missing := missingIDs(needed, have)
+	if len(missing) == 0 {
+		return nil
+	}
+	return deployAndMeasure(ctx, p, q, ref, limiter, missing)
+}
+
+// deployAndMeasure deploys a succeeded job's model, invokes it over
+// missing while settling hosting minutes forward, persists every score it
+// gets back, and tears the endpoint down UNCONDITIONALLY — success or
+// failure — before returning. Teardown's own failure is never swallowed:
+// it fails this call, per core.Tuner.Teardown's contract.
+func deployAndMeasure(
+	ctx context.Context, p RunParams, q GroupQuote, ref *core.JobRef,
+	limiter *LiveEndpointLimiter, missing []string,
+) (retErr error) {
+	if err := limiter.Acquire(ctx); err != nil {
+		return fmt.Errorf("acquiring a live-endpoint slot for %s: %w", q.Group, err)
+	}
+	defer limiter.Release()
+
+	ep, err := DeployGroup(ctx, DeployParams{
+		RunID: p.RunID, AblationGroup: q.Group, Store: p.Store, Tuner: p.Tuner,
+		Emitter: p.Emitter, Ref: ref,
+	})
+	if err != nil {
+		return err
+	}
+
+	// Teardown is unconditional and defer-shaped, per the plan's Step
+	// 2(f): it runs on success, on eval-pass failure, on the serve-minute
+	// cap, and on cancellation. Its own failure is never swallowed — it
+	// replaces whatever error this function was about to return with its
+	// own, naming the endpoint, because a leaked endpoint outranks a
+	// measurement error in urgency.
+	defer func() {
+		tdErr := TeardownGroup(ctx, TeardownParams{
+			RunID: p.RunID, AblationGroup: q.Group, Store: p.Store, Tuner: p.Tuner,
+			Emitter: p.Emitter, Endpoint: ep,
+		})
+		if tdErr != nil {
+			retErr = tdErr
+		}
+	}()
+
+	model := &knov1.AgentRef{Ref: ep.Served, Scheme: ep.Provider, Target: ep.Served}
+
+	// measureCtx, not ctx: a hosting tick that the budget guard REFUSES has
+	// to reach the measurement and stop it. The endpoint bills by the
+	// minute whether or not anything is measuring it, so a cap reached
+	// mid-measure means every further minute is spend the user did not
+	// authorize. The ticker cancels this context on refusal, Measure
+	// returns, and the deferred teardown above runs immediately instead of
+	// after a measurement nobody can pay for.
+	//
+	// The ticker itself keeps the parent ctx: it must go on settling the
+	// minutes actually consumed between the refusal and teardown. Those
+	// are real charges, and recording them as orphan spend is the honest
+	// treatment — cancelling the ticker too would simply lose them.
+	measureCtx, cancelMeasure := context.WithCancel(ctx)
+	defer cancelMeasure()
+
+	stopTick := startServeTicker(ctx, cancelMeasure, p, q.Group, ep)
+	defer func() {
+		if err := stopTick(); err != nil && retErr == nil {
+			retErr = err
+		}
+	}()
+
+	scores, mErr := p.Eval.Measure(measureCtx, q.Group, model, missing)
+	// Persist whatever was scored BEFORE returning any measurement error —
+	// a partial pass that scored 40 of 60 Cases before a refusal or a
+	// transport failure must not lose those 40. This is bridge.Run's own
+	// durability safety net; a production EvalRunner built on
+	// core.ScorePass persists each Case as it happens too (ScoreParams.OnScored),
+	// so this write is typically idempotent by the time it runs — see
+	// recordScores's doc.
+	devSet := make(map[string]struct{}, len(p.DevCaseIDs[q.Group]))
+	if q.Group != AllIn {
+		for _, id := range p.DevCaseIDs[q.Group] {
+			devSet[id] = struct{}{}
+		}
+	}
+	armOf := func(id string) store.Arm {
+		if q.Group == AllIn {
+			// The all-in scores are the baseline itself, not either side
+			// of a paired comparison — every row is ArmTreatment
+			// uniformly. See armFor's doc.
+			return store.ArmTreatment
+		}
+		return armFor(id, devSet)
+	}
+	if err := recordScores(ctx, p.Store, p.RunID, q.Group, scores, armOf); err != nil {
+		if retErr == nil {
+			retErr = err
+		}
+		return retErr
+	}
+	if mErr != nil {
+		retErr = fmt.Errorf("measuring the %s group: %w", q.Group, mErr)
+		return retErr
+	}
+	return nil
+}
+
+// emitVerdict computes a leave-one-out group's verdict from durably
+// recorded scores, appends BridgeGroupMeasured, and marks the group
+// reported — in that order, because losing a measurement is worse than
+// duplicating one: a crash between the two leaves the group "fully scored,
+// not yet marked", which resume's default branch in measureGroup recomputes
+// and emits again rather than silently dropping. See
+// docs/plans/2026-09-01-bridge-eval-seam.md §6.
+func emitVerdict(ctx context.Context, p RunParams, group string, rec *store.TuningJobRecord) (*knov1.BridgeGroupMeasured, error) {
+	ev, err := recomputeVerdict(ctx, p, group)
+	if err != nil {
+		return nil, err
+	}
+	if err := p.Emitter.GroupMeasured(ctx, ev); err != nil {
+		return nil, err
+	}
+	rec.VerdictEmittedAt = p.now().Format(time.RFC3339)
+	if err := p.Store.UpdateTuningJob(ctx, p.RunID, rec); err != nil {
+		return nil, fmt.Errorf("marking the %s group's verdict emitted: %w", group, err)
+	}
+	return ev, nil
+}
+
+// recomputeVerdict rebuilds a leave-one-out group's BridgeGroupMeasured
+// purely from durable state — the store's recorded per-Case scores for
+// this group and for the all-in baseline. Used both by emitVerdict (a
+// fresh measurement) and by measureGroup's already-reported branch (a
+// resumed process reconstructing what a prior one already emitted, for
+// this process's own RunResult, without re-emitting).
+func recomputeVerdict(ctx context.Context, p RunParams, group string) (*knov1.BridgeGroupMeasured, error) {
+	allIn, err := loadGroupScores(ctx, p.Store, p.RunID, AllIn)
+	if err != nil {
+		return nil, err
+	}
+	if len(allIn) == 0 {
+		return nil, fmt.Errorf("bridge: group %s has no all-in baseline scores recorded — "+
+			"the all-in job must be measured before any leave-one-out group's delta is meaningful", group)
+	}
+	groupScores, err := loadGroupScores(ctx, p.Store, p.RunID, group)
+	if err != nil {
+		return nil, err
+	}
+	return computeVerdict(group, p.GoalDomain, p.Level, p.NGroups,
+		allIn, groupScores, p.DevCaseIDs[group], p.ControlCaseIDs), nil
+}
+
+// groupNeededCaseIDs is the Case ID set one group's job must be measured
+// over: the union of every group's dev Cases plus the control partition
+// for AllIn (the union pass, §2), or this group's own dev Cases plus the
+// control partition for a leave-one-out group (groupCaseIDs,
+// bridge/measure.go).
+func groupNeededCaseIDs(p RunParams, group string) []string {
+	if group == AllIn {
+		return unionCaseIDs(p)
+	}
+	return groupCaseIDs(p, group)
 }
 
 // submitOrResumeGroup calls SubmitGroup and translates its outcome into a
@@ -312,99 +558,6 @@ func isTerminal(s knov1.JobStatus) bool {
 	}
 }
 
-// deployMeasureTeardown deploys a succeeded job's model, runs its eval
-// passes while settling hosting minutes forward, and tears the endpoint
-// down UNCONDITIONALLY — success or failure — before returning. Teardown's
-// own failure is never swallowed: it fails this call, per
-// core.Tuner.Teardown's contract.
-func deployMeasureTeardown(
-	ctx context.Context, p RunParams, q GroupQuote, ref *core.JobRef,
-	limiter *LiveEndpointLimiter, baselineModel *knov1.AgentRef,
-) (*knov1.BridgeGroupMeasured, *knov1.AgentRef, error) {
-	if err := limiter.Acquire(ctx); err != nil {
-		return nil, nil, fmt.Errorf("acquiring a live-endpoint slot for %s: %w", q.Group, err)
-	}
-	defer limiter.Release()
-
-	ep, err := DeployGroup(ctx, DeployParams{
-		RunID: p.RunID, AblationGroup: q.Group, Store: p.Store, Tuner: p.Tuner,
-		Emitter: p.Emitter, Ref: ref,
-	})
-	if err != nil {
-		return nil, nil, err
-	}
-
-	// Teardown is unconditional and defer-shaped, per the plan's Step
-	// 2(f): it runs on success, on eval-pass failure, on the serve-minute
-	// cap, and on cancellation. Its own failure is never swallowed — it
-	// replaces whatever error this function was about to return with its
-	// own, naming the endpoint, because a leaked endpoint outranks a
-	// measurement error in urgency.
-	var measureErr error
-	defer func() {
-		tdErr := TeardownGroup(ctx, TeardownParams{
-			RunID: p.RunID, AblationGroup: q.Group, Store: p.Store, Tuner: p.Tuner,
-			Emitter: p.Emitter, Endpoint: ep,
-		})
-		if tdErr != nil {
-			measureErr = tdErr
-		}
-	}()
-
-	model := &knov1.AgentRef{Ref: ep.Served, Scheme: ep.Provider, Target: ep.Served}
-	if q.Group == AllIn {
-		// The all-in group IS the baseline every leave-one-out group is
-		// compared against; it has no delta of its own to report against a
-		// prior model.
-		measureErr = nil
-		return &knov1.BridgeGroupMeasured{
-			AblationGroup: q.Group,
-			NotMeasured:   knov1.RejectionReason_REJECTION_REASON_UNSPECIFIED,
-			Verdict:       knov1.BridgeGroupVerdict_BRIDGE_GROUP_VERDICT_UNSPECIFIED,
-		}, model, measureErr
-	}
-	if baselineModel == nil {
-		measureErr = fmt.Errorf("bridge: group %s reached deploy with no all-in baseline model — "+
-			"the all-in job must succeed before any leave-one-out group's delta is meaningful", q.Group)
-		return nil, model, measureErr
-	}
-
-	// measureCtx, not ctx: a hosting tick that the budget guard REFUSES has
-	// to reach the measurement and stop it. The endpoint bills by the minute
-	// whether or not anything is measuring it, so a cap reached mid-measure
-	// means every further minute is spend the user did not authorize. The
-	// ticker cancels this context on refusal, Measure returns, and the
-	// deferred teardown above runs immediately instead of after a
-	// measurement nobody can pay for.
-	//
-	// The ticker itself keeps the parent ctx: it must go on settling the
-	// minutes actually consumed between the refusal and teardown. Those are
-	// real charges, and recording them as orphan spend is the honest
-	// treatment — cancelling the ticker too would simply lose them.
-	measureCtx, cancelMeasure := context.WithCancel(ctx)
-	defer cancelMeasure()
-
-	stopTick := startServeTicker(ctx, cancelMeasure, p, q.Group, ep)
-	defer func() {
-		if err := stopTick(); err != nil && measureErr == nil {
-			measureErr = err
-		}
-	}()
-
-	devCaseIDs := p.DevCaseIDs[q.Group]
-	goalDeltas, controlDeltas, err := p.Eval.Measure(measureCtx, q.Group, model, devCaseIDs, p.ControlCaseIDs)
-	if err != nil {
-		// A refusal surfaces through stopTick in the deferred block above and
-		// takes precedence: "the cap stopped this" is the useful report, not
-		// the context cancellation it caused.
-		measureErr = fmt.Errorf("measuring the %s group: %w", q.Group, err)
-		return nil, model, measureErr
-	}
-
-	ev := groupMeasuredEvent(q.Group, p.GoalDomain, p.Level, goalDeltas, controlDeltas)
-	return ev, model, measureErr
-}
-
 // startServeTicker starts a background goroutine settling hosting minutes
 // forward at p.TickInterval and returns a function that stops it, waits for
 // the final tick, and reports the first settle error observed.
@@ -481,103 +634,4 @@ func startServeTicker(
 		defer mu.Unlock()
 		return firstErr
 	}
-}
-
-// groupMeasuredEvent computes Δ_group and Δ_control with their intervals
-// and derives the verdict — prime directive 5's own rule applied here: a
-// delta is never carried without its interval.
-func groupMeasuredEvent(group string, domain knov1.ScoreDomain, level float64, goalDeltas, controlDeltas [][]float64) *knov1.BridgeGroupMeasured {
-	ev := &knov1.BridgeGroupMeasured{AblationGroup: group}
-
-	var goalIv *knov1.Interval
-	if len(goalDeltas) > 0 {
-		goalIv = interval.PairedTrials(goalDeltas, domain, level)
-	}
-	var controlIv *knov1.Interval
-	controlUnderpowered := true
-	if len(controlDeltas) > 0 {
-		if means, trials, ok := perCaseMeansLocal(controlDeltas); ok {
-			controlIv = interval.HarmBound(means, domain, trials, level)
-			controlUnderpowered = controlIv == nil
-		}
-	}
-
-	if goalIv == nil {
-		ev.NotMeasured = knov1.RejectionReason_REJECTION_REASON_UNDERPOWERED
-		ev.Verdict = knov1.BridgeGroupVerdict_BRIDGE_GROUP_VERDICT_UNSPECIFIED
-		return ev
-	}
-
-	ev.DeltaGroup = meanOfMeansLocal(goalDeltas)
-	ev.DeltaGroupInterval = goalIv
-	if controlIv != nil {
-		ev.DeltaControl = meanOfMeansLocal(controlDeltas)
-		ev.DeltaControlInterval = controlIv
-	}
-	ev.ControlUnderpowered = controlUnderpowered
-
-	// INTERFERENCE IS DELIBERATELY NOT DECIDED HERE. core/select.go's own
-	// harm gate (netInterval, core/select.go:495) does not read
-	// ControlInterval alone — it combines DeltaInterval and ControlInterval
-	// into a variance-weighted NET interval (netInterval, unexported) and
-	// gates on net.GetHigh() <= 0. HarmBound's own doc (stats/interval/
-	// interval.go:131) explains why a naive "Low <= 0" or "Low > 0" read of
-	// the ONE-SIDED bound alone is exactly the underpowered-looks-like-
-	// passed failure mode this package exists to avoid: shipping a guessed
-	// sign rule here for a P0-sensitive "did this measurably regress
-	// something" claim is a statistical-validity risk CLAUDE.md's prime
-	// directive 5 exists to prevent, not a detail to approximate. See this
-	// PR's report — BRIDGE_GROUP_VERDICT_INTERFERENCE is never emitted by
-	// this build; a group that would need it reports CONFIRMED or
-	// UNCONFIRMED on delta_group alone, and delta_control/its interval are
-	// still recorded on the event for a human or a future gate to read.
-	if goalIv.GetLow() > 0 {
-		ev.Verdict = knov1.BridgeGroupVerdict_BRIDGE_GROUP_VERDICT_CONFIRMED
-	} else {
-		ev.Verdict = knov1.BridgeGroupVerdict_BRIDGE_GROUP_VERDICT_UNCONFIRMED
-		ev.NotMeasured = knov1.RejectionReason_REJECTION_REASON_BRIDGE_UNCONFIRMED
-	}
-	return ev
-}
-
-// perCaseMeansLocal and meanOfMeansLocal mirror core/value_measure.go's
-// perCaseMeans/meanOfMeans exactly (both unexported there, so bridge cannot
-// import them) — collapsing each Case's per-trial deltas to one mean per
-// Case, then averaging the Cases. Kept dependency-free and this small
-// deliberately, rather than exporting core's version, because bridge's
-// EvalRunner contract is single-trial per Case (see EvalRunner's doc): a
-// divergence between the two copies here would show up immediately as a
-// wrong-shaped interval, not as a silent drift in what "trial" means.
-func perCaseMeansLocal(perCase [][]float64) (means []float64, trials int, ok bool) {
-	if len(perCase) == 0 {
-		return nil, 0, false
-	}
-	trials = len(perCase[0])
-	if trials == 0 {
-		return nil, 0, false
-	}
-	means = make([]float64, len(perCase))
-	for i, tr := range perCase {
-		if len(tr) != trials {
-			return nil, 0, false
-		}
-		var sum float64
-		for _, v := range tr {
-			sum += v
-		}
-		means[i] = sum / float64(trials)
-	}
-	return means, trials, true
-}
-
-func meanOfMeansLocal(perCase [][]float64) float64 {
-	means, _, ok := perCaseMeansLocal(perCase)
-	if !ok || len(means) == 0 {
-		return 0
-	}
-	var total float64
-	for _, m := range means {
-		total += m
-	}
-	return total / float64(len(means))
 }

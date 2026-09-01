@@ -116,3 +116,51 @@ func microsToUSD(micros int64) float64 {
 	cents := micros / 10_000
 	return float64(cents) / 100
 }
+
+// renderBridgeResult prints what an armed bridge run measured: one line
+// per group with its verdict and delta, and every skipped group.
+func renderBridgeResult(out io.Writer, f bridgeFlags, result *bridge.RunResult) error {
+	if f.jsonOut {
+		enc := json.NewEncoder(out)
+		enc.SetIndent("", "  ")
+		return enc.Encode(bridgeResultJSONOf(result))
+	}
+	var b []byte
+	for _, m := range result.Measured {
+		b = append(b, fmt.Sprintf("  %-24s verdict=%-32s delta_group=%+.4f\n",
+			m.GetAblationGroup(), m.GetVerdict(), m.GetDeltaGroup())...)
+	}
+	for _, g := range result.Skipped {
+		b = append(b, fmt.Sprintf("  %-24s skipped (job did not succeed)\n", g)...)
+	}
+	_, err := out.Write(b)
+	return err
+}
+
+// bridgeResultJSON is the --json shape of an armed run's result.
+type bridgeResultJSON struct {
+	Measured []bridgeGroupJSON `json:"measured"`
+	Skipped  []string          `json:"skipped"`
+}
+
+// bridgeGroupJSON is one measured group's --json shape.
+type bridgeGroupJSON struct {
+	Group      string  `json:"group"`
+	Verdict    string  `json:"verdict"`
+	DeltaGroup float64 `json:"delta_group"`
+}
+
+func bridgeResultJSONOf(result *bridge.RunResult) bridgeResultJSON {
+	doc := bridgeResultJSON{Skipped: result.Skipped}
+	for _, m := range result.Measured {
+		doc.Measured = append(doc.Measured, bridgeGroupJSON{
+			Group: m.GetAblationGroup(), Verdict: m.GetVerdict().String(),
+			// Rounded to four decimal places at the source: Go fuses
+			// multiply-add differently on arm64 vs amd64, and this is
+			// the same discipline cli/evalinspect.go and judge/kappa.go
+			// already apply before anything crosses a --json boundary.
+			DeltaGroup: roundTo4(m.GetDeltaGroup()),
+		})
+	}
+	return doc
+}

@@ -1,0 +1,5 @@
+Hand-authored from the published Together fine-tuning API spec, per this
+package's PROVENANCE WARNING (verify) — not a confirmed wire trace. Exercises
+the full terminal-succeeding poll sequence the tuner-bridge plan's Step 6
+names: VALIDATING_FILES -> QUEUED -> RUNNING -> DEPLOYING -> SUCCEEDED, with
+progress advancing and a fine_tuned_model appearing on the terminal poll.

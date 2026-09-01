@@ -87,6 +87,67 @@ covenants — breaking any of them requires a major version.
 
 ## [Unreleased]
 
+### Added
+
+- **`kno bridge` measures instead of refusing to start.** The tuner-bridge
+  spine (submit, poll, reconcile, deploy, hosting settle-forward, teardown,
+  the resume-time endpoint sweep) shipped in `feat/tuner-bridge` (#184)
+  without a production `EvalRunner` — the seam that invokes a deployed
+  proxy model over Cases and scores it — so an armed run planned, priced,
+  confirmed, and then stopped with an actionable refusal (docs/debt.md#158).
+  This closes that loop:
+
+  - **`core.ScorePass`** (`core/score.go`), a new exported seam: invokes an
+    Agent once per Case and scores it, under the same budget-guarded,
+    retrying, panic-safe path Value and Validate already share
+    (`core.invoker`, unexported and unchanged). Takes a `*core.SealedEvals`
+    — the holdout cannot be reached through it — and `Skip`/`OnScored` so a
+    caller checkpoints per Case as it happens, the unit resume correctness
+    needs.
+  - **`kno bridge` gained `--evals`**, resolved and sealed once at the CLI
+    choke point, filtered to exactly the Case IDs the value.Plan names. A
+    Case ID the plan names with no Case behind it refuses the WHOLE run
+    before any job is submitted, naming the Case.
+  - **The all-in model is actually scored.** It is deployed, invoked over
+    the union of every group's dev Cases plus the reserved control
+    partition while its endpoint is live (the only moment it exists), and
+    its per-Case scores are durably persisted — never held only in memory —
+    so every leave-one-out group's delta, computed as
+    `Δ = groupScore[id] − allInScore[id]`, pairs against a real number
+    instead of a baseline that was torn down before it was ever measured.
+  - **`bridge.EvalRunner.Measure`** now returns `map[string]float64` keyed
+    by Case ID — raw scores, never deltas, never positional — because a
+    Case routed to two failure clusters (`core/value/route.go`'s
+    `cluster()` assigns per tag) sits in two groups' dev sets with
+    different membership and ordering than the all-in union pass. Pairing
+    moved into `bridge.Run`, the component that legitimately holds both
+    sides.
+  - **Resume never re-pays and never loses a paid-for verdict.** A group
+    whose Cases are all durably scored redeploys nothing; a group whose
+    Cases are scored but whose `BridgeGroupMeasured` event was never
+    recorded (a crash between the two) is recomputed from stored scores and
+    emitted, rather than silently dropped.
+  - **`BRIDGE_GROUP_VERDICT_INTERFERENCE` is now emitted.** A new exported
+    `stats/interval.NetEffect` combines a group's goal delta and its
+    control-partition delta into one net judgement — extracted from
+    `core/select.go`'s previously-unexported `netInterval`, which now
+    delegates to it, characterization-tested against the pre-extraction
+    formula for behavior preservation. Bonferroni correction is goal-only,
+    with `N` pinned at the group count planned at quote time.
+  - **`store.TuningJobRecord` gained `VerdictEmittedAt`** (schema version 7
+    → 8) — the durable marker the resume logic above reads.
+  - **`adapters/tuner/together`'s poll tests moved to on-disk fixture
+    sequences** (`testdata/fixtures/poll-sequence`,
+    `testdata/fixtures/poll-failed`): `poll-01.json` … `poll-NN.json`,
+    replaying the full `VALIDATING_FILES → QUEUED → RUNNING → DEPLOYING →
+    SUCCEEDED` state machine and a `FAILED` branch surfacing the
+    provider's error text verbatim, deterministically and with no network.
+
+  Known gap, tracked as docs/debt.md#161: the deployed-endpoint inference
+  route this PR's CLI wiring assumes (`together.DefaultBaseURL + "/v1"`,
+  OpenAI-compatible) is unconfirmed against a live Together dedicated
+  endpoint — this pass did not run a live (`KNO_LIVE_TESTS=1`) bridge run.
+
 ### Changed
 
 - **The cookbook migration is finished: `calibrate-a-judge` has moved, and no

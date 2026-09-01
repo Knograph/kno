@@ -139,6 +139,19 @@ type TuningJobRecord struct {
 	// ServeCostUSDMicros is what those minutes cost at the settled rate —
 	// the second SettledSpend term this record contributes.
 	ServeCostUSDMicros int64
+
+	// VerdictEmittedAt is the RFC 3339 timestamp this group's
+	// BridgeGroupMeasured event (or, for the all-in group, the completion
+	// of its union scoring pass) was durably appended at. Empty means not
+	// yet reported.
+	//
+	// This is the resume marker the bridge eval-seam plan's §6 requires:
+	// a group whose Cases are all scored but whose event was never
+	// recorded must be recomputed from the stored measurements and
+	// emitted, never skipped — and a group whose verdict WAS already
+	// emitted must never be measured or emitted a second time. See
+	// bridge.Run's groupCompletion for how the two states are told apart.
+	VerdictEmittedAt string
 }
 
 // WriteTuningJob inserts or replaces the write-ahead row for one ablation
@@ -190,13 +203,15 @@ func (s *SQLite) upsertTuningJob(ctx context.Context, runID string, j *TuningJob
 			    base_model, suffix, training_file_sha256, train_tokens,
 			    epochs, lora_rank, estimated_cost_usd_micros, actual_cost_usd_micros,
 			    status, submitted_at, terminal_at, error_text,
-			    endpoint_id, deployed_at, torn_down_at, serve_minutes, serve_cost_usd_micros
-			 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			    endpoint_id, deployed_at, torn_down_at, serve_minutes, serve_cost_usd_micros,
+			    verdict_emitted_at
+			 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			runID, j.AblationGroup, string(j.State), j.Provider, j.ProviderJobID,
 			j.BaseModel, j.Suffix, j.TrainingFileSHA256, j.TrainTokens,
 			j.Epochs, j.LoRARank, j.EstimatedCostUSDMicros, actualCost,
 			int32(j.Status), j.SubmittedAt, j.TerminalAt, j.ErrorText,
 			endpointID, j.DeployedAt, tornDownAt, j.ServeMinutes, j.ServeCostUSDMicros,
+			j.VerdictEmittedAt,
 		)
 		if err != nil {
 			return fmt.Errorf("recording tuning job %s/%s: %w", runID, j.AblationGroup, err)
@@ -217,7 +232,8 @@ func (s *SQLite) TuningJobs(ctx context.Context, runID string) ([]*TuningJobReco
 		        training_file_sha256, train_tokens, epochs, lora_rank,
 		        estimated_cost_usd_micros, actual_cost_usd_micros, status,
 		        submitted_at, terminal_at, error_text,
-		        endpoint_id, deployed_at, torn_down_at, serve_minutes, serve_cost_usd_micros
+		        endpoint_id, deployed_at, torn_down_at, serve_minutes, serve_cost_usd_micros,
+		        verdict_emitted_at
 		 FROM tuning_jobs WHERE run_id = ? ORDER BY ablation_group`, runID)
 	if err != nil {
 		return nil, fmt.Errorf("listing tuning jobs for %s: %w", runID, err)
@@ -239,6 +255,7 @@ func (s *SQLite) TuningJobs(ctx context.Context, runID string) ([]*TuningJobReco
 			&j.EstimatedCostUSDMicros, &actualCost, &status,
 			&j.SubmittedAt, &j.TerminalAt, &j.ErrorText,
 			&endpointID, &j.DeployedAt, &tornDownAt, &j.ServeMinutes, &j.ServeCostUSDMicros,
+			&j.VerdictEmittedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scanning tuning job for %s: %w", runID, err)
 		}

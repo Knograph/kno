@@ -22,7 +22,7 @@ import (
 //
 // Version 0 is the M1 schema. Every later version is a numbered step in
 // migrations below.
-const schemaVersion = 7
+const schemaVersion = 8
 
 // schema is the version-0 base, applied on open. It is idempotent.
 //
@@ -478,6 +478,28 @@ var migrations = []migration{{
 		    serve_cost_usd_micros     INTEGER NOT NULL DEFAULT 0,
 		    PRIMARY KEY (run_id, ablation_group)
 		)`,
+	},
+}, {
+	to: 8,
+	// M-BR2. The bridge eval-seam plan's resume marker
+	// (docs/plans/2026-09-01-bridge-eval-seam.md §6): a group whose Cases
+	// are all durably scored but whose BridgeGroupMeasured event was never
+	// recorded (a crash between finishing the measurement and appending
+	// the event) must be RECOMPUTED from the stored per-Case scores and
+	// EMITTED on resume, not skipped — a paid-for measurement with a
+	// defensible interval is not something resume is allowed to lose. And
+	// a group whose verdict WAS already emitted must never emit it a
+	// second time, or the event stream carries two independently-sampled
+	// verdicts for one group.
+	//
+	// verdict_emitted_at is the durable marker deciding between those two
+	// cases: empty means "not yet reported" (recompute-and-emit is legal),
+	// non-empty means "already reported" (never re-measure, never
+	// re-emit). Written in the SAME statement as the rest of the row via
+	// UpdateTuningJob, so there is no separate write to lose to a crash
+	// between the two.
+	stmts: []string{
+		`ALTER TABLE tuning_jobs ADD COLUMN verdict_emitted_at TEXT NOT NULL DEFAULT ''`,
 	},
 }}
 

@@ -73,60 +73,11 @@ func TestNewRefusesPrivateAddressByDefault(t *testing.T) {
 	}
 }
 
-// TestSubmitAndStatusRoundTrip drives Submit and Status against a fixture
-// HTTP server built from this adapter's own hand-authored (verify) request
-// and response shapes — this is a self-consistency test of the adapter's
-// own parsing, not a confirmation of Together's real wire format. See the
-// package doc's PROVENANCE WARNING.
-func TestSubmitAndStatusRoundTrip(t *testing.T) {
-	t.Setenv("TOGETHER_API_KEY", "sk-test")
-
-	var sawAuth string
-	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/fine-tunes", func(w http.ResponseWriter, r *http.Request) {
-		sawAuth = r.Header.Get("Authorization")
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"id": "ft-abc123", "status": "pending", "created_at": "2026-08-31T00:00:00Z",
-		})
-	})
-	mux.HandleFunc("/v1/fine-tunes/ft-abc123", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"id": "ft-abc123", "status": "running", "progress": 0.5,
-		})
-	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-
-	tuner, err := together.New(together.Options{BaseURL: srv.URL, AllowPrivateAddress: true, AllowInsecureBaseURL: true, KeyEnv: bindKey(t, srv.URL)})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-
-	job := &core.TuningJob{
-		BaseModel: &core.AgentRef{Ref: "together:meta-llama/Llama-3-8b", Target: "meta-llama/Llama-3-8b"},
-		Suffix:    "kno-run-1-all-in",
-	}
-	ref, err := tuner.Submit(context.Background(), job)
-	if err != nil {
-		t.Fatalf("Submit: %v", err)
-	}
-	if ref.GetId() != "ft-abc123" {
-		t.Errorf("job id = %q, want ft-abc123", ref.GetId())
-	}
-	if sawAuth != "Bearer sk-test" {
-		t.Errorf("Authorization header = %q, want Bearer sk-test", sawAuth)
-	}
-
-	state, err := tuner.Status(context.Background(), ref)
-	if err != nil {
-		t.Fatalf("Status: %v", err)
-	}
-	if state.GetProgress() != 0.5 {
-		t.Errorf("progress = %v, want 0.5", state.GetProgress())
-	}
-}
+// The inline httptest submit/status round trip that used to live here was
+// converted to an on-disk fixture SEQUENCE — see poll_fixtures_test.go's
+// TestPollSequenceReplaysFromFixturesToSuccess and
+// TestPollSequenceFailedFixtureSurfacesProviderErrorVerbatim — per the
+// tuner-bridge plan's Step 6(3) and acceptance criterion 23.
 
 // TestFromStatusClassifiesUnauthorizedAsAuthFailure pins that a 401 maps
 // onto ErrAuthentication so the run stops with a message naming the fix,
