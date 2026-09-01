@@ -592,11 +592,39 @@ func (r *recordingStore) AppendEvent(ctx context.Context, ev *knov1.Event) error
 }
 
 // holdoutCanaryStore passes every read/write through to a real SQLite store
-// except the outcome readers — the methods that would let Select touch the
-// holdout. Select must never reach any of them.
+// except the readers that would let Select touch the holdout.
+//
+// Forbidding by METHOD NAME was sound only while no holdout row existed
+// anywhere Select could read. `kno validate` ended that: it writes holdout
+// measurements through RecordMeasurement (core/validate_loop.go) and reads
+// them back through Measurements (core/validate_measure.go), and Measurements
+// is not on the forbid list — so the day Select acquires a Measurements
+// reader, this canary goes green while the guarantee it names is gone.
+//
+// The guard is therefore RUN-SCOPED, not name-scoped. Measurements is allowed
+// for the gated Value run and CaseScores for that run's recorded baseline;
+// any other run ID is a failure, including a Validate run ID. That is
+// strictly stronger than forbidding names: it survives a new reader being
+// added, which is exactly how the name-scoped version decayed.
 type holdoutCanaryStore struct {
 	store.Store
-	t *testing.T
+	// canaryT rather than *testing.T so the guard itself can be tested. A
+	// guard that has never been watched to fail is a guard nobody knows
+	// works (docs/debt.md#16), and this one now guards a reader Select does
+	// not yet call — so "it passes" proves nothing on its own.
+	t canaryT
+
+	// valueRunID is the Value run Select was pointed at, and baselineRunID is
+	// the baseline that run recorded. Empty means "no read of this kind is
+	// legitimate", which is the safe default for a canary.
+	valueRunID    string
+	baselineRunID string
+}
+
+// canaryT is the slice of *testing.T the canary uses.
+type canaryT interface {
+	Helper()
+	Fatalf(format string, args ...any)
 }
 
 func (h *holdoutCanaryStore) forbid(name string) {
@@ -604,14 +632,43 @@ func (h *holdoutCanaryStore) forbid(name string) {
 	h.t.Fatalf("select reached the holdout through %s", name)
 }
 
+// allow fails unless runID is the one run this reader is legitimately scoped
+// to. Named for what it permits rather than what it blocks, because the
+// permitted set is the shorter and more reviewable half.
+func (h *holdoutCanaryStore) allow(name, runID, want string) {
+	h.t.Helper()
+	if want == "" || runID != want {
+		h.t.Fatalf("select read %s for run %q; the only run it may read this "+
+			"way is %q. A Validate run ID here would be a holdout read: "+
+			"validate writes holdout measurements through this table",
+			name, runID, want)
+	}
+}
+
 func (h *holdoutCanaryStore) RecordOutcome(_ context.Context, _ string, _ *store.Outcome) error {
 	h.forbid("RecordOutcome")
 	return nil
 }
 
-func (h *holdoutCanaryStore) CaseScores(_ context.Context, _ string) (map[string]store.CaseScore, error) {
-	h.forbid("CaseScores")
-	return nil, nil
+func (h *holdoutCanaryStore) CaseScores(ctx context.Context, runID string) (map[string]store.CaseScore, error) {
+	// Permitted only for the baseline the gated Value run recorded. Any other
+	// run — a Validate run above all — is the leak this canary exists for.
+	h.allow("CaseScores", runID, h.baselineRunID)
+	return h.Store.CaseScores(ctx, runID)
+}
+
+// Measurements is guarded even though Select does not call it today. The
+// canary's job is to fail when a future change reaches the holdout, and a
+// reader that is unguarded until someone uses it is a guard that arrives
+// after the fact.
+func (h *holdoutCanaryStore) Measurements(ctx context.Context, runID, assetID string) ([]store.RecordedMeasurement, error) {
+	// Run-scoped, not asset-scoped, and that is the load-bearing detail:
+	// validate records its holdout rows under its OWN run ID, with the Select
+	// run in the asset_id column (core/validate_loop.go RecordMeasurement,
+	// read back by core/validate_measure.go). So a holdout read is exactly a
+	// read at a run ID that is not the gated Value run, whatever asset it names.
+	h.allow("Measurements", runID, h.valueRunID)
+	return h.Store.Measurements(ctx, runID, assetID)
 }
 
 func (h *holdoutCanaryStore) CompletedCases(_ context.Context, _ string) (map[string]struct{}, error) {
@@ -649,14 +706,25 @@ func (h *holdoutCanaryStore) Purge(_ context.Context, _ string) (int64, error) {
 	return 0, nil
 }
 
-// TestSelectHoldoutCanary: the holdout-isolation invariant as a test — no
-// Select code path may read the holdout's outcomes, so the canary store
-// fails the run if any outcome reader is touched. Select takes no Evals, and
-// this test proves the interface is the reason it cannot.
+// TestSelectHoldoutCanary: the holdout-isolation invariant as a test. Select
+// takes no Evals, so it cannot measure the holdout itself; what remains is
+// whether it can READ a holdout result someone else recorded, and that is
+// what the canary store answers.
+//
+// The scope is a run ID, not a method name. Select may read Measurements only
+// for the Value run it was pointed at and CaseScores only for that run's
+// recorded baseline; every other run ID fails, including a Validate run's.
+// Naming methods instead was sound only until something wrote a holdout row
+// where Select could reach it, and `kno validate` did exactly that.
 func TestSelectHoldoutCanary(t *testing.T) {
 	t.Parallel()
 
-	st := &holdoutCanaryStore{Store: openTestStore(t), t: t}
+	// baselineRunID is left empty deliberately: seedValueRun records no
+	// baseline, so no CaseScores read is legitimate for this run and every one
+	// fails — the same strictness the method-name forbid had. A Select that
+	// legitimately needs per-Case deltas must seed a baseline here first, which
+	// makes the widening visible in the diff rather than silent.
+	st := &holdoutCanaryStore{Store: openTestStore(t), t: t, valueRunID: "val"}
 	seedValueRun(
 		t, st, "val",
 		testValuation("a", 0.5, 0.2),
@@ -1060,4 +1128,81 @@ func rejectionDetailOf(p *knov1.Portfolio, id string) string {
 		}
 	}
 	return ""
+}
+
+// recordingT captures what a canary reported instead of failing the test, so
+// the canary's own failure path can be asserted on.
+type recordingT struct {
+	fired bool
+	msg   string
+}
+
+func (r *recordingT) Helper() {}
+
+func (r *recordingT) Fatalf(format string, args ...any) {
+	r.fired = true
+	r.msg = fmt.Sprintf(format, args...)
+}
+
+// TestSelectHoldoutCanaryCatchesAForeignRun: the canary fails when a read
+// names a run that is not the gated Value run.
+//
+// This is the case the method-name version could not express. `kno validate`
+// records holdout measurements under its own run ID, so a Select that grew a
+// Measurements reader would have read the holdout while a canary that only
+// listed forbidden method names stayed green. The guarantee has to be watched
+// failing to be worth anything.
+func TestSelectHoldoutCanaryCatchesAForeignRun(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name string
+		read func(*holdoutCanaryStore) error
+		want string
+	}{
+		{
+			name: "a validate run's measurements are the holdout",
+			read: func(st *holdoutCanaryStore) error {
+				_, err := st.Measurements(ctx, "validate-run", "sel-1")
+				return err
+			},
+			want: "Measurements",
+		},
+		{
+			name: "case scores for an unrecorded baseline",
+			read: func(st *holdoutCanaryStore) error {
+				_, err := st.CaseScores(ctx, "some-other-run")
+				return err
+			},
+			want: "CaseScores",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			rec := &recordingT{}
+			st := &holdoutCanaryStore{Store: openTestStore(t), t: rec, valueRunID: "val"}
+			t.Cleanup(func() { _ = st.Close() })
+
+			_ = tc.read(st)
+
+			require.True(t, rec.fired, "the canary permitted a read it exists to stop")
+			require.Contains(t, rec.msg, tc.want)
+		})
+	}
+
+	// And the permitted read does NOT fire, because a canary that is always
+	// red is a canary people learn to ignore (docs/debt.md#70).
+	t.Run("the gated value run is permitted", func(t *testing.T) {
+		t.Parallel()
+
+		rec := &recordingT{}
+		st := &holdoutCanaryStore{Store: openTestStore(t), t: rec, valueRunID: "val"}
+		t.Cleanup(func() { _ = st.Close() })
+
+		_, _ = st.Measurements(ctx, "val", "asset-a")
+		require.False(t, rec.fired, "the canary blocked the one read Select may make: %s", rec.msg)
+	})
 }

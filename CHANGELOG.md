@@ -51,6 +51,22 @@ covenants — breaking any of them requires a major version.
 
 ## [Unreleased]
 
+### Tests
+
+- **The holdout canary is scoped to a run ID, not a method name.**
+  `TestSelectHoldoutCanary` asserted holdout isolation by listing forbidden
+  reader methods, which was sound only while no holdout row existed
+  anywhere Select could read. `kno validate` ended that: it records holdout
+  measurements through `RecordMeasurement` and reads them through
+  `Measurements`, and `Measurements` was not on the list. Nothing leaked,
+  because Select does not call it — but the day it did, the canary would
+  have gone green while the guarantee it names was gone. Select may now
+  read `Measurements` only for the gated Value run and `CaseScores` only
+  for that run's recorded baseline; any other run ID fails. That is
+  strictly stronger than before for `Measurements`, which was unguarded.
+  `TestSelectHoldoutCanaryCatchesAForeignRun` watches the guard fail, since
+  a guard on a reader nobody calls yet proves nothing by passing.
+
 ### Bug Fixes
 
 - **A resumed Value run restores its token spend.** `core/value_loop.go`'s
