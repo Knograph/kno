@@ -86,38 +86,6 @@ covenants — breaking any of them requires a major version.
 * move the cookbook to uknoAI/kno-examples, leaving tombstones ([#163](https://github.com/uknoAI/kno/issues/163)) ([94f32df](https://github.com/uknoAI/kno/commit/94f32dfc5f0bd6d9e49570f02278375d249cb5e4))
 
 ## [Unreleased]
-
-<<<<<<< HEAD
-### Fixed
-
-- **`kno value` could not measure an Asset against any real provider.**
-  `measureAsset` built its treatment arm from a freshly constructed
-  `&Asset{Id: routing.AssetID}` — the ID and no content — while the Pool's real
-  Asset was already in scope as its own parameter. Against an adapter that
-  validates what it is handed (`openaicompat`, which refuses an empty Asset
-  precisely to prevent the other failure) every measurement was refused and the
-  stage could not run. Against one that does not validate, the treatment request
-  was byte-identical to the control's: every paired difference exactly zero with
-  a tight interval around it, which reads in the report as *"measured, and
-  inert"* — the one conclusion the stage exists to reach honestly.
-
-  It survived because the pipeline had only ever been driven end to end against
-  `fake:`, and because `stubAgent.WithContext` ignores its argument — a test
-  double more permissive than every adapter it stands in for cannot fail where
-  they would. Found by the first live run against a real provider.
-
-- **`kno value` and `kno validate` sent an explicit `temperature=0` on every
-  run.** Their `--temperature` flags defaulted to `0` while `baseline`'s
-  defaulted to `math.NaN()`, and `optionalFloat` treats only NaN as unset — so
-  the help text's *"unset leaves the provider default"* was true of one stage
-  and false of two. Visibly, a model that rejects sampling parameters became
-  unusable in both, with a refusal naming a flag the user never passed. More
-  seriously, baseline measured a model at the provider's default temperature
-  while value and validate measured the same model at 0 — and baseline is the
-  reference every later delta is computed against, so a sampling difference was
-  attributed to the Asset. All three now default to NaN, asserted across every
-  command that declares the flag rather than the three that have it today.
-=======
 ### Added
 
 - **`kno bridge` measures instead of refusing to start.** The tuner-bridge
@@ -178,7 +146,6 @@ covenants — breaking any of them requires a major version.
   route this PR's CLI wiring assumes (`together.DefaultBaseURL + "/v1"`,
   OpenAI-compatible) is unconfirmed against a live Together dedicated
   endpoint — this pass did not run a live (`KNO_LIVE_TESTS=1`) bridge run.
->>>>>>> 1c792f1 (feat(bridge): close the eval seam so kno bridge actually measures)
 
 ### Changed
 
@@ -250,8 +217,35 @@ covenants — breaking any of them requires a major version.
   comment above it says why keeping it empty is the point. A name added there
   must come with the release that will ship its command.
 
-
 ### Fixed
+
+- **`kno value` could not measure an Asset against any real provider.**
+  `measureAsset` built its treatment arm from a freshly constructed
+  `&Asset{Id: routing.AssetID}` — the ID and no content — while the Pool's real
+  Asset was already in scope as its own parameter. Against an adapter that
+  validates what it is handed (`openaicompat`, which refuses an empty Asset
+  precisely to prevent the other failure) every measurement was refused and the
+  stage could not run. Against one that does not validate, the treatment request
+  was byte-identical to the control's: every paired difference exactly zero with
+  a tight interval around it, which reads in the report as *"measured, and
+  inert"* — the one conclusion the stage exists to reach honestly.
+
+  It survived because the pipeline had only ever been driven end to end against
+  `fake:`, and because `stubAgent.WithContext` ignores its argument — a test
+  double more permissive than every adapter it stands in for cannot fail where
+  they would. Found by the first live run against a real provider.
+
+- **`kno value` and `kno validate` sent an explicit `temperature=0` on every
+  run.** Their `--temperature` flags defaulted to `0` while `baseline`'s
+  defaulted to `math.NaN()`, and `optionalFloat` treats only NaN as unset — so
+  the help text's *"unset leaves the provider default"* was true of one stage
+  and false of two. Visibly, a model that rejects sampling parameters became
+  unusable in both, with a refusal naming a flag the user never passed. More
+  seriously, baseline measured a model at the provider's default temperature
+  while value and validate measured the same model at 0 — and baseline is the
+  reference every later delta is computed against, so a sampling difference was
+  attributed to the Asset. All three now default to NaN, asserted across every
+  command that declares the flag rather than the three that have it today.
 
 - **A budget cap reached while a dedicated endpoint was hosting did not stop
   the spending.** `bridge`'s hosting ticker settled minutes forward through
@@ -271,8 +265,6 @@ covenants — breaking any of them requires a major version.
 
   Pinned by `TestReachingTheCapMidServeStopsTheMeasurementAndTearsDown`,
   verified failing without the fix with a measurement that never returns.
-
-### Fixed
 
 - **`kno export --destination tuning_set` produced files no provider can train
   on.** `renderTuningSet` emitted one `user` message per Asset and no
@@ -295,8 +287,6 @@ covenants — breaking any of them requires a major version.
   `"role":"assistant"`, and an Asset whose content cannot become a trainable
   example now fails the export with an actionable error instead of writing a
   line that would be rejected later, further from the cause.
-
-### Fixed
 
 - **A confidence interval could collapse to a point, and report itself as a
   Student-t interval.** `stats/interval`'s degenerate-sample guard was
