@@ -140,21 +140,30 @@ const (
 	// reporting a bare delta under it is the thing prime directive 5 exists to
 	// prevent, and it must never degrade into NO_EFFECT.
 	RejectionReason_REJECTION_REASON_UNDERPOWERED RejectionReason = 9
+	// This Asset's primary ablation group was measured by the bridge and its
+	// Δ_group interval crossed zero: the group did not confirm as transferring
+	// under fine-tuning. Distinct from WRONG_MECHANISM, which is a claim about
+	// routing ("this belongs in a different Destination"); this is a claim
+	// about a MEASURED failure to transfer. An Asset's order is unaffected —
+	// it still ranks by the Tier-2 ICL delta_per_cost — this reason only gates
+	// it out of a confirmed-by-tuning claim it did not earn.
+	RejectionReason_REJECTION_REASON_BRIDGE_UNCONFIRMED RejectionReason = 10
 )
 
 // Enum value maps for RejectionReason.
 var (
 	RejectionReason_name = map[int32]string{
-		0: "REJECTION_REASON_UNSPECIFIED",
-		1: "REJECTION_REASON_NO_EFFECT",
-		2: "REJECTION_REASON_REGRESSION",
-		3: "REJECTION_REASON_REDUNDANT",
-		4: "REJECTION_REASON_COST_DOMINATED",
-		5: "REJECTION_REASON_WRONG_MECHANISM",
-		6: "REJECTION_REASON_IRRELEVANT",
-		7: "REJECTION_REASON_BUDGET_EXHAUSTED",
-		8: "REJECTION_REASON_MEASUREMENT_FAILED",
-		9: "REJECTION_REASON_UNDERPOWERED",
+		0:  "REJECTION_REASON_UNSPECIFIED",
+		1:  "REJECTION_REASON_NO_EFFECT",
+		2:  "REJECTION_REASON_REGRESSION",
+		3:  "REJECTION_REASON_REDUNDANT",
+		4:  "REJECTION_REASON_COST_DOMINATED",
+		5:  "REJECTION_REASON_WRONG_MECHANISM",
+		6:  "REJECTION_REASON_IRRELEVANT",
+		7:  "REJECTION_REASON_BUDGET_EXHAUSTED",
+		8:  "REJECTION_REASON_MEASUREMENT_FAILED",
+		9:  "REJECTION_REASON_UNDERPOWERED",
+		10: "REJECTION_REASON_BRIDGE_UNCONFIRMED",
 	}
 	RejectionReason_value = map[string]int32{
 		"REJECTION_REASON_UNSPECIFIED":        0,
@@ -167,6 +176,7 @@ var (
 		"REJECTION_REASON_BUDGET_EXHAUSTED":   7,
 		"REJECTION_REASON_MEASUREMENT_FAILED": 8,
 		"REJECTION_REASON_UNDERPOWERED":       9,
+		"REJECTION_REASON_BRIDGE_UNCONFIRMED": 10,
 	}
 )
 
@@ -773,7 +783,7 @@ const file_kno_v1_valuation_proto_rawDesc = "" +
 	"\x15SIDEDNESS_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13SIDEDNESS_TWO_SIDED\x10\x01\x12\x13\n" +
 	"\x0fSIDEDNESS_UPPER\x10\x02\x12\x13\n" +
-	"\x0fSIDEDNESS_LOWER\x10\x03*\xf3\x02\n" +
+	"\x0fSIDEDNESS_LOWER\x10\x03*\x9c\x03\n" +
 	"\x0fRejectionReason\x12 \n" +
 	"\x1cREJECTION_REASON_UNSPECIFIED\x10\x00\x12\x1e\n" +
 	"\x1aREJECTION_REASON_NO_EFFECT\x10\x01\x12\x1f\n" +
@@ -784,7 +794,9 @@ const file_kno_v1_valuation_proto_rawDesc = "" +
 	"\x1bREJECTION_REASON_IRRELEVANT\x10\x06\x12%\n" +
 	"!REJECTION_REASON_BUDGET_EXHAUSTED\x10\a\x12'\n" +
 	"#REJECTION_REASON_MEASUREMENT_FAILED\x10\b\x12!\n" +
-	"\x1dREJECTION_REASON_UNDERPOWERED\x10\t*y\n" +
+	"\x1dREJECTION_REASON_UNDERPOWERED\x10\t\x12'\n" +
+	"#REJECTION_REASON_BRIDGE_UNCONFIRMED\x10\n" +
+	"*y\n" +
 	"\rPairingScheme\x12\x1e\n" +
 	"\x1aPAIRING_SCHEME_UNSPECIFIED\x10\x00\x12$\n" +
 	" PAIRING_SCHEME_RECORDED_BASELINE\x10\x01\x12\"\n" +

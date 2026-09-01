@@ -139,6 +139,15 @@ enum RejectionReason {
   // reporting a bare delta under it is the thing prime directive 5 exists to
   // prevent, and it must never degrade into NO_EFFECT.
   REJECTION_REASON_UNDERPOWERED = 9;
+
+  // This Asset's primary ablation group was measured by the bridge and its
+  // Δ_group interval crossed zero: the group did not confirm as transferring
+  // under fine-tuning. Distinct from WRONG_MECHANISM, which is a claim about
+  // routing ("this belongs in a different Destination"); this is a claim
+  // about a MEASURED failure to transfer. An Asset's order is unaffected —
+  // it still ranks by the Tier-2 ICL delta_per_cost — this reason only gates
+  // it out of a confirmed-by-tuning claim it did not earn.
+  REJECTION_REASON_BRIDGE_UNCONFIRMED = 10;
 }
 
 // Valuation is an Asset's measured record: what it did, how sure we are, what

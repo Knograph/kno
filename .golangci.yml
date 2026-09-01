@@ -125,6 +125,20 @@ linters:
             # contract as adapters/**/format.go, scoped to the one file so it
             # cannot spread to code that touches kno.v1 types.
             - "!**/judge/format.go"
+            # The Together Tuner adapter is a wire-format parser: it encodes
+            # and decodes Together's fine-tuning and dedicated-endpoint REST
+            # shapes into plain Go structs (submitRequest, statusResponse,
+            # deployRequest, errorEnvelope), a kno.v1 type is never involved,
+            # and protojson would force the wire format to mirror proto
+            # field names and presence rules. Same contract as
+            # adapters/**/format.go. Scoped to the one directory so it
+            # cannot spread to code that touches kno.v1 types.
+            - "!**/adapters/tuner/together/**"
+            # cli/bridge_render.go's --json output is the same contract as
+            # cli/jsonreport.go: a hand-written shape aimed at a jq
+            # pipeline, not a kno.v1 type. Scoped to the one file so it
+            # cannot spread.
+            - "!**/cli/bridge_render.go"
           deny:
             - pkg: encoding/json
               desc: >-

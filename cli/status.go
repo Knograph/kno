@@ -89,6 +89,13 @@ func stageFacts() []stageFact {
 		{Stage: knov1.Stage_STAGE_SELECT, State: stageShipped, Milestone: "v0.1"},
 		{Stage: knov1.Stage_STAGE_VALIDATE, State: stageShipped, Milestone: "v0.2"},
 		{Stage: knov1.Stage_STAGE_EXPORT, State: stageShipped, Milestone: "v0.1"},
+		{Stage: knov1.Stage_STAGE_BRIDGE, State: stagePartial, Milestone: "v0.2", Note: "`kno bridge` plans, " +
+			"prices, and confirms a run — the un-armed plan renders every group's training file " +
+			"byte-identically to `kno export`, prices it, and spends nothing; an armed, confirmed run " +
+			"authorizes the total spend through the same budget guard every other spend path uses. It " +
+			"does not yet submit a job, poll it, host a tuned model, or compute a group's " +
+			"leave-one-out delta — bridge.SubmitGroup and bridge.ReconcileTerminal implement and test " +
+			"the money-safety sequence for a caller that wires the rest."},
 	}
 }
 

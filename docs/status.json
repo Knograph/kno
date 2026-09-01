@@ -31,10 +31,18 @@
       "command": true,
       "shipped": "shipped",
       "milestone": "v0.1"
+    },
+    {
+      "name": "bridge",
+      "command": true,
+      "shipped": "partial",
+      "milestone": "v0.2",
+      "note": "`kno bridge` plans, prices, and confirms a run — the un-armed plan renders every group's training file byte-identically to `kno export`, prices it, and spends nothing; an armed, confirmed run authorizes the total spend through the same budget guard every other spend path uses. It does not yet submit a job, poll it, host a tuned model, or compute a group's leave-one-out delta — bridge.SubmitGroup and bridge.ReconcileTerminal implement and test the money-safety sequence for a caller that wires the rest."
     }
   ],
   "commands": [
     "baseline",
+    "bridge",
     "demo",
     "doctor",
     "eval inspect",
@@ -111,8 +119,8 @@
   ],
   "price_table": "2026-08-28",
   "debt": {
-    "total": 116,
-    "open": 65,
+    "total": 119,
+    "open": 68,
     "skipped": 0
   }
 }

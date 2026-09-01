@@ -318,6 +318,7 @@ Both tables are machine-checked against the code: [`docs/status.json`](docs/stat
 | **Select** | Build a Portfolio under budget, with a rejection log; every decision at a Bonferroni-corrected interval | **Shipped** |
 | **Validate** | Measure the Portfolio as a set against the untouched holdout, in two arms, and report the gain with its interval | **Shipped** |
 | **Export** | Render the selected assets into the destination grammar: context pack, knowledge-base manifest, or tuning-set JSONL | **Shipped** |
+| **Bridge** | Group-ablate the tuning set on a proxy model: plan, price, and confirm a fine-tuning run per failure cluster | **Partial** |
 
 Enum membership does not mean shipped: the schema leads the implementation ([CLAUDE.md](CLAUDE.md), "proto first"), and `Stage` carried `STAGE_VALIDATE` for three milestones before anything read a holdout. Which stages ship is declared once, in `cli/status.go`, and cross-checked against this table, the enum, and the command tree.
 
@@ -334,6 +335,7 @@ Enum membership does not mean shipped: the schema leads the implementation ([CLA
 | `kno select` | Choose the assets that earn their place, under budget |
 | `kno validate` | Measure the selected portfolio against the untouched holdout |
 | `kno export` | Write a portfolio's selected assets to a destination |
+| `kno bridge` | Plan, price, and confirm a group-ablation fine-tuning run on the tuning set (Tier 3; submission is not yet implemented) |
 | `kno report` | The one-page verdict across the recorded stages |
 | `kno judge calibrate` | Report how well a goal agrees with human labels, against a floor |
 | `kno doctor` | Print what this build supports |

@@ -7,6 +7,7 @@ import "kno/v1/valuation.proto";
 import "kno/v1/portfolio.proto";
 import "kno/v1/run.proto";
 import "kno/v1/validation.proto";
+import "kno/v1/tuner.proto";
 
 // Event is one thing that happened during a Run.
 //
@@ -101,6 +102,22 @@ message Event {
 
     // The Portfolio's holdout measurement finished, with its verdict.
     PortfolioValidated portfolio_validated = 27;
+
+    // A bridge run submitted a fine-tuning job. Field numbers 28-31,
+    // continuing from 27 (holdout_opened/portfolio_validated took 26/27,
+    // which had been reserved for these when this section of the plan was
+    // written; the numbering here reflects the tree as it now stands, not the
+    // plan's table).
+    TuningJobSubmitted tuning_job_submitted = 28;
+
+    // A submitted tuning job's status changed.
+    TuningJobStateChanged tuning_job_state_changed = 29;
+
+    // A bridge ablation group's leave-one-group-out measurement finished.
+    BridgeGroupMeasured bridge_group_measured = 30;
+
+    // A tuned model's serving endpoint changed state.
+    TuningEndpointChanged tuning_endpoint_changed = 31;
   }
 }
 
@@ -768,4 +785,172 @@ message PortfolioValidated {
 
   // Set when no interval could be formed.
   RejectionReason not_measured = 6;
+}
+
+// TuningJobSubmitted reports that the bridge sent a fine-tuning job to a
+// provider.
+//
+// Emitted AFTER the durable job row is written write-ahead and Submit
+// returns successfully — see bridge's Step 2(b)-(e). Carries the estimate
+// that was just settled, never the actual (unknown at submission time) and
+// never TuningJob.training_data or any Asset content: CLAUDE.md forbids
+// trace/asset content above DEBUG and this stream feeds the TUI, the API,
+// and the logs alike.
+message TuningJobSubmitted {
+  // Which ablation group this job belongs to ("all-in", or a cluster tag).
+  string ablation_group = 1;
+
+  // Which provider: "openai", "together", "fireworks".
+  string provider = 2;
+
+  // Provider-assigned job identifier.
+  string job_id = 3;
+
+  // The base model being tuned.
+  AgentRef base_model = 4;
+
+  // What was authorized and settled for this submission, in MICRO-USD. The
+  // estimate, not an actual — see JobState.actual_cost_usd_micros for that.
+  int64 estimated_cost_usd_micros = 5;
+
+  // Training tokens the estimate was computed from.
+  int64 train_tokens = 6;
+}
+
+// TuningJobStateChanged reports a submitted job's status, as polled from the
+// provider.
+message TuningJobStateChanged {
+  // Provider-assigned job identifier.
+  string job_id = 1;
+
+  // Which ablation group this job belongs to.
+  string ablation_group = 2;
+
+  // Where the job stands.
+  JobStatus status = 3;
+
+  // Progress 0..1, when the provider reports it.
+  optional double progress = 4;
+
+  // Actual cost in MICRO-USD, once the provider reports one. Absent is not
+  // zero — see Step 2(c).
+  optional int64 actual_cost_usd_micros = 5;
+
+  // Provider error text when FAILED, verbatim.
+  string error = 6;
+}
+
+// BridgeGroupMeasured reports one ablation group's leave-one-group-out
+// result: the measured effect of removing the group's Assets from the
+// training set, and the interference read on the control partition.
+//
+// Per prime directive 5, a delta is never carried here without its Interval
+// — see BridgeGroupVerdict and the not_measured-shaped omission used
+// elsewhere in this file (AssetValued, PortfolioValidated).
+message BridgeGroupMeasured {
+  // The ablation group: "all-in", or the cluster tag it was leave-one-out
+  // for.
+  string ablation_group = 1;
+
+  // score(all-in) - score(leave-group-out), over the group's dev Cases.
+  double delta_group = 2;
+
+  // The interval on delta_group. Omitted exactly when not_measured is set.
+  Interval delta_group_interval = 3;
+
+  // The interference read: the same delta over the RESERVED control
+  // partition (value.Plan.ControlCaseIDs), the harm test's own slice.
+  double delta_control = 4;
+
+  // The interval on delta_control.
+  Interval delta_control_interval = 5;
+
+  // Whether the control partition was too small to testify about
+  // interference. A group is never accused of interference on an
+  // underpowered control.
+  bool control_underpowered = 6;
+
+  // The verdict this measurement supports.
+  BridgeGroupVerdict verdict = 7;
+
+  // Set when no verdict could be reached — the job failed, the group was
+  // skipped for being below core.MinClusterCases, or a covering interval
+  // could not be formed.
+  RejectionReason not_measured = 8;
+}
+
+// BridgeGroupVerdict is what a group's leave-one-group-out measurement
+// supports.
+enum BridgeGroupVerdict {
+  // Unset. An emitter that reached no verdict should set not_measured
+  // instead of leaving this UNSPECIFIED with a delta present.
+  BRIDGE_GROUP_VERDICT_UNSPECIFIED = 0;
+
+  // delta_group's interval excludes zero in the improving direction: the
+  // group's Assets measurably help the tuned model.
+  BRIDGE_GROUP_VERDICT_CONFIRMED = 1;
+
+  // delta_group's interval crosses zero: transfer under fine-tuning is not
+  // confirmed. This is REJECTION_REASON_BRIDGE_UNCONFIRMED's source.
+  BRIDGE_GROUP_VERDICT_UNCONFIRMED = 2;
+
+  // delta_control's interval excludes zero in the HARMFUL direction on a
+  // powered control: training on this group measurably regressed unrelated
+  // Cases.
+  BRIDGE_GROUP_VERDICT_INTERFERENCE = 3;
+
+  // The group's cluster had fewer than core.MinClusterCases dev Cases and
+  // was never tuned. Zero jobs for this group.
+  BRIDGE_GROUP_VERDICT_SKIPPED = 4;
+}
+
+// TuningEndpointChanged reports a hosted tuned model's serving endpoint
+// changing state — Step 2(f)'s hosting dimension, which bills per minute per
+// replica, idle included, and is therefore user-visible state with money
+// attached.
+//
+// No endpoint URL and no credential: a URL could carry a token, and this
+// stream feeds logs, the API, and the TUI alike.
+message TuningEndpointChanged {
+  // The job whose model this endpoint serves.
+  string job_id = 1;
+
+  // Provider-assigned endpoint identifier, for the user to find it in the
+  // provider's own console if Kno cannot tear it down.
+  string endpoint_id = 2;
+
+  // Which ablation group this endpoint is serving.
+  string ablation_group = 3;
+
+  // Where the endpoint stands.
+  TuningEndpointState state = 4;
+
+  // Serve minutes accrued and settled so far, this endpoint's lifetime.
+  int32 serve_minutes = 5;
+
+  // What those minutes cost, in MICRO-USD, at the settled rate.
+  int64 serve_cost_usd_micros = 6;
+
+  // Provider error text, set when state is LEAKED because Teardown failed.
+  string error = 7;
+}
+
+// TuningEndpointState is where a hosted endpoint stands.
+enum TuningEndpointState {
+  // Unset.
+  TUNING_ENDPOINT_STATE_UNSPECIFIED = 0;
+
+  // Deploy was called; the replica is not yet answering requests.
+  TUNING_ENDPOINT_STATE_DEPLOYING = 1;
+
+  // The endpoint is answering requests and billing.
+  TUNING_ENDPOINT_STATE_READY = 2;
+
+  // Teardown succeeded. The meter has stopped.
+  TUNING_ENDPOINT_STATE_TORN_DOWN = 3;
+
+  // Teardown was attempted and failed, or the process exited before it could
+  // be attempted. The meter may still be running. `kno doctor` reports any
+  // durable row carrying a non-null endpoint id and no teardown timestamp.
+  TUNING_ENDPOINT_STATE_LEAKED = 4;
 }
