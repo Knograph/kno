@@ -103,8 +103,12 @@ Type "kno export --select-run-id qs-select --pool pool.jsonl --destination tunin
 Sleep 3s
 
 # Report: the one-page verdict across the recorded stages. The dev estimate
-# carries the "not yet validated on holdout" caveat, because at v0.1 honesty
-# is the feature.
+# carries the "not yet validated on holdout" caveat. That caveat is now
+# CONDITIONAL: `kno validate` exists, and a report given a COMPLETED validate
+# run that produced an interval drops it. This transcript is the un-validated
+# path -- no validate run was named, so the caveat is what the report should
+# print here. Its absence has to be earned; do not "fix" this tape by
+# deleting the line.
 Type "kno report --value-run-id qs-value --select-run-id qs-select" Sleep 500ms Enter
 Sleep 4s
 

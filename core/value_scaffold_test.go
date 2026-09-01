@@ -731,7 +731,7 @@ func TestValuationForZeroRoutedAssetsCarriesTheReason(t *testing.T) {
 func TestValueWiresEveryInvokerHook(t *testing.T) {
 	t.Parallel()
 
-	iv := ValueOptions{}.invoker(store.MeasurementKey{AssetID: "a", Trial: 1}, store.ArmTreatment, stubAgent{}, &valueEmitter{})
+	iv := ValueOptions{}.invoker(store.MeasurementKey{AssetID: "a", Trial: 1}, store.ArmTreatment, stubAgent{}, &stageEmitter{})
 	if iv.OnOvershoot == nil {
 		t.Error("Value wires no OnOvershoot hook, so a settlement overshoot — " +
 			"money spent past its reservation — would go unreported and look " +
@@ -1043,7 +1043,7 @@ func TestLoopHelpersCoverTheCorners(t *testing.T) {
 		t.Error("valueTrialPtr does not distinguish unset from set")
 	}
 
-	em := &valueEmitter{}
+	em := &stageEmitter{}
 	em.recordEmitFailure(nil)
 	if em.emitFailure.Load() != nil {
 		t.Error("a nil failure was recorded")
@@ -1063,7 +1063,7 @@ func TestLoopHelpersCoverTheCorners(t *testing.T) {
 	emitStore := openTestStore(t)
 	ensureValueRun(t, emitStore, "run-1")
 	emitOpts := ValueOptions{RunID: "run-1", Store: emitStore}
-	emRun := &valueEmitter{}
+	emRun := &stageEmitter{}
 	inflated := map[store.MeasurementKey]struct{}{}
 	for i := range 100 {
 		inflated[store.MeasurementKey{AssetID: "a", CaseID: "c" + string(rune('a'+i%26)), Arm: store.ArmTreatment, Trial: 1}] = struct{}{}
@@ -1423,7 +1423,7 @@ func TestAppendRefusesAfterRunFinished(t *testing.T) {
 	st := openTestStore(t)
 	ensureValueRun(t, st, "run-1")
 	opts := ValueOptions{RunID: "run-1", Store: st}
-	em := &valueEmitter{}
+	em := &stageEmitter{}
 	if err := opts.append(context.Background(), em, func() *knov1.Event {
 		return &knov1.Event{Payload: &knov1.Event_RunFinished{RunFinished: &knov1.RunFinished{}}}
 	}, "run-finished"); err != nil {

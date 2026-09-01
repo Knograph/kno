@@ -22,8 +22,13 @@ type reportFlags struct {
 	valueRunID  string
 	selectRunID string
 	exportRunID string
-	watch       bool
-	jsonOut     bool
+
+	// validateRunID names the Validate run whose holdout number the page
+	// reports. Optional: without it the page keeps the not-yet-validated
+	// caveat, which is the honest default and not a placeholder.
+	validateRunID string
+	watch         bool
+	jsonOut       bool
 }
 
 func newReportCmd() *cobra.Command {
@@ -67,6 +72,8 @@ snapshot.`,
 		"run ID of the Select run whose Portfolio and rejection log the page shows")
 	flags.StringVar(&f.exportRunID, "export-run-id", "",
 		"run ID of the Export run whose gaps record the page renders")
+	flags.StringVar(&f.validateRunID, "validate-run-id", "",
+		"run ID of the Validate run whose holdout number the page reports; without it the page says the portfolio is not yet validated")
 	flags.StringVar(&f.dbPath, "db", "kno.db", "where runs and traces are stored")
 	flags.BoolVar(&f.watch, "watch", false, "re-render every 2s until the Value run is terminal, then exit 0")
 	flags.BoolVar(&f.jsonOut, "json", false, "machine-readable output")
@@ -216,6 +223,14 @@ type reportData struct {
 	ExportRun *knov1.Run
 	Gaps      *knov1.Gaps
 
+	// ValidateRun is nil when no Validate run was named. Validation is nil
+	// when the named run recorded none, which is the state an INTERRUPTED or
+	// BUDGET_STOPPED validate leaves: a partial peek is not a validation, so
+	// the page keeps its caveat and adds a line saying an attempt was made
+	// and produced no number.
+	ValidateRun *knov1.Run
+	Validation  *knov1.Validation
+
 	// Spend is what the pipeline cost: Store.SettledSpend for each of the two
 	// metered runs the page always names, plus the total. Read from the store
 	// rather than from a guard, because report runs none and the processes
@@ -329,6 +344,42 @@ func composeReport(ctx context.Context, db store.Store, f reportFlags) (*reportD
 		f.valueRunID, valueSpend,
 		valueRun.GetIncompleteReason() != "" || baseline.GetIncompleteReason() != "",
 	)
+
+	if f.validateRunID != "" {
+		validateRun, err := db.GetRun(ctx, f.validateRunID)
+		if err != nil {
+			return nil, errs.ErrInvalidInput.
+				WithFix("run `kno validate` first — run IDs come from the Validate report line").
+				Wrap(fmt.Errorf("loading validate run %s: %w", f.validateRunID, err))
+		}
+		if got := validateRun.GetStage(); got != knov1.Stage_STAGE_VALIDATE {
+			return nil, errs.ErrInvalidInput.
+				WithFix("pass the run ID of a `kno validate` run").
+				Wrap(fmt.Errorf("run %s is a %s run, not a validate run", f.validateRunID, got))
+		}
+		d.ValidateRun = validateRun
+		if v, err := db.Validation(ctx, f.validateRunID); err != nil {
+			if !errors.Is(err, store.ErrValidationNotFound) {
+				return nil, fmt.Errorf("loading the validation of %s: %w", f.validateRunID, err)
+			}
+			// Absent on a RUNNING validate run and on one that stopped early.
+			// The page says a validation was attempted and produced no number,
+			// and KEEPS the caveat — a partial peek is not a validation.
+		} else {
+			// The chain, exactly as the Portfolio's is checked: a holdout
+			// number measured against a different Portfolio than the one this
+			// page shows is two stories spliced into one page, and this is the
+			// one number people quote out of context.
+			if src := v.GetSelectRunId(); src != "" && src != f.selectRunID {
+				return nil, errs.ErrInvalidInput.
+					WithFix("pass --select-run-id of the Portfolio that was validated, " +
+						"or drop --validate-run-id").
+					Wrap(fmt.Errorf("validate run %s measured select run %s, not %s",
+						f.validateRunID, src, f.selectRunID))
+			}
+			d.Validation = v
+		}
+	}
 
 	if f.exportRunID != "" {
 		exportRun, err := db.GetRun(ctx, f.exportRunID)

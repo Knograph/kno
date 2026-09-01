@@ -207,6 +207,8 @@ type Event struct {
 	//	*Event_AssetValued
 	//	*Event_PortfolioSelected
 	//	*Event_ExportWritten
+	//	*Event_HoldoutOpened
+	//	*Event_PortfolioValidated
 	Payload       isEvent_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -414,6 +416,24 @@ func (x *Event) GetExportWritten() *ExportWritten {
 	return nil
 }
 
+func (x *Event) GetHoldoutOpened() *HoldoutOpened {
+	if x != nil {
+		if x, ok := x.Payload.(*Event_HoldoutOpened); ok {
+			return x.HoldoutOpened
+		}
+	}
+	return nil
+}
+
+func (x *Event) GetPortfolioValidated() *PortfolioValidated {
+	if x != nil {
+		if x, ok := x.Payload.(*Event_PortfolioValidated); ok {
+			return x.PortfolioValidated
+		}
+	}
+	return nil
+}
+
 type isEvent_Payload interface {
 	isEvent_Payload()
 }
@@ -502,6 +522,17 @@ type Event_ExportWritten struct {
 	ExportWritten *ExportWritten `protobuf:"bytes,25,opt,name=export_written,json=exportWritten,proto3,oneof"`
 }
 
+type Event_HoldoutOpened struct {
+	// The holdout was opened. Emitted once per Validate run, before the first
+	// agent call, because a run that peeked and then crashed still peeked.
+	HoldoutOpened *HoldoutOpened `protobuf:"bytes,26,opt,name=holdout_opened,json=holdoutOpened,proto3,oneof"`
+}
+
+type Event_PortfolioValidated struct {
+	// The Portfolio's holdout measurement finished, with its verdict.
+	PortfolioValidated *PortfolioValidated `protobuf:"bytes,27,opt,name=portfolio_validated,json=portfolioValidated,proto3,oneof"`
+}
+
 func (*Event_RunStarted) isEvent_Payload() {}
 
 func (*Event_CaseScored) isEvent_Payload() {}
@@ -533,6 +564,10 @@ func (*Event_AssetValued) isEvent_Payload() {}
 func (*Event_PortfolioSelected) isEvent_Payload() {}
 
 func (*Event_ExportWritten) isEvent_Payload() {}
+
+func (*Event_HoldoutOpened) isEvent_Payload() {}
+
+func (*Event_PortfolioValidated) isEvent_Payload() {}
 
 // PortfolioSelected reports that Select finished constructing a Portfolio.
 //
@@ -2252,11 +2287,197 @@ func (x *AssetValued) GetNDropped() int32 {
 	return 0
 }
 
+// HoldoutOpened reports that a Validate run consumed the holdout.
+//
+// Emitted once, before the first agent call, and after the durable
+// holdout_uses row is committed. That ordering is the honest one: an
+// interrupted Validate has already seen part of the holdout, and an event
+// emitted at completion would let a crashed run look like it never looked.
+//
+// Carries counts and ordinals only. Case content never reaches the event
+// stream.
+type HoldoutOpened struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// How many Cases the holdout yielded.
+	HoldoutCaseCount int32 `protobuf:"varint,1,opt,name=holdout_case_count,json=holdoutCaseCount,proto3" json:"holdout_case_count,omitempty"`
+	// Whether the holdout is below split.MinHoldout.
+	Underpowered bool `protobuf:"varint,2,opt,name=underpowered,proto3" json:"underpowered,omitempty"`
+	// Which portfolio this is for this holdout: 1 for the first.
+	HoldoutUseIndex int32 `protobuf:"varint,3,opt,name=holdout_use_index,json=holdoutUseIndex,proto3" json:"holdout_use_index,omitempty"`
+	// The Select run whose Portfolio is about to be measured.
+	SelectRunId string `protobuf:"bytes,4,opt,name=select_run_id,json=selectRunId,proto3" json:"select_run_id,omitempty"`
+	// How many Assets are being injected as a set.
+	AssetCount    int32 `protobuf:"varint,5,opt,name=asset_count,json=assetCount,proto3" json:"asset_count,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HoldoutOpened) Reset() {
+	*x = HoldoutOpened{}
+	mi := &file_kno_v1_event_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HoldoutOpened) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HoldoutOpened) ProtoMessage() {}
+
+func (x *HoldoutOpened) ProtoReflect() protoreflect.Message {
+	mi := &file_kno_v1_event_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HoldoutOpened.ProtoReflect.Descriptor instead.
+func (*HoldoutOpened) Descriptor() ([]byte, []int) {
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *HoldoutOpened) GetHoldoutCaseCount() int32 {
+	if x != nil {
+		return x.HoldoutCaseCount
+	}
+	return 0
+}
+
+func (x *HoldoutOpened) GetUnderpowered() bool {
+	if x != nil {
+		return x.Underpowered
+	}
+	return false
+}
+
+func (x *HoldoutOpened) GetHoldoutUseIndex() int32 {
+	if x != nil {
+		return x.HoldoutUseIndex
+	}
+	return 0
+}
+
+func (x *HoldoutOpened) GetSelectRunId() string {
+	if x != nil {
+		return x.SelectRunId
+	}
+	return ""
+}
+
+func (x *HoldoutOpened) GetAssetCount() int32 {
+	if x != nil {
+		return x.AssetCount
+	}
+	return 0
+}
+
+// PortfolioValidated reports the finished holdout measurement.
+//
+// The Validation is the durable record; this is what a dashboard renders as it
+// happens. Headline numbers only — an event stream that duplicates the store
+// is two things to keep consistent.
+type PortfolioValidated struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The measured effect on the holdout and its interval. Both, or neither:
+	// holdout_interval is omitted exactly when not_measured is set.
+	HoldoutGain float64 `protobuf:"fixed64,1,opt,name=holdout_gain,json=holdoutGain,proto3" json:"holdout_gain,omitempty"`
+	// The interval on holdout_gain.
+	HoldoutInterval *Interval `protobuf:"bytes,2,opt,name=holdout_interval,json=holdoutInterval,proto3" json:"holdout_interval,omitempty"`
+	// The verdict a deploy gate branches on.
+	Verdict ValidationVerdict `protobuf:"varint,3,opt,name=verdict,proto3,enum=kno.v1.ValidationVerdict" json:"verdict,omitempty"`
+	// How many Cases scored in BOTH arms, and how many were dropped.
+	MeasuredCaseCount int32 `protobuf:"varint,4,opt,name=measured_case_count,json=measuredCaseCount,proto3" json:"measured_case_count,omitempty"`
+	// See measured_case_count.
+	NDropped int32 `protobuf:"varint,5,opt,name=n_dropped,json=nDropped,proto3" json:"n_dropped,omitempty"`
+	// Set when no interval could be formed.
+	NotMeasured   RejectionReason `protobuf:"varint,6,opt,name=not_measured,json=notMeasured,proto3,enum=kno.v1.RejectionReason" json:"not_measured,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PortfolioValidated) Reset() {
+	*x = PortfolioValidated{}
+	mi := &file_kno_v1_event_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PortfolioValidated) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PortfolioValidated) ProtoMessage() {}
+
+func (x *PortfolioValidated) ProtoReflect() protoreflect.Message {
+	mi := &file_kno_v1_event_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PortfolioValidated.ProtoReflect.Descriptor instead.
+func (*PortfolioValidated) Descriptor() ([]byte, []int) {
+	return file_kno_v1_event_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *PortfolioValidated) GetHoldoutGain() float64 {
+	if x != nil {
+		return x.HoldoutGain
+	}
+	return 0
+}
+
+func (x *PortfolioValidated) GetHoldoutInterval() *Interval {
+	if x != nil {
+		return x.HoldoutInterval
+	}
+	return nil
+}
+
+func (x *PortfolioValidated) GetVerdict() ValidationVerdict {
+	if x != nil {
+		return x.Verdict
+	}
+	return ValidationVerdict_VALIDATION_VERDICT_UNSPECIFIED
+}
+
+func (x *PortfolioValidated) GetMeasuredCaseCount() int32 {
+	if x != nil {
+		return x.MeasuredCaseCount
+	}
+	return 0
+}
+
+func (x *PortfolioValidated) GetNDropped() int32 {
+	if x != nil {
+		return x.NDropped
+	}
+	return 0
+}
+
+func (x *PortfolioValidated) GetNotMeasured() RejectionReason {
+	if x != nil {
+		return x.NotMeasured
+	}
+	return RejectionReason_REJECTION_REASON_UNSPECIFIED
+}
+
 var File_kno_v1_event_proto protoreflect.FileDescriptor
 
 const file_kno_v1_event_proto_rawDesc = "" +
 	"\n" +
-	"\x12kno/v1/event.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/valuation.proto\x1a\x16kno/v1/portfolio.proto\x1a\x10kno/v1/run.proto\"\xe5\b\n" +
+	"\x12kno/v1/event.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/valuation.proto\x1a\x16kno/v1/portfolio.proto\x1a\x10kno/v1/run.proto\x1a\x17kno/v1/validation.proto\"\xf4\t\n" +
 	"\x05Event\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x1d\n" +
 	"\n" +
@@ -2281,7 +2502,9 @@ const file_kno_v1_event_proto_rawDesc = "" +
 	"\fasset_routed\x18\x16 \x01(\v2\x13.kno.v1.AssetRoutedH\x00R\vassetRouted\x128\n" +
 	"\fasset_valued\x18\x17 \x01(\v2\x13.kno.v1.AssetValuedH\x00R\vassetValued\x12J\n" +
 	"\x12portfolio_selected\x18\x18 \x01(\v2\x19.kno.v1.PortfolioSelectedH\x00R\x11portfolioSelected\x12>\n" +
-	"\x0eexport_written\x18\x19 \x01(\v2\x15.kno.v1.ExportWrittenH\x00R\rexportWrittenB\t\n" +
+	"\x0eexport_written\x18\x19 \x01(\v2\x15.kno.v1.ExportWrittenH\x00R\rexportWritten\x12>\n" +
+	"\x0eholdout_opened\x18\x1a \x01(\v2\x15.kno.v1.HoldoutOpenedH\x00R\rholdoutOpened\x12M\n" +
+	"\x13portfolio_validated\x18\x1b \x01(\v2\x1a.kno.v1.PortfolioValidatedH\x00R\x12portfolioValidatedB\t\n" +
 	"\apayload\"\xf4\x01\n" +
 	"\x11PortfolioSelected\x12\x1a\n" +
 	"\bselected\x18\x01 \x01(\x05R\bselected\x12\x1a\n" +
@@ -2420,7 +2643,21 @@ const file_kno_v1_event_proto_rawDesc = "" +
 	"\x1bmeasurement_cost_usd_micros\x18\x05 \x01(\x03R\x18measurementCostUsdMicros\x12:\n" +
 	"\fnot_measured\x18\x06 \x01(\x0e2\x17.kno.v1.RejectionReasonR\vnotMeasured\x12\x17\n" +
 	"\an_pairs\x18\a \x01(\x05R\x06nPairs\x12\x1b\n" +
-	"\tn_dropped\x18\b \x01(\x05R\bnDropped*\x8a\x01\n" +
+	"\tn_dropped\x18\b \x01(\x05R\bnDropped\"\xd2\x01\n" +
+	"\rHoldoutOpened\x12,\n" +
+	"\x12holdout_case_count\x18\x01 \x01(\x05R\x10holdoutCaseCount\x12\"\n" +
+	"\funderpowered\x18\x02 \x01(\bR\funderpowered\x12*\n" +
+	"\x11holdout_use_index\x18\x03 \x01(\x05R\x0fholdoutUseIndex\x12\"\n" +
+	"\rselect_run_id\x18\x04 \x01(\tR\vselectRunId\x12\x1f\n" +
+	"\vasset_count\x18\x05 \x01(\x05R\n" +
+	"assetCount\"\xb2\x02\n" +
+	"\x12PortfolioValidated\x12!\n" +
+	"\fholdout_gain\x18\x01 \x01(\x01R\vholdoutGain\x12;\n" +
+	"\x10holdout_interval\x18\x02 \x01(\v2\x10.kno.v1.IntervalR\x0fholdoutInterval\x123\n" +
+	"\averdict\x18\x03 \x01(\x0e2\x19.kno.v1.ValidationVerdictR\averdict\x12.\n" +
+	"\x13measured_case_count\x18\x04 \x01(\x05R\x11measuredCaseCount\x12\x1b\n" +
+	"\tn_dropped\x18\x05 \x01(\x05R\bnDropped\x12:\n" +
+	"\fnot_measured\x18\x06 \x01(\x0e2\x17.kno.v1.RejectionReasonR\vnotMeasured*\x8a\x01\n" +
 	"\fOrphanReason\x12\x1d\n" +
 	"\x19ORPHAN_REASON_UNSPECIFIED\x10\x00\x12!\n" +
 	"\x1dORPHAN_REASON_BUDGET_EXCEEDED\x10\x01\x12\x1b\n" +
@@ -2449,7 +2686,7 @@ func file_kno_v1_event_proto_rawDescGZIP() []byte {
 }
 
 var file_kno_v1_event_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_kno_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
+var file_kno_v1_event_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
 var file_kno_v1_event_proto_goTypes = []any{
 	(OrphanReason)(0),           // 0: kno.v1.OrphanReason
 	(RetryReason)(0),            // 1: kno.v1.RetryReason
@@ -2471,17 +2708,20 @@ var file_kno_v1_event_proto_goTypes = []any{
 	(*ConcurrencyReduced)(nil),  // 17: kno.v1.ConcurrencyReduced
 	(*AssetRouted)(nil),         // 18: kno.v1.AssetRouted
 	(*AssetValued)(nil),         // 19: kno.v1.AssetValued
-	(*Interval)(nil),            // 20: kno.v1.Interval
-	(Destination)(0),            // 21: kno.v1.Destination
-	(Stage)(0),                  // 22: kno.v1.Stage
-	(*AgentRef)(nil),            // 23: kno.v1.AgentRef
-	(Direction)(0),              // 24: kno.v1.Direction
-	(*Budget)(nil),              // 25: kno.v1.Budget
-	(ScoreDomain)(0),            // 26: kno.v1.ScoreDomain
-	(RunStatus)(0),              // 27: kno.v1.RunStatus
-	(Arm)(0),                    // 28: kno.v1.Arm
-	(*ConcurrencyDecision)(nil), // 29: kno.v1.ConcurrencyDecision
-	(RejectionReason)(0),        // 30: kno.v1.RejectionReason
+	(*HoldoutOpened)(nil),       // 20: kno.v1.HoldoutOpened
+	(*PortfolioValidated)(nil),  // 21: kno.v1.PortfolioValidated
+	(*Interval)(nil),            // 22: kno.v1.Interval
+	(Destination)(0),            // 23: kno.v1.Destination
+	(Stage)(0),                  // 24: kno.v1.Stage
+	(*AgentRef)(nil),            // 25: kno.v1.AgentRef
+	(Direction)(0),              // 26: kno.v1.Direction
+	(*Budget)(nil),              // 27: kno.v1.Budget
+	(ScoreDomain)(0),            // 28: kno.v1.ScoreDomain
+	(RunStatus)(0),              // 29: kno.v1.RunStatus
+	(Arm)(0),                    // 30: kno.v1.Arm
+	(*ConcurrencyDecision)(nil), // 31: kno.v1.ConcurrencyDecision
+	(RejectionReason)(0),        // 32: kno.v1.RejectionReason
+	(ValidationVerdict)(0),      // 33: kno.v1.ValidationVerdict
 }
 var file_kno_v1_event_proto_depIdxs = []int32{
 	6,  // 0: kno.v1.Event.run_started:type_name -> kno.v1.RunStarted
@@ -2500,31 +2740,36 @@ var file_kno_v1_event_proto_depIdxs = []int32{
 	19, // 13: kno.v1.Event.asset_valued:type_name -> kno.v1.AssetValued
 	3,  // 14: kno.v1.Event.portfolio_selected:type_name -> kno.v1.PortfolioSelected
 	4,  // 15: kno.v1.Event.export_written:type_name -> kno.v1.ExportWritten
-	20, // 16: kno.v1.PortfolioSelected.dev_estimated_interval:type_name -> kno.v1.Interval
-	21, // 17: kno.v1.ExportWritten.destination:type_name -> kno.v1.Destination
-	22, // 18: kno.v1.RunStarted.stage:type_name -> kno.v1.Stage
-	23, // 19: kno.v1.RunStarted.agent:type_name -> kno.v1.AgentRef
-	24, // 20: kno.v1.RunStarted.goal_direction:type_name -> kno.v1.Direction
-	25, // 21: kno.v1.RunStarted.budget:type_name -> kno.v1.Budget
-	26, // 22: kno.v1.RunStarted.goal_score_domain:type_name -> kno.v1.ScoreDomain
-	5,  // 23: kno.v1.CaseErrored.error:type_name -> kno.v1.EventError
-	22, // 24: kno.v1.StageProgress.stage:type_name -> kno.v1.Stage
-	27, // 25: kno.v1.RunFinished.status:type_name -> kno.v1.RunStatus
-	5,  // 26: kno.v1.RunFinished.error:type_name -> kno.v1.EventError
-	1,  // 27: kno.v1.RetryAttempted.reason:type_name -> kno.v1.RetryReason
-	28, // 28: kno.v1.RetryAttempted.arm:type_name -> kno.v1.Arm
-	28, // 29: kno.v1.SettlementOvershoot.arm:type_name -> kno.v1.Arm
-	0,  // 30: kno.v1.OrphanSpend.reason:type_name -> kno.v1.OrphanReason
-	28, // 31: kno.v1.OrphanSpend.arm:type_name -> kno.v1.Arm
-	29, // 32: kno.v1.ConcurrencyReduced.decision:type_name -> kno.v1.ConcurrencyDecision
-	30, // 33: kno.v1.AssetRouted.not_measured:type_name -> kno.v1.RejectionReason
-	20, // 34: kno.v1.AssetValued.delta_interval:type_name -> kno.v1.Interval
-	30, // 35: kno.v1.AssetValued.not_measured:type_name -> kno.v1.RejectionReason
-	36, // [36:36] is the sub-list for method output_type
-	36, // [36:36] is the sub-list for method input_type
-	36, // [36:36] is the sub-list for extension type_name
-	36, // [36:36] is the sub-list for extension extendee
-	0,  // [0:36] is the sub-list for field type_name
+	20, // 16: kno.v1.Event.holdout_opened:type_name -> kno.v1.HoldoutOpened
+	21, // 17: kno.v1.Event.portfolio_validated:type_name -> kno.v1.PortfolioValidated
+	22, // 18: kno.v1.PortfolioSelected.dev_estimated_interval:type_name -> kno.v1.Interval
+	23, // 19: kno.v1.ExportWritten.destination:type_name -> kno.v1.Destination
+	24, // 20: kno.v1.RunStarted.stage:type_name -> kno.v1.Stage
+	25, // 21: kno.v1.RunStarted.agent:type_name -> kno.v1.AgentRef
+	26, // 22: kno.v1.RunStarted.goal_direction:type_name -> kno.v1.Direction
+	27, // 23: kno.v1.RunStarted.budget:type_name -> kno.v1.Budget
+	28, // 24: kno.v1.RunStarted.goal_score_domain:type_name -> kno.v1.ScoreDomain
+	5,  // 25: kno.v1.CaseErrored.error:type_name -> kno.v1.EventError
+	24, // 26: kno.v1.StageProgress.stage:type_name -> kno.v1.Stage
+	29, // 27: kno.v1.RunFinished.status:type_name -> kno.v1.RunStatus
+	5,  // 28: kno.v1.RunFinished.error:type_name -> kno.v1.EventError
+	1,  // 29: kno.v1.RetryAttempted.reason:type_name -> kno.v1.RetryReason
+	30, // 30: kno.v1.RetryAttempted.arm:type_name -> kno.v1.Arm
+	30, // 31: kno.v1.SettlementOvershoot.arm:type_name -> kno.v1.Arm
+	0,  // 32: kno.v1.OrphanSpend.reason:type_name -> kno.v1.OrphanReason
+	30, // 33: kno.v1.OrphanSpend.arm:type_name -> kno.v1.Arm
+	31, // 34: kno.v1.ConcurrencyReduced.decision:type_name -> kno.v1.ConcurrencyDecision
+	32, // 35: kno.v1.AssetRouted.not_measured:type_name -> kno.v1.RejectionReason
+	22, // 36: kno.v1.AssetValued.delta_interval:type_name -> kno.v1.Interval
+	32, // 37: kno.v1.AssetValued.not_measured:type_name -> kno.v1.RejectionReason
+	22, // 38: kno.v1.PortfolioValidated.holdout_interval:type_name -> kno.v1.Interval
+	33, // 39: kno.v1.PortfolioValidated.verdict:type_name -> kno.v1.ValidationVerdict
+	32, // 40: kno.v1.PortfolioValidated.not_measured:type_name -> kno.v1.RejectionReason
+	41, // [41:41] is the sub-list for method output_type
+	41, // [41:41] is the sub-list for method input_type
+	41, // [41:41] is the sub-list for extension type_name
+	41, // [41:41] is the sub-list for extension extendee
+	0,  // [0:41] is the sub-list for field type_name
 }
 
 func init() { file_kno_v1_event_proto_init() }
@@ -2536,6 +2781,7 @@ func file_kno_v1_event_proto_init() {
 	file_kno_v1_valuation_proto_init()
 	file_kno_v1_portfolio_proto_init()
 	file_kno_v1_run_proto_init()
+	file_kno_v1_validation_proto_init()
 	file_kno_v1_event_proto_msgTypes[0].OneofWrappers = []any{
 		(*Event_RunStarted)(nil),
 		(*Event_CaseScored)(nil),
@@ -2553,6 +2799,8 @@ func file_kno_v1_event_proto_init() {
 		(*Event_AssetValued)(nil),
 		(*Event_PortfolioSelected)(nil),
 		(*Event_ExportWritten)(nil),
+		(*Event_HoldoutOpened)(nil),
+		(*Event_PortfolioValidated)(nil),
 	}
 	file_kno_v1_event_proto_msgTypes[8].OneofWrappers = []any{}
 	file_kno_v1_event_proto_msgTypes[9].OneofWrappers = []any{}
@@ -2565,7 +2813,7 @@ func file_kno_v1_event_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kno_v1_event_proto_rawDesc), len(file_kno_v1_event_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   18,
+			NumMessages:   20,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

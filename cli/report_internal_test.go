@@ -392,8 +392,8 @@ _×scale rows carry the Select run's routing-fraction correction to the tagged d
 
 Select run ` + "`select-1`" + ` (completed)
 
-- dev-estimated gain **+0.1123** [-0.0210, +0.2456]
-- **not yet validated on holdout** — validate is not in this release; this is a selection-time estimate, winner's-curse inflation included
+- dev-estimated gain **+0.1123** [-0.0210, +0.2456]  (selection-time; winner's-curse inflated)
+- **not yet validated on holdout** — this is a selection-time estimate, winner's-curse inflation included. Run ` + "`kno validate`" + ` to measure this portfolio against the untouched holdout.
 
 ### Rejected, by reason
 

@@ -166,9 +166,18 @@ func TestStatusCheckFailsWhenTheArtifactDrifts(t *testing.T) {
 
 	// Exactly what a hand-edit looks like: one stage's declared state changed
 	// in the artifact without the declaration behind it moving.
-	drifted := strings.Replace(string(body), `"shipped": "planned"`, `"shipped": "shipped"`, 1)
+	//
+	// The mutation demotes rather than promotes, and the direction had to flip
+	// once `validate` shipped: with every Stage now declared shipped, there is
+	// no "planned" row left in the artifact to promote, and the assertion that
+	// caught that ("the fixture no longer contains a planned stage") is a fact
+	// about the fixture rather than about the gate. A demotion is the same
+	// hand-edit seen from the other side, and it stays representable however
+	// many stages ship.
+	drifted := strings.Replace(string(body), `"shipped": "shipped"`, `"shipped": "planned"`, 1)
 	if drifted == string(body) {
-		t.Fatal("the fixture no longer contains a planned stage to mutate")
+		t.Fatal("the fixture contains no declared stage state to mutate, so this gate " +
+			"cannot be watched failing")
 	}
 	if err := os.WriteFile(filepath.Join(dir, artifact), []byte(drifted), 0o600); err != nil {
 		t.Fatalf("writing the drifted artifact: %v", err)

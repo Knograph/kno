@@ -710,6 +710,17 @@ type Capabilities struct {
 	// many cases errored for this to be a usable baseline" — naming nothing
 	// about the actual cause.
 	GenerationParams bool `protobuf:"varint,6,opt,name=generation_params,json=generationParams,proto3" json:"generation_params,omitempty"`
+	// The adapter can carry a WHOLE Portfolio — several Assets, in a given
+	// order — in one prompt (core.ContextSetInjector).
+	//
+	// Separate from context_inject rather than implied by it. Every
+	// ContextInjector in the tree refuses a SECOND Asset by design, because a
+	// per-Asset Valuation silently becoming a two-Asset one is the failure that
+	// refusal exists to stop. Validate needs the opposite operation, so it is a
+	// different capability and is declared separately; an adapter that supports
+	// one-Asset injection and not set injection says so, and Validate refuses
+	// it before any spend rather than measuring a subset.
+	ContextSetInject bool `protobuf:"varint,7,opt,name=context_set_inject,json=contextSetInject,proto3" json:"context_set_inject,omitempty"`
 	// Capability names this schema version does not model, for forward
 	// compatibility with adapters newer than the engine.
 	Extensions    []string `protobuf:"bytes,5,rep,name=extensions,proto3" json:"extensions,omitempty"`
@@ -778,6 +789,13 @@ func (x *Capabilities) GetTokenCounts() bool {
 func (x *Capabilities) GetGenerationParams() bool {
 	if x != nil {
 		return x.GenerationParams
+	}
+	return false
+}
+
+func (x *Capabilities) GetContextSetInject() bool {
+	if x != nil {
+		return x.ContextSetInject
 	}
 	return false
 }
@@ -1116,13 +1134,14 @@ const file_kno_v1_common_proto_rawDesc = "" +
 	"\vingested_at\x18\x03 \x01(\tR\n" +
 	"ingestedAt\x12\x18\n" +
 	"\aderived\x18\x04 \x01(\bR\aderived\x12'\n" +
-	"\x0fderivation_note\x18\x05 \x01(\tR\x0ederivationNote\"\xe6\x01\n" +
+	"\x0fderivation_note\x18\x05 \x01(\tR\x0ederivationNote\"\x94\x02\n" +
 	"\fCapabilities\x12%\n" +
 	"\x0econtext_inject\x18\x01 \x01(\bR\rcontextInject\x12'\n" +
 	"\x0fknowledge_write\x18\x02 \x01(\bR\x0eknowledgeWrite\x12\x16\n" +
 	"\x06stream\x18\x03 \x01(\bR\x06stream\x12!\n" +
 	"\ftoken_counts\x18\x04 \x01(\bR\vtokenCounts\x12+\n" +
-	"\x11generation_params\x18\x06 \x01(\bR\x10generationParams\x12\x1e\n" +
+	"\x11generation_params\x18\x06 \x01(\bR\x10generationParams\x12,\n" +
+	"\x12context_set_inject\x18\a \x01(\bR\x10contextSetInject\x12\x1e\n" +
 	"\n" +
 	"extensions\x18\x05 \x03(\tR\n" +
 	"extensions\"\xa3\x03\n" +

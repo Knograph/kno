@@ -22,8 +22,8 @@
     },
     {
       "name": "validate",
-      "command": false,
-      "shipped": "planned",
+      "command": true,
+      "shipped": "shipped",
       "milestone": "v0.2"
     },
     {
@@ -44,6 +44,7 @@
     "purge",
     "report",
     "select",
+    "validate",
     "value"
   ],
   "adapters": [
@@ -109,8 +110,8 @@
   ],
   "price_table": "2026-08-28",
   "debt": {
-    "total": 101,
-    "open": 51,
+    "total": 111,
+    "open": 61,
     "skipped": 0
   }
 }

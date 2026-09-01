@@ -413,3 +413,220 @@ func TestWithContextRefusesAnAssetItCannotHonestlyMeasure(t *testing.T) {
 		})
 	}
 }
+
+// These tests cover WithContextSet: the Portfolio-injection half of the same
+// contract WithContext already proves for one Asset. See ring0.go's
+// ContextSetInjector for why order and a whole-set ceiling are the two
+// properties that matter here and nowhere else.
+
+// injectedSet is WithContextSet with the failure made fatal, for the tests
+// where the injection succeeding is a precondition rather than the subject.
+func injectedSet(t *testing.T, a *openaicompat.Agent, assets ...*core.Asset) core.Agent {
+	t.Helper()
+	g, err := a.WithContextSet(assets)
+	if err != nil {
+		t.Fatalf("WithContextSet: %v", err)
+	}
+	return g
+}
+
+// TestWithContextSetJoinsEveryAssetInRankOrder.
+//
+// ORDER IS PART OF THE MEASUREMENT: Validate applies PortfolioEntry.rank
+// before calling this, and a caller-supplied order that the adapter silently
+// resorted would measure a Portfolio other than the one Validate asked about.
+func TestWithContextSetJoinsEveryAssetInRankOrder(t *testing.T) {
+	t.Parallel()
+
+	srv, rec := recording(t)
+	a := newAgent(t, srv, func(o *openaicompat.Options) { o.System = "SYSTEM-PROMPT" })
+
+	first := &knov1.Asset{Id: "a1", Content: []byte("FIRST-ASSET-CONTENT")}
+	second := &knov1.Asset{Id: "a2", Content: []byte("SECOND-ASSET-CONTENT")}
+
+	treatment := injectedSet(t, a, first, second)
+	if _, err := treatment.Invoke(t.Context(), newCase("c", "CASE-INPUT")); err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+
+	got := rec.body(t, 0)
+	iFirst := strings.Index(got, "FIRST-ASSET-CONTENT")
+	iSecond := strings.Index(got, "SECOND-ASSET-CONTENT")
+	if iFirst == -1 || iSecond == -1 {
+		t.Fatalf("the request does not carry both Assets: %s", got)
+	}
+	if iFirst > iSecond {
+		t.Errorf("the Assets were not sent in the given order: %s", got)
+	}
+}
+
+// TestWithContextSetRefusesAnEmptyOrNilSet.
+//
+// An Agent carrying no Assets IS the control arm: answering here would
+// measure the control against itself and report the difference as zero, with
+// an interval — indistinguishable from an honest null result.
+func TestWithContextSetRefusesAnEmptyOrNilSet(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		assets []*core.Asset
+	}{
+		{"nil set", nil},
+		{"empty set", []*core.Asset{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv, _ := recording(t)
+			a := newAgent(t, srv)
+
+			got, err := a.WithContextSet(tc.assets)
+			if err == nil {
+				t.Fatalf("WithContextSet accepted it and returned %T", got)
+			}
+			if got != nil {
+				t.Errorf("a refused injection still returned an Agent (%T)", got)
+			}
+			if !errors.Is(err, errs.ErrInvalidInput) {
+				t.Errorf("error is not ErrInvalidInput: %v", err)
+			}
+			if !strings.Contains(err.Error(), "control arm") {
+				t.Errorf("the refusal does not explain why an empty set cannot be "+
+					"measured: %v", err)
+			}
+		})
+	}
+}
+
+// TestWithContextSetRefusesASetPastTheCeiling.
+//
+// The WHOLE joined set is bound against --max-prompt-bytes ONCE, before any
+// Case is sent — the same free-refusal property injectable gives a single
+// Asset, applied to the set as a whole because it rides as one payload.
+func TestWithContextSetRefusesASetPastTheCeiling(t *testing.T) {
+	t.Parallel()
+
+	const ceiling = 4096
+	srv, rec := recording(t)
+	a := newAgent(t, srv, func(o *openaicompat.Options) { o.MaxPromptBytes = ceiling })
+
+	assets := []*core.Asset{
+		{Id: "a1", Content: []byte(strings.Repeat("a", 3000))},
+		{Id: "a2", Content: []byte(strings.Repeat("b", 3000))},
+	}
+
+	got, err := a.WithContextSet(assets)
+	if err == nil {
+		t.Fatalf("WithContextSet accepted a set past the ceiling and returned %T", got)
+	}
+	if !errors.Is(err, errs.ErrInvalidInput) {
+		t.Errorf("error is not ErrInvalidInput: %v", err)
+	}
+	if !strings.Contains(err.Error(), "--max-prompt-bytes") {
+		t.Errorf("the refusal does not name the flag: %v", err)
+	}
+	if len(rec.bodies) != 0 {
+		t.Errorf("a refused set still reached the network: %d requests", len(rec.bodies))
+	}
+}
+
+// TestWithContextSetRefusesAnInvalidAssetInTheSet.
+//
+// Every Asset in the set is checked with the same rule WithContext applies to
+// one, naming the offending Asset so the refusal is actionable rather than a
+// run that fails on every Case in the sample.
+func TestWithContextSetRefusesAnInvalidAssetInTheSet(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		asset *core.Asset
+		wants string
+	}{
+		{"nil element", nil, "there is no Asset at index"},
+		{"empty content", &knov1.Asset{Id: "asset-empty"}, "asset-empty"},
+		{"invalid UTF-8", &knov1.Asset{Id: "asset-binary", Content: []byte{0xff, 0xfe, 'a'}}, "asset-binary"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv, _ := recording(t)
+			a := newAgent(t, srv)
+
+			got, err := a.WithContextSet([]*core.Asset{anAsset("good content"), tc.asset})
+			if err == nil {
+				t.Fatalf("WithContextSet accepted an invalid Asset and returned %T", got)
+			}
+			if !errors.Is(err, errs.ErrInvalidInput) {
+				t.Errorf("error is not ErrInvalidInput: %v", err)
+			}
+			if !strings.Contains(err.Error(), tc.wants) {
+				t.Errorf("the refusal does not name the offending Asset: %v, want it to "+
+					"contain %q", err, tc.wants)
+			}
+		})
+	}
+}
+
+// TestTheReceiverStillSendsNoAssetAfterSetInjection mirrors
+// TestTheReceiverStillSendsNoAssetAfterInjection for the whole-set path: the
+// receiver is the control arm of the same measurement WithContextSet's
+// treatment arm belongs to.
+func TestTheReceiverStillSendsNoAssetAfterSetInjection(t *testing.T) {
+	t.Parallel()
+
+	srv, rec := recording(t)
+	a := newAgent(t, srv, func(o *openaicompat.Options) { o.System = "SYSTEM-PROMPT" })
+	c := newCase("c", "CASE-INPUT")
+
+	before, err := a.Estimate(t.Context(), c)
+	if err != nil {
+		t.Fatalf("Estimate before injection: %v", err)
+	}
+
+	treatment := injectedSet(t, a, anAsset(assetText))
+	if _, err := treatment.Invoke(t.Context(), c); err != nil {
+		t.Fatalf("Invoke on the treatment arm: %v", err)
+	}
+	if _, err := a.Invoke(t.Context(), c); err != nil {
+		t.Fatalf("Invoke on the control arm: %v", err)
+	}
+
+	if got := rec.body(t, 0); !strings.Contains(got, assetText) {
+		t.Fatalf("the treatment arm sent no Asset, so this test cannot tell the two arms apart: %s", got)
+	}
+	if got := rec.body(t, 1); strings.Contains(got, assetText) {
+		t.Errorf("the control arm carries the set, so every paired delta would be "+
+			"zero and would be reported as a measurement: %s", got)
+	}
+
+	after, err := a.Estimate(t.Context(), c)
+	if err != nil {
+		t.Fatalf("Estimate after injection: %v", err)
+	}
+	if before.CostUSDMicros != after.CostUSDMicros || before.Tokens != after.Tokens {
+		t.Errorf("injection moved the receiver's own estimate from %+v to %+v; the "+
+			"control arm would then reserve for a prompt it does not send", before, after)
+	}
+}
+
+// TestTheSetInjectedAgentDeclaresContextSetInject asserts the treatment arm
+// reports the capability the Value stage checks before routing a Portfolio.
+func TestTheSetInjectedAgentDeclaresContextSetInject(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := recording(t)
+	a := newAgent(t, srv)
+	treatment := injectedSet(t, a, anAsset(assetText))
+
+	capable, ok := treatment.(core.Capable)
+	if !ok {
+		t.Fatal("the injected Agent is not Capable")
+	}
+	if !capable.Capabilities().GetContextSetInject() {
+		t.Error("the injected Agent does not declare context_set_inject")
+	}
+}

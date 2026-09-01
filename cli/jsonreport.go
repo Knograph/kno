@@ -21,6 +21,7 @@ import (
 	"io"
 
 	"github.com/knograph/kno/adapters/evals/jsonl"
+	"github.com/knograph/kno/adapters/evals/split"
 	"github.com/knograph/kno/core"
 	knov1 "github.com/knograph/kno/gen/kno/v1"
 )
@@ -182,6 +183,25 @@ func decodeRaw(b []byte) (map[string]any, error) {
 	return raw, nil
 }
 
+// decodeExactlyOneDocument parses a rendered document into a map and refuses
+// anything that follows it.
+//
+// json.Unmarshal accepts a prefix, so a renderer that printed a document
+// followed by a line of prose would satisfy every key assertion a test could
+// make. `kno <stage> --json` promises exactly one document and no prose on
+// stdout; this is what holds it to that.
+func decodeExactlyOneDocument(b []byte) (map[string]any, error) {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	var raw map[string]any
+	if err := dec.Decode(&raw); err != nil {
+		return nil, fmt.Errorf("decoding the document: %w", err)
+	}
+	if dec.More() {
+		return nil, fmt.Errorf("stdout carries more than one document")
+	}
+	return raw, nil
+}
+
 // valueReport is the JSON shape of a Value run. Deltas travel beside their
 // intervals, or the reason they are absent — the same discipline the proto
 // godocs now enforce. Lives in this file because the --json contract is the
@@ -256,6 +276,157 @@ func renderValueJSON(out io.Writer, res *core.ValueResult, runID string, dir flo
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(rep); err != nil {
 		return fmt.Errorf("writing the value report: %w", err)
+	}
+	return nil
+}
+
+// validateReport is the JSON shape of a Validate run.
+//
+// The only document in this contract whose top-level number is a claim about
+// the world rather than about the tool, so its absence rules are the strictest
+// here: holdout_gain, low and high are present if and only if an interval was
+// formed. A run that could not form one emits none of the three and emits
+// not_measured instead — NEVER a 0.0, which a jq pipeline reading
+// `.holdout_gain // 0` cannot tell from a measured zero.
+//
+// Hand-written and aimed at a jq pipeline, per ADR-0006: enum-valued keys
+// carry names, money appears as a display string beside integer micro-USD,
+// and every load-bearing absence has a positive signal beside it —
+// `not_measured` for the missing gain, `guarded` for the spend block.
+type validateReport struct {
+	RunID       string `json:"run_id"`
+	Status      string `json:"status"`
+	SelectRunID string `json:"select_run_id"`
+
+	// GoalDirection lets a MINIMIZE consumer read the sign in the Goal's own
+	// units, exactly as the value document does.
+	GoalDirection string `json:"goal_direction"`
+
+	// NothingToValidate is the machine form of "the Portfolio selected nothing
+	// this stage can measure". Exit 0, no agent call, no consumed holdout.
+	NothingToValidate bool `json:"nothing_to_validate,omitempty"`
+
+	// The spend block, identical in shape to baseline's and value's. Validate
+	// runs a guard, so guarded is true even where the figure is $0.00.
+	spendReport
+
+	HoldoutCases  int32 `json:"holdout_case_count"`
+	MeasuredCases int32 `json:"measured_case_count"`
+	NDropped      int32 `json:"n_dropped"`
+	Trials        int32 `json:"trials"`
+	Arms          int   `json:"arms"`
+	PlannedCalls  int64 `json:"planned_calls"`
+	AssetCount    int   `json:"asset_count"`
+	Underpowered  bool  `json:"holdout_underpowered"`
+	HoldoutUses   int32 `json:"holdout_uses"`
+	MinHoldout    int   `json:"min_holdout"`
+
+	// ContextOnly and ExcludedAssetIDs together say the number covers a
+	// SUBSET of the Portfolio. Both, because a bare list is easy to skip and
+	// a bare bool names nothing.
+	ContextOnly      bool     `json:"context_only"`
+	ExcludedAssetIDs []string `json:"excluded_asset_ids,omitempty"`
+
+	// HoldoutGain, Low and High: present together or not at all.
+	HoldoutGain *float64 `json:"holdout_gain,omitempty"`
+	Low         *float64 `json:"low,omitempty"`
+	High        *float64 `json:"high,omitempty"`
+
+	// ControlScore and TreatmentScore are the two arms' means, so a reader can
+	// see the arithmetic behind the gain rather than take it on trust.
+	ControlScore   *float64 `json:"control_score,omitempty"`
+	TreatmentScore *float64 `json:"treatment_score,omitempty"`
+
+	// NotMeasured is the positive signal beside the missing gain.
+	NotMeasured string `json:"not_measured,omitempty"`
+
+	// Verdict is what a deploy gate branches on: confirmed, inconclusive,
+	// not_confirmed, unmeasured. A name, never a number.
+	Verdict string `json:"verdict"`
+
+	// The dev-slice comparison, carried so a consumer can compute the
+	// shrinkage without a second query — and warned about in the same breath.
+	DevGain   *float64 `json:"dev_estimated_gain,omitempty"`
+	DevLow    *float64 `json:"dev_estimated_low,omitempty"`
+	DevHigh   *float64 `json:"dev_estimated_high,omitempty"`
+	Shrinkage *float64 `json:"shrinkage,omitempty"`
+
+	// IncompleteReason is the source Select run's, verbatim, when it had one.
+	IncompleteReason string `json:"incomplete_reason,omitempty"`
+
+	// InteractionPenaltyDetected is false, always, in this release, and it is
+	// emitted rather than omitted so a consumer can see that the question was
+	// asked and not answered. Leave-one-out on the holdout costs (k+1) arms
+	// for a k-asset Portfolio; the tempting cheap rule — flag an interaction
+	// when the holdout gain is below the dev estimate — fires under the null
+	// at nearly 100%, because dev inflation is the EXPECTED state.
+	InteractionPenaltyDetected bool `json:"interaction_penalty_detected"`
+}
+
+// renderValidateJSON emits the machine-readable Validate report.
+func renderValidateJSON(
+	out io.Writer,
+	res *core.ValidateResult,
+	quote core.ValidateQuote,
+	counts split.Counts,
+	dir float64,
+	f validateFlags,
+) error {
+	_ = counts
+	rep := validateReport{
+		RunID:             res.RunID,
+		Status:            statusName(res.Status),
+		SelectRunID:       f.selectRunID,
+		GoalDirection:     res.GoalDirection.String(),
+		NothingToValidate: res.NothingToValidate,
+		// Validate records no usage-estimated count today, so the qualifier is
+		// structurally zero here rather than suppressed.
+		spendReport: newSpendReport(res.Spent, 0, f.resume),
+		//nolint:gosec // bounded by the eval set
+		HoldoutCases:     int32(res.HoldoutCases),
+		Trials:           quote.Trials,
+		Arms:             quote.Arms,
+		PlannedCalls:     quote.Calls,
+		AssetCount:       res.AssetCount,
+		Underpowered:     quote.Underpowered,
+		HoldoutUses:      res.HoldoutUseIndex,
+		MinHoldout:       split.MinHoldout,
+		ContextOnly:      f.contextOnly,
+		ExcludedAssetIDs: quote.ExcludedAssetIDs,
+		Verdict:          verdictName(knov1.ValidationVerdict_VALIDATION_VERDICT_UNSPECIFIED),
+	}
+	if v := res.Validation; v != nil {
+		rep.MeasuredCases = v.GetMeasuredCaseCount()
+		rep.NDropped = v.GetNDropped()
+		rep.Underpowered = v.GetHoldoutUnderpowered()
+		rep.HoldoutUses = v.GetHoldoutUseIndex()
+		rep.IncompleteReason = v.GetIncompleteReason()
+		rep.Verdict = verdictName(v.GetVerdict())
+		if v.GetNotMeasured() != knov1.RejectionReason_REJECTION_REASON_UNSPECIFIED {
+			rep.NotMeasured = rejectReasonName(v.GetNotMeasured())
+		}
+		if iv := v.GetHoldoutInterval(); iv != nil {
+			gain := dir * v.GetHoldoutGain()
+			low, high := dir*iv.GetLow(), dir*iv.GetHigh()
+			rep.HoldoutGain, rep.Low, rep.High = &gain, &low, &high
+			control := v.GetControlScore()
+			treatment := v.GetTreatmentScore()
+			rep.ControlScore, rep.TreatmentScore = &control, &treatment
+		}
+		if div := v.GetDevEstimatedInterval(); div != nil {
+			devGain := dir * v.GetDevEstimatedGain()
+			devLow, devHigh := dir*div.GetLow(), dir*div.GetHigh()
+			rep.DevGain, rep.DevLow, rep.DevHigh = &devGain, &devLow, &devHigh
+			if rep.HoldoutGain != nil {
+				shrink := dir * (v.GetDevEstimatedGain() - v.GetHoldoutGain())
+				rep.Shrinkage = &shrink
+			}
+		}
+	}
+	enc := json.NewEncoder(out)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(rep); err != nil {
+		return fmt.Errorf("writing the validate report: %w", err)
 	}
 	return nil
 }
@@ -438,6 +609,12 @@ type reportJSON struct {
 	Portfolio       *reportPortfolio `json:"portfolio,omitempty"`
 	Gaps            *reportGaps      `json:"gaps,omitempty"`
 
+	// Validation is the holdout number, absent when no Validate run was
+	// named. Its absence is the machine form of the not-yet-validated caveat,
+	// and portfolio.validated_on_holdout says the same thing positively so a
+	// consumer never has to read a missing key as a false.
+	Validation *reportValidation `json:"validation,omitempty"`
+
 	// Spend is what the pipeline cost — the number nobody could get before,
 	// because it is the sum across runs and no single stage holds them all.
 	Spend reportSpend `json:"spend"`
@@ -523,6 +700,54 @@ type reportGapCluster struct {
 	High         *float64 `json:"high,omitempty"`
 }
 
+// reportValidation is the holdout section of the report page.
+//
+// Its shape deliberately echoes validateReport's keys, so a consumer reading
+// `kno validate --json` and `kno report --json` does not learn two vocabularies
+// for one measurement.
+type reportValidation struct {
+	RunID  string `json:"run_id"`
+	Status string `json:"status"`
+
+	// NotRecorded is true when the named Validate run recorded no Validation —
+	// the machine form of "a validation was attempted and produced no number".
+	// The caveat stays in place beside it.
+	NotRecorded bool `json:"not_recorded,omitempty"`
+
+	HoldoutCases  int32 `json:"holdout_case_count,omitempty"`
+	MeasuredCases int32 `json:"measured_case_count,omitempty"`
+	NDropped      int32 `json:"n_dropped,omitempty"`
+	Trials        int32 `json:"trials,omitempty"`
+	Underpowered  bool  `json:"holdout_underpowered,omitempty"`
+	HoldoutUses   int32 `json:"holdout_uses,omitempty"`
+
+	ContextOnly      bool     `json:"context_only,omitempty"`
+	ExcludedAssetIDs []string `json:"excluded_asset_ids,omitempty"`
+
+	HoldoutGain *float64 `json:"holdout_gain,omitempty"`
+	Low         *float64 `json:"low,omitempty"`
+	High        *float64 `json:"high,omitempty"`
+	Shrinkage   *float64 `json:"shrinkage,omitempty"`
+	NotMeasured string   `json:"not_measured,omitempty"`
+	Verdict     string   `json:"verdict,omitempty"`
+
+	// InteractionPenaltyDetected is false in this release and is emitted
+	// rather than omitted, so a consumer can see the question was asked and
+	// deliberately not answered. See validateReport.
+	InteractionPenaltyDetected bool `json:"interaction_penalty_detected"`
+}
+
+// validatedOnHoldout reports whether this page may say the Portfolio was
+// validated.
+//
+// Three conditions, all required: a Validate run was named, it recorded a
+// Validation, and that Validation carries an interval. A gain without an
+// interval is not a validated number, and a started-but-unfinished run is not
+// a validation at all.
+func validatedOnHoldout(d *reportData) bool {
+	return d.Validation != nil && d.Validation.GetHoldoutInterval() != nil
+}
+
 // writeReportJSON emits the machine-readable report.
 func writeReportJSON(out io.Writer, d *reportData) error {
 	rep := reportJSON{
@@ -560,7 +785,12 @@ func writeReportJSON(out io.Writer, d *reportData) error {
 			if iv := po.GetDevEstimatedInterval(); iv != nil {
 				p.DevGain, p.GainLow, p.GainHigh = &po.DevEstimatedGain, &iv.Low, &iv.High
 			}
-			p.ValidatedOnHoldout = false
+			// Computed, at last. True only for a COMPLETED Validate run that
+			// produced an interval for THIS Portfolio — chain-checked in
+			// composeReport. False for an interrupted run, for a
+			// budget-stopped one, and for an underpowered holdout that formed
+			// no interval, because none of those is a validation.
+			p.ValidatedOnHoldout = validatedOnHoldout(d)
 			for _, g := range rejectionsByReason(po.GetRejected()) {
 				p.Rejected = append(p.Rejected, reportRejectionRow{
 					Reason: g.reason, Count: g.count, Assets: g.assets,
@@ -569,6 +799,37 @@ func writeReportJSON(out io.Writer, d *reportData) error {
 		}
 		rep.Portfolio = p
 	}
+	if d.ValidateRun != nil {
+		vr := &reportValidation{
+			RunID:  d.ValidateRun.GetId(),
+			Status: statusName(d.ValidateRun.GetStatus()),
+		}
+		v := d.Validation
+		if v == nil {
+			vr.NotRecorded = true
+		} else {
+			vr.HoldoutCases = v.GetHoldoutCaseCount()
+			vr.MeasuredCases = v.GetMeasuredCaseCount()
+			vr.NDropped = v.GetNDropped()
+			vr.Trials = v.GetTrials()
+			vr.Underpowered = v.GetHoldoutUnderpowered()
+			vr.HoldoutUses = v.GetHoldoutUseIndex()
+			vr.ContextOnly = v.GetContextOnly()
+			vr.ExcludedAssetIDs = v.GetExcludedAssetIds()
+			vr.Verdict = verdictName(v.GetVerdict())
+			if nm := v.GetNotMeasured(); nm != knov1.RejectionReason_REJECTION_REASON_UNSPECIFIED {
+				vr.NotMeasured = rejectReasonName(nm)
+			}
+			if iv := v.GetHoldoutInterval(); iv != nil {
+				gain, low, high := unnegate(d, v.GetHoldoutGain(), iv.GetLow(), iv.GetHigh())
+				vr.HoldoutGain, vr.Low, vr.High = gain, low, high
+				shrink, _, _ := unnegate(d, v.GetDevEstimatedGain()-v.GetHoldoutGain(), 0, 0)
+				vr.Shrinkage = shrink
+			}
+		}
+		rep.Validation = vr
+	}
+
 	if d.ExportRun != nil {
 		g := &reportGaps{RunID: d.ExportRun.GetId(), Status: statusName(d.ExportRun.GetStatus())}
 		if d.Gaps == nil {

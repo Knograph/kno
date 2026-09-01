@@ -102,7 +102,18 @@ type PortfolioEntry struct {
 	// scale would be a silent division, and the entry is flagged instead of
 	// scaled). Presence of this field is the flag: a reader can tell a scaled
 	// entry from an unscaled one without re-deriving the factor.
-	NRoutedScale  *float64 `protobuf:"fixed64,5,opt,name=n_routed_scale,json=nRoutedScale,proto3,oneof" json:"n_routed_scale,omitempty"`
+	NRoutedScale *float64 `protobuf:"fixed64,5,opt,name=n_routed_scale,json=nRoutedScale,proto3,oneof" json:"n_routed_scale,omitempty"`
+	// SHA-256 of the Asset's content at selection time.
+	//
+	// Validate re-reads the Pool and refuses an Asset whose content no longer
+	// matches. Without it, a Pool edited between `select` and `validate`
+	// produces a holdout number for a set that is not the set the report names,
+	// undetectably — and Asset carries no content hash of its own.
+	//
+	// ABSENT for a Portfolio written before this field existed, or by a Select
+	// run that had no Pool. Absence disables the check rather than failing it:
+	// an older Portfolio is not evidence of tampering.
+	ContentHash   []byte `protobuf:"bytes,6,opt,name=content_hash,json=contentHash,proto3,oneof" json:"content_hash,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -170,6 +181,13 @@ func (x *PortfolioEntry) GetNRoutedScale() float64 {
 		return *x.NRoutedScale
 	}
 	return 0
+}
+
+func (x *PortfolioEntry) GetContentHash() []byte {
+	if x != nil {
+		return x.ContentHash
+	}
+	return nil
 }
 
 // Rejection is one excluded Asset and why.
@@ -687,14 +705,16 @@ var File_kno_v1_portfolio_proto protoreflect.FileDescriptor
 
 const file_kno_v1_portfolio_proto_rawDesc = "" +
 	"\n" +
-	"\x16kno/v1/portfolio.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/valuation.proto\"\xe5\x01\n" +
+	"\x16kno/v1/portfolio.proto\x12\x06kno.v1\x1a\x13kno/v1/common.proto\x1a\x16kno/v1/valuation.proto\"\x9e\x02\n" +
 	"\x0ePortfolioEntry\x12\x19\n" +
 	"\basset_id\x18\x01 \x01(\tR\aassetId\x125\n" +
 	"\vdestination\x18\x02 \x01(\x0e2\x13.kno.v1.DestinationR\vdestination\x12/\n" +
 	"\tvaluation\x18\x03 \x01(\v2\x11.kno.v1.ValuationR\tvaluation\x12\x12\n" +
 	"\x04rank\x18\x04 \x01(\x05R\x04rank\x12)\n" +
-	"\x0en_routed_scale\x18\x05 \x01(\x01H\x00R\fnRoutedScale\x88\x01\x01B\x11\n" +
-	"\x0f_n_routed_scale\"\xd9\x01\n" +
+	"\x0en_routed_scale\x18\x05 \x01(\x01H\x00R\fnRoutedScale\x88\x01\x01\x12&\n" +
+	"\fcontent_hash\x18\x06 \x01(\fH\x01R\vcontentHash\x88\x01\x01B\x11\n" +
+	"\x0f_n_routed_scaleB\x0f\n" +
+	"\r_content_hash\"\xd9\x01\n" +
 	"\tRejection\x12\x19\n" +
 	"\basset_id\x18\x01 \x01(\tR\aassetId\x12/\n" +
 	"\x06reason\x18\x02 \x01(\x0e2\x17.kno.v1.RejectionReasonR\x06reason\x127\n" +

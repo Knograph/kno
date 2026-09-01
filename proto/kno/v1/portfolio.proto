@@ -32,6 +32,18 @@ message PortfolioEntry {
   // scaled). Presence of this field is the flag: a reader can tell a scaled
   // entry from an unscaled one without re-deriving the factor.
   optional double n_routed_scale = 5;
+
+  // SHA-256 of the Asset's content at selection time.
+  //
+  // Validate re-reads the Pool and refuses an Asset whose content no longer
+  // matches. Without it, a Pool edited between `select` and `validate`
+  // produces a holdout number for a set that is not the set the report names,
+  // undetectably — and Asset carries no content hash of its own.
+  //
+  // ABSENT for a Portfolio written before this field existed, or by a Select
+  // run that had no Pool. Absence disables the check rather than failing it:
+  // an older Portfolio is not evidence of tampering.
+  optional bytes content_hash = 6;
 }
 
 // Rejection is one excluded Asset and why.

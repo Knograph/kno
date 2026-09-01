@@ -303,9 +303,15 @@ func generationParamsSupported(model string) bool {
 // the endpoint rejects per Case (docs/plans/2026-08-29-bedrock-vertex-agents.md
 // P0-3). If a model family gains seed through additionalModelRequestFields,
 // this reports it then — verified per model, never assumed.
+//
+// ContextSetInject is true because WithContextSet injects a whole Portfolio
+// through the SAME mechanism as WithContext — one joined system-array
+// payload — not a second one. Declaring it is a claim that this adapter can
+// hold the set, not that it has a separate injection path.
 func (a *Agent) Capabilities() *core.Capabilities {
 	return &knov1.Capabilities{
 		ContextInject:    true,
+		ContextSetInject: true,
 		KnowledgeWrite:   false,
 		Stream:           false,
 		TokenCounts:      true,

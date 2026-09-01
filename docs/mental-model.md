@@ -51,12 +51,12 @@ Two of these are worth pausing on.
 
 **Select** — build the Portfolio under budget: greedy on Δ-per-cost, honestly labeled — feasible, deterministic, reproducible, and no approximation guarantee. Every keep/reject decision runs at a Bonferroni-corrected interval, in precedence order (regression, no effect, redundant, cost-dominated, wrong mechanism), and the output is the selection *and* the rejection log. "Include nothing new" is a legal, first-class answer. The portfolio-level gain is a single corrected claim, winner's-curse inflation included — it is a selection-time estimate, not a result.
 
-**Validate** — the Portfolio ships as a set, so it is measured as a set, against the holdout. Two individually-helpful documents can be jointly contradictory. This produces the honest number.
+**Validate** — the Portfolio ships as a set, so it is measured as a set, against the holdout. Two individually-helpful documents can be jointly contradictory. `kno validate` runs the holdout twice in one run — a control arm with nothing injected, a treatment arm carrying the whole Portfolio — and reports the paired difference with its interval, a verdict keyed on that interval rather than on the sign, and the exit code a deploy gate blocks on. This produces the honest number.
 
 **Export** — write the selected assets into the destination grammar: `context` (a context-pack manifest plus the rendered pack), `knowledge_base` (a manifest plus an instruction list; writable knowledge-base adapters arrive with v0.2), or `tuning_set` (OpenAI chat format JSONL, the shape the Tuner adapters parse). Re-exporting the same Portfolio is byte-identical, and export never mutates a destination. Export also computes the per-cluster gaps statistic from the source Value run's planning-time failure clusters and persists it with the run, so the report can render it.
 
-Today Baseline, Value, Select, and Export are implemented; Validate is next. The
-[README Status table](../README.md#status) is the canonical state.
+All five stages are implemented. The [README Status table](../README.md#status) is the
+canonical state.
 
 ## Why dev/holdout exists
 
@@ -71,6 +71,9 @@ Kno enforces this rather than documenting it:
 - The split happens at ingestion, keyed on Case ID, so it is stable across runs and adding cases never moves the ones already there.
 - `Baseline` accepts a `SealedEvals` — a distinct Go type. A stage that could read the holdout **does not compile**.
 - A Case with no assigned split is filtered out too, because treating "unknown" as "dev" is how a holdout leaks one case at a time.
+- The holdout reader is package-private to `core`. `cli`, `tui`, `api` and every external consumer **cannot construct one** — the type and its opener are both unexported, so there is no way to name them from outside. [ADR-0007](adr/0007-the-holdout-opener-is-unexported.md) records what that guarantee does and does not cover.
+- **The holdout is consumed once per Portfolio, and the consumption is recorded before the first agent call** — not when the run finishes. A validate run that crashed halfway has already read part of the holdout, and recording at completion would let that peek go unrecorded. So: the same Portfolio against the same holdout a second time is refused, with no flag to override it, and an interrupted run is resumed rather than restarted — the resumed process reads only the Cases the first one never reached.
+- **A different Portfolio against the same holdout is allowed, counted, and disclosed.** It takes `--allow-repeat-holdout`, the ordinal is stored on the Validation, and every rendering says how many portfolios this holdout has now measured. Kno counts it and does not widen the interval for it: repeated use re-introduces multiplicity at rate N, and that is stated rather than corrected. Refusing outright would only push you to delete the database or re-split, which converts a counted second peek into an invisible one.
 
 ## Injection modes: what a number is a claim about
 

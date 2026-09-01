@@ -121,6 +121,11 @@ func (x *Gap) GetAttemptedAssetIds() []string {
 
 // Report is the deliverable: what was selected, what was rejected and why,
 // what it cost, and what the holdout says it is actually worth.
+//
+// Nothing constructs one yet. Validate writes a Validation instead — the
+// holdout slice of this message, and only that slice — because a Report
+// populated from Validate alone would have to fabricate the portfolio, gaps,
+// costs and case counts it never computed. See kno/v1/validation.proto.
 type Report struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The run this reports on.

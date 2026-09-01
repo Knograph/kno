@@ -48,6 +48,39 @@ type ContextInjector interface {
 	WithContext(a *Asset) (Agent, error)
 }
 
+// ContextSetInjector is an Agent that can carry a whole Portfolio in its
+// prompt.
+//
+// A separate capability from ContextInjector rather than a loop over it, and
+// the reason is a refusal that already exists: every ContextInjector in the
+// tree rejects a SECOND Asset, because a per-Asset Valuation silently becoming
+// a two-Asset one is precisely what that refusal prevents. Loosening it to
+// serve Validate would remove a guard from the stage that needs it most, so
+// Validate asks for a different operation instead.
+//
+// Like ContextInjector this is the UPPER-BOUND mode: the whole set is handed
+// to the model directly rather than reached through a retriever, so the
+// holdout gain it produces is an upper bound on what retrieval would deliver,
+// and every rendering says so.
+type ContextSetInjector interface {
+	// WithContextSet returns an Agent carrying every Asset, in the given
+	// order. The receiver is unmodified and remains usable as the control arm
+	// of the same measurement — the same contract, for the same reason, as
+	// ContextInjector.WithContext.
+	//
+	// ORDER IS PART OF THE MEASUREMENT and callers pass it deliberately:
+	// Validate applies PortfolioEntry.rank. Providers cache on a PREFIX, and a
+	// portfolio prefix that is byte-identical across every holdout Case is the
+	// difference between paying for the set's tokens once and paying for them
+	// on every Case.
+	//
+	// An empty or nil slice must be refused rather than answered: an Agent
+	// carrying no Assets is the control arm, and returning one here would
+	// measure the control against itself and report the difference as zero,
+	// with an interval.
+	WithContextSet(assets []*Asset) (Agent, error)
+}
+
 // Estimator is an Agent that can say what a Case will cost before it runs.
 //
 // Named for the value it produces — budget.Estimate — rather than introducing

@@ -374,8 +374,15 @@ func (a *Agent) Capabilities() *core.Capabilities {
 		// so the deployment-faithful mode is not something this adapter can
 		// offer, and declaring it would let a run report a measurement mode it
 		// never used.
-		ContextInject:  true,
-		KnowledgeWrite: false,
+		//
+		// ContextSetInject is true because WithContextSet injects a whole
+		// Portfolio through the SAME mechanism as WithContext — one joined
+		// system-field payload — not a second one. Declaring it is a claim
+		// that this adapter can hold the set, not that it has a separate
+		// injection path.
+		ContextInject:    true,
+		ContextSetInject: true,
+		KnowledgeWrite:   false,
 
 		// Streaming is accepted debt, not an oversight — the plan's §11 records
 		// it with a trigger. Declaring it would promise incremental output this

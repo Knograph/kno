@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"math"
@@ -330,6 +331,18 @@ func (o SelectOptions) decide(
 			}
 			if scale, ok := routedScale(v); ok {
 				entry.NRoutedScale = &scale
+			}
+			// The content hash Validate checks before it spends anything.
+			//
+			// Without it, a Pool edited between `select` and `validate`
+			// produces a holdout number for a set that is not the set the
+			// report names, undetectably — Asset carries no content hash of
+			// its own. Written only when a Pool was supplied: absence disables
+			// the check rather than failing it, because a Portfolio selected
+			// without a Pool is not evidence of tampering.
+			if asset != nil {
+				sum := sha256.Sum256(asset.GetContent())
+				entry.ContentHash = sum[:]
 			}
 			p.Selected = append(p.Selected, entry)
 			if asset != nil && kindOf(v) == knov1.Kind_KIND_KNOWLEDGE {

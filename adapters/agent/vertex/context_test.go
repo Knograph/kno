@@ -180,3 +180,222 @@ func TestWithContextPromptCeiling(t *testing.T) {
 		t.Fatalf("a small Asset was refused: %v", err)
 	}
 }
+
+// These tests cover WithContextSet: the Portfolio-injection half of the same
+// contract WithContext already proves for one Asset. See core/ring0.go's
+// ContextSetInjector for why order and a whole-set ceiling are the two
+// properties that matter here and nowhere else.
+
+// TestWithContextSetJoinsEveryAssetInRankOrder asserts the treatment arm
+// sends every Asset, joined in the given order, as one system prefix — and
+// that the receiver stays untouched.
+//
+// ORDER IS PART OF THE MEASUREMENT: Validate applies PortfolioEntry.rank
+// before calling this, and a caller-supplied order that the adapter silently
+// resorted would measure a Portfolio other than the one Validate asked about.
+func TestWithContextSetJoinsEveryAssetInRankOrder(t *testing.T) {
+	t.Parallel()
+
+	a, rec := newAgent(t, Options{System: "sys"}, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, rawPredictOK)
+	})
+
+	first := anAsset("a1", "FIRST-ASSET-CONTENT")
+	second := anAsset("a2", "SECOND-ASSET-CONTENT")
+
+	injected, err := a.WithContextSet([]*core.Asset{first, second})
+	if err != nil {
+		t.Fatalf("WithContextSet: %v", err)
+	}
+	if a.asset != "" {
+		t.Error("the receiver carries the injected set — it must stay the control")
+	}
+	inj := injected.(*Agent)
+	if want := "sys\n\nFIRST-ASSET-CONTENT\n\nSECOND-ASSET-CONTENT"; inj.systemPrefix() != want {
+		t.Errorf("systemPrefix = %q, want %q", inj.systemPrefix(), want)
+	}
+
+	if _, err := injected.(core.Agent).Invoke(context.Background(), aCase("c1", "in")); err != nil {
+		t.Fatalf("Invoke: %v", err)
+	}
+	got := rec.body(t, 0)
+	iFirst := strings.Index(string(got), "FIRST-ASSET-CONTENT")
+	iSecond := strings.Index(string(got), "SECOND-ASSET-CONTENT")
+	if iFirst == -1 || iSecond == -1 {
+		t.Fatalf("the request does not carry both Assets: %s", got)
+	}
+	if iFirst > iSecond {
+		t.Errorf("the Assets were not sent in the given order: %s", got)
+	}
+}
+
+// TestWithContextSetForwardsEstimator mirrors TestWithContextForwardsEstimator
+// for the whole-set path: the copy is still a full Agent, so the budget
+// guard keeps its reservation through the injected arm.
+func TestWithContextSetForwardsEstimator(t *testing.T) {
+	t.Parallel()
+
+	a, _ := newAgent(t, Options{}, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, rawPredictOK)
+	})
+	injected, err := a.WithContextSet([]*core.Asset{anAsset("a1", "asset one"), anAsset("a2", "asset two")})
+	if err != nil {
+		t.Fatalf("WithContextSet: %v", err)
+	}
+
+	if _, ok := injected.(core.Estimator); !ok {
+		t.Fatal("the injected Agent is not an Estimator")
+	}
+	est, err := injected.(core.Estimator).Estimate(context.Background(), aCase("c1", "in"))
+	if err != nil {
+		t.Fatalf("Estimate: %v", err)
+	}
+	base, err := a.Estimate(context.Background(), aCase("c1", "in"))
+	if err != nil {
+		t.Fatalf("control Estimate: %v", err)
+	}
+	if est.CostUSDMicros <= base.CostUSDMicros {
+		t.Errorf("treatment reservation %d is not above the control's %d",
+			est.CostUSDMicros, base.CostUSDMicros)
+	}
+}
+
+// TestWithContextSetRefusesAnEmptyOrNilSet asserts an Agent carrying no
+// Assets IS the control arm: answering here would measure the control
+// against itself and report the difference as zero, with an interval.
+func TestWithContextSetRefusesAnEmptyOrNilSet(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		assets []*core.Asset
+	}{
+		{"nil set", nil},
+		{"empty set", []*core.Asset{}},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			a, rec := newAgent(t, Options{}, func(w http.ResponseWriter, r *http.Request) {
+				t.Error("a refused injection reached the network")
+			})
+
+			got, err := a.WithContextSet(tt.assets)
+			if err == nil {
+				t.Fatalf("WithContextSet accepted it and returned %T", got)
+			}
+			if got != nil {
+				t.Errorf("a refused injection still returned an Agent (%T)", got)
+			}
+			if !errors.Is(err, errs.ErrInvalidInput) {
+				t.Errorf("err = %v, want ErrInvalidInput", err)
+			}
+			if !strings.Contains(err.Error(), "control arm") {
+				t.Errorf("the refusal does not explain why an empty set cannot be measured: %v", err)
+			}
+			if rec.calls() != 0 {
+				t.Errorf("calls = %d, want 0", rec.calls())
+			}
+		})
+	}
+}
+
+// TestWithContextSetRefusals mirrors TestWithContextRefusals for the
+// whole-set path: every Asset is checked with the same rule WithContext
+// applies to one, naming the offending Asset so the refusal is actionable.
+func TestWithContextSetRefusals(t *testing.T) {
+	t.Parallel()
+
+	a, rec := newAgent(t, Options{}, func(w http.ResponseWriter, r *http.Request) {
+		t.Error("a refused injection reached the network")
+	})
+
+	tests := []struct {
+		name  string
+		asset *core.Asset
+		want  string
+	}{
+		{"nil element", nil, "there is no Asset at index"},
+		{"empty asset", anAsset("a1", ""), "has no content"},
+		{"invalid utf8", anAsset("a1", string([]byte{0xff, 0xfe})), "not valid UTF-8"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := a.WithContextSet([]*core.Asset{anAsset("good", "good content"), tt.asset})
+			if err == nil {
+				t.Fatalf("WithContextSet succeeded, want %q", tt.want)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("err = %q, want it to contain %q", err, tt.want)
+			}
+			if !errors.Is(err, errs.ErrInvalidInput) {
+				t.Errorf("err = %v, want ErrInvalidInput", err)
+			}
+		})
+	}
+	if rec.calls() != 0 {
+		t.Errorf("calls = %d, want 0", rec.calls())
+	}
+}
+
+// TestWithContextSetAlreadyInjected asserts one Agent carries one injected
+// payload, whether it arrived through WithContext or WithContextSet.
+func TestWithContextSetAlreadyInjected(t *testing.T) {
+	t.Parallel()
+
+	a, _ := newAgent(t, Options{}, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, rawPredictOK)
+	})
+	first, err := a.WithContextSet([]*core.Asset{anAsset("a1", "asset one")})
+	if err != nil {
+		t.Fatalf("WithContextSet: %v", err)
+	}
+	if _, err := first.(*Agent).WithContextSet([]*core.Asset{anAsset("a2", "asset two")}); err == nil {
+		t.Fatal("second injection succeeded")
+	}
+}
+
+// TestWithContextSetPromptCeiling asserts the whole joined set is bound
+// against --max-prompt-bytes ONCE, before any Case is sent.
+func TestWithContextSetPromptCeiling(t *testing.T) {
+	t.Parallel()
+
+	a, _ := newAgent(t, Options{MaxPromptBytes: 100, System: "sys"}, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, rawPredictOK)
+	})
+	_, err := a.WithContextSet([]*core.Asset{
+		anAsset("a1", strings.Repeat("x", 300)),
+		anAsset("a2", strings.Repeat("y", 300)),
+	})
+	if err == nil {
+		t.Fatal("a set past a 100-byte ceiling was accepted")
+	}
+	if !strings.Contains(err.Error(), "max-prompt-bytes") {
+		t.Errorf("err = %v, want it to name the ceiling flag", err)
+	}
+}
+
+// TestWithContextSetDeclaresContextSetInject asserts the treatment arm
+// reports the capability the Value stage checks before routing a Portfolio.
+func TestWithContextSetDeclaresContextSetInject(t *testing.T) {
+	t.Parallel()
+
+	a, _ := newAgent(t, Options{}, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, rawPredictOK)
+	})
+	injected, err := a.WithContextSet([]*core.Asset{anAsset("a1", "asset")})
+	if err != nil {
+		t.Fatalf("WithContextSet: %v", err)
+	}
+
+	capable, ok := injected.(core.Capable)
+	if !ok {
+		t.Fatal("the injected Agent is not Capable")
+	}
+	if !capable.Capabilities().GetContextSetInject() {
+		t.Error("the injected Agent does not declare context_set_inject")
+	}
+}

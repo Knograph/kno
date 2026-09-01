@@ -32,6 +32,53 @@ covenants — breaking any of them requires a major version.
 
 ### Features
 
+* **`kno validate` — the holdout stage.** The Portfolio ships as a set, so it is measured as a
+  set, against the slice nothing has read. Validate runs the holdout twice inside one run: a
+  **control arm** with nothing injected and a **treatment arm** carrying the whole Portfolio as
+  one ordered payload in the system position. It reports the mean paired difference with its
+  interval, and a verdict keyed on that interval and never on the sign — `confirmed` above zero,
+  `inconclusive` across it (exit 0, or 3 with `--require-gain`), `not_confirmed` below it
+  (exit 3, unconditionally), `unmeasured` when no interval could be formed. This is the first
+  code path to return `ExitValidationFailed = 3`, which has existed with that godoc since v0.1
+  and had never been returned.
+
+  Three things about it are decisions rather than mechanics, and each is documented where it
+  will be read. **The control arm is measured, not read off the baseline:** `core.Baseline`
+  takes a sealed dev-only view, so no baseline run has ever scored a holdout Case, and
+  subtracting the dev mean instead would fold the Portfolio's effect together with a random
+  dev/holdout population difference and provider drift. Two arms cost `n_holdout x 2 x trials`
+  agent calls and the consent quote shows that derivation. **The holdout is consumed once per
+  Portfolio,** recorded before the first agent call rather than at completion, because a
+  crashed validate has already peeked; the same Portfolio a second time is refused with no
+  override, and an interrupted run is resumed rather than restarted. **A different Portfolio
+  against the same holdout is allowed under `--allow-repeat-holdout`, counted, and disclosed** —
+  and not corrected for, because refusing outright would push people to delete the database or
+  re-split, turning a counted peek into an invisible one. Pairwise interaction detection does
+  **not** ship: `interaction_penalty_detected` is `false` unconditionally, a scope reduction
+  against `DESIGN.md:88` recorded as [debt #141](docs/debt.md) rather than quietly resolved.
+
+* **`kno report --validate-run-id <id>`** renders the holdout number, and the *not yet validated
+  on holdout* caveat becomes conditional for the first time. Its absence has to be **earned**:
+  the caveat is still printed byte-for-byte whenever there is no COMPLETED Validate run carrying
+  an interval for this Portfolio — an INTERRUPTED validate keeps the caveat and adds a line
+  saying a validation was attempted and produced no number. A partial peek is not a validation,
+  and a page that dropped the caveat because someone *started* a validate would be the exact
+  dishonesty the caveat exists to prevent.
+
+* **Proto: a new `Validation` message, plus two additive fields.** `kno/v1/validation.proto` is
+  new, so `buf breaking` has nothing to compare it against. `PortfolioEntry.content_hash`
+  (optional, field 6) is written by Select and checked by Validate, so a Pool edited between the
+  two stages is refused **before any spend** rather than producing a number about a set that no
+  longer exists. `Capabilities.context_set_inject` (field 7) is how an agent adapter declares it
+  can take a whole Portfolio in one call — every `ContextInjector` refuses a second Asset by
+  design, and that refusal protects the Value stage and is not being loosened.
+
+* **Store schema version 6** (additive): `validations` records what one Validate run measured,
+  and `holdout_uses` records that a Portfolio has met a holdout, keyed on
+  `(eval_fingerprint, select_run_id)` and written in the same transaction that creates the
+  Validate Run. The second table is the one-shot rule made durable — before it, "the Portfolio
+  meets the holdout exactly once" was prose in `docs/mental-model.md` and nothing enforced it.
+
 * **every stage reports what it spent, or says it could not.** `kno value` — the stage
   `DESIGN.md` sizes at $15–40 for a run against a baseline's fraction of a dollar — reported
   nothing about money in either rendering. It now carries the same spend block `kno baseline`
@@ -54,6 +101,12 @@ New keys. Nothing is renamed, removed or retyped; `spent_usd` keeps its v0.1 val
   the repair a consumer reaches for, `.spent_usd // 0`, reinstates the ambiguity on the reading
   side. So the documents say it positively. **The CI idiom is
   `map(select(.guarded) | .spent_usd_micros) | add`, never `// 0`.**
+* `kno validate --json` is new: `holdout_gain` with its `low`/`high`, `verdict`,
+  `control_score`/`treatment_score`, `dev_estimated_gain` and `shrinkage`,
+  `holdout_underpowered`, `holdout_uses`, `context_only`, `interaction_penalty_detected`, and
+  the standard `guarded` spend block. `kno report --json` gains a `validation` object, absent
+  when no Validate run was named — and `portfolio.validated_on_holdout`, which v0.1 hardcoded to
+  `false`, is now computed, so it says positively what the absent object says by omission.
 * `kno report --json` gains a `spend` object: one entry per metered run it names (baseline and
   value; select and export are absent rather than zero), plus `total_usd`, `total_usd_micros`,
   `total_llm_calls`, `incomplete`, and `no_metered_spend`.
@@ -63,6 +116,21 @@ New keys. Nothing is renamed, removed or retyped; `spent_usd` keeps its v0.1 val
 Why `spent_usd_micros` rather than retyping `spent_usd`: retyping a released key breaks every
 `jq` pipeline written against v0.1, and the recipe that samples it now lives in a repository this
 one cannot update in the same commit.
+
+### Migration notes
+
+- **`store.Store` gains four methods: `WriteValidation`, `Validation`, `RecordHoldoutUse` and
+  `HoldoutUses`.** This is a pre-1.0 interface break for anyone implementing `store.Store`
+  outside this repository — an existing implementation no longer satisfies the interface and
+  will not compile until it grows all four. The in-tree implementation and every fake are
+  updated. It is a break rather than an addition because `Store` is an interface, not a struct,
+  and there is no honest default: a `RecordHoldoutUse` that silently did nothing would turn the
+  one-shot rule into a suggestion, and `Validation` returning a zero value would make an
+  unvalidated Portfolio indistinguishable from a validated one that measured nothing.
+- **The store schema moves to version 6** (additive): two new tables, `validations` and
+  `holdout_uses`. Existing databases upgrade in place on open; no data is rewritten, and a run
+  recorded before this version simply has no validation row, which the report reads as "not yet
+  validated on holdout" rather than guessing.
 
 ### Documentation
 

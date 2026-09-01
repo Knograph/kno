@@ -2,6 +2,7 @@ package openaicompat
 
 import (
 	"fmt"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/knograph/kno/core"
@@ -70,25 +71,9 @@ func (a *Agent) injectable(asset *core.Asset) (string, error) {
 			Wrap(fmt.Errorf("openaicompat: this Agent already carries an injected Asset"))
 	}
 
-	content := asset.GetContent()
-	if len(content) == 0 {
-		// An empty Asset produces a request byte-identical to the control's, so
-		// every paired difference is exactly zero and the interval around it is
-		// tight. That is indistinguishable in the report from "measured, and
-		// inert" — the one conclusion this stage exists to reach honestly.
-		return "", errs.ErrInvalidInput.
-			WithFix("check the Pool: this Asset has no content to measure").
-			Wrap(fmt.Errorf("openaicompat: asset %s is empty", asset.GetId()))
-	}
-	if !utf8.Valid(content) {
-		// Asset.content is bytes and the request body is JSON. encoding/json
-		// replaces every invalid byte with U+FFFD, so the model would see
-		// something other than the Asset and the provider would bill three
-		// bytes where the estimate counted one — a reservation built from the
-		// wrong prompt, silently.
-		return "", errs.ErrInvalidInput.
-			WithFix("inject a text Asset; a binary one belongs in a knowledge index, not in a prompt").
-			Wrap(fmt.Errorf("openaicompat: asset %s is not valid UTF-8", asset.GetId()))
+	content, err := assetContent(asset)
+	if err != nil {
+		return "", err
 	}
 
 	// MaxPromptBytes bounds the CASE, and the Asset is charged on top — see
@@ -115,4 +100,118 @@ func (a *Agent) injectable(asset *core.Asset) (string, error) {
 	return string(content), nil
 }
 
-var _ core.ContextInjector = (*Agent)(nil)
+// assetContent reports one Asset's content as prompt bytes, or refuses it —
+// the checks that apply to any Asset entering a prompt regardless of how many
+// others ride alongside it: non-empty, valid UTF-8. Extracted out of
+// injectable so WithContext (one Asset) and WithContextSet (a whole
+// Portfolio) apply the identical rule to every Asset; a second hand-copied
+// version of these checks is exactly the drift that would let one path
+// accept an Asset the other refuses.
+//
+// The nil check and the "already carries an Asset" check stay with their
+// callers rather than moving here: nil has no content to report on (it is a
+// different failure, not a smaller instance of this one), and "already
+// carries" is a statement about the Agent, not about the Asset in hand.
+func assetContent(asset *core.Asset) ([]byte, error) {
+	content := asset.GetContent()
+	if len(content) == 0 {
+		// An empty Asset produces a request byte-identical to the control's, so
+		// every paired difference is exactly zero and the interval around it is
+		// tight. That is indistinguishable in the report from "measured, and
+		// inert" — the one conclusion this stage exists to reach honestly.
+		return nil, errs.ErrInvalidInput.
+			WithFix("check the Pool: this Asset has no content to measure").
+			Wrap(fmt.Errorf("openaicompat: asset %s is empty", asset.GetId()))
+	}
+	if !utf8.Valid(content) {
+		// Asset.content is bytes and the request body is JSON. encoding/json
+		// replaces every invalid byte with U+FFFD, so the model would see
+		// something other than the Asset and the provider would bill three
+		// bytes where the estimate counted one — a reservation built from the
+		// wrong prompt, silently.
+		return nil, errs.ErrInvalidInput.
+			WithFix("inject a text Asset; a binary one belongs in a knowledge index, not in a prompt").
+			Wrap(fmt.Errorf("openaicompat: asset %s is not valid UTF-8", asset.GetId()))
+	}
+	return content, nil
+}
+
+// WithContextSet returns an Agent that carries every Asset in assets, joined
+// in order, ahead of every Case.
+//
+// The receiver is unmodified and remains usable as the control arm — the
+// same contract as WithContext, for the same reason: Value measures a paired
+// difference, and mutating the receiver would make both arms carry the
+// Portfolio and every delta would report as zero, with an interval.
+//
+// A nil or empty slice is refused rather than answered: an Agent carrying no
+// Assets IS the control arm, so returning one here would measure the control
+// against itself and report the difference as zero, with an interval —
+// indistinguishable in the report from an honest null result.
+//
+// ORDER IS NOT RENEGOTIATED: assets are joined exactly as given, with "\n\n"
+// between them, because ORDER IS PART OF THE MEASUREMENT — see
+// core.ContextSetInjector. Every Asset is validated with the same rule
+// WithContext applies to one (present, non-empty, valid UTF-8), naming the
+// offending Asset's ID so the refusal is actionable.
+//
+// The whole joined payload is bound against --max-prompt-bytes ONCE, the same
+// way a single Asset is bound in injectable — not per Asset — because the set
+// rides as one system message and it is the WHOLE set that must fit ahead of
+// every Case.
+//
+// POSITION: like WithContext, the joined set is sent as its own system
+// message, immediately after the configured system prompt and ahead of the
+// Case's history and input. Providers cache on a PREFIX, and
+// [system][portfolio] is byte-identical across every holdout Case, so the
+// Portfolio's tokens are paid for once — from cache — instead of once per
+// Case in the holdout.
+func (a *Agent) WithContextSet(assets []*core.Asset) (core.Agent, error) {
+	if len(assets) == 0 {
+		return nil, errs.ErrInvalidInput.
+			WithFix("pass at least one Asset, or measure the un-injected Agent directly as the control").
+			Wrap(fmt.Errorf("openaicompat: no Assets to inject; an Agent carrying none " +
+				"is the control arm, and injecting an empty set would measure the " +
+				"control against itself and report the difference as zero, with an interval"))
+	}
+	if a.asset != "" {
+		return nil, errs.ErrInvalidInput.
+			WithFix("build the treatment arm from the un-injected Agent, which is also the control arm").
+			Wrap(fmt.Errorf("openaicompat: this Agent already carries an injected Asset"))
+	}
+
+	contents := make([]string, len(assets))
+	for i, asset := range assets {
+		if asset == nil {
+			return nil, fmt.Errorf("%w: openaicompat: there is no Asset at index %d of the set to inject",
+				errs.ErrInvalidInput, i)
+		}
+		content, err := assetContent(asset)
+		if err != nil {
+			return nil, err
+		}
+		contents[i] = string(content)
+	}
+	joined := strings.Join(contents, "\n\n")
+
+	total := len(a.system) + len(joined)
+	if total >= a.maxPrompt {
+		return nil, errs.ErrInvalidInput.WithFix(fmt.Sprintf(
+			"raise --max-prompt-bytes above %d, or measure a smaller Portfolio — note "+
+				"that raising it also raises the planned cost of every Case, so fewer "+
+				"run concurrently under a cost cap", total,
+		)).
+			Wrap(fmt.Errorf("openaicompat: the %d-Asset Portfolio is %d bytes and the "+
+				"system prompt is %d, together past the --max-prompt-bytes ceiling of "+
+				"%d that bounds what may ride on every Case", len(assets), len(joined), len(a.system), a.maxPrompt))
+	}
+
+	injected := *a
+	injected.asset = joined
+	return &injected, nil
+}
+
+var (
+	_ core.ContextInjector    = (*Agent)(nil)
+	_ core.ContextSetInjector = (*Agent)(nil)
+)

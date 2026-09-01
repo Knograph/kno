@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"hash/fnv"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -41,6 +42,11 @@ type Agent struct {
 	// so a Value test can assert the treatment arm carried the Asset and the
 	// control arm did not — which is the entire measurement.
 	injected sync.Map
+
+	// prefixes records the distinct set-injection prompt prefixes observed, so
+	// a Validate test can assert there was exactly ONE across the whole
+	// holdout. Used as a set; the value is always true.
+	prefixes sync.Map
 }
 
 // Options configures the fake.
@@ -194,10 +200,16 @@ func (a *Agent) resolvedModel() string {
 // and claiming one would let a valuation run report a mode it never used.
 func (a *Agent) Capabilities() *core.Capabilities {
 	return &knov1.Capabilities{
-		ContextInject:  true,
-		KnowledgeWrite: false,
-		Stream:         false,
-		TokenCounts:    true,
+		ContextInject: true,
+		// Set injection is the same mechanism as single-Asset injection here —
+		// one recorded payload ahead of the Case — so declaring it is not a
+		// claim about a second machinery. Validate refuses an agent that does
+		// not declare it, before any spend, because an adapter that answered
+		// anyway would measure both arms without the Portfolio.
+		ContextSetInject: true,
+		KnowledgeWrite:   false,
+		Stream:           false,
+		TokenCounts:      true,
 	}
 }
 
@@ -205,6 +217,43 @@ func (a *Agent) Capabilities() *core.Capabilities {
 // what makes the treatment arm the treatment arm.
 func (a *Agent) WithContext(asset *core.Asset) (core.Agent, error) {
 	return &contextAgent{inner: a, asset: asset}, nil
+}
+
+// WithContextSet wraps the agent so the whole Portfolio travels with every
+// Invoke, which is what makes Validate's treatment arm the treatment arm.
+//
+// An empty set is REFUSED rather than answered. An Agent carrying no Assets is
+// the control arm: returning one here would make Validate measure the control
+// against itself, report a paired difference of exactly zero, and put a tight
+// interval around it — which reads in the report as "measured, and inert", the
+// one conclusion the stage exists to reach honestly.
+//
+// The recorded prefix is the joined content in the GIVEN order, so a test can
+// pin the prefix-cache property Validate relies on: providers cache on a
+// prefix, and a Portfolio prefix that is byte-identical across every holdout
+// Case is the difference between paying for the set's tokens once and paying
+// for them once per Case.
+func (a *Agent) WithContextSet(assets []*core.Asset) (core.Agent, error) {
+	if len(assets) == 0 {
+		return nil, errs.ErrInvalidInput.
+			WithFix("validate a Portfolio that selected at least one Asset").
+			Wrap(fmt.Errorf("fake: there is no Portfolio to inject; an Agent carrying " +
+				"no Assets is the control arm"))
+	}
+	var b strings.Builder
+	ids := make([]string, 0, len(assets))
+	for i, asset := range assets {
+		if asset == nil {
+			return nil, errs.ErrInvalidInput.Wrap(
+				fmt.Errorf("fake: the Portfolio holds a nil Asset at position %d", i))
+		}
+		if i > 0 {
+			b.WriteString("\n\n")
+		}
+		b.Write(asset.GetContent())
+		ids = append(ids, asset.GetId())
+	}
+	return &contextSetAgent{inner: a, ids: ids, prefix: b.String()}, nil
 }
 
 // contextAgent is the injected wrapper: it records the injection and
@@ -222,6 +271,51 @@ func (c *contextAgent) Invoke(ctx context.Context, cs *core.Case) (*core.Respons
 
 func (c *contextAgent) Capabilities() *core.Capabilities {
 	return c.inner.Capabilities()
+}
+
+// contextSetAgent is Validate's injected wrapper: it records the injection for
+// every Asset in the set, records the prompt prefix it would send, and
+// delegates the call.
+//
+// The prefix is recorded rather than sent because the fake makes no request.
+// It is what TestPortfolioPrefixIsByteIdenticalAcrossCases reads, so the
+// property the real adapters rely on — one stable prefix for the whole
+// holdout — is pinned against something rather than asserted about nothing.
+type contextSetAgent struct {
+	inner  *Agent
+	ids    []string
+	prefix string
+}
+
+func (c *contextSetAgent) Invoke(ctx context.Context, cs *core.Case) (*core.Response, error) {
+	for _, id := range c.ids {
+		n, _ := c.inner.injected.LoadOrStore(id, new(atomic.Int64))
+		n.(*atomic.Int64).Add(1)
+	}
+	c.inner.prefixes.Store(c.prefix, true)
+	return c.inner.Invoke(ctx, cs)
+}
+
+func (c *contextSetAgent) Capabilities() *core.Capabilities {
+	return c.inner.Capabilities()
+}
+
+// Prefixes returns the distinct request prefixes the injected wrappers used,
+// sorted.
+//
+// One entry means the Portfolio prefix was byte-identical across every Case it
+// answered, which is the prefix-cache property Validate's set injection exists
+// to preserve. More than one means someone reordered or re-rendered the set
+// per Case and quietly multiplied the bill by the holdout size.
+func (a *Agent) Prefixes() []string {
+	var out []string
+	a.prefixes.Range(func(k, _ any) bool {
+		s, _ := k.(string)
+		out = append(out, s)
+		return true
+	})
+	sort.Strings(out)
+	return out
 }
 
 // Injected returns how many measurements ran with the named Asset in context.
@@ -267,6 +361,8 @@ func Wrong(share float64) func(c *core.Case) string {
 }
 
 var (
-	_ core.Agent   = (*Agent)(nil)
-	_ core.Capable = (*Agent)(nil)
+	_ core.Agent              = (*Agent)(nil)
+	_ core.Capable            = (*Agent)(nil)
+	_ core.ContextInjector    = (*Agent)(nil)
+	_ core.ContextSetInjector = (*Agent)(nil)
 )
