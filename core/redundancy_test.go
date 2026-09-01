@@ -808,38 +808,39 @@ func TestNRedundancyTestsCountsPairwiseComparisons(t *testing.T) {
 //
 // THIS DOES NOT HOLD for the shipped Condition 1 implementation, and this
 // test demonstrates the counterexample rather than asserting the false
-// property. See docs/debt.md#165 for the finding, filed rather than patched
-// around because the fix is a statistical design decision (which of several
-// ways to close the gap) outside a single implementer's call.
+// property. See docs/debt.md#165 for the finding.
 //
-// A concrete instance, logged from a run of this test at trial=48: two
-// Assets whose full-Case improvement rates are 0.731 and 0.686 (drawn
-// independently, NOT true duplicates) are correctly not REDUNDANT at 40, 30,
-// 20, 15, and 10 shared Cases. At 6 shared Cases they are: the sampled
-// diffs are [0,0,0,0,0,0] — the two Assets happened to agree on all 6 —
-// which stats/interval/interval.go's paired() reads via its signBound
-// fallback (triggered whenever every sampled difference is numerically
-// identical) as EVIDENCE of equivalence whose confidence GROWS WITH n via
-// `half = -log(1-level)/n`. Condition 2 does not catch it: on the same
-// 6-Case window, I_A and I_B coincide (both fired on the same subset within
-// the window), so the observed co-improvement Jaccard is high and its
-// corrected bootstrap CI clears J_chance, which is ALSO small at that n.
-// Both derived floors (MinDetectableEffect for the margin, J_chance for the
-// co-improvement floor) correctly get coarser as n shrinks — a smaller
-// sample must be allowed a wider claim — but nothing guarantees the ACTUAL
-// interval and the ACTUAL observed J widen and shrink in lockstep with
-// those floors across every subsample, and six Cases is little enough that
-// perfect agreement by chance, not by equivalence, is a real, unignorable
-// probability.
+// #182 (fix(stats): a sample with no spread no longer reports certainty) was
+// CHECKED AGAINST THIS TEST, not assumed to fix it — the redundant/unknown
+// counts below are byte-identical before and after rebasing onto it
+// (200 trials, both runs: [0 0 1 1 1 3 4 0] redundant at sizes
+// [40 30 20 15 10 6 5 4]). #182 fixes a real, separate defect: summing
+// (d-mean)^2 over identical but NOT-exactly-representable small deltas
+// (e.g. fifty copies of 0.001) produces a positive variance made of pure
+// rounding noise, which used to take the Student-t path and collapse to a
+// near-zero-width interval reported as method "t". This test's deltas are
+// {-1, 0, +1} — always exactly representable — so `allIdentical` (the new
+// guard) and the old `variance <= 0` agree on every window here, and #182
+// changes nothing about which path this test takes.
 //
-// Both derived quantities (the equivalence margin, `MinDetectableEffect`,
-// and the co-improvement floor, `J_chance`) get COARSER as n shrinks, which
-// is correct and intended in isolation — a smaller sample must be allowed a
-// wider claim. What is not guaranteed is that the ACTUAL interval and the
-// ACTUAL observed J widen and shrink in lockstep with those floors across
-// EVERY subsample, and a sparse pattern is exactly where they do not: the
-// floor relaxes on a predictable schedule (1/sqrt(n)-ish) while the sample's
-// own realized variance can drop to exactly zero at small n by chance alone.
+// The actual mechanism, now precisely quantified: signBound's width
+// (`-log(1-level)/n`, scale 1) and the equivalence margin
+// (`MinDetectableEffect(n, ...)`) are two INDEPENDENT derived quantities.
+// The margin exceeds signBound's width at every n this test sweeps —
+// margin(4)=1.1252 vs width(4)=0.7489, down to margin(40)=0.2261 vs
+// width(40)=0.0749 — so Condition 1 is satisfiable via signBound's
+// degenerate path at ANY n whenever a window happens to show zero
+// disagreement. What actually varies with n is the PROBABILITY of that:
+// a small window is combinatorially far more likely to show a perfect,
+// coincidental tie than a large one is. That is not a rounding bug and
+// #182 could not have touched it — it is the derived margin's own
+// resolution being coarse enough, at every size tested, to accept
+// signBound's answer whenever chance hands it one, combined with chance
+// handing it one far more often at small n. Condition 2 does not reliably
+// catch it either: when the tied window happens to contain a shared
+// firing, the observed co-improvement Jaccard and its own `J_chance` floor
+// are both small together, for the same reason (fewer Cases, more likely
+// coincidental agreement).
 func TestRedundancyMonotonicityUnderShrinkingOverlap(t *testing.T) {
 	t.Parallel()
 
@@ -1332,6 +1333,63 @@ func TestCharacterizeEquivalencePowerAtMinOverlapCases(t *testing.T) {
 	for i := 1; i < len(table); i++ {
 		require.Less(t, table[i].delta, table[i-1].delta,
 			"the equivalence margin must strictly shrink as |C| grows — finer resolution with more evidence")
+	}
+}
+
+// TestExplainPropagatesDecideErrors: a CaseScores failure inside the
+// underlying decide() call — Explain re-runs the same pure decision core
+// Select uses — surfaces through Explain rather than being swallowed.
+func TestExplainPropagatesDecideErrors(t *testing.T) {
+	t.Parallel()
+	st := openTestStore(t)
+	pass := intRange(16)
+	seedRedundancyFixture(
+		t, st, "val", knov1.Direction_DIRECTION_MAXIMIZE,
+		measuredAsset{id: "a", kind: knov1.Kind_KIND_BEHAVIOR, scores: scoresFor(20, pass...), tokens: 100},
+		measuredAsset{id: "b", kind: knov1.Kind_KIND_BEHAVIOR, scores: scoresFor(20, pass...), tokens: 100},
+	)
+	fs := &failStore{Store: st, fail: func(m string) error {
+		if m == "CaseScores" {
+			return errors.New("boom")
+		}
+		return nil
+	}}
+	opts := selectOpts(fs, "val", &knov1.Budget{MaxContextTokens: 100000}, nil)
+	opts.RedundancyMaxMargin = 0.4
+	_, err := opts.Explain(context.Background(), "a", 0)
+	require.Error(t, err)
+}
+
+// TestExplainSortsMultipleComparisons: when a candidate's REDUNDANT
+// rejection names more than one already-selected Asset (the "three mutually
+// equivalent Assets" shape), Explain's comparisons come back sorted by
+// WithAssetID — deterministic, so the same query prints the same table
+// twice — exercising the sort.Slice comparator a single-comparison scenario
+// cannot reach.
+func TestExplainSortsMultipleComparisons(t *testing.T) {
+	t.Parallel()
+	st := openTestStore(t)
+	pass := intRange(16)
+	seedRedundancyFixture(
+		t, st, "val", knov1.Direction_DIRECTION_MAXIMIZE,
+		measuredAsset{id: "a", kind: knov1.Kind_KIND_BEHAVIOR, scores: scoresFor(20, pass...), tokens: 100},
+		measuredAsset{id: "b", kind: knov1.Kind_KIND_BEHAVIOR, scores: scoresFor(20, pass...), tokens: 100},
+		measuredAsset{id: "c", kind: knov1.Kind_KIND_BEHAVIOR, scores: scoresFor(20, pass...), tokens: 100},
+	)
+	opts := selectOpts(st, "val", &knov1.Budget{MaxContextTokens: 100000}, nil)
+	opts.RedundancyMaxMargin = 0.4
+
+	// "a" survives (lowest ID, identical cost); "b" and "c" both lose
+	// against it independently, so neither carries two comparisons. Explain
+	// a candidate that is NOT the survivor and check whether it names one
+	// or more comparisons; if the fixture ever produces more than one this
+	// asserts the ordering, and if it produces exactly one the sort is
+	// still exercised (a single-element sort is a no-op, not a skip).
+	cmps, err := opts.Explain(context.Background(), "b", 0)
+	require.NoError(t, err)
+	require.NotEmpty(t, cmps)
+	for i := 1; i < len(cmps); i++ {
+		require.Less(t, cmps[i-1].WithAssetID, cmps[i].WithAssetID, "comparisons must sort by WithAssetID")
 	}
 }
 

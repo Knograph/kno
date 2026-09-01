@@ -879,6 +879,24 @@ func (f *failStore) GetRun(ctx context.Context, id string) (*knov1.Run, error) {
 	return f.Store.GetRun(ctx, id)
 }
 
+func (f *failStore) CaseScores(ctx context.Context, id string) (map[string]store.CaseScore, error) {
+	if f.fail != nil {
+		if err := f.fail("CaseScores"); err != nil {
+			return nil, err
+		}
+	}
+	return f.Store.CaseScores(ctx, id)
+}
+
+func (f *failStore) Measurements(ctx context.Context, runID, assetID string) ([]store.RecordedMeasurement, error) {
+	if f.fail != nil {
+		if err := f.fail("Measurements"); err != nil {
+			return nil, err
+		}
+	}
+	return f.Store.Measurements(ctx, runID, assetID)
+}
+
 func (f *failStore) Valuations(ctx context.Context, id string) ([]*Valuation, error) {
 	if f.fail != nil {
 		if err := f.fail("Valuations"); err != nil {
