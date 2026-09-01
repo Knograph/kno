@@ -190,6 +190,27 @@ covenants — breaking any of them requires a major version.
 
 ### Fixed
 
+- **A budget cap reached while a dedicated endpoint was hosting did not stop
+  the spending.** `bridge`'s hosting ticker settled minutes forward through
+  the budget guard and discarded the result as `_, _ =`. When the guard
+  refused — the cap reached mid-hosting — nothing observed it: the endpoint
+  went on billing by the minute until the measurement finished on its own.
+  Prime directive 4, and invisible to `errcheck`, because an explicit
+  two-blank discard is not an unchecked error.
+
+  The ticker now reports its first settle error and cancels the measurement's
+  context on a refusal, so the in-flight measurement returns and the deferred
+  teardown runs immediately rather than after work nobody can pay for. The
+  ticker itself keeps the parent context and goes on settling the minutes
+  actually consumed between refusal and teardown — those are real charges,
+  and recording them as orphan spend is the honest treatment; cancelling the
+  ticker too would simply lose them.
+
+  Pinned by `TestReachingTheCapMidServeStopsTheMeasurementAndTearsDown`,
+  verified failing without the fix with a measurement that never returns.
+
+### Fixed
+
 - **`kno export --destination tuning_set` produced files no provider can train
   on.** `renderTuningSet` emitted one `user` message per Asset and no
   `assistant` turn — every line was
