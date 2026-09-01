@@ -158,7 +158,7 @@ Scores and traces are recorded. `kno purge` removes trace content when you no lo
 **3. Write a pool of candidate assets:**
 
 ```jsonl
-{"id":"refund-policy-v3","content":"Refunds are processed within 5 business days.","kind":"knowledge"}
+{"id":"refund-policy-v3","content":"Refunds are issued within 5 business days.","kind":"knowledge"}
 {"id":"refund-example-17","content":"Example: a 30-day-old refund request is declined.","kind":"knowledge"}
 {"id":"brand-guide","content":"Use sentence case everywhere.","kind":"knowledge"}
 ```
