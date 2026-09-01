@@ -232,3 +232,40 @@ jobs:
           GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
         run: |
           ./scripts/fold-changelog.sh "$GITHUB_REF_NAME"
+
+      - name: Tell the website a release happened
+        # kno-www renders docs/status.json at a PINNED ref, so its page can say
+        # "as of v0.1.4" and mean it. Something has to move that pin, and its
+        # workflow (uknoAI/kno-www/.github/workflows/kno-release.yml) has always
+        # named this step as the thing that would — "kno's release workflow can
+        # notify us directly; see the dispatch note in that repo." There was no
+        # dispatch note and no step. Only its nightly 06:17 UTC cron ever fired,
+        # so the site lagged a release by up to a day while a comment in the
+        # other repo described a mechanism nobody had built.
+        #
+        # `if: always()` and the `|| true`, deliberately: this is the suspender,
+        # not the belt. The cron is the guarantee and it costs nothing to wait
+        # for; a release that has already published signed artifacts must not go
+        # red because a cross-repo token is missing, expired, or scoped without
+        # access to kno-www. A failed notification loses hours of freshness. A
+        # failed release loses the release.
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -uo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "no token for the cross-repo dispatch; kno-www's nightly cron"
+            echo "will move the pin within 24h. Not a release failure."
+            exit 0
+          fi
+          if gh api -X POST repos/uknoAI/kno-www/dispatches \
+              -f event_type=kno-release \
+              -f "client_payload[tag]=$TAG"; then
+            echo "notified kno-www to pin $TAG"
+          else
+            echo "::warning::could not notify kno-www of $TAG — its nightly cron"
+            echo "::warning::will move the pin within 24h. Check that the token"
+            echo "::warning::still has contents:write on uknoAI/kno-www."
+          fi
