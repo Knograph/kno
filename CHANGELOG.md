@@ -89,6 +89,30 @@ covenants — breaking any of them requires a major version.
 
 ### Changed
 
+- **`DESTINATION_KNOWLEDGE_BASE` is now reachable through routing, not only
+  through an Asset pinning its own `destination` by hand** (docs/debt.md#133,
+  partial repayment). `core.destinationFor` now consults the measuring
+  `Valuation`'s `InjectionMode`: a `KIND_KNOWLEDGE` Asset measured in
+  `INJECTION_MODE_KNOWLEDGE` routes to `DESTINATION_KNOWLEDGE_BASE`; the same
+  Asset measured in `INJECTION_MODE_CONTEXT` (or with no mode recorded, the
+  default) keeps routing to `DESTINATION_CONTEXT`, exactly as before.
+  `KIND_BEHAVIOR` is unaffected — it always routes to the tuning set — and an
+  explicit `Asset.destination` still wins over both kind and mode.
+
+  This is the routing **mechanism** only. It does not yet make the
+  Destination reachable in a real `kno value` run: nothing in the tree sets
+  `InjectionMode_INJECTION_MODE_KNOWLEDGE` today — `core/value_measure.go`
+  hardcodes context mode unconditionally — so `destinationFor` can now select
+  the knowledge base but no run currently hands it a Valuation that would
+  trigger it. Wiring that (the `core.KnowledgeInjector` measurement wrapper,
+  invoked from Value whenever a `--kb` target is supplied) is deliberately
+  **not** done here: it is gated on docs/debt.md#78's measurement-design half
+  (splitting the baseline's trials across the routed sample), which needs its
+  own Phase-0/Phase-1-reviewed plan landing first per
+  `docs/plans/2026-08-31-knowledge-injection.md`, and that plan does not
+  exist yet. See docs/debt.md#133 for the full disposition and its
+  repayment trigger.
+
 - **The cookbook migration is finished: `calibrate-a-judge` has moved, and no
   recipe lives in this repository any more.** `docs/cookbook/calibrate-a-judge.md`
   is now a one-line tombstone pointing at

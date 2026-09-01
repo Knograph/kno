@@ -593,15 +593,28 @@ func overBudget(v *Valuation, asset *Asset, dest knov1.Destination, budget *knov
 }
 
 // destinationFor is the mechanism routing this stage applies: the Asset's own
-// destination when the pool supplied one, else the kind's home.
+// destination when the pool supplied one, else the kind's home — and for
+// knowledge Kind, the home follows the InjectionMode that produced the
+// number (docs/debt.md#133). A context-mode delta is a claim about being in
+// the prompt, so its Destination is the prompt; a knowledge-mode delta is a
+// claim about being retrieved, so its Destination is the index. Routing a
+// context-bound Asset into a knowledge base would apply an upper bound
+// through a retriever that was never measured — the exact conflation
+// InjectionMode exists as a required field to prevent. KIND_BEHAVIOR is
+// unaffected by mode: it always routes to the tuning set.
 func destinationFor(asset *Asset, v *Valuation) knov1.Destination {
 	if asset != nil {
 		if d := asset.GetDestination(); d != knov1.Destination_DESTINATION_UNSPECIFIED {
 			return d
 		}
 	}
-	if kindOf(v) == knov1.Kind_KIND_BEHAVIOR {
+	switch kindOf(v) {
+	case knov1.Kind_KIND_BEHAVIOR:
 		return knov1.Destination_DESTINATION_TUNING_SET
+	case knov1.Kind_KIND_KNOWLEDGE:
+		if v.GetMode() == knov1.InjectionMode_INJECTION_MODE_KNOWLEDGE {
+			return knov1.Destination_DESTINATION_KNOWLEDGE_BASE
+		}
 	}
 	return knov1.Destination_DESTINATION_CONTEXT
 }

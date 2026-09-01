@@ -1088,6 +1088,73 @@ func TestSelectBudgetKnowledgeBaseCap(t *testing.T) {
 	require.Contains(t, rejectionDetailOf(res.Portfolio, "b"), "allowed bytes")
 }
 
+// TestDestinationFor pins docs/debt.md#133's routing-mechanism repayment: a
+// knowledge Kind Asset's Destination follows the InjectionMode that produced
+// its Valuation, so DESTINATION_KNOWLEDGE_BASE is reachable through routing
+// rather than only through an Asset pinning its own destination by hand.
+func TestDestinationFor(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		kind knov1.Kind
+		mode knov1.InjectionMode
+		want knov1.Destination
+	}{
+		{
+			name: "knowledge asset measured in knowledge mode routes to the knowledge base",
+			kind: knov1.Kind_KIND_KNOWLEDGE,
+			mode: knov1.InjectionMode_INJECTION_MODE_KNOWLEDGE,
+			want: knov1.Destination_DESTINATION_KNOWLEDGE_BASE,
+		},
+		{
+			name: "knowledge asset measured in context mode keeps routing to context",
+			kind: knov1.Kind_KIND_KNOWLEDGE,
+			mode: knov1.InjectionMode_INJECTION_MODE_CONTEXT,
+			want: knov1.Destination_DESTINATION_CONTEXT,
+		},
+		{
+			name: "knowledge asset with no recorded mode defaults to context",
+			kind: knov1.Kind_KIND_KNOWLEDGE,
+			mode: knov1.InjectionMode_INJECTION_MODE_UNSPECIFIED,
+			want: knov1.Destination_DESTINATION_CONTEXT,
+		},
+		{
+			name: "unclassified asset behaves like knowledge kind",
+			kind: knov1.Kind_KIND_UNSPECIFIED,
+			mode: knov1.InjectionMode_INJECTION_MODE_KNOWLEDGE,
+			want: knov1.Destination_DESTINATION_KNOWLEDGE_BASE,
+		},
+		{
+			name: "behavior asset always routes to the tuning set, mode ignored",
+			kind: knov1.Kind_KIND_BEHAVIOR,
+			mode: knov1.InjectionMode_INJECTION_MODE_KNOWLEDGE,
+			want: knov1.Destination_DESTINATION_TUNING_SET,
+		},
+		{
+			name: "behavior asset in context mode still routes to the tuning set",
+			kind: knov1.Kind_KIND_BEHAVIOR,
+			mode: knov1.InjectionMode_INJECTION_MODE_CONTEXT,
+			want: knov1.Destination_DESTINATION_TUNING_SET,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			v := &Valuation{Kind: tt.kind, Mode: tt.mode}
+			require.Equal(t, tt.want, destinationFor(nil, v))
+		})
+	}
+
+	t.Run("explicit asset destination wins over both kind and mode", func(t *testing.T) {
+		t.Parallel()
+		v := &Valuation{Kind: knov1.Kind_KIND_KNOWLEDGE, Mode: knov1.InjectionMode_INJECTION_MODE_KNOWLEDGE}
+		asset := &Asset{Id: "a", Destination: knov1.Destination_DESTINATION_CONTEXT}
+		require.Equal(t, knov1.Destination_DESTINATION_CONTEXT, destinationFor(asset, v))
+	})
+}
+
 // TestSelectAppendFailsMidRun: an AppendEvent failure after the run started
 // surfaces with the event named — the run cannot finish with a missing
 // portfolio-selected or run-finished record.
