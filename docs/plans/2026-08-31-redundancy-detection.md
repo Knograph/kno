@@ -445,8 +445,37 @@ Numbered, testable, each naming an observable.
 17. Select still makes no LLM call, constructs no `Agent`, and creates no budget guard: asserted
     by the same transport guard, so the "pure function of the store" property is a test, not a
     comment.
-18. The holdout canary still passes: Select reads Valuations and Measurements from dev-side runs
-    only, and `--explain` reads the same. No new store reader touches a `SPLIT_HOLDOUT` Case.
+18. **Select reads `Measurements` only for the gated Value run and `CaseScores` only for that
+    run's recorded `baseline_run_id`** *(F5)*. The canary fails on any other run ID, including a
+    Validate run's, and `--explain` reads the same two runs.
+
+    This criterion was written as "the holdout canary still passes", and the implementation
+    workstream stopped rather than satisfy it, correctly, because it was false in both
+    directions.
+
+    *Downward:* the canary forbade `CaseScores` **by name**, and this plan needs `CaseScores` to
+    reconstruct per-Case control deltas under `PAIRING_SCHEME_RECORDED_BASELINE` — the default
+    here, since `AssetRouting.FreshControlArm` is false under `ModeAllDev`. Satisfying the
+    criterion as written would have meant editing a holdout-isolation test until something
+    passed. That is the one edit this repository must never make casually.
+
+    *Upward, and worse:* `Measurements` was **not** forbidden, and `kno validate` writes holdout
+    results there (`core/validate_loop.go`'s `RecordMeasurement`, read back by
+    `core/validate_measure.go`). So Select gaining a `Measurements` reader — which this plan
+    also requires — would have acquired a holdout-capable reader **while the canary went
+    green**. The criterion's guarantee was vacuous exactly where it had just started to matter.
+
+    The fix is not in this plan's scope and landed separately (#171): the canary is scoped to a
+    run ID rather than a method name, which is strictly stronger than what it replaced, since
+    `Measurements` was previously unguarded. Implementation of this plan **depends on #171** and
+    must seed a `baseline_run_id` on the canary's Value run rather than relax the guard.
+
+    The reason a run-scoped guard is sufficient — and it belonged in this plan from the start,
+    since nothing enforced it and it was carried only in reviewers' heads: Baseline takes a
+    `*SealedEvals` (`core/baseline.go`), and Select gates its source run to `STAGE_VALUE`. The
+    seal is what keeps holdout Cases out of the Value run's measurement rows in the first
+    place; the canary's job is to catch a reader that reaches **past** that run, which is a
+    foreign run ID and nothing else.
 19. A store whose measurement rows are `Unrecoverable` (purged) for one Asset yields `UNKNOWN`
     for every pair involving it — never a delta computed against a zero standing in for a
     missing number (`store.RecordedMeasurement.Unrecoverable`).
@@ -651,10 +680,20 @@ deletes cleanly.
   that on a default run many pairs will be `UNKNOWN` because routing does not aim for overlap
   *(F4)*; the data-dependent multiplicity caveat; and that resolving a duplicate pair by
   cost removes one noise-driven choice, not the winner's curse.
-- **`docs/cookbook/select-a-portfolio.md`** — reading a redundancy rejection, and
-  `kno select --explain`.
-- **`docs/cookbook/export-a-tuning-set.md`** — behavior redundancy is now detected; what that
-  does to the example cap.
+- **The two cookbook recipes now live in `uknoAI/kno-examples`, not in this repo.** #163 moved
+  the cookbook out and left one-line tombstones behind, after this plan was written. Editing
+  `docs/cookbook/select-a-portfolio.md` or `docs/cookbook/export-a-tuning-set.md` in place would
+  overwrite a tombstone and be caught by `scripts/cookbook-stub-check.sh`, which asserts each is
+  one line and one link. The recipe changes are a **companion PR against
+  `uknoAI/kno-examples`**, opened from the same branch-point and linked from this PR's body:
+  - `recipes/select-a-portfolio.md` — reading a redundancy rejection, and `kno select --explain`.
+  - `recipes/export-a-tuning-set.md` — behavior redundancy is now detected; what that does to
+    the example cap.
+
+  This is the second workstream to be stopped by a cookbook path that was accurate when its plan
+  was written. The general rule, worth stating once: **a plan's docs-impact paths are resolved at
+  implementation time, not trusted from the plan.** Any path a plan names may have moved between
+  Phase 0 and Phase 2, and in a repo that migrates docs to sibling repositories it will.
 - **`docs/mental-model.md`** — the Select stage's rule list.
 - **`CHANGELOG.md`** under `Unreleased`, flagged as a behavior change: a poolless Select now
   emits `REDUNDANT` rejections it did not emit before — and saying plainly that under default
