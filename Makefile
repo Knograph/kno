@@ -501,7 +501,8 @@ docs: status-check ## Regenerate OpenAPI, check godoc coverage, verify links, ga
 	@$(SAFE) ./scripts/fixture-consistency.sh
 	@$(call pending,OpenAPI generation,the first proto service definition)
 	@$(SAFE) broken=0; checked=0; \
-	for f in $$(find . -name '*.md' -not -path './bin/*' -not -path './.git/*'); do \
+	for f in $$(find . -name '*.md' -not -path './bin/*' -not -path './.git/*' \
+		-not -path './.claude/*' -not -path './node_modules/*'); do \
 		dir=$$(dirname "$$f"); \
 		for target in $$(grep -oE '\]\([^)[:space:]]+\)' "$$f" 2>/dev/null \
 			| sed -e 's/^](//' -e 's/)$$//'); do \
