@@ -476,6 +476,11 @@ func (o SelectOptions) runGreedy(
 				RedundantWithAssetIds: outcome.withIDs,
 				RedundancyEvidence:    outcome.evidence,
 			})
+			// Decided, and not selected: its delta vector is never read
+			// again this pass. See caseDeltaReader.forget's own doc for why
+			// this bounds memory at pool scale rather than materializing
+			// every Asset's vector for the whole run.
+			reader.forget(v.GetAssetId())
 			continue
 		}
 		if len(outcome.evictIDs) > 0 {
@@ -488,6 +493,9 @@ func (o SelectOptions) runGreedy(
 					RedundantWithAssetIds: []string{v.GetAssetId()},
 					RedundancyEvidence:    []*knov1.RedundancyEvidence{outcome.evictEvidence[id]},
 				})
+				// The evicted Asset is no longer in selectedAssets, so
+				// nothing will compare against it again this pass.
+				reader.forget(id)
 			}
 		}
 
@@ -496,6 +504,7 @@ func (o SelectOptions) runGreedy(
 				AssetId: v.GetAssetId(), Reason: knov1.RejectionReason_REJECTION_REASON_COST_DOMINATED,
 				Detail: over, Valuation: v,
 			})
+			reader.forget(v.GetAssetId())
 			continue
 		}
 		if asset != nil && kindOf(v) == knov1.Kind_KIND_KNOWLEDGE && dest == knov1.Destination_DESTINATION_TUNING_SET {
@@ -504,6 +513,7 @@ func (o SelectOptions) runGreedy(
 				Detail:    "a knowledge Asset in the tuning set would be unreliably retained and cannot be patched when stale",
 				Valuation: v,
 			})
+			reader.forget(v.GetAssetId())
 			continue
 		}
 

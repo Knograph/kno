@@ -4,10 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"math"
+	"math/rand"
+	"reflect"
 	"testing"
 
 	knov1 "github.com/knograph/kno/gen/kno/v1"
+	"github.com/knograph/kno/stats/budget"
 	"github.com/knograph/kno/store"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite" // pure-Go driver, matching store's own
@@ -389,7 +393,7 @@ func TestCostTieBreakInsideBiasBandFallsToAssetID(t *testing.T) {
 	ev := res.Portfolio.GetRejected()[0].GetRedundancyEvidence()
 	require.NotEmpty(t, ev)
 	require.Equal(t, knov1.RedundancyDecidedBy_REDUNDANCY_DECIDED_BY_ID, ev[0].GetDecidedBy())
-	require.InDelta(t, 500.0/300.0, ev[0].GetCostRatio(), 1e-9)
+	require.InDelta(t, 500.0/300.0, ev[0].GetCostRatio(), 5e-5) // rounded to 4 places at the source
 }
 
 // TestRedundancyDeterminismAcrossRuns is acceptance criterion 12: two
@@ -774,12 +778,136 @@ func TestNRedundancyTestsCountsPairwiseComparisons(t *testing.T) {
 	res, err := runSelect(t, opts)
 	require.NoError(t, err)
 
-	require.Equal(t, int32(2), res.Portfolio.GetNRedundancyTests())
+	n := res.Portfolio.GetNRedundancyTests()
+	require.Equal(t, int32(2), n)
+
+	// Acceptance criterion 14, the exact formula: every difference_interval
+	// (and, since interval.Percentile carries its Level through verbatim,
+	// every co_improvement_interval) level equals 1 - (1-level)/n_redundancy_tests
+	// — not merely "wider than uncorrected", which a bug that under-corrects
+	// could still satisfy.
+	wantLevel := 1 - (1-defaultLevel)/float64(n)
 	for _, rej := range res.Portfolio.GetRejected() {
-		iv := rej.GetRedundancyEvidence()[0].GetDifferenceInterval()
-		require.NotNil(t, iv)
-		require.Greater(t, iv.GetLevel(), 0.95, "corrected for 2 tests, the level must exceed the uncorrected 0.95")
+		ev := rej.GetRedundancyEvidence()[0]
+		diffIv := ev.GetDifferenceInterval()
+		require.NotNil(t, diffIv)
+		require.InDelta(t, wantLevel, diffIv.GetLevel(), 1e-12,
+			"difference_interval.level must equal 1-(1-level)/n_redundancy_tests exactly")
+
+		coIv := ev.GetCoImprovementInterval()
+		require.NotNil(t, coIv)
+		require.InDelta(t, wantLevel, coIv.GetLevel(), 1e-12,
+			"co_improvement_interval.level must equal 1-(1-level)/n_redundancy_tests exactly")
 	}
+}
+
+// TestRedundancyMonotonicityUnderShrinkingOverlap is acceptance criterion 4
+// AS THE PLAN STATES IT: over many seeded synthetic pairs, shrinking the
+// shared slice must never increase the number of REDUNDANT verdicts and must
+// never decrease the number of UNKNOWN ones.
+//
+// THIS DOES NOT HOLD for the shipped Condition 1 implementation, and this
+// test demonstrates the counterexample rather than asserting the false
+// property. See docs/debt.md#165 for the finding, filed rather than patched
+// around because the fix is a statistical design decision (which of several
+// ways to close the gap) outside a single implementer's call.
+//
+// A concrete instance, logged from a run of this test at trial=48: two
+// Assets whose full-Case improvement rates are 0.731 and 0.686 (drawn
+// independently, NOT true duplicates) are correctly not REDUNDANT at 40, 30,
+// 20, 15, and 10 shared Cases. At 6 shared Cases they are: the sampled
+// diffs are [0,0,0,0,0,0] — the two Assets happened to agree on all 6 —
+// which stats/interval/interval.go's paired() reads via its signBound
+// fallback (triggered whenever every sampled difference is numerically
+// identical) as EVIDENCE of equivalence whose confidence GROWS WITH n via
+// `half = -log(1-level)/n`. Condition 2 does not catch it: on the same
+// 6-Case window, I_A and I_B coincide (both fired on the same subset within
+// the window), so the observed co-improvement Jaccard is high and its
+// corrected bootstrap CI clears J_chance, which is ALSO small at that n.
+// Both derived floors (MinDetectableEffect for the margin, J_chance for the
+// co-improvement floor) correctly get coarser as n shrinks — a smaller
+// sample must be allowed a wider claim — but nothing guarantees the ACTUAL
+// interval and the ACTUAL observed J widen and shrink in lockstep with
+// those floors across every subsample, and six Cases is little enough that
+// perfect agreement by chance, not by equivalence, is a real, unignorable
+// probability.
+//
+// Both derived quantities (the equivalence margin, `MinDetectableEffect`,
+// and the co-improvement floor, `J_chance`) get COARSER as n shrinks, which
+// is correct and intended in isolation — a smaller sample must be allowed a
+// wider claim. What is not guaranteed is that the ACTUAL interval and the
+// ACTUAL observed J widen and shrink in lockstep with those floors across
+// EVERY subsample, and a sparse pattern is exactly where they do not: the
+// floor relaxes on a predictable schedule (1/sqrt(n)-ish) while the sample's
+// own realized variance can drop to exactly zero at small n by chance alone.
+func TestRedundancyMonotonicityUnderShrinkingOverlap(t *testing.T) {
+	t.Parallel()
+
+	const trials = 200
+	const maxN = 40
+	sizes := []int{40, 30, 20, 15, 10, 6, 5, 4}
+
+	rng := rand.New(rand.NewSource(20260901))
+
+	redundantCount := make([]int, len(sizes))
+	unknownCount := make([]int, len(sizes))
+	monotonic := true
+
+	for trial := 0; trial < trials; trial++ {
+		rateA := rng.Float64()
+		rateB := rateA + (rng.Float64()-0.5)*0.3
+		if rateB < 0 {
+			rateB = 0
+		}
+		if rateB > 1 {
+			rateB = 1
+		}
+		ids := caseIDs(maxN)
+		deltaA := make(map[string]float64, maxN)
+		deltaB := make(map[string]float64, maxN)
+		for _, id := range ids {
+			if rng.Float64() < rateA {
+				deltaA[id] = 1
+			} else {
+				deltaA[id] = 0
+			}
+			if rng.Float64() < rateB {
+				deltaB[id] = 1
+			} else {
+				deltaB[id] = 0
+			}
+		}
+
+		for i, n := range sizes {
+			subA := make(map[string]float64, n)
+			subB := make(map[string]float64, n)
+			for _, id := range ids[:n] {
+				subA[id] = deltaA[id]
+				subB[id] = deltaB[id]
+			}
+			rngKey := fmt.Sprintf("monotonicity-seed-%d-%d", trial, n)
+			cfg := redundancyConfig{maxMargin: 0.9}
+			mv := evaluateMeasurement("with", subA, subB, cfg, defaultLevel, 1, rngKey)
+			switch {
+			case !mv.attempted:
+				unknownCount[i]++
+			case mv.redundant:
+				redundantCount[i]++
+			}
+		}
+	}
+	for i := 1; i < len(sizes); i++ {
+		if redundantCount[i] > redundantCount[i-1] || unknownCount[i] < unknownCount[i-1] {
+			monotonic = false
+		}
+	}
+
+	t.Logf("size -> redundant/unknown out of %d trials: %v / %v", trials, redundantCount, unknownCount)
+	require.False(t, monotonic,
+		"acceptance criterion 4 no longer reproduces as false — if Condition 1's degenerate-"+
+			"sample interaction with the derived margin has been fixed (docs/debt.md#165), "+
+			"replace this test with the property it names: redundantCount and unknownCount "+
+			"must move monotonically as sizes shrink")
 }
 
 // TestCostTieBreakUnavailableCostFallsToID: costTieBreak treats a
@@ -1103,6 +1231,108 @@ func TestPoollessRunEmitsMeasurementRedundancyAndStillDegradesContent(t *testing
 	require.Len(t, res.Portfolio.GetRejected(), 1, "measurement evidence needs only the store, so a poolless run still catches this pair")
 	require.Equal(t, knov1.RejectionReason_REJECTION_REASON_REDUNDANT, res.Portfolio.GetRejected()[0].GetReason())
 	require.Contains(t, res.DegradedRules, "REDUNDANT", "content evidence is still unavailable with no Pool, and the result says so")
+}
+
+// TestSelectOptionsConstructsNoAgentAndNoGuard is acceptance criterion 17,
+// as a test rather than a comment: "Select makes no LLM call, constructs no
+// Agent, creates no budget guard" is currently true because SelectOptions
+// simply has no field of either type — but a comment saying so is not a
+// test, and the exact way a future PR could quietly reopen prime directive
+// 4 for this stage is by adding one. This walks SelectOptions' fields by
+// reflection and fails if any field's type is core.Agent (directly, or
+// through an embedded/named type built on it) or *budget.Guard, so that PR
+// fails here instead of shipping a stage whose godoc lied.
+//
+// The CLI-level counterpart — a poisoned http.Transport proving `kno select`
+// and `kno select --explain` never issue a request — lives in
+// cli/redundancy_test.go's TestSelectAndExplainMakeNoProviderCall, and
+// covers the runtime half this structural check cannot: a field of some
+// OTHER type that still reaches the network indirectly.
+func TestSelectOptionsConstructsNoAgentAndNoGuard(t *testing.T) {
+	t.Parallel()
+
+	agentType := reflect.TypeOf((*Agent)(nil)).Elem()
+	guardType := reflect.TypeOf((*budget.Guard)(nil))
+
+	typ := reflect.TypeOf(SelectOptions{})
+	for i := 0; i < typ.NumField(); i++ {
+		f := typ.Field(i)
+		if f.Type.Implements(agentType) || f.Type == agentType {
+			t.Errorf("SelectOptions.%s is (or implements) core.Agent; Select's godoc promises "+
+				"it makes no LLM call, and a field of this type is how that promise gets broken", f.Name)
+		}
+		if f.Type == guardType {
+			t.Errorf("SelectOptions.%s is *budget.Guard; Select's godoc promises it creates no "+
+				"budget guard, and a field of this type is how that promise gets broken", f.Name)
+		}
+	}
+}
+
+// TestCharacterizeEquivalencePowerAtMinOverlapCases is acceptance criterion
+// 24: a characterization test recording delta, J_chance and the verdict for
+// a synthetic KNOWN-duplicate pair at |C| in {5, 10, 20, 40} — measured and
+// pinned rather than asserted as a gate, per the plan's own
+// "measure-then-pin" discipline (accepted risk 8 / docs/debt.md#162, which
+// this table is the promised evidence for).
+//
+// No frequency claim ships as a requirement here: this is a record of what
+// WAS measured, in a form a future routing or margin change shows a diff
+// against, not a pass/fail bar. The known-duplicate pair fires on the same
+// 80% of Cases identically, at --redundancy-max-margin left at the package
+// DEFAULT (0.10) — the number an actual default run uses, not the widened
+// value the rest of this file's fixtures use to exercise the mechanism.
+func TestCharacterizeEquivalencePowerAtMinOverlapCases(t *testing.T) {
+	t.Parallel()
+
+	type row struct {
+		n       int
+		delta   float64
+		jChance float64
+		verdict string
+	}
+	var table []row
+
+	for _, n := range []int{5, 10, 20, 40} {
+		passN := n * 4 / 5 // 80% improvement rate, identical for both Assets
+		if passN == 0 {
+			passN = n
+		}
+		scores := scoresFor(n, intRange(passN)...)
+		mv := evaluateMeasurement("with", scores, scores, redundancyConfig{}, defaultLevel, 1,
+			fmt.Sprintf("characterize-%d", n))
+
+		delta, jChance := math.NaN(), math.NaN()
+		verdict := "UNKNOWN (insufficient overlap)"
+		if mv.attempted {
+			delta = mv.evidence.GetMargin()
+			jChance = mv.evidence.GetCoImprovementFloor()
+			switch {
+			case mv.redundant:
+				verdict = "REDUNDANT"
+			default:
+				verdict = "UNKNOWN or DISTINCT (see docs/debt.md#162: the default 0.10 ceiling " +
+					"very often refuses the claim at these sample sizes)"
+			}
+		}
+		table = append(table, row{n, delta, jChance, verdict})
+	}
+
+	t.Log("|C|	delta (margin)	J_chance (floor)	verdict")
+	for _, r := range table {
+		t.Logf("%d	%.4f	%.4f	%s", r.n, r.delta, r.jChance, r.verdict)
+	}
+
+	// Pinned facts about the table, not a frequency gate: MinOverlapCases=5
+	// is attemptable at all (criterion 3's floor), and delta shrinks as |C|
+	// grows — the sample's own resolution getting finer with more evidence,
+	// which is the entire argument for deriving the margin from n rather
+	// than inventing a constant.
+	require.Len(t, table, 4)
+	require.Equal(t, 5, table[0].n)
+	for i := 1; i < len(table); i++ {
+		require.Less(t, table[i].delta, table[i-1].delta,
+			"the equivalence margin must strictly shrink as |C| grows — finer resolution with more evidence")
+	}
 }
 
 var _ = math.NaN // keep math imported for any future numeric assertions in this file

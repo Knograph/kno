@@ -25,7 +25,6 @@ import (
 	"fmt"
 	"hash/fnv"
 	"math"
-	"math/rand"
 	"sort"
 
 	knov1 "github.com/knograph/kno/gen/kno/v1"
@@ -227,16 +226,73 @@ func jaccard(a, b []bool) float64 {
 	return float64(inter) / float64(union)
 }
 
-// deterministicRNG seeds a *rand.Rand from a stable string key, so the
-// co-improvement bootstrap — the one place this stage uses randomness —
-// produces byte-identical Portfolios across runs over the same store
-// (acceptance criterion 12). FNV-1a rather than crypto/rand: this is a
-// resampling seed, not a security boundary.
-func deterministicRNG(key string) *rand.Rand {
+// deterministicSeed derives a stable uint64 seed from a string key, so the
+// co-improvement bootstrap (interval.Percentile) — the one place this stage
+// uses randomness — produces byte-identical Portfolios across runs over the
+// same store (acceptance criterion 12). FNV-1a rather than crypto/rand: this
+// is a resampling seed, not a security boundary. Zero is avoided because
+// interval.Percentile reads a zero Bootstrap.Seed as "use the package
+// default" rather than "seed with zero" — collapsing every zero-hashing key
+// onto one shared stream would be a real, if vanishingly unlikely, collision.
+func deterministicSeed(key string) uint64 {
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(key))
-	//nolint:gosec // deterministic reproducibility, not a security boundary
-	return rand.New(rand.NewSource(int64(h.Sum64())))
+	s := h.Sum64()
+	if s == 0 {
+		s = 1
+	}
+	return s
+}
+
+// round4 rounds a POINT ESTIMATE to four decimal places, and roundInterval
+// does the same to both bounds of an Interval — the same treatment
+// judge/kappa.go applies to every statistic it reports, for the same two
+// reasons. First: Go permits fusing a multiply-add into one FMA instruction,
+// and arm64 fuses several of the expressions this file's arithmetic goes
+// through (the t-quantile bisection behind interval.Paired, the mean-of-
+// differences here) where amd64 does not, so the tail digits of an unrounded
+// statistic genuinely differ by architecture — a value recorded on darwin/
+// arm64 can fail to match the same computation on linux/amd64 bit for bit.
+// Second: none of these numbers carry that much precision anyway. A
+// bootstrap over a few dozen shared Cases, or a t-interval over the same,
+// does not resolve to the fifteenth decimal place, and printing seventeen
+// digits is a false-precision claim in a document whose whole job is honest
+// reporting. Rounding happens HERE, at construction, not in the CLI
+// renderer, so the human line, `--json`, and any consumer reading the proto
+// directly all see the same number.
+//
+// Applied only to numbers already used to DECIDE — every redundancy verdict
+// in this file compares withinMargin/coIv.GetLow() against the UNROUNDED
+// values before evidence is ever built, so rounding here cannot flip a
+// verdict; it only changes what gets reported about one already made.
+func round4(f float64) float64 {
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return f
+	}
+	return math.Round(f*1e4) / 1e4
+}
+
+// roundInterval rounds an Interval's bounds to four decimal places, to
+// nearest rather than outward — see round4's godoc and judge/kappa.go's
+// roundInterval, which makes the same choice for the same reason: outward
+// rounding is LESS stable at the values these methods actually produce (a
+// bound that already sits on the 1e-4 grid), and the width it buys back is
+// three orders of magnitude below either method's real uncertainty.
+func roundInterval(iv *Interval) *Interval {
+	if iv == nil {
+		return nil
+	}
+	out := &Interval{
+		Level:     iv.GetLevel(),
+		Method:    iv.GetMethod(),
+		Sidedness: iv.GetSidedness(),
+		Low:       round4(iv.GetLow()),
+		High:      round4(iv.GetHigh()),
+	}
+	if n := iv.GetNPairs(); n != 0 {
+		out.NPairs = &n
+	}
+	return out
 }
 
 // correctRedundancyInterval widens iv for nTests pairwise comparisons, the
@@ -327,9 +383,21 @@ func evaluateMeasurement(
 		// quantile to ratio — it is exact at whatever level it is resampled
 		// for. Asking for the corrected level up front is both correct and
 		// simpler than teaching Correct a method it cannot derive a ratio for.
-		rng := deterministicRNG(rngKey)
-		coIv = interval.BootstrapPercentile(len(shared), redundancyBootstrapIterations, correctedLevel(level, nTestsAssumed), rng,
-			func(idx []int) float64 { return jaccardResample(withImproved, candImproved, idx) })
+		//
+		// interval.Percentile (stats/interval/bootstrap.go) is judge-
+		// calibrate's (#177), which merged first and so owns the package's
+		// one percentile-bootstrap implementation, per the plan's own
+		// "whichever merges first owns it" call. This is the second
+		// consumer, not a second implementation.
+		coIv = interval.Percentile(len(shared),
+			func(idx []int) float64 { return jaccardResample(withImproved, candImproved, idx) },
+			interval.Bootstrap{
+				Resamples: redundancyBootstrapIterations,
+				Level:     correctedLevel(level, nTestsAssumed),
+				Seed:      deterministicSeed(rngKey),
+				Sidedness: knov1.Sidedness_SIDEDNESS_TWO_SIDED,
+				Support:   &interval.Support{Low: 0, High: 1}, // a Jaccard index never leaves [0, 1]
+			})
 		cond2 = coIv != nil && coIv.GetLow() > floor
 	}
 
@@ -337,13 +405,13 @@ func evaluateMeasurement(
 		WithAssetId:              withID,
 		Kind:                     knov1.RedundancyEvidenceKind_REDUNDANCY_EVIDENCE_KIND_MEASUREMENT,
 		NOverlap:                 n,
-		PairedDifference:         mean(diffs),
-		DifferenceInterval:       diffIv,
-		Margin:                   margin,
+		PairedDifference:         round4(mean(diffs)),
+		DifferenceInterval:       roundInterval(diffIv),
+		Margin:                   round4(margin),
 		MarginSource:             marginSource,
-		CoImprovement:            rawJ,
-		CoImprovementInterval:    coIv,
-		CoImprovementFloor:       floor,
+		CoImprovement:            round4(rawJ),
+		CoImprovementInterval:    roundInterval(coIv),
+		CoImprovementFloor:       round4(floor),
 		CoImprovementFloorSource: floorSource,
 	}
 	return measurementVerdict{attempted: true, redundant: cond1 && cond2, evidence: ev}
@@ -450,6 +518,17 @@ func newCaseDeltaReader(ctx context.Context, st store.Store, valueRunID string, 
 		ctx: ctx, store: st, valueRunID: valueRunID, baseline: baseline, direction: direction,
 		cache: make(map[string]map[string]float64),
 	}
+}
+
+// forget drops one Asset's cached delta vector. Called once an Asset is
+// finally decided and is NOT part of run.selected — a rejected candidate's
+// vector is never read again, and holding it for the rest of the pass is
+// exactly the "materialized for all Assets at once" shape CLAUDE.md's
+// streaming-memory rule (iter.Seq is load-bearing) exists to avoid at pool
+// scale. An Asset that IS selected keeps its cache entry: later candidates
+// still need to compare against it.
+func (r *caseDeltaReader) forget(assetID string) {
+	delete(r.cache, assetID)
 }
 
 // deltasFor returns v's Asset's per-Case delta vector, reading the store on
@@ -566,12 +645,12 @@ func (o SelectOptions) evaluateRedundancyForCandidate(
 				if mv.redundant {
 					ev := mv.evidence
 					if bothKnowledge(sel) {
-						ev.ShingleOverlap = shingleOverlap(shingles(asset.GetContent()), shingles(sel.asset.GetContent()))
+						ev.ShingleOverlap = round4(shingleOverlap(shingles(asset.GetContent()), shingles(sel.asset.GetContent())))
 					}
 					survivor, decidedBy, ratio := costTieBreak(
 						sel.assetID, contextTokensOf(sel.valuation), v.GetAssetId(), contextTokensOf(v),
 					)
-					ev.CostRatio = ratio
+					ev.CostRatio = round4(ratio)
 					ev.DecidedBy = decidedBy
 					if survivor == sel.assetID {
 						losing = append(losing, match{id: sel.assetID, ev: ev})
@@ -587,7 +666,7 @@ func (o SelectOptions) evaluateRedundancyForCandidate(
 							// silently dropping the evidence.
 							ev2 = ev
 						} else {
-							ev2.CostRatio = ratio
+							ev2.CostRatio = round4(ratio)
 							ev2.DecidedBy = decidedBy
 							ev2.ShingleOverlap = ev.ShingleOverlap
 						}
@@ -609,7 +688,7 @@ func (o SelectOptions) evaluateRedundancyForCandidate(
 				losing = append(losing, match{id: sel.assetID, ev: &knov1.RedundancyEvidence{
 					WithAssetId:    sel.assetID,
 					Kind:           knov1.RedundancyEvidenceKind_REDUNDANCY_EVIDENCE_KIND_CONTENT_SHINGLE,
-					ShingleOverlap: so,
+					ShingleOverlap: round4(so),
 					DecidedBy:      knov1.RedundancyDecidedBy_REDUNDANCY_DECIDED_BY_CONTENT,
 				}})
 			}

@@ -94,7 +94,7 @@ func seedValueRunWithBaseline(t *testing.T, st store.Store, runID, baselineRunID
 // createValueRun creates a completed Value run's ROW ONLY — no Valuations —
 // so a caller can record measurements against it (measurements.run_id is a
 // foreign key to runs.id) before writing the Valuations that reference them.
-func createValueRun(t *testing.T, st store.Store, runID, baselineRunID string, direction knov1.Direction) {
+func createValueRun(t testing.TB, st store.Store, runID, baselineRunID string, direction knov1.Direction) {
 	t.Helper()
 	run := &knov1.Run{
 		Id:              runID,
@@ -111,7 +111,7 @@ func createValueRun(t *testing.T, st store.Store, runID, baselineRunID string, d
 	}
 }
 
-func writeValuations(t *testing.T, st store.Store, runID string, vals ...*Valuation) {
+func writeValuations(t testing.TB, st store.Store, runID string, vals ...*Valuation) {
 	t.Helper()
 	for _, v := range vals {
 		if err := st.WriteValuation(context.Background(), runID, v); err != nil {
@@ -123,7 +123,7 @@ func writeValuations(t *testing.T, st store.Store, runID string, vals ...*Valuat
 // seedBaselineRun creates a completed Baseline run whose recorded outcomes
 // carry the given per-Case scores — the reference a Value run's redundancy
 // evidence pairs against via store.CaseScores.
-func seedBaselineRun(t *testing.T, st store.Store, runID string, scores map[string]float64) {
+func seedBaselineRun(t testing.TB, st store.Store, runID string, scores map[string]float64) {
 	t.Helper()
 	run := &knov1.Run{
 		Id:              runID,
@@ -150,7 +150,7 @@ func seedBaselineRun(t *testing.T, st store.Store, runID string, scores map[stri
 // seedTreatmentMeasurement records one Asset's treatment-arm measurement for
 // one Case, trial 1 — the per-Case reads the redundancy rule reconstructs
 // from.
-func seedTreatmentMeasurement(t *testing.T, st store.Store, runID, assetID, caseID string, score float64) {
+func seedTreatmentMeasurement(t testing.TB, st store.Store, runID, assetID, caseID string, score float64) {
 	t.Helper()
 	err := st.RecordMeasurement(context.Background(), runID, &store.Measurement{
 		Key:   store.MeasurementKey{AssetID: assetID, CaseID: caseID, Arm: store.ArmTreatment, Trial: 1},

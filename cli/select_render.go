@@ -82,10 +82,16 @@ func renderSelectHuman(out io.Writer, res *core.SelectResult) error {
 			return err
 		}
 		for _, r := range rejected {
+			// Detail carries the full claim for every reason, REDUNDANT
+			// included: core/redundancy.go's redundancyDetail names which
+			// Asset(s) were duplicated AND the evidence behind the claim
+			// (shared Case count, paired difference, co-improvement,
+			// which criterion decided a tie). An older build's detail here
+			// was a generic string with no numbers, and this rendering used
+			// to paper over that by substituting redundant_with_asset_ids
+			// for it — which would now DISCARD the richer prose in favor of
+			// exactly the bare asset list it replaces.
 			detail := r.GetDetail()
-			if len(r.GetRedundantWithAssetIds()) > 0 {
-				detail = "duplicates " + strings.Join(r.GetRedundantWithAssetIds(), ", ")
-			}
 			if detail != "" {
 				detail = "  " + detail
 			}
