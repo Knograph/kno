@@ -40,7 +40,6 @@
     "eval inspect",
     "export",
     "init",
-    "judge calibrate",
     "mine",
     "purge",
     "report",
@@ -111,8 +110,8 @@
   ],
   "price_table": "2026-08-28",
   "debt": {
-    "total": 116,
-    "open": 65,
+    "total": 120,
+    "open": 68,
     "skipped": 0
   }
 }

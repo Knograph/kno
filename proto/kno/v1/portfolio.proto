@@ -46,6 +46,123 @@ message PortfolioEntry {
   optional bytes content_hash = 6;
 }
 
+// RedundancyEvidenceKind is which instrument decided one redundancy
+// comparison.
+enum RedundancyEvidenceKind {
+  // Unset.
+  REDUNDANCY_EVIDENCE_KIND_UNSPECIFIED = 0;
+
+  // Decided by measured per-Case deltas: equivalence (Condition 1) and
+  // co-located incidence (Condition 2), both against the shared routed
+  // slice. Kind-agnostic and scoped within destination.
+  REDUNDANCY_EVIDENCE_KIND_MEASUREMENT = 1;
+
+  // Decided by 3-gram shingle overlap on content, at the shipped 0.6
+  // threshold. Knowledge-kind only, destination-blind, for byte-compatibility
+  // with the rule this replaces where measurement evidence is unavailable.
+  REDUNDANCY_EVIDENCE_KIND_CONTENT_SHINGLE = 2;
+}
+
+// RedundancyDecidedBy is which criterion broke the tie between two Assets
+// this plan's Condition 1 found measurement-equivalent.
+enum RedundancyDecidedBy {
+  // Unset — the pair was not decided by a tie-break (e.g. content evidence).
+  REDUNDANCY_DECIDED_BY_UNSPECIFIED = 0;
+
+  // The cheaper Asset's carrying cost survived; the two costs differed by
+  // more than the docs/debt.md#68 bias band (2.4x), so the estimate could
+  // support the claim.
+  REDUNDANCY_DECIDED_BY_COST = 1;
+
+  // Asset ID, ascending. Used when costs are equal or inside the bias band —
+  // the estimate cannot tell the two apart, so the tie falls to a
+  // deterministic, unbiased rule instead.
+  REDUNDANCY_DECIDED_BY_ID = 2;
+
+  // Decided by content evidence rather than a measurement tie-break.
+  REDUNDANCY_DECIDED_BY_CONTENT = 3;
+}
+
+// CoImprovementFloorSource records which term produced Condition 2's
+// co-improvement floor: the data's own chance level, or a stricter floor the
+// user supplied.
+enum CoImprovementFloorSource {
+  CO_IMPROVEMENT_FLOOR_SOURCE_UNSPECIFIED = 0;
+  CO_IMPROVEMENT_FLOOR_SOURCE_CHANCE = 1;
+  CO_IMPROVEMENT_FLOOR_SOURCE_USER = 2;
+}
+
+// MarginSource records which term produced Condition 1's equivalence margin
+// (delta): the sample's own resolution, or a stricter margin the user
+// supplied. Symmetric to CoImprovementFloorSource.
+enum MarginSource {
+  MARGIN_SOURCE_UNSPECIFIED = 0;
+  MARGIN_SOURCE_SAMPLE_RESOLUTION = 1;
+  MARGIN_SOURCE_USER = 2;
+}
+
+// RedundancyEvidence is one pairwise redundancy comparison and the numbers
+// behind its verdict — what a user needs to check a REDUNDANT claim they
+// disagree with, per the redundancy-detection plan.
+//
+// Redundancy is inferred, never asserted: this message names the instrument
+// (kind), the shared evidence (n_overlap, paired_difference,
+// difference_interval), the margin and floor with which TERM produced them,
+// and — when the pair was measurement-equivalent — which criterion broke the
+// tie between the two Assets.
+message RedundancyEvidence {
+  // The other Asset in this comparison.
+  string with_asset_id = 1;
+
+  // Which instrument decided this comparison.
+  RedundancyEvidenceKind kind = 2;
+
+  // |C|: the shared routed slice (measurement) or n/a for content evidence.
+  int32 n_overlap = 3;
+
+  // Mean of d_with(c) - d_this(c) over the shared slice — Condition 1's
+  // paired difference. Measurement evidence only.
+  double paired_difference = 4;
+
+  // Condition 1's TOST instrument: the corrected two-sided interval on
+  // paired_difference. A REDUNDANT verdict requires this to lie entirely
+  // inside +/- margin.
+  Interval difference_interval = 5;
+
+  // Condition 1's equivalence margin (delta).
+  double margin = 6;
+
+  // Which term produced margin.
+  MarginSource margin_source = 7;
+
+  // Condition 2's co-improvement Jaccard J = |I_A n I_B| / |I_A u I_B| over
+  // the shared slice.
+  double co_improvement = 8;
+
+  // Bootstrap interval on co_improvement.
+  Interval co_improvement_interval = 9;
+
+  // Condition 2's floor: max(user floor, J_chance). A REDUNDANT verdict
+  // requires co_improvement_interval's lower bound to exceed this.
+  double co_improvement_floor = 10;
+
+  // Which term produced co_improvement_floor.
+  CoImprovementFloorSource co_improvement_floor_source = 11;
+
+  // Jaccard overlap of 3-gram shingles. Recorded whenever a Pool was
+  // supplied, even when measurement evidence decided — so a disagreement
+  // between the two signals is visible rather than silently dropped.
+  double shingle_overlap = 12;
+
+  // The survivor's carrying cost divided by the rejected Asset's, for a
+  // measurement-equivalent pair. Makes decided_by = ID on an equivalent pair
+  // with different costs auditable as "inside the bias band", not a bug.
+  double cost_ratio = 13;
+
+  // Which criterion broke the tie between two measurement-equivalent Assets.
+  RedundancyDecidedBy decided_by = 14;
+}
+
 // Rejection is one excluded Asset and why.
 //
 // The reason is an enum PLUS references, because DESIGN.md's Select stage
@@ -71,6 +188,11 @@ message Rejection {
   // REJECTION_REASON_IRRELEVANT and REJECTION_REASON_BUDGET_EXHAUSTED, where
   // no measurement happened — and the absence is itself the honest answer.
   Valuation valuation = 5;
+
+  // The evidence behind a REJECTION_REASON_REDUNDANT verdict: one entry per
+  // Asset named in redundant_with_asset_ids. What a user checks a claim
+  // against — see the redundancy-detection plan's "way to actually check it".
+  repeated RedundancyEvidence redundancy_evidence = 6;
 }
 
 // Portfolio is the selected subset of Assets, chosen under budget, with the
@@ -121,6 +243,15 @@ message Portfolio {
 
   // The source run's incomplete_reason, verbatim, when it had one.
   string source_incomplete_reason = 10;
+
+  // How many pairwise redundancy tests this run actually performed —
+  // greedy compares each candidate only against already-selected Assets, so
+  // this is bounded by k(k-1)/2 but is normally far fewer. Every
+  // RedundancyEvidence.difference_interval and .co_improvement_interval is
+  // corrected for this count, not for n_screened: the redundancy tests are a
+  // different family from the keep/reject tests, counted separately per the
+  // redundancy-detection plan.
+  int32 n_redundancy_tests = 11;
 }
 
 // GapStatus is the per-cluster improvement verdict Export computes and the

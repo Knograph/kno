@@ -21,6 +21,230 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// RedundancyEvidenceKind is which instrument decided one redundancy
+// comparison.
+type RedundancyEvidenceKind int32
+
+const (
+	// Unset.
+	RedundancyEvidenceKind_REDUNDANCY_EVIDENCE_KIND_UNSPECIFIED RedundancyEvidenceKind = 0
+	// Decided by measured per-Case deltas: equivalence (Condition 1) and
+	// co-located incidence (Condition 2), both against the shared routed
+	// slice. Kind-agnostic and scoped within destination.
+	RedundancyEvidenceKind_REDUNDANCY_EVIDENCE_KIND_MEASUREMENT RedundancyEvidenceKind = 1
+	// Decided by 3-gram shingle overlap on content, at the shipped 0.6
+	// threshold. Knowledge-kind only, destination-blind, for byte-compatibility
+	// with the rule this replaces where measurement evidence is unavailable.
+	RedundancyEvidenceKind_REDUNDANCY_EVIDENCE_KIND_CONTENT_SHINGLE RedundancyEvidenceKind = 2
+)
+
+// Enum value maps for RedundancyEvidenceKind.
+var (
+	RedundancyEvidenceKind_name = map[int32]string{
+		0: "REDUNDANCY_EVIDENCE_KIND_UNSPECIFIED",
+		1: "REDUNDANCY_EVIDENCE_KIND_MEASUREMENT",
+		2: "REDUNDANCY_EVIDENCE_KIND_CONTENT_SHINGLE",
+	}
+	RedundancyEvidenceKind_value = map[string]int32{
+		"REDUNDANCY_EVIDENCE_KIND_UNSPECIFIED":     0,
+		"REDUNDANCY_EVIDENCE_KIND_MEASUREMENT":     1,
+		"REDUNDANCY_EVIDENCE_KIND_CONTENT_SHINGLE": 2,
+	}
+)
+
+func (x RedundancyEvidenceKind) Enum() *RedundancyEvidenceKind {
+	p := new(RedundancyEvidenceKind)
+	*p = x
+	return p
+}
+
+func (x RedundancyEvidenceKind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (RedundancyEvidenceKind) Descriptor() protoreflect.EnumDescriptor {
+	return file_kno_v1_portfolio_proto_enumTypes[0].Descriptor()
+}
+
+func (RedundancyEvidenceKind) Type() protoreflect.EnumType {
+	return &file_kno_v1_portfolio_proto_enumTypes[0]
+}
+
+func (x RedundancyEvidenceKind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use RedundancyEvidenceKind.Descriptor instead.
+func (RedundancyEvidenceKind) EnumDescriptor() ([]byte, []int) {
+	return file_kno_v1_portfolio_proto_rawDescGZIP(), []int{0}
+}
+
+// RedundancyDecidedBy is which criterion broke the tie between two Assets
+// this plan's Condition 1 found measurement-equivalent.
+type RedundancyDecidedBy int32
+
+const (
+	// Unset — the pair was not decided by a tie-break (e.g. content evidence).
+	RedundancyDecidedBy_REDUNDANCY_DECIDED_BY_UNSPECIFIED RedundancyDecidedBy = 0
+	// The cheaper Asset's carrying cost survived; the two costs differed by
+	// more than the docs/debt.md#68 bias band (2.4x), so the estimate could
+	// support the claim.
+	RedundancyDecidedBy_REDUNDANCY_DECIDED_BY_COST RedundancyDecidedBy = 1
+	// Asset ID, ascending. Used when costs are equal or inside the bias band —
+	// the estimate cannot tell the two apart, so the tie falls to a
+	// deterministic, unbiased rule instead.
+	RedundancyDecidedBy_REDUNDANCY_DECIDED_BY_ID RedundancyDecidedBy = 2
+	// Decided by content evidence rather than a measurement tie-break.
+	RedundancyDecidedBy_REDUNDANCY_DECIDED_BY_CONTENT RedundancyDecidedBy = 3
+)
+
+// Enum value maps for RedundancyDecidedBy.
+var (
+	RedundancyDecidedBy_name = map[int32]string{
+		0: "REDUNDANCY_DECIDED_BY_UNSPECIFIED",
+		1: "REDUNDANCY_DECIDED_BY_COST",
+		2: "REDUNDANCY_DECIDED_BY_ID",
+		3: "REDUNDANCY_DECIDED_BY_CONTENT",
+	}
+	RedundancyDecidedBy_value = map[string]int32{
+		"REDUNDANCY_DECIDED_BY_UNSPECIFIED": 0,
+		"REDUNDANCY_DECIDED_BY_COST":        1,
+		"REDUNDANCY_DECIDED_BY_ID":          2,
+		"REDUNDANCY_DECIDED_BY_CONTENT":     3,
+	}
+)
+
+func (x RedundancyDecidedBy) Enum() *RedundancyDecidedBy {
+	p := new(RedundancyDecidedBy)
+	*p = x
+	return p
+}
+
+func (x RedundancyDecidedBy) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (RedundancyDecidedBy) Descriptor() protoreflect.EnumDescriptor {
+	return file_kno_v1_portfolio_proto_enumTypes[1].Descriptor()
+}
+
+func (RedundancyDecidedBy) Type() protoreflect.EnumType {
+	return &file_kno_v1_portfolio_proto_enumTypes[1]
+}
+
+func (x RedundancyDecidedBy) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use RedundancyDecidedBy.Descriptor instead.
+func (RedundancyDecidedBy) EnumDescriptor() ([]byte, []int) {
+	return file_kno_v1_portfolio_proto_rawDescGZIP(), []int{1}
+}
+
+// CoImprovementFloorSource records which term produced Condition 2's
+// co-improvement floor: the data's own chance level, or a stricter floor the
+// user supplied.
+type CoImprovementFloorSource int32
+
+const (
+	CoImprovementFloorSource_CO_IMPROVEMENT_FLOOR_SOURCE_UNSPECIFIED CoImprovementFloorSource = 0
+	CoImprovementFloorSource_CO_IMPROVEMENT_FLOOR_SOURCE_CHANCE      CoImprovementFloorSource = 1
+	CoImprovementFloorSource_CO_IMPROVEMENT_FLOOR_SOURCE_USER        CoImprovementFloorSource = 2
+)
+
+// Enum value maps for CoImprovementFloorSource.
+var (
+	CoImprovementFloorSource_name = map[int32]string{
+		0: "CO_IMPROVEMENT_FLOOR_SOURCE_UNSPECIFIED",
+		1: "CO_IMPROVEMENT_FLOOR_SOURCE_CHANCE",
+		2: "CO_IMPROVEMENT_FLOOR_SOURCE_USER",
+	}
+	CoImprovementFloorSource_value = map[string]int32{
+		"CO_IMPROVEMENT_FLOOR_SOURCE_UNSPECIFIED": 0,
+		"CO_IMPROVEMENT_FLOOR_SOURCE_CHANCE":      1,
+		"CO_IMPROVEMENT_FLOOR_SOURCE_USER":        2,
+	}
+)
+
+func (x CoImprovementFloorSource) Enum() *CoImprovementFloorSource {
+	p := new(CoImprovementFloorSource)
+	*p = x
+	return p
+}
+
+func (x CoImprovementFloorSource) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (CoImprovementFloorSource) Descriptor() protoreflect.EnumDescriptor {
+	return file_kno_v1_portfolio_proto_enumTypes[2].Descriptor()
+}
+
+func (CoImprovementFloorSource) Type() protoreflect.EnumType {
+	return &file_kno_v1_portfolio_proto_enumTypes[2]
+}
+
+func (x CoImprovementFloorSource) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use CoImprovementFloorSource.Descriptor instead.
+func (CoImprovementFloorSource) EnumDescriptor() ([]byte, []int) {
+	return file_kno_v1_portfolio_proto_rawDescGZIP(), []int{2}
+}
+
+// MarginSource records which term produced Condition 1's equivalence margin
+// (delta): the sample's own resolution, or a stricter margin the user
+// supplied. Symmetric to CoImprovementFloorSource.
+type MarginSource int32
+
+const (
+	MarginSource_MARGIN_SOURCE_UNSPECIFIED       MarginSource = 0
+	MarginSource_MARGIN_SOURCE_SAMPLE_RESOLUTION MarginSource = 1
+	MarginSource_MARGIN_SOURCE_USER              MarginSource = 2
+)
+
+// Enum value maps for MarginSource.
+var (
+	MarginSource_name = map[int32]string{
+		0: "MARGIN_SOURCE_UNSPECIFIED",
+		1: "MARGIN_SOURCE_SAMPLE_RESOLUTION",
+		2: "MARGIN_SOURCE_USER",
+	}
+	MarginSource_value = map[string]int32{
+		"MARGIN_SOURCE_UNSPECIFIED":       0,
+		"MARGIN_SOURCE_SAMPLE_RESOLUTION": 1,
+		"MARGIN_SOURCE_USER":              2,
+	}
+)
+
+func (x MarginSource) Enum() *MarginSource {
+	p := new(MarginSource)
+	*p = x
+	return p
+}
+
+func (x MarginSource) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (MarginSource) Descriptor() protoreflect.EnumDescriptor {
+	return file_kno_v1_portfolio_proto_enumTypes[3].Descriptor()
+}
+
+func (MarginSource) Type() protoreflect.EnumType {
+	return &file_kno_v1_portfolio_proto_enumTypes[3]
+}
+
+func (x MarginSource) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use MarginSource.Descriptor instead.
+func (MarginSource) EnumDescriptor() ([]byte, []int) {
+	return file_kno_v1_portfolio_proto_rawDescGZIP(), []int{3}
+}
+
 // GapStatus is the per-cluster improvement verdict Export computes and the
 // report renders.
 type GapStatus int32
@@ -63,11 +287,11 @@ func (x GapStatus) String() string {
 }
 
 func (GapStatus) Descriptor() protoreflect.EnumDescriptor {
-	return file_kno_v1_portfolio_proto_enumTypes[0].Descriptor()
+	return file_kno_v1_portfolio_proto_enumTypes[4].Descriptor()
 }
 
 func (GapStatus) Type() protoreflect.EnumType {
-	return &file_kno_v1_portfolio_proto_enumTypes[0]
+	return &file_kno_v1_portfolio_proto_enumTypes[4]
 }
 
 func (x GapStatus) Number() protoreflect.EnumNumber {
@@ -76,7 +300,7 @@ func (x GapStatus) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use GapStatus.Descriptor instead.
 func (GapStatus) EnumDescriptor() ([]byte, []int) {
-	return file_kno_v1_portfolio_proto_rawDescGZIP(), []int{0}
+	return file_kno_v1_portfolio_proto_rawDescGZIP(), []int{4}
 }
 
 // PortfolioEntry is one selected Asset and the measurement that earned it a
@@ -190,6 +414,186 @@ func (x *PortfolioEntry) GetContentHash() []byte {
 	return nil
 }
 
+// RedundancyEvidence is one pairwise redundancy comparison and the numbers
+// behind its verdict — what a user needs to check a REDUNDANT claim they
+// disagree with, per the redundancy-detection plan.
+//
+// Redundancy is inferred, never asserted: this message names the instrument
+// (kind), the shared evidence (n_overlap, paired_difference,
+// difference_interval), the margin and floor with which TERM produced them,
+// and — when the pair was measurement-equivalent — which criterion broke the
+// tie between the two Assets.
+type RedundancyEvidence struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The other Asset in this comparison.
+	WithAssetId string `protobuf:"bytes,1,opt,name=with_asset_id,json=withAssetId,proto3" json:"with_asset_id,omitempty"`
+	// Which instrument decided this comparison.
+	Kind RedundancyEvidenceKind `protobuf:"varint,2,opt,name=kind,proto3,enum=kno.v1.RedundancyEvidenceKind" json:"kind,omitempty"`
+	// |C|: the shared routed slice (measurement) or n/a for content evidence.
+	NOverlap int32 `protobuf:"varint,3,opt,name=n_overlap,json=nOverlap,proto3" json:"n_overlap,omitempty"`
+	// Mean of d_with(c) - d_this(c) over the shared slice — Condition 1's
+	// paired difference. Measurement evidence only.
+	PairedDifference float64 `protobuf:"fixed64,4,opt,name=paired_difference,json=pairedDifference,proto3" json:"paired_difference,omitempty"`
+	// Condition 1's TOST instrument: the corrected two-sided interval on
+	// paired_difference. A REDUNDANT verdict requires this to lie entirely
+	// inside +/- margin.
+	DifferenceInterval *Interval `protobuf:"bytes,5,opt,name=difference_interval,json=differenceInterval,proto3" json:"difference_interval,omitempty"`
+	// Condition 1's equivalence margin (delta).
+	Margin float64 `protobuf:"fixed64,6,opt,name=margin,proto3" json:"margin,omitempty"`
+	// Which term produced margin.
+	MarginSource MarginSource `protobuf:"varint,7,opt,name=margin_source,json=marginSource,proto3,enum=kno.v1.MarginSource" json:"margin_source,omitempty"`
+	// Condition 2's co-improvement Jaccard J = |I_A n I_B| / |I_A u I_B| over
+	// the shared slice.
+	CoImprovement float64 `protobuf:"fixed64,8,opt,name=co_improvement,json=coImprovement,proto3" json:"co_improvement,omitempty"`
+	// Bootstrap interval on co_improvement.
+	CoImprovementInterval *Interval `protobuf:"bytes,9,opt,name=co_improvement_interval,json=coImprovementInterval,proto3" json:"co_improvement_interval,omitempty"`
+	// Condition 2's floor: max(user floor, J_chance). A REDUNDANT verdict
+	// requires co_improvement_interval's lower bound to exceed this.
+	CoImprovementFloor float64 `protobuf:"fixed64,10,opt,name=co_improvement_floor,json=coImprovementFloor,proto3" json:"co_improvement_floor,omitempty"`
+	// Which term produced co_improvement_floor.
+	CoImprovementFloorSource CoImprovementFloorSource `protobuf:"varint,11,opt,name=co_improvement_floor_source,json=coImprovementFloorSource,proto3,enum=kno.v1.CoImprovementFloorSource" json:"co_improvement_floor_source,omitempty"`
+	// Jaccard overlap of 3-gram shingles. Recorded whenever a Pool was
+	// supplied, even when measurement evidence decided — so a disagreement
+	// between the two signals is visible rather than silently dropped.
+	ShingleOverlap float64 `protobuf:"fixed64,12,opt,name=shingle_overlap,json=shingleOverlap,proto3" json:"shingle_overlap,omitempty"`
+	// The survivor's carrying cost divided by the rejected Asset's, for a
+	// measurement-equivalent pair. Makes decided_by = ID on an equivalent pair
+	// with different costs auditable as "inside the bias band", not a bug.
+	CostRatio float64 `protobuf:"fixed64,13,opt,name=cost_ratio,json=costRatio,proto3" json:"cost_ratio,omitempty"`
+	// Which criterion broke the tie between two measurement-equivalent Assets.
+	DecidedBy     RedundancyDecidedBy `protobuf:"varint,14,opt,name=decided_by,json=decidedBy,proto3,enum=kno.v1.RedundancyDecidedBy" json:"decided_by,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RedundancyEvidence) Reset() {
+	*x = RedundancyEvidence{}
+	mi := &file_kno_v1_portfolio_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RedundancyEvidence) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RedundancyEvidence) ProtoMessage() {}
+
+func (x *RedundancyEvidence) ProtoReflect() protoreflect.Message {
+	mi := &file_kno_v1_portfolio_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RedundancyEvidence.ProtoReflect.Descriptor instead.
+func (*RedundancyEvidence) Descriptor() ([]byte, []int) {
+	return file_kno_v1_portfolio_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *RedundancyEvidence) GetWithAssetId() string {
+	if x != nil {
+		return x.WithAssetId
+	}
+	return ""
+}
+
+func (x *RedundancyEvidence) GetKind() RedundancyEvidenceKind {
+	if x != nil {
+		return x.Kind
+	}
+	return RedundancyEvidenceKind_REDUNDANCY_EVIDENCE_KIND_UNSPECIFIED
+}
+
+func (x *RedundancyEvidence) GetNOverlap() int32 {
+	if x != nil {
+		return x.NOverlap
+	}
+	return 0
+}
+
+func (x *RedundancyEvidence) GetPairedDifference() float64 {
+	if x != nil {
+		return x.PairedDifference
+	}
+	return 0
+}
+
+func (x *RedundancyEvidence) GetDifferenceInterval() *Interval {
+	if x != nil {
+		return x.DifferenceInterval
+	}
+	return nil
+}
+
+func (x *RedundancyEvidence) GetMargin() float64 {
+	if x != nil {
+		return x.Margin
+	}
+	return 0
+}
+
+func (x *RedundancyEvidence) GetMarginSource() MarginSource {
+	if x != nil {
+		return x.MarginSource
+	}
+	return MarginSource_MARGIN_SOURCE_UNSPECIFIED
+}
+
+func (x *RedundancyEvidence) GetCoImprovement() float64 {
+	if x != nil {
+		return x.CoImprovement
+	}
+	return 0
+}
+
+func (x *RedundancyEvidence) GetCoImprovementInterval() *Interval {
+	if x != nil {
+		return x.CoImprovementInterval
+	}
+	return nil
+}
+
+func (x *RedundancyEvidence) GetCoImprovementFloor() float64 {
+	if x != nil {
+		return x.CoImprovementFloor
+	}
+	return 0
+}
+
+func (x *RedundancyEvidence) GetCoImprovementFloorSource() CoImprovementFloorSource {
+	if x != nil {
+		return x.CoImprovementFloorSource
+	}
+	return CoImprovementFloorSource_CO_IMPROVEMENT_FLOOR_SOURCE_UNSPECIFIED
+}
+
+func (x *RedundancyEvidence) GetShingleOverlap() float64 {
+	if x != nil {
+		return x.ShingleOverlap
+	}
+	return 0
+}
+
+func (x *RedundancyEvidence) GetCostRatio() float64 {
+	if x != nil {
+		return x.CostRatio
+	}
+	return 0
+}
+
+func (x *RedundancyEvidence) GetDecidedBy() RedundancyDecidedBy {
+	if x != nil {
+		return x.DecidedBy
+	}
+	return RedundancyDecidedBy_REDUNDANCY_DECIDED_BY_UNSPECIFIED
+}
+
 // Rejection is one excluded Asset and why.
 //
 // The reason is an enum PLUS references, because DESIGN.md's Select stage
@@ -211,14 +615,18 @@ type Rejection struct {
 	// The measurement, when one was taken. Absent for
 	// REJECTION_REASON_IRRELEVANT and REJECTION_REASON_BUDGET_EXHAUSTED, where
 	// no measurement happened — and the absence is itself the honest answer.
-	Valuation     *Valuation `protobuf:"bytes,5,opt,name=valuation,proto3" json:"valuation,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Valuation *Valuation `protobuf:"bytes,5,opt,name=valuation,proto3" json:"valuation,omitempty"`
+	// The evidence behind a REJECTION_REASON_REDUNDANT verdict: one entry per
+	// Asset named in redundant_with_asset_ids. What a user checks a claim
+	// against — see the redundancy-detection plan's "way to actually check it".
+	RedundancyEvidence []*RedundancyEvidence `protobuf:"bytes,6,rep,name=redundancy_evidence,json=redundancyEvidence,proto3" json:"redundancy_evidence,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *Rejection) Reset() {
 	*x = Rejection{}
-	mi := &file_kno_v1_portfolio_proto_msgTypes[1]
+	mi := &file_kno_v1_portfolio_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -230,7 +638,7 @@ func (x *Rejection) String() string {
 func (*Rejection) ProtoMessage() {}
 
 func (x *Rejection) ProtoReflect() protoreflect.Message {
-	mi := &file_kno_v1_portfolio_proto_msgTypes[1]
+	mi := &file_kno_v1_portfolio_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -243,7 +651,7 @@ func (x *Rejection) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Rejection.ProtoReflect.Descriptor instead.
 func (*Rejection) Descriptor() ([]byte, []int) {
-	return file_kno_v1_portfolio_proto_rawDescGZIP(), []int{1}
+	return file_kno_v1_portfolio_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *Rejection) GetAssetId() string {
@@ -277,6 +685,13 @@ func (x *Rejection) GetDetail() string {
 func (x *Rejection) GetValuation() *Valuation {
 	if x != nil {
 		return x.Valuation
+	}
+	return nil
+}
+
+func (x *Rejection) GetRedundancyEvidence() []*RedundancyEvidence {
+	if x != nil {
+		return x.RedundancyEvidence
 	}
 	return nil
 }
@@ -321,13 +736,21 @@ type Portfolio struct {
 	SourceStatus RunStatus `protobuf:"varint,9,opt,name=source_status,json=sourceStatus,proto3,enum=kno.v1.RunStatus" json:"source_status,omitempty"`
 	// The source run's incomplete_reason, verbatim, when it had one.
 	SourceIncompleteReason string `protobuf:"bytes,10,opt,name=source_incomplete_reason,json=sourceIncompleteReason,proto3" json:"source_incomplete_reason,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// How many pairwise redundancy tests this run actually performed —
+	// greedy compares each candidate only against already-selected Assets, so
+	// this is bounded by k(k-1)/2 but is normally far fewer. Every
+	// RedundancyEvidence.difference_interval and .co_improvement_interval is
+	// corrected for this count, not for n_screened: the redundancy tests are a
+	// different family from the keep/reject tests, counted separately per the
+	// redundancy-detection plan.
+	NRedundancyTests int32 `protobuf:"varint,11,opt,name=n_redundancy_tests,json=nRedundancyTests,proto3" json:"n_redundancy_tests,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *Portfolio) Reset() {
 	*x = Portfolio{}
-	mi := &file_kno_v1_portfolio_proto_msgTypes[2]
+	mi := &file_kno_v1_portfolio_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -339,7 +762,7 @@ func (x *Portfolio) String() string {
 func (*Portfolio) ProtoMessage() {}
 
 func (x *Portfolio) ProtoReflect() protoreflect.Message {
-	mi := &file_kno_v1_portfolio_proto_msgTypes[2]
+	mi := &file_kno_v1_portfolio_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -352,7 +775,7 @@ func (x *Portfolio) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Portfolio.ProtoReflect.Descriptor instead.
 func (*Portfolio) Descriptor() ([]byte, []int) {
-	return file_kno_v1_portfolio_proto_rawDescGZIP(), []int{2}
+	return file_kno_v1_portfolio_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *Portfolio) GetRunId() string {
@@ -425,6 +848,13 @@ func (x *Portfolio) GetSourceIncompleteReason() string {
 	return ""
 }
 
+func (x *Portfolio) GetNRedundancyTests() int32 {
+	if x != nil {
+		return x.NRedundancyTests
+	}
+	return 0
+}
+
 // GapCluster is the gaps verdict for one failure cluster of the source Value
 // run.
 type GapCluster struct {
@@ -456,7 +886,7 @@ type GapCluster struct {
 
 func (x *GapCluster) Reset() {
 	*x = GapCluster{}
-	mi := &file_kno_v1_portfolio_proto_msgTypes[3]
+	mi := &file_kno_v1_portfolio_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -468,7 +898,7 @@ func (x *GapCluster) String() string {
 func (*GapCluster) ProtoMessage() {}
 
 func (x *GapCluster) ProtoReflect() protoreflect.Message {
-	mi := &file_kno_v1_portfolio_proto_msgTypes[3]
+	mi := &file_kno_v1_portfolio_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -481,7 +911,7 @@ func (x *GapCluster) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GapCluster.ProtoReflect.Descriptor instead.
 func (*GapCluster) Descriptor() ([]byte, []int) {
-	return file_kno_v1_portfolio_proto_rawDescGZIP(), []int{3}
+	return file_kno_v1_portfolio_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *GapCluster) GetTag() string {
@@ -555,7 +985,7 @@ type Gaps struct {
 
 func (x *Gaps) Reset() {
 	*x = Gaps{}
-	mi := &file_kno_v1_portfolio_proto_msgTypes[4]
+	mi := &file_kno_v1_portfolio_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -567,7 +997,7 @@ func (x *Gaps) String() string {
 func (*Gaps) ProtoMessage() {}
 
 func (x *Gaps) ProtoReflect() protoreflect.Message {
-	mi := &file_kno_v1_portfolio_proto_msgTypes[4]
+	mi := &file_kno_v1_portfolio_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -580,7 +1010,7 @@ func (x *Gaps) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Gaps.ProtoReflect.Descriptor instead.
 func (*Gaps) Descriptor() ([]byte, []int) {
-	return file_kno_v1_portfolio_proto_rawDescGZIP(), []int{4}
+	return file_kno_v1_portfolio_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *Gaps) GetRunId() string {
@@ -631,7 +1061,7 @@ type Budget struct {
 
 func (x *Budget) Reset() {
 	*x = Budget{}
-	mi := &file_kno_v1_portfolio_proto_msgTypes[5]
+	mi := &file_kno_v1_portfolio_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -643,7 +1073,7 @@ func (x *Budget) String() string {
 func (*Budget) ProtoMessage() {}
 
 func (x *Budget) ProtoReflect() protoreflect.Message {
-	mi := &file_kno_v1_portfolio_proto_msgTypes[5]
+	mi := &file_kno_v1_portfolio_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -656,7 +1086,7 @@ func (x *Budget) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Budget.ProtoReflect.Descriptor instead.
 func (*Budget) Descriptor() ([]byte, []int) {
-	return file_kno_v1_portfolio_proto_rawDescGZIP(), []int{5}
+	return file_kno_v1_portfolio_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *Budget) GetMaxContextTokens() int64 {
@@ -714,13 +1144,32 @@ const file_kno_v1_portfolio_proto_rawDesc = "" +
 	"\x0en_routed_scale\x18\x05 \x01(\x01H\x00R\fnRoutedScale\x88\x01\x01\x12&\n" +
 	"\fcontent_hash\x18\x06 \x01(\fH\x01R\vcontentHash\x88\x01\x01B\x11\n" +
 	"\x0f_n_routed_scaleB\x0f\n" +
-	"\r_content_hash\"\xd9\x01\n" +
+	"\r_content_hash\"\xd4\x05\n" +
+	"\x12RedundancyEvidence\x12\"\n" +
+	"\rwith_asset_id\x18\x01 \x01(\tR\vwithAssetId\x122\n" +
+	"\x04kind\x18\x02 \x01(\x0e2\x1e.kno.v1.RedundancyEvidenceKindR\x04kind\x12\x1b\n" +
+	"\tn_overlap\x18\x03 \x01(\x05R\bnOverlap\x12+\n" +
+	"\x11paired_difference\x18\x04 \x01(\x01R\x10pairedDifference\x12A\n" +
+	"\x13difference_interval\x18\x05 \x01(\v2\x10.kno.v1.IntervalR\x12differenceInterval\x12\x16\n" +
+	"\x06margin\x18\x06 \x01(\x01R\x06margin\x129\n" +
+	"\rmargin_source\x18\a \x01(\x0e2\x14.kno.v1.MarginSourceR\fmarginSource\x12%\n" +
+	"\x0eco_improvement\x18\b \x01(\x01R\rcoImprovement\x12H\n" +
+	"\x17co_improvement_interval\x18\t \x01(\v2\x10.kno.v1.IntervalR\x15coImprovementInterval\x120\n" +
+	"\x14co_improvement_floor\x18\n" +
+	" \x01(\x01R\x12coImprovementFloor\x12_\n" +
+	"\x1bco_improvement_floor_source\x18\v \x01(\x0e2 .kno.v1.CoImprovementFloorSourceR\x18coImprovementFloorSource\x12'\n" +
+	"\x0fshingle_overlap\x18\f \x01(\x01R\x0eshingleOverlap\x12\x1d\n" +
+	"\n" +
+	"cost_ratio\x18\r \x01(\x01R\tcostRatio\x12:\n" +
+	"\n" +
+	"decided_by\x18\x0e \x01(\x0e2\x1b.kno.v1.RedundancyDecidedByR\tdecidedBy\"\xa6\x02\n" +
 	"\tRejection\x12\x19\n" +
 	"\basset_id\x18\x01 \x01(\tR\aassetId\x12/\n" +
 	"\x06reason\x18\x02 \x01(\x0e2\x17.kno.v1.RejectionReasonR\x06reason\x127\n" +
 	"\x18redundant_with_asset_ids\x18\x03 \x03(\tR\x15redundantWithAssetIds\x12\x16\n" +
 	"\x06detail\x18\x04 \x01(\tR\x06detail\x12/\n" +
-	"\tvaluation\x18\x05 \x01(\v2\x11.kno.v1.ValuationR\tvaluation\"\xec\x03\n" +
+	"\tvaluation\x18\x05 \x01(\v2\x11.kno.v1.ValuationR\tvaluation\x12K\n" +
+	"\x13redundancy_evidence\x18\x06 \x03(\v2\x1a.kno.v1.RedundancyEvidenceR\x12redundancyEvidence\"\x9a\x04\n" +
 	"\tPortfolio\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x122\n" +
 	"\bselected\x18\x02 \x03(\v2\x16.kno.v1.PortfolioEntryR\bselected\x12-\n" +
@@ -733,7 +1182,8 @@ const file_kno_v1_portfolio_proto_rawDesc = "" +
 	"\rsource_run_id\x18\b \x01(\tR\vsourceRunId\x126\n" +
 	"\rsource_status\x18\t \x01(\x0e2\x11.kno.v1.RunStatusR\fsourceStatus\x128\n" +
 	"\x18source_incomplete_reason\x18\n" +
-	" \x01(\tR\x16sourceIncompleteReason\"\x87\x02\n" +
+	" \x01(\tR\x16sourceIncompleteReason\x12,\n" +
+	"\x12n_redundancy_tests\x18\v \x01(\x05R\x10nRedundancyTests\"\x87\x02\n" +
 	"\n" +
 	"GapCluster\x12\x10\n" +
 	"\x03tag\x18\x01 \x01(\tR\x03tag\x12\x1d\n" +
@@ -755,7 +1205,24 @@ const file_kno_v1_portfolio_proto_rawDesc = "" +
 	"\x18max_knowledge_base_bytes\x18\x06 \x01(\x03R\x15maxKnowledgeBaseBytes\x12-\n" +
 	"\x13max_cost_usd_micros\x18\x03 \x01(\x03R\x10maxCostUsdMicros\x12\"\n" +
 	"\rmax_llm_calls\x18\x04 \x01(\x03R\vmaxLlmCalls\x12\x16\n" +
-	"\x06trials\x18\x05 \x01(\x05R\x06trials*l\n" +
+	"\x06trials\x18\x05 \x01(\x05R\x06trials*\x9a\x01\n" +
+	"\x16RedundancyEvidenceKind\x12(\n" +
+	"$REDUNDANCY_EVIDENCE_KIND_UNSPECIFIED\x10\x00\x12(\n" +
+	"$REDUNDANCY_EVIDENCE_KIND_MEASUREMENT\x10\x01\x12,\n" +
+	"(REDUNDANCY_EVIDENCE_KIND_CONTENT_SHINGLE\x10\x02*\x9d\x01\n" +
+	"\x13RedundancyDecidedBy\x12%\n" +
+	"!REDUNDANCY_DECIDED_BY_UNSPECIFIED\x10\x00\x12\x1e\n" +
+	"\x1aREDUNDANCY_DECIDED_BY_COST\x10\x01\x12\x1c\n" +
+	"\x18REDUNDANCY_DECIDED_BY_ID\x10\x02\x12!\n" +
+	"\x1dREDUNDANCY_DECIDED_BY_CONTENT\x10\x03*\x95\x01\n" +
+	"\x18CoImprovementFloorSource\x12+\n" +
+	"'CO_IMPROVEMENT_FLOOR_SOURCE_UNSPECIFIED\x10\x00\x12&\n" +
+	"\"CO_IMPROVEMENT_FLOOR_SOURCE_CHANCE\x10\x01\x12$\n" +
+	" CO_IMPROVEMENT_FLOOR_SOURCE_USER\x10\x02*j\n" +
+	"\fMarginSource\x12\x1d\n" +
+	"\x19MARGIN_SOURCE_UNSPECIFIED\x10\x00\x12#\n" +
+	"\x1fMARGIN_SOURCE_SAMPLE_RESOLUTION\x10\x01\x12\x16\n" +
+	"\x12MARGIN_SOURCE_USER\x10\x02*l\n" +
 	"\tGapStatus\x12\x1a\n" +
 	"\x16GAP_STATUS_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13GAP_STATUS_IMPROVED\x10\x01\x12\x16\n" +
@@ -776,42 +1243,54 @@ func file_kno_v1_portfolio_proto_rawDescGZIP() []byte {
 	return file_kno_v1_portfolio_proto_rawDescData
 }
 
-var file_kno_v1_portfolio_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_kno_v1_portfolio_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_kno_v1_portfolio_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
+var file_kno_v1_portfolio_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_kno_v1_portfolio_proto_goTypes = []any{
-	(GapStatus)(0),         // 0: kno.v1.GapStatus
-	(*PortfolioEntry)(nil), // 1: kno.v1.PortfolioEntry
-	(*Rejection)(nil),      // 2: kno.v1.Rejection
-	(*Portfolio)(nil),      // 3: kno.v1.Portfolio
-	(*GapCluster)(nil),     // 4: kno.v1.GapCluster
-	(*Gaps)(nil),           // 5: kno.v1.Gaps
-	(*Budget)(nil),         // 6: kno.v1.Budget
-	(Destination)(0),       // 7: kno.v1.Destination
-	(*Valuation)(nil),      // 8: kno.v1.Valuation
-	(RejectionReason)(0),   // 9: kno.v1.RejectionReason
-	(*CostVector)(nil),     // 10: kno.v1.CostVector
-	(*Interval)(nil),       // 11: kno.v1.Interval
-	(RunStatus)(0),         // 12: kno.v1.RunStatus
+	(RedundancyEvidenceKind)(0),   // 0: kno.v1.RedundancyEvidenceKind
+	(RedundancyDecidedBy)(0),      // 1: kno.v1.RedundancyDecidedBy
+	(CoImprovementFloorSource)(0), // 2: kno.v1.CoImprovementFloorSource
+	(MarginSource)(0),             // 3: kno.v1.MarginSource
+	(GapStatus)(0),                // 4: kno.v1.GapStatus
+	(*PortfolioEntry)(nil),        // 5: kno.v1.PortfolioEntry
+	(*RedundancyEvidence)(nil),    // 6: kno.v1.RedundancyEvidence
+	(*Rejection)(nil),             // 7: kno.v1.Rejection
+	(*Portfolio)(nil),             // 8: kno.v1.Portfolio
+	(*GapCluster)(nil),            // 9: kno.v1.GapCluster
+	(*Gaps)(nil),                  // 10: kno.v1.Gaps
+	(*Budget)(nil),                // 11: kno.v1.Budget
+	(Destination)(0),              // 12: kno.v1.Destination
+	(*Valuation)(nil),             // 13: kno.v1.Valuation
+	(*Interval)(nil),              // 14: kno.v1.Interval
+	(RejectionReason)(0),          // 15: kno.v1.RejectionReason
+	(*CostVector)(nil),            // 16: kno.v1.CostVector
+	(RunStatus)(0),                // 17: kno.v1.RunStatus
 }
 var file_kno_v1_portfolio_proto_depIdxs = []int32{
-	7,  // 0: kno.v1.PortfolioEntry.destination:type_name -> kno.v1.Destination
-	8,  // 1: kno.v1.PortfolioEntry.valuation:type_name -> kno.v1.Valuation
-	9,  // 2: kno.v1.Rejection.reason:type_name -> kno.v1.RejectionReason
-	8,  // 3: kno.v1.Rejection.valuation:type_name -> kno.v1.Valuation
-	1,  // 4: kno.v1.Portfolio.selected:type_name -> kno.v1.PortfolioEntry
-	2,  // 5: kno.v1.Portfolio.rejected:type_name -> kno.v1.Rejection
-	6,  // 6: kno.v1.Portfolio.budget:type_name -> kno.v1.Budget
-	10, // 7: kno.v1.Portfolio.total_cost:type_name -> kno.v1.CostVector
-	11, // 8: kno.v1.Portfolio.dev_estimated_interval:type_name -> kno.v1.Interval
-	12, // 9: kno.v1.Portfolio.source_status:type_name -> kno.v1.RunStatus
-	0,  // 10: kno.v1.GapCluster.status:type_name -> kno.v1.GapStatus
-	11, // 11: kno.v1.GapCluster.best_interval:type_name -> kno.v1.Interval
-	4,  // 12: kno.v1.Gaps.clusters:type_name -> kno.v1.GapCluster
-	13, // [13:13] is the sub-list for method output_type
-	13, // [13:13] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	12, // 0: kno.v1.PortfolioEntry.destination:type_name -> kno.v1.Destination
+	13, // 1: kno.v1.PortfolioEntry.valuation:type_name -> kno.v1.Valuation
+	0,  // 2: kno.v1.RedundancyEvidence.kind:type_name -> kno.v1.RedundancyEvidenceKind
+	14, // 3: kno.v1.RedundancyEvidence.difference_interval:type_name -> kno.v1.Interval
+	3,  // 4: kno.v1.RedundancyEvidence.margin_source:type_name -> kno.v1.MarginSource
+	14, // 5: kno.v1.RedundancyEvidence.co_improvement_interval:type_name -> kno.v1.Interval
+	2,  // 6: kno.v1.RedundancyEvidence.co_improvement_floor_source:type_name -> kno.v1.CoImprovementFloorSource
+	1,  // 7: kno.v1.RedundancyEvidence.decided_by:type_name -> kno.v1.RedundancyDecidedBy
+	15, // 8: kno.v1.Rejection.reason:type_name -> kno.v1.RejectionReason
+	13, // 9: kno.v1.Rejection.valuation:type_name -> kno.v1.Valuation
+	6,  // 10: kno.v1.Rejection.redundancy_evidence:type_name -> kno.v1.RedundancyEvidence
+	5,  // 11: kno.v1.Portfolio.selected:type_name -> kno.v1.PortfolioEntry
+	7,  // 12: kno.v1.Portfolio.rejected:type_name -> kno.v1.Rejection
+	11, // 13: kno.v1.Portfolio.budget:type_name -> kno.v1.Budget
+	16, // 14: kno.v1.Portfolio.total_cost:type_name -> kno.v1.CostVector
+	14, // 15: kno.v1.Portfolio.dev_estimated_interval:type_name -> kno.v1.Interval
+	17, // 16: kno.v1.Portfolio.source_status:type_name -> kno.v1.RunStatus
+	4,  // 17: kno.v1.GapCluster.status:type_name -> kno.v1.GapStatus
+	14, // 18: kno.v1.GapCluster.best_interval:type_name -> kno.v1.Interval
+	9,  // 19: kno.v1.Gaps.clusters:type_name -> kno.v1.GapCluster
+	20, // [20:20] is the sub-list for method output_type
+	20, // [20:20] is the sub-list for method input_type
+	20, // [20:20] is the sub-list for extension type_name
+	20, // [20:20] is the sub-list for extension extendee
+	0,  // [0:20] is the sub-list for field type_name
 }
 
 func init() { file_kno_v1_portfolio_proto_init() }
@@ -827,8 +1306,8 @@ func file_kno_v1_portfolio_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_kno_v1_portfolio_proto_rawDesc), len(file_kno_v1_portfolio_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   6,
+			NumEnums:      5,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

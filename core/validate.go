@@ -438,13 +438,15 @@ func (o ValidateOptions) chain(ctx context.Context, p *validatePlan) error {
 	if got := valueRun.GetStage(); got != knov1.Stage_STAGE_VALUE {
 		return errs.ErrInvalidInput.Wrap(fmt.Errorf(
 			"the Portfolio from %s names %s as its source, which is a %s run, not a value",
-			o.SelectRunID, p.valueRunID, got))
+			o.SelectRunID, p.valueRunID, got,
+		))
 	}
 	p.baselineRunID = valueRun.GetBaselineRunId()
 	if p.baselineRunID == "" {
 		return errs.ErrInvalidInput.Wrap(fmt.Errorf(
 			"value run %s names no baseline run, so the chain behind this Portfolio "+
-				"is broken", p.valueRunID))
+				"is broken", p.valueRunID,
+		))
 	}
 	return nil
 }

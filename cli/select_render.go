@@ -164,3 +164,133 @@ func destinationName(d knov1.Destination) string {
 		return "context"
 	}
 }
+
+// redundancyEvidenceKindName renders which instrument decided a redundancy
+// comparison.
+func redundancyEvidenceKindName(k knov1.RedundancyEvidenceKind) string {
+	switch k {
+	case knov1.RedundancyEvidenceKind_REDUNDANCY_EVIDENCE_KIND_MEASUREMENT:
+		return "measurement"
+	case knov1.RedundancyEvidenceKind_REDUNDANCY_EVIDENCE_KIND_CONTENT_SHINGLE:
+		return "content_shingle"
+	default:
+		return "unspecified"
+	}
+}
+
+// marginSourceName renders which term produced the equivalence margin.
+func marginSourceName(s knov1.MarginSource) string {
+	if s == knov1.MarginSource_MARGIN_SOURCE_USER {
+		return "user"
+	}
+	return "sample_resolution"
+}
+
+// coImprovementFloorSourceName renders which term produced the co-improvement
+// floor.
+func coImprovementFloorSourceName(s knov1.CoImprovementFloorSource) string {
+	if s == knov1.CoImprovementFloorSource_CO_IMPROVEMENT_FLOOR_SOURCE_USER {
+		return "user"
+	}
+	return "chance"
+}
+
+// redundancyDecidedByName renders which criterion broke a measurement-
+// equivalent pair's tie.
+func redundancyDecidedByName(d knov1.RedundancyDecidedBy) string {
+	switch d {
+	case knov1.RedundancyDecidedBy_REDUNDANCY_DECIDED_BY_COST:
+		return "cost"
+	case knov1.RedundancyDecidedBy_REDUNDANCY_DECIDED_BY_ID:
+		return "id"
+	case knov1.RedundancyDecidedBy_REDUNDANCY_DECIDED_BY_CONTENT:
+		return "content"
+	default:
+		return "unspecified"
+	}
+}
+
+// renderExplain writes `kno select --explain <asset-id>`'s output: the
+// per-Case table for every Asset named in the explained Asset's redundancy
+// evidence. Free, read-only, no provider call.
+func renderExplain(out io.Writer, jsonOut bool, assetID string, cmps []core.ExplainComparison) error {
+	if jsonOut {
+		return writeJSON(out, explainReport(assetID, cmps))
+	}
+	if len(cmps) == 0 {
+		_, err := fmt.Fprintf(out, "%s was not rejected as redundant by this decision; nothing to explain.\n", assetID)
+		return err
+	}
+	if _, err := fmt.Fprintf(out, "%s — redundancy evidence\n", assetID); err != nil {
+		return err
+	}
+	for _, c := range cmps {
+		if _, err := fmt.Fprintf(out, "\nagainst %s (%s)\n", c.WithAssetID, redundancyEvidenceKindName(c.Evidence.GetKind())); err != nil {
+			return err
+		}
+		if len(c.Rows) == 0 {
+			if _, err := fmt.Fprintf(out, "  no per-Case table: %s decides with no Case-level claim\n",
+				redundancyEvidenceKindName(c.Evidence.GetKind())); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := fmt.Fprintf(out, "  %-14s  %-10s  %-14s  %-10s  %-14s\n",
+			"CASE", "BASELINE", "THIS DELTA", "IMPROVED", "WITH DELTA"); err != nil {
+			return err
+		}
+		for _, r := range c.Rows {
+			thisDelta := fmt.Sprintf("%+.4f", r.ThisDelta)
+			withDelta := fmt.Sprintf("%+.4f", r.WithDelta)
+			if _, err := fmt.Fprintf(out, "  %-14s  %-10.4f  %-14s  %-10t  %-14s\n",
+				r.CaseID, r.Baseline, thisDelta, r.ThisImproved, withDelta); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// explainReportRow / explainReportComparison / explainReport are --explain's
+// JSON shape: structured evidence, per the same rule select's own --json
+// follows — a reader who disagrees with a claim needs the numbers, not
+// parsed prose.
+type explainReportRow struct {
+	CaseID       string  `json:"case_id"`
+	Baseline     float64 `json:"baseline"`
+	ThisDelta    float64 `json:"this_delta"`
+	ThisImproved bool    `json:"this_improved"`
+	WithDelta    float64 `json:"with_delta"`
+	WithImproved bool    `json:"with_improved"`
+}
+
+type explainReportComparison struct {
+	WithAssetID string                `json:"with_asset_id"`
+	Evidence    *selectReportEvidence `json:"evidence,omitempty"`
+	Rows        []explainReportRow    `json:"rows,omitempty"`
+}
+
+type explainReportDoc struct {
+	AssetID     string                    `json:"asset_id"`
+	Comparisons []explainReportComparison `json:"comparisons"`
+}
+
+func explainReport(assetID string, cmps []core.ExplainComparison) explainReportDoc {
+	doc := explainReportDoc{AssetID: assetID}
+	for _, c := range cmps {
+		rc := explainReportComparison{WithAssetID: c.WithAssetID}
+		if c.Evidence != nil {
+			ev := redundancyEvidenceReport(c.Evidence)
+			rc.Evidence = &ev
+		}
+		for _, r := range c.Rows {
+			rc.Rows = append(rc.Rows, explainReportRow{
+				CaseID: r.CaseID, Baseline: r.Baseline,
+				ThisDelta: r.ThisDelta, ThisImproved: r.ThisImproved,
+				WithDelta: r.WithDelta, WithImproved: r.WithImproved,
+			})
+		}
+		doc.Comparisons = append(doc.Comparisons, rc)
+	}
+	return doc
+}
