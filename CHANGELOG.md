@@ -115,6 +115,8 @@ covenants — breaking any of them requires a major version.
 * move the cookbook to uknoAI/kno-examples, leaving tombstones ([#163](https://github.com/uknoAI/kno/issues/163)) ([94f32df](https://github.com/uknoAI/kno/commit/94f32dfc5f0bd6d9e49570f02278375d249cb5e4))
 
 ## [Unreleased]
+
+## v0.1.7 — in detail
 ### Added
 
 - **`kno bridge` measures instead of refusing to start.** The tuner-bridge
