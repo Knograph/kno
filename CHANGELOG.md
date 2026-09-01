@@ -74,6 +74,8 @@ covenants — breaking any of them requires a major version.
 
 ## [Unreleased]
 
+## v0.1.5 — in detail
+
 ### Fixed
 
 - **The changelog fold no longer races the tag, and leaves an `[Unreleased]`
