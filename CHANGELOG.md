@@ -49,7 +49,7 @@ covenants — breaking any of them requires a major version.
 * fold the hand-written changelog into v0.1.3 ([#164](https://github.com/uknoAI/kno/issues/164)) ([788c09f](https://github.com/uknoAI/kno/commit/788c09faffcaf314fe8288447ff1dfa0fd08a8d6))
 * move the cookbook to uknoAI/kno-examples, leaving tombstones ([#163](https://github.com/uknoAI/kno/issues/163)) ([94f32df](https://github.com/uknoAI/kno/commit/94f32dfc5f0bd6d9e49570f02278375d249cb5e4))
 
-## [Unreleased]
+## v0.1.4 — in detail
 
 ### Tests
 
