@@ -181,6 +181,7 @@ UNCOVERED=$(
 		release-identity-check|the cosign identity changed in one of the four files that quote it
 		release-stamp|a binary whose version stamp does not match the tag
 		pr-ready|a feat: branch with no CHANGELOG entry
+		fold-changelog|an [Unreleased] block that changed since the tag, which must refuse to auto-merge
 		test-live|KNO_MAX_COST_USD unset, which must refuse to spend
 		record-fixtures|KNO_MAX_COST_USD unset, which must refuse to spend
 	ROWS
