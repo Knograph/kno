@@ -396,8 +396,12 @@ The OSS engine is complete and genuinely useful standalone. The platform sells c
 ## Milestones
 
 - **v0.1 (launchable):** `init` (huh wizard), `demo` (the whole loop against `fake:`, on embedded data, for free), `mine`, `run`, `baseline`, `value` (mechanism + relevance routing, context-injection mode, CIs), `select`, `export`, `report` (glow), `eval inspect` (read-only: whether an eval set can support attribution at all, before anything is spent), TUI dashboard, budget confirm, resume. Ring-0 contracts + Ring-1 adapters: openai-compatible, anthropic, shell agents; jsonl/csv/parquet/markdown pools. *Value prop: "it told me which 12% of my data earns its place, where each piece belongs, what it costs, and what to stop dumping into JSONL."*
-- **v0.2:** `validate` (set-level + holdout ceremony hardened), knowledge-injection mode for writable KBs, redundancy detection, `judge calibrate`, `Tuner` interface + proxy-FT bridge (Tier 3) behind `--bridge`.
-- **v0.3:** post-fine-tune validation (`validate --agent`), `serve` + connect-rpc + SSE events, **MCP pool adapter**, **Ring-2 exec plugin protocol (experimental) + `kno plugins list`**, OTel export, generated Python SDK.
+- **v0.2:** `validate` (set-level + holdout ceremony hardened), `judge calibrate`, stage spend reporting, `Tuner` interface + proxy-FT bridge (Tier 3) behind `--bridge`.
+- **v0.3:** post-fine-tune validation (`validate --agent`), knowledge-injection mode for writable KBs, `serve` + connect-rpc + SSE events, **MCP pool adapter**, **Ring-2 exec plugin protocol (experimental) + `kno plugins list`**, OTel export, generated Python SDK.
+- **Deferred, no milestone:** measured redundancy detection. Cut from v0.2 in
+  [ADR-0008](docs/adr/0008-measured-redundancy-is-cut-from-v0-2.md) — the
+  instrument was wrong, not the implementation, and the replacement is not
+  designed. It gets a milestone when it has a design.
 - **v0.4:** hand-polished Python SDK, community goal/judge packs + `awesome-kno` index, Anthropic + local-model Tuner adapters, local transfer-prior calibration (Tier 5, single-tenant), gradient-influence sidecar (experimental).
 
 ## Success criteria
