@@ -28,6 +28,29 @@ covenants — breaking any of them requires a major version.
      At release time the hand-written heading is renamed from [Unreleased] to
      the version. See docs/debt.md#76 for why that is still a manual step. -->
 
+## [0.1.5](https://github.com/uknoAI/kno/compare/v0.1.4...v0.1.5) (2026-09-01)
+
+
+### Features
+
+* judge calibrate — a judge is measured before it is trusted ([#177](https://github.com/uknoAI/kno/issues/177)) ([bd2cc17](https://github.com/uknoAI/kno/commit/bd2cc17520e6b939f6493ed65d10c904002ed2a1))
+
+
+### Bug Fixes
+
+* **release:** fold the changelog correctly, and stop it racing the tag ([#174](https://github.com/uknoAI/kno/issues/174)) ([9112255](https://github.com/uknoAI/kno/commit/91122551c46ba074298fc974202de6fe6822e951))
+* **validate:** a resumed run restores the tokens it spent ([#172](https://github.com/uknoAI/kno/issues/172)) ([14291c8](https://github.com/uknoAI/kno/commit/14291c82fe5ea979effea37f65aeb1a9499da5b9))
+
+
+### Documentation
+
+* **plans:** amend redundancy detection with F5 and the moved cookbook ([#173](https://github.com/uknoAI/kno/issues/173)) ([159d6e1](https://github.com/uknoAI/kno/commit/159d6e1ef7a9e53654d892a860b26032b4ad5702))
+
+
+### Build & Dependencies
+
+* **release:** notify kno-www when a release ships ([#176](https://github.com/uknoAI/kno/issues/176)) ([01ebc01](https://github.com/uknoAI/kno/commit/01ebc012fea86e25a6ef23627d2ac5edf8a677ee))
+
 ## [0.1.4](https://github.com/uknoAI/kno/compare/v0.1.3...v0.1.4) (2026-09-01)
 
 
