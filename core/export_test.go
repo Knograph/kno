@@ -144,6 +144,56 @@ func TestExportTuningSetPinned(t *testing.T) {
 	require.Equal(t, selRun, selRun) // keep the var: the fixture's run ID is asserted via the manifest
 }
 
+// TestRenderTuningSetForAssetsIsByteIdenticalToExport is acceptance
+// criterion 3: the bytes RenderTuningSetForAssets produces for a group's
+// Asset IDs are byte-identical to what `kno export --destination
+// tuning_set` writes for the same Portfolio filtered to that group — both
+// call the same renderTuningSet function, and this test proves it rather
+// than asserting it by inspection.
+func TestRenderTuningSetForAssetsIsByteIdenticalToExport(t *testing.T) {
+	t.Parallel()
+
+	st := openTestStore(t)
+	_, pool := exportFixture(t, st)
+	path := filepath.Join(t.TempDir(), "training.jsonl")
+	_, err := runExport(t, exportOpts(st, pool, knov1.Destination_DESTINATION_TUNING_SET, path, false))
+	require.NoError(t, err)
+	exported := readFile(t, path)
+
+	p, err := st.Portfolio(context.Background(), "sel-1")
+	require.NoError(t, err)
+	assets, err := LoadAssetsByID(context.Background(), pool)
+	require.NoError(t, err)
+
+	got, err := RenderTuningSetForAssets(p, []string{"tune-a"}, assets)
+	require.NoError(t, err)
+	require.Equal(t, exported, string(got))
+}
+
+// TestRenderTuningSetForAssetsFiltersToTheGivenIDs pins that a group's
+// rendered file contains only the requested Asset IDs' lines, in Portfolio
+// order — the leave-one-out shape group ablation depends on.
+func TestRenderTuningSetForAssetsFiltersToTheGivenIDs(t *testing.T) {
+	t.Parallel()
+
+	p := &knov1.Portfolio{Selected: []*PortfolioEntry{
+		{AssetId: "a", Destination: knov1.Destination_DESTINATION_TUNING_SET},
+		{AssetId: "b", Destination: knov1.Destination_DESTINATION_TUNING_SET},
+		{AssetId: "c", Destination: knov1.Destination_DESTINATION_TUNING_SET},
+	}}
+	assets := map[string]*Asset{
+		"a": {Id: "a", Content: []byte("demo a")},
+		"b": {Id: "b", Content: []byte("demo b")},
+		"c": {Id: "c", Content: []byte("demo c")},
+	}
+
+	got, err := RenderTuningSetForAssets(p, []string{"a", "c"}, assets)
+	require.NoError(t, err)
+	require.Contains(t, string(got), "demo a")
+	require.Contains(t, string(got), "demo c")
+	require.NotContains(t, string(got), "demo b")
+}
+
 // TestRenderTuningSetRequiresAnAssistantTurn is the table pinning the Step-1
 // fix: every hosted fine-tuning API requires at least one `assistant`
 // message per example, and the old renderer produced a `user`-only line for

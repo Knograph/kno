@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"iter"
+	"time"
 
 	"github.com/knograph/kno/stats/budget"
 )
@@ -238,7 +239,11 @@ type Goal interface {
 // constraint is what makes proxy fine-tuning affordable enough to be a
 // measurement rather than an infrastructure commitment.
 //
-// Every Submit is a spend path, so it must pass the budget guard first.
+// Every Submit is a spend path, so it must pass the budget guard first. So is
+// Deploy: a Together dedicated endpoint bills per minute per replica, idle
+// included, which is a SECOND spend shape distinct from Submit's one-time
+// commitment — see the bridge plan's Step 2(f). Both must flow through
+// stats/budget before any request leaves.
 type Tuner interface {
 	// Submit sends a tuning job to the provider.
 	Submit(ctx context.Context, job *TuningJob) (*JobRef, error)
@@ -246,7 +251,75 @@ type Tuner interface {
 	// Status reports where a submitted job stands.
 	Status(ctx context.Context, ref *JobRef) (*JobState, error)
 
-	// Model returns the tuned model as an agent ref, usable directly for
-	// post-tune validation against the same untouched holdout.
+	// Model returns the tuned model as an agent ref.
+	//
+	// This is NOT a promise the model is reachable. Some providers auto-serve
+	// a finished job; Together does not — reaching a Together fine-tune over
+	// HTTP requires Deploy first. A caller that needs to invoke the model
+	// must call Deploy and wait for the returned Endpoint to be ready before
+	// using this ref against an Agent adapter.
 	Model(ctx context.Context, ref *JobRef) (*AgentRef, error)
+
+	// Deploy brings a finished job's model up behind a servable endpoint.
+	//
+	// This is the SECOND spend shape the bridge introduces: unlike Submit, it
+	// bills incrementally (per minute per replica, idle included) and CAN be
+	// stopped, so the engine settles it forward per tick through the budget
+	// guard rather than reserving a pessimistic lump sum at call time — see
+	// Step 2(f). A Tuner whose provider auto-serves a finished job (no
+	// separate deploy step) implements this as a no-op returning a
+	// zero-rate Endpoint, which is how the interface stays honest for a
+	// provider that is not Together.
+	//
+	// The caller is responsible for waiting until the returned Endpoint is
+	// ready (however this Tuner signals that — a status field, a poll) before
+	// invoking the model, and for calling Teardown exactly once when done,
+	// unconditionally, including on every error and cancellation path.
+	Deploy(ctx context.Context, ref *JobRef) (*Endpoint, error)
+
+	// Teardown stops a deployed endpoint and its billing.
+	//
+	// MUST be called on every exit path once Deploy has returned successfully
+	// — success, eval-pass failure, a budget or serve-minute cap, a timeout,
+	// or cancellation. An error here means the endpoint may still be live and
+	// billing after the caller has moved on: the caller must treat that as
+	// loud (see docs — a leaked endpoint is reported, never swallowed), not
+	// as a retryable nuisance.
+	Teardown(ctx context.Context, ep *Endpoint) error
+}
+
+// Endpoint is a tuned model's live serving location.
+//
+// A Go struct, not a proto message — deliberately. It is an adapter-lifecycle
+// type with (for now) exactly one implementation, and committing a wire
+// contract to it would repeat the mistake TuningJob.lora_rank nearly made:
+// describing a shape no second adapter has confirmed. The bridge plan's Step
+// 2(f) is explicit about this; TuningEndpointChanged carries the fields a
+// consumer needs on the event stream instead.
+type Endpoint struct {
+	// ID is the provider-assigned endpoint identifier — what a user would
+	// look up in the provider's own console if Teardown ever fails.
+	ID string
+
+	// Provider names which Tuner this came from: "together", "fireworks",
+	// "openai".
+	Provider string
+
+	// Served is the model this endpoint serves, usable as the Ref of an
+	// AgentRef once Ready is true.
+	Served string
+
+	// Replicas is how many running replicas are billing. Together's per-
+	// minute rate is per replica; a zero-rate no-op Endpoint (an
+	// auto-serving provider) may report zero here without implying nothing
+	// is servable.
+	Replicas int
+
+	// Ready reports whether the endpoint is currently answering requests.
+	// False while deploying or after teardown.
+	Ready bool
+
+	// ReadyAt is when the endpoint first became ready, zero if it never did.
+	// The billing clock the per-minute settlement loop reads from.
+	ReadyAt time.Time
 }

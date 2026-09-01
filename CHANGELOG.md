@@ -316,6 +316,21 @@ covenants — breaking any of them requires a major version.
   stage-spend work; repaid ahead of its trigger because `validate` shipped
   as a second resuming spend stage on the same path. `docs/debt.md#137`.
 
+- **The `tuning_set` export now emits a trainable example, not a promptless line. BEHAVIOR
+  CHANGE.** `renderTuningSet` (`core/export.go`) wrote one `user` message per selected Asset and
+  no `assistant` turn at all — every hosted fine-tuning API rejects a training example with no
+  target, so the artifact `kno export --destination tuning_set` produced was a list of prompts
+  wearing the JSONL of a training set, not a training set. It now parses content that is already
+  chat JSONL (re-marshaling it to compact single-line form) when it carries an assistant message,
+  and otherwise wraps the content as a single `assistant` turn. Content that is neither — empty,
+  or chat-shaped JSON with no assistant message — is refused at export, naming the Asset, rather
+  than silently shipped as an untrainable line. The golden in `TestExportTuningSetPinned` changed
+  accordingly; `TestRenderTuningSetRequiresAnAssistantTurn` and
+  `TestOldSingleUserMessageShapeIsNeverProducedAgain` pin the fix and its negative case. There is
+  no accessible Goal instruction at the Export stage today (`core.Goal` exposes `Score`/`Domain`/
+  `Direction` and no instruction text), so the wrapped example carries no `system` message — a
+  gap from the tuner-bridge plan's original description, noted rather than papered over.
+
 ### Features
 
 * **`kno judge calibrate` — a judge is measured before it is trusted.** `CLAUDE.md` and
@@ -398,6 +413,36 @@ covenants — breaking any of them requires a major version.
   records does not carry seventeen significant digits. `kno eval inspect` already did this for
   `separable_effect`; this generalizes the rule and adds a property test rather than trusting a
   golden to catch the next one.
+
+* **`kno bridge` — the tuner-bridge engine (partial; v0.2, DESIGN.md's Tier 3).** Group-ablates
+  the tuning set's behavior Assets on a proxy model: plans and prices every leave-one-group-out
+  fine-tuning job locally, with zero network calls and zero dollars spent, before anything is
+  armed. `AssignGroups`/`BuildGroups` (`bridge/`) compute each ablation group by the exclusive
+  intersection rule — the cluster an Asset shares the most **routed** dev Cases with, never by
+  cluster size — reusing the failure clusters `kno value` already persisted rather than
+  reclustering. `QuoteGroups` renders every group's training file **byte-identical** to what
+  `kno export --destination tuning_set` writes for the same Asset subset, and prices it against
+  `pricing.TrainPrice`. `SubmitGroup` (`bridge/submit.go`) implements the money-safety sequence a
+  fine-tuning job needs that no other spend path in Kno has had to: authorize through the budget
+  guard on all three dimensions (Calls/CostUSDMicros/Tokens — the same fix `#170`/`#172` shipped
+  for Value and Validate, not reintroduced here), write a durable `submitting` row **before** the
+  irreversible request leaves, and never retry a submit blind. `ReconcileTerminal` handles the
+  actual-vs-estimate true-up: an overrun goes through `RecordOrphanSpend` + `Guard.Restore`, an
+  underrun is never credited back, and an unreported actual leaves the estimate standing, labelled
+  `estimated`, never `billed`. `core.Tuner` gains `Deploy`/`Teardown` (additive) for Together's
+  second spend shape — a dedicated hosting endpoint billed per minute per replica, idle included,
+  which Together does not auto-serve — and `store` gains a `tuning_jobs` table (schema version 7)
+  whose two spend dimensions join `SettledSpend`'s existing three-way sum.
+  `adapters/tuner/together` is the first `core.Tuner` implementation, following the adapter
+  posture of `adapters/agent/anthropic` with a **local** security layer rather than a ported one —
+  `adapters/agent/internal/transport` is a Go `internal` package reachable only from
+  `adapters/agent/*`, so `adapters/tuner/together` cannot import it; see the package's `security.go`
+  for what that cost. **What does not ship in this PR:** actual job submission from the CLI
+  (`kno bridge --bridge --yes` plans, prices, and confirms, then stops and says so rather than
+  claiming success), polling, the per-group leave-one-out measurement and its Δ_group/Δ_control
+  statistics, the hosting settle-forward tick loop, the resume-time endpoint sweep, and `kno
+  doctor`'s leaked-endpoint report. `docs/debt.md#155` and `#156` record the hosting gaps with
+  their triggers; `docs/status.json` carries `bridge` as `partial`, not `shipped`.
 
 * **`kno validate` — the holdout stage.** The Portfolio ships as a set, so it is measured as a
   set, against the slice nothing has read. Validate runs the holdout twice inside one run: a

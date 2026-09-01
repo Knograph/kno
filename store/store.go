@@ -273,6 +273,35 @@ type Store interface {
 	// defeat the gap detection Event.sequence exists for.
 	MaxEventSequence(ctx context.Context, runID string) (int64, error)
 
+	// WriteTuningJob inserts or replaces one bridge ablation group's job
+	// record, keyed (run_id, ablation_group).
+	//
+	// The FIRST call for a group MUST happen with State ==
+	// TuningJobStateSubmitting, its estimate already in EstimatedCostUSDMicros
+	// and TrainTokens, and MUST be durable (this call must return) before
+	// Tuner.Submit is entered. That ordering — write-ahead, then the
+	// irreversible request — is the whole of the bridge's money safety: a
+	// crash between the write and the provider's response leaves evidence
+	// (a "submitting" row) instead of an unrecorded $3-8 job. See
+	// UpdateTuningJob for what happens after Submit returns.
+	WriteTuningJob(ctx context.Context, runID string, j *TuningJobRecord) error
+
+	// UpdateTuningJob replaces one group's job record in place — the state
+	// transitions after the write-ahead row: submitting -> submitted (or
+	// abandoned), and every subsequent poll or hosting tick.
+	//
+	// INSERT OR REPLACE, like WriteTuningJob: this is not an accumulator, the
+	// caller always writes the record's full current state. Money already
+	// counted in a prior call's EstimatedCostUSDMicros or ServeCostUSDMicros
+	// must not be double-counted by SettledSpend on a later one — see that
+	// method's treatment of tuning_jobs.
+	UpdateTuningJob(ctx context.Context, runID string, j *TuningJobRecord) error
+
+	// TuningJobs returns every ablation group's record for a run, ordered by
+	// ablation group. Empty for a run that is not a bridge run, or one that
+	// has not reached its first write-ahead row yet.
+	TuningJobs(ctx context.Context, runID string) ([]*TuningJobRecord, error)
+
 	// Close releases resources. Safe to call more than once, and safe to call
 	// while other calls are in flight — those return an error rather than
 	// racing, which is what the executor's drain-then-close shutdown needs.

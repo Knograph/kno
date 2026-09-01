@@ -173,6 +173,14 @@ func TestMoneyIsAlwaysInt64MicroUSD(t *testing.T) {
 		// rather than check the result.
 		"kno.v1.ConcurrencyDecision.headroom_usd_micros",
 		"kno.v1.ConcurrencyDecision.per_case_estimate_usd_micros",
+		// The tuner-bridge plan's Step 8 event additions. Both are estimates
+		// or actuals of the same TWO spend dimensions Step 2 introduces —
+		// the training job's cost and the hosting endpoint's per-minute
+		// serve cost — held to the same int64 micro-USD rule as every other
+		// amount on the wire.
+		"kno.v1.TuningJobSubmitted.estimated_cost_usd_micros",
+		"kno.v1.TuningJobStateChanged.actual_cost_usd_micros",
+		"kno.v1.TuningEndpointChanged.serve_cost_usd_micros",
 	}
 	slices.Sort(wantMoneyFields)
 	if diff := cmp.Diff(wantMoneyFields, found); diff != "" {
@@ -404,6 +412,12 @@ func TestEveryDeltaHasAnIntervalField(t *testing.T) {
 		{"kno.v1.Valuation", "delta_control", "control_interval"},
 		{"kno.v1.Portfolio", "dev_estimated_gain", "dev_estimated_interval"},
 		{"kno.v1.Report", "holdout_gain", "holdout_interval"},
+		// The tuner-bridge plan's acceptance criterion 19: every group's
+		// Δ_group is reported with an Interval or not reported at all, the
+		// same discipline TestValuationOmitsDeltaWithoutInterval enforces
+		// for Value.
+		{"kno.v1.BridgeGroupMeasured", "delta_group", "delta_group_interval"},
+		{"kno.v1.BridgeGroupMeasured", "delta_control", "delta_control_interval"},
 	}
 
 	for _, p := range pairs {
