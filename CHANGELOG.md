@@ -49,7 +49,29 @@ covenants — breaking any of them requires a major version.
 * fold the hand-written changelog into v0.1.3 ([#164](https://github.com/uknoAI/kno/issues/164)) ([788c09f](https://github.com/uknoAI/kno/commit/788c09faffcaf314fe8288447ff1dfa0fd08a8d6))
 * move the cookbook to uknoAI/kno-examples, leaving tombstones ([#163](https://github.com/uknoAI/kno/issues/163)) ([94f32df](https://github.com/uknoAI/kno/commit/94f32dfc5f0bd6d9e49570f02278375d249cb5e4))
 
-## v0.1.4 — in detail
+## [Unreleased]
+
+### Fixed
+
+- **The changelog fold no longer races the tag, and leaves an `[Unreleased]`
+  heading behind.** `scripts/fold-changelog.sh` renames the hand-written
+  `## [Unreleased]` heading to the release that shipped it. It opens that as a
+  PR at release time and auto-merges it later, when checks go green — so
+  anything merged into `main` in between landed under the very heading the
+  rename was about to consume, and got filed under a release it did not ship
+  in. That is not hypothetical: v0.1.4's fold PR sat open while two PRs
+  merged, and rebasing it swept both of their entries into
+  `## v0.1.4 — in detail`. The script now compares the tree's `[Unreleased]`
+  block against the tag's, and when they differ it still folds — the heading
+  does belong to the release — but withholds auto-merge and prints the added
+  entries in the PR body, so a human splits them rather than a script guessing.
+
+  Separately, the fold consumed the `[Unreleased]` heading without writing a
+  new one, leaving the file with no such section until somebody recreated it
+  by hand. `.github/workflows/changelog.yml` requires *"an entry under
+  ## [Unreleased]"* from every `feat:`/`fix:`/`docs:` PR, so the next
+  contributor met a red gate with no visible cause. A fresh empty
+  `[Unreleased]` is now written above the folded heading.
 
 ### Tests
 
@@ -84,6 +106,10 @@ covenants — breaking any of them requires a major version.
   assertion is verified failing with the fix reverted. See docs/debt.md#137,
   which is annotated with how a defect gets repaid as literally as it was
   written.
+
+## v0.1.4 — in detail
+
+### Bug Fixes
 
 - **A resumed Value run restores its token spend.** `core/value_loop.go`'s
   sink recorded `budget.Spend{Calls, CostUSDMicros}` and dropped `Tokens`,
