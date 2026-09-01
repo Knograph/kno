@@ -324,6 +324,46 @@ Kno's response, in order of increasing faithfulness and cost:
 
 A number from step 3 is a *ranking* signal. Only step 4 is a result.
 
+## What a bridge group verdict claims
+
+`kno bridge`'s leave-one-group-out measurement (step 3 above) reports one
+`BridgeGroupMeasured` event per ablation group, and each carries one of four
+verdicts — a claim about that group, never about an individual Asset within
+it (an Asset's own ranking still comes from Select's ICL delta; the bridge
+supplies a gate, not a per-Asset number):
+
+- **CONFIRMED**: `Δ_group`'s interval — `score(all-in model) −
+  score(leave-group-out model)` over the group's own dev Cases, Bonferroni-
+  corrected across every leave-one-out group planned at quote time — excludes
+  zero in the improving direction. The group's Assets measurably transfer
+  under fine-tuning.
+- **UNCONFIRMED**: `Δ_group`'s corrected interval crosses zero, or could not
+  be corrected at all. Every Asset in the group carries
+  `REJECTION_REASON_BRIDGE_UNCONFIRMED` — a claim about a measured failure to
+  transfer, not about routing (`WRONG_MECHANISM` means something routed to
+  the wrong destination; this means it was tuned on and did not help).
+- **INTERFERENCE**: `Δ_control` — the same delta over the reserved control
+  partition, i.e. whether training on this group regressed Cases it was
+  never meant to touch — combined with `Δ_group` into one net judgement
+  (`stats/interval.NetEffect`) whose interval excludes zero *below*. This is
+  the read in-context measurement categorically cannot give: a group can
+  look CONFIRMED on its own Cases and still be INTERFERENCE if the net
+  judgement says the group made everything else worse by more than it
+  helped. Never decided from `Δ_control`'s one-sided harm bound alone — a
+  bound read in isolation is exactly the underpowered-looks-like-passed
+  failure mode `HarmBound`'s own doc warns about, so INTERFERENCE requires
+  the control partition to be powered (`control_underpowered = false`) and
+  the combined net interval, not the harm bound by itself, to clear zero.
+- **SKIPPED**: the cluster had fewer than `core.MinClusterCases` dev Cases
+  and was never tuned at all — zero jobs, reported rather than silently
+  merged into another group.
+
+A group whose job failed, or whose all-in baseline was never successfully
+measured, reports **no verdict** (`not_measured` names why) rather than a
+delta computed over a sample that happened to succeed — substituting one
+group's number for another's is exactly the selection bias `validate`
+exists to catch downstream, and the bridge does not reintroduce it upstream.
+
 ## What a confidence interval on a delta claims
 
 Every delta Kno reports comes with an interval, and the interval is the product — a Δ of +0.04 with a range of [−0.11, +0.19] is not a finding, and shipping it as one is what the whole discipline exists to prevent.

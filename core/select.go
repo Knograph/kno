@@ -488,38 +488,27 @@ func rejectReason(
 // netInterval combines the treatment and control deltas into one corrected
 // net judgement, or returns nil when the record cannot support one.
 //
-// The control interval is one-sided (a harm bound), so its two-sided
-// half-width at the judgement's level is derived from the recorded bound and
-// the control's own degrees of freedom — the center of the bound is the
-// recorded delta_control.
+// Delegates to stats/interval.NetEffect (extracted from this function by the
+// bridge eval-seam plan, docs/plans/2026-09-01-bridge-eval-seam.md §4) rather
+// than computing the combination inline: bridge needs the identical
+// judgement for its interference read, and a second hand-written copy is
+// exactly the risk that plan argues extraction is worth taking at the second
+// occurrence rather than the customary third — see NetEffect's own doc.
+// TestNetIntervalAgreesWithNetEffect (select_test.go) is the characterization
+// test proving this delegation is behaviour-preserving against the
+// pre-extraction formula.
 func netInterval(v *Valuation, corrected *Interval, level float64) *Interval {
 	ctrl := v.GetControlInterval()
 	if ctrl == nil || v.GetDeltaInterval().GetSidedness() != knov1.Sidedness_SIDEDNESS_TWO_SIDED {
 		return nil
 	}
 	nT, nC := int(v.GetNRouted()), int(v.GetNControl())
-	if nT <= 0 || nC <= 0 || ctrl.GetNPairs() < 2 {
-		return nil
-	}
-	df := int(ctrl.GetNPairs()) - 1
-	// The harm bound's one-sided half at its level, widened to the two-sided
-	// half at the judgement's level by the quantile ratio.
-	halfC := (v.GetDeltaControl() - ctrl.GetLow()) *
-		interval.Quantile(level, knov1.Sidedness_SIDEDNESS_TWO_SIDED, df) /
-		interval.Quantile(ctrl.GetLevel(), knov1.Sidedness_SIDEDNESS_LOWER, df)
-	if math.IsNaN(halfC) || math.IsInf(halfC, 0) || halfC <= 0 {
-		return nil
-	}
 	// Fresh control arms pair each trial against its own draw; a recorded-
 	// baseline arm shares the draw with every other delta — the covariance
 	// the conservative combination exists for. Unknown means recorded, the
 	// conservative direction.
 	shared := !v.GetFreshControlArm()
-	return portfolio.NetLoss(
-		portfolio.NetDelta{Mean: v.GetDeltaGoal(), Half: halfWidth(corrected), N: nT},
-		portfolio.NetDelta{Mean: v.GetDeltaControl(), Half: halfC, N: nC},
-		shared, level,
-	)
+	return interval.NetEffect(corrected, v.GetDeltaControl(), ctrl, nT, nC, shared, level)
 }
 
 // charge adds one selected Asset to the running spend, charged by what its

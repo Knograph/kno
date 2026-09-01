@@ -89,13 +89,16 @@ func stageFacts() []stageFact {
 		{Stage: knov1.Stage_STAGE_SELECT, State: stageShipped, Milestone: "v0.1"},
 		{Stage: knov1.Stage_STAGE_VALIDATE, State: stageShipped, Milestone: "v0.2"},
 		{Stage: knov1.Stage_STAGE_EXPORT, State: stageShipped, Milestone: "v0.1"},
-		{Stage: knov1.Stage_STAGE_BRIDGE, State: stagePartial, Milestone: "v0.2", Note: "`kno bridge` plans, " +
-			"prices, and confirms a run — the un-armed plan renders every group's training file " +
-			"byte-identically to `kno export`, prices it, and spends nothing; an armed, confirmed run " +
-			"authorizes the total spend through the same budget guard every other spend path uses. It " +
-			"does not yet submit a job, poll it, host a tuned model, or compute a group's " +
-			"leave-one-out delta — bridge.SubmitGroup and bridge.ReconcileTerminal implement and test " +
-			"the money-safety sequence for a caller that wires the rest."},
+		{Stage: knov1.Stage_STAGE_BRIDGE, State: stagePartial, Milestone: "v0.2", Note: "`kno bridge` " +
+			"plans, prices, confirms, submits, polls, deploys, measures, and tears down a leave-one-group-out " +
+			"run: the un-armed plan renders every group's training file byte-identically to `kno export`; " +
+			"an armed, confirmed run submits each job, deploys the all-in and every leave-one-out model in " +
+			"turn, invokes each over Cases resolved from --evals, and reports Δ_group/Δ_control with " +
+			"intervals, including the interference verdict. Partial rather than shipped for two reasons: " +
+			"the deployed-endpoint inference route this build's `together` wiring assumes " +
+			"(docs/debt.md#161) is unconfirmed against a live endpoint, and a knowledge-kind Asset " +
+			"explicitly overridden into the tuning set is refused unconditionally rather than honored " +
+			"(bridge.Population's own doc) because no `user_overridden` field exists yet."},
 	}
 }
 

@@ -212,3 +212,60 @@ func TestBuildGroupsUnknownAssetsAreExcludedFromAllIn(t *testing.T) {
 		t.Errorf("Unknown = %v, want [never-routed]", got.Unknown)
 	}
 }
+
+// TestDevCaseIDsForGroupsMapsEachLeaveOneOutGroupToItsClusterCases pins
+// RunParams.DevCaseIDs's contract: each qualifying leave-one-out group's
+// name maps to its cluster's dev Case IDs, read back from the SAME
+// persisted value.Plan BuildGroups used, and a skipped or all-in-only
+// plan produces no entries.
+func TestDevCaseIDsForGroupsMapsEachLeaveOneOutGroupToItsClusterCases(t *testing.T) {
+	t.Parallel()
+
+	plan := &value.Plan{
+		Routed: []value.AssetRouting{
+			{AssetID: "a", CaseIDs: refundsCases},
+			{AssetID: "b", CaseIDs: billingCases},
+		},
+		Clusters: []value.ClusterSnapshot{
+			{Tag: "refunds", CaseIDs: refundsCases},
+			{Tag: "billing", CaseIDs: billingCases},
+		},
+	}
+	groups, err := bridge.BuildGroups(plan, []string{"a", "b"}, 6)
+	if err != nil {
+		t.Fatalf("BuildGroups: %v", err)
+	}
+
+	got := bridge.DevCaseIDsForGroups(plan, groups)
+	if len(got) != 2 {
+		t.Fatalf("got %d groups, want 2 (refunds, billing)", len(got))
+	}
+	if diff := !slicesEqualUnordered(got["refunds"], refundsCases); diff {
+		t.Errorf("DevCaseIDs[refunds] = %v, want %v", got["refunds"], refundsCases)
+	}
+	if diff := !slicesEqualUnordered(got["billing"], billingCases); diff {
+		t.Errorf("DevCaseIDs[billing] = %v, want %v", got["billing"], billingCases)
+	}
+	if _, ok := got[bridge.AllIn]; ok {
+		t.Error("DevCaseIDsForGroups must carry no entry for the all-in group")
+	}
+}
+
+func slicesEqualUnordered(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	set := make(map[string]int, len(a))
+	for _, x := range a {
+		set[x]++
+	}
+	for _, x := range b {
+		set[x]--
+	}
+	for _, n := range set {
+		if n != 0 {
+			return false
+		}
+	}
+	return true
+}

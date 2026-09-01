@@ -17,7 +17,6 @@ import (
 	"github.com/knograph/kno/core"
 	"github.com/knograph/kno/core/errs"
 	"github.com/knograph/kno/core/value"
-	"github.com/knograph/kno/stats/budget"
 	"github.com/knograph/kno/store"
 )
 
@@ -45,6 +44,22 @@ type bridgeFlags struct {
 	priceServeUSD    float64 // dollars per replica per minute; the --price-serve-per-minute escape hatch
 	maxLiveEndpoints int
 	maxServeMinutes  int32
+
+	// evalsPath is --evals: eval cases behind the value.Plan's Case IDs,
+	// resolved and sealed at THIS choke point — see runBridgeMeasured's
+	// doc. Only required once armed: the un-armed plan needs no Case
+	// content, only Asset content (rendering the training files).
+	evalsPath string
+	goalName  string
+
+	// keyEnv binds a host to the environment variable naming its
+	// credential, shared by the Tuner and by the openaicompat agent this
+	// build points at a deployed endpoint — both reach the same provider.
+	keyEnv              []string
+	allowInsecureURL    bool
+	allowPrivateAddress bool
+	holdoutFrac         float64
+	splitSeed           string
 
 	yes     bool
 	jsonOut bool
@@ -74,20 +89,16 @@ WITH --bridge, the plan is the same and a job is submitted for every group
 in it once confirmed. Each job is charged when it is submitted and cannot be un-submitted.
 Hosting a tuned model for its eval passes is charged per minute per endpoint,
 including while idle, capped by --bridge-max-serve-minutes and serialized to
---bridge-max-live-endpoints live endpoints at once.
-
-NOT YET IMPLEMENTED IN THIS BUILD: the per-group leave-one-out MEASUREMENT.
-Submission, polling, reconciliation, deployment, the hosting settle-forward
-tick loop, teardown, and the resume-time endpoint sweep are all implemented
-(bridge.Run) but this build ships no way to actually invoke a deployed
-model over Cases and score it, so --bridge plans, prices, and asks for
-confirmation, then stops before calling bridge.Run rather than deploying a
-paid endpoint with nothing to measure it.`,
+--bridge-max-live-endpoints live endpoints at once. --evals is required once
+armed: it is where the Case CONTENT behind the value.Plan's Case IDs comes
+from, resolved and sealed once, dev Cases only — the holdout is never read.
+A Case ID the plan names with no Case in --evals refuses the whole run
+before any job is submitted.`,
 		Example: `  # See the plan and the price, without spending anything
   kno bridge --select-run-id <id> --pool assets.jsonl --tuner together:meta-llama/Llama-3-8b --price-train-per-mtok 1.50 --price-serve-per-minute 0.02
 
-  # Arm it (measurement is not yet implemented; this still stops before spending)
-  kno bridge --select-run-id <id> --pool assets.jsonl --tuner together:meta-llama/Llama-3-8b --price-train-per-mtok 1.50 --price-serve-per-minute 0.02 --bridge --yes`,
+  # Arm it: submit every group's job, deploy and measure it, tear it down
+  kno bridge --select-run-id <id> --pool assets.jsonl --evals cases.jsonl --tuner together:meta-llama/Llama-3-8b --price-train-per-mtok 1.50 --price-serve-per-minute 0.02 --bridge --yes`,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -122,6 +133,17 @@ paid endpoint with nothing to measure it.`,
 		"at most this many dedicated endpoints live at once; each one bills per minute per replica, including while idle")
 	flags.Int32Var(&f.maxServeMinutes, "bridge-max-serve-minutes", 30,
 		"tear an endpoint down and report its group unknown after this many served minutes, per endpoint")
+	flags.StringVar(&f.evalsPath, "evals", "",
+		"eval cases behind the value.Plan's Case IDs: a JSONL file path, langsmith:<dataset-name>, "+
+			"langfuse:<dataset-name>, braintrust:<dataset-name>, or hf:<org>/<name>/<config>/<split> "+
+			"(required once --bridge is armed; the un-armed plan needs no Case content)")
+	flags.StringVar(&f.goalName, "goal", "exact-match", "goal to score each group's deployed model against")
+	flags.StringSliceVar(&f.keyEnv, "key-env", nil,
+		"host=VAR credential bindings for the tuner and the deployed model it serves, e.g. api.together.xyz=TOGETHER_API_KEY")
+	flags.BoolVar(&f.allowInsecureURL, "allow-insecure-base-url", false, "permit a plain-HTTP evals or provider base URL")
+	flags.BoolVar(&f.allowPrivateAddress, "allow-private-address", false, "permit a loopback or private evals or provider address")
+	flags.Float64Var(&f.holdoutFrac, "holdout-frac", 0.2, "share of --evals held back, matching the original kno baseline/value run")
+	flags.StringVar(&f.splitSeed, "split-seed", "", "the --evals split seed, matching the original kno baseline/value run")
 	flags.BoolVar(&f.yes, "yes", false, "skip the confirmation prompt")
 	flags.BoolVar(&f.jsonOut, "json", false, "machine-readable output")
 
@@ -226,67 +248,7 @@ func runBridgeCore(ctx context.Context, in io.Reader, out io.Writer, f bridgeFla
 	if !f.bridgeArmed {
 		return nil
 	}
-	return confirmAndStop(ctx, in, out, f, quotes, hostingCapUSDMicros)
-}
-
-// confirmAndStop runs the SAME budget-confirmation machinery every other
-// spend path in Kno uses (stats/budget.Guard, cli's confirmFunc) against
-// the bridge's total quote, so an armed-but-unconfirmed run declines
-// through the identical errs.ErrBudgetExceeded path a Case-level spend
-// would. It never reaches a Tuner: job submission, polling, and per-group
-// measurement are not implemented in this build (see newBridgeCmd's Long
-// description and this PR's report), so a confirmed run stops here rather
-// than pretending to have submitted anything.
-func confirmAndStop(ctx context.Context, _ io.Reader, out io.Writer, f bridgeFlags, quotes []bridge.GroupQuote, hostingCapUSDMicros int64) error {
-	total := bridge.TotalEstimatedCostUSDMicros(quotes) + hostingCapUSDMicros
-	var totalTokens int64
-	for _, q := range quotes {
-		totalTokens += q.TrainTokens
-	}
-
-	recorder := &consentRecorder{}
-	guard := budget.New(
-		budget.Limits{MaxCostUSDMicros: usdToMicros(f.maxCostUSD)},
-		confirmFunc(out, f.yes, f.jsonOut, recorder),
-		usdToMicros(confirmThresholdUSD),
-	)
-
-	res, err := guard.Authorize(ctx, budget.Estimate{
-		Calls:         int64(len(quotes)),
-		CostUSDMicros: total,
-		Tokens:        totalTokens,
-	})
-	if err != nil {
-		// The SAME refusal a declined Case-level spend produces:
-		// errs.ErrBudgetExceeded, exit 2, resumable in spirit (nothing was
-		// spent). Nothing was written, nothing was submitted.
-		return err
-	}
-	// Nothing was actually authorized against real work: this build never
-	// calls bridge.Run. Release rather than Settle — a Settle here would
-	// record spend for nothing, which is exactly the silent-spend failure
-	// prime directive 4 exists to prevent.
-	res.Release()
-
-	// Submission, polling, reconciliation, deployment, the settle-forward
-	// hosting tick loop, teardown, and the resume-time endpoint sweep are
-	// ALL implemented and tested — see bridge.Run (bridge/run.go) and
-	// bridge/hosting.go. What stops here is the per-group MEASUREMENT:
-	// bridge.Run requires an EvalRunner (bridge/run.go's EvalRunner
-	// interface) to invoke each group's deployed model over dev and
-	// control Cases, and this build ships no production implementation of
-	// one — see EvalRunner's doc for exactly why (core.invoker, the
-	// budget-guarded retrying invoke path Value and Validate share, is
-	// unexported from core) and this PR's report for the scope decision.
-	// Confirming and then deploying a paid endpoint with nothing to
-	// measure it would spend real hosting money for zero information, so
-	// this stops here rather than doing that.
-	return errs.ErrInvalidInput.
-		WithFix("this build plans, prices, and confirms a bridge run, and its submission/polling/deploy/" +
-			"teardown/sweep machinery is implemented and tested (see bridge.Run in bridge/run.go); it " +
-			"stops before calling bridge.Run because no EvalRunner ships in this build to measure a " +
-			"deployed model — see EvalRunner's doc for the specific gap and this PR's report").
-		Wrap(fmt.Errorf("bridge: no EvalRunner is configured; nothing was submitted or spent"))
+	return confirmAndRun(ctx, in, out, f, db, plan, groups, scheme, model, quotes, servePrice, hostingCapUSDMicros)
 }
 
 // parseTunerRef splits --tuner's scheme:model grammar.

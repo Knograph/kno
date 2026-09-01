@@ -174,3 +174,21 @@ func BuildGroups(plan *value.Plan, population []string, maxGroups int) (*GroupsP
 	sort.Strings(unknown)
 	return &GroupsPlan{AllIn: allIn, LeaveOneOut: loo, Skipped: skipped, Unknown: unknown}, nil
 }
+
+// DevCaseIDsForGroups builds RunParams.DevCaseIDs: each qualifying
+// leave-one-out group's name mapped to its cluster's dev Case IDs, read
+// back from the SAME persisted value.Plan BuildGroups used —
+// value.Plan.Clusters[i].CaseIDs, keyed by tag, never re-derived or
+// recomputed. The all-in group needs no entry (see RunParams.DevCaseIDs's
+// doc).
+func DevCaseIDsForGroups(plan *value.Plan, groups *GroupsPlan) map[string][]string {
+	byTag := make(map[string][]string, len(plan.Clusters))
+	for _, c := range plan.Clusters {
+		byTag[c.Tag] = c.CaseIDs
+	}
+	out := make(map[string][]string, len(groups.LeaveOneOut))
+	for tag := range groups.LeaveOneOut {
+		out[tag] = byTag[tag]
+	}
+	return out
+}

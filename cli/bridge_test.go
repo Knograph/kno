@@ -6,6 +6,7 @@ import (
 	"encoding/gob"
 	"errors"
 	"iter"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -180,14 +181,13 @@ func TestBridgeArmedWithoutYesDeclines(t *testing.T) {
 	}
 }
 
-// TestBridgeArmedWithYesStopsBeforeSubmitting pins that --yes clears
-// confirmation but the command still refuses to claim success: this build
-// ships no EvalRunner to measure a deployed model, so it stops before
-// calling bridge.Run rather than exiting 0 having done nothing spendable —
-// see confirmAndStop's doc for what IS implemented (submission, polling,
-// deploy, teardown, the hosting tick loop, the resume sweep) versus what
-// is not (the per-group measurement).
-func TestBridgeArmedWithYesStopsBeforeSubmitting(t *testing.T) {
+// TestBridgeArmedWithYesRequiresEvals pins that --yes clears confirmation
+// but the command still refuses to claim success without --evals: the
+// per-group measurement needs Case CONTENT, which only --evals supplies,
+// so an armed run with no --evals refuses before any Tuner is even
+// constructed rather than exiting 0 (or reaching the network) having
+// nothing to measure with.
+func TestBridgeArmedWithYesRequiresEvals(t *testing.T) {
 	dbPath, pool := bridgeFixture(t)
 	f := bridgeTestFlags(dbPath)
 	f.bridgeArmed = true
@@ -196,18 +196,96 @@ func TestBridgeArmedWithYesStopsBeforeSubmitting(t *testing.T) {
 	var out bytes.Buffer
 	err := runBridgeCore(context.Background(), &bytes.Buffer{}, &out, f, pool)
 	if err == nil {
-		t.Fatal("want an error: no EvalRunner ships in this build")
+		t.Fatal("want an error: --evals is required once --bridge is armed")
 	}
 	if !errors.Is(err, errs.ErrInvalidInput) {
 		t.Errorf("err = %v, want errs.ErrInvalidInput", err)
 	}
-	if !strings.Contains(err.Error(), "EvalRunner") {
-		t.Errorf("error does not say what is missing: %q", err.Error())
+	if !strings.Contains(err.Error(), "--evals") {
+		t.Errorf("error does not name --evals: %q", err.Error())
 	}
 	// The plan was still printed before the stop.
 	if !strings.Contains(out.String(), "Total") {
 		t.Errorf("plan was not printed before the stop: %q", out.String())
 	}
+}
+
+// TestBridgeArmedRefusesAPlanCaseIDMissingFromEvals is edge case 1: a Case
+// ID the value.Plan names with no Case behind it in --evals refuses the
+// WHOLE run before any job is submitted, naming the missing Case.
+func TestBridgeArmedRefusesAPlanCaseIDMissingFromEvals(t *testing.T) {
+	dbPath, pool := bridgeFixture(t)
+	f := bridgeTestFlags(dbPath)
+	f.bridgeArmed = true
+	f.yes = true
+	// split-seed "8" is the one this file's TestBridgeArmedWithEvalsReachesTunerConstruction
+	// verified lands every one of these 10 Case IDs in DEV under the
+	// default holdout fraction — deterministic, so c5 is the ONLY Case ID
+	// this test's omission can produce as missing.
+	f.splitSeed = "8"
+	// Only 4 of the 5 "refunds" Cases the value.Plan names — c5 is
+	// missing.
+	f.evalsPath = writeBridgeEvalsFixture(t, "c1", "c2", "c3", "c4", "b1", "b2", "b3", "b4", "b5")
+
+	var out bytes.Buffer
+	err := runBridgeCore(context.Background(), &bytes.Buffer{}, &out, f, pool)
+	if err == nil {
+		t.Fatal("want a refusal: c5 has no Case in --evals")
+	}
+	if !errors.Is(err, errs.ErrInvalidInput) {
+		t.Errorf("err = %v, want errs.ErrInvalidInput", err)
+	}
+	if !strings.Contains(err.Error(), "c5") {
+		t.Errorf("error does not name the missing Case c5: %q", err.Error())
+	}
+}
+
+// TestBridgeArmedWithEvalsReachesTunerConstruction proves the pipeline
+// this PR wires — --evals resolution, the pre-flight Case-ID
+// completeness check, Goal resolution — all succeed and the run reaches
+// real Tuner construction, which then refuses for the only reason it can
+// in a test environment: no TOGETHER_API_KEY. This is as far as a unit
+// test can drive the armed path without a live network double for
+// together.Tuner and openaicompat.Agent (see this PR's report).
+func TestBridgeArmedWithEvalsReachesTunerConstruction(t *testing.T) {
+	t.Setenv("TOGETHER_API_KEY", "")
+	dbPath, pool := bridgeFixture(t)
+	f := bridgeTestFlags(dbPath)
+	f.bridgeArmed = true
+	f.yes = true
+	// split-seed "8" was found by brute force to land every one of these
+	// 10 Case IDs in DEV under DefaultHoldoutFrac (adapters/evals/split's
+	// hash-based per-Case split has no seed that forces zero holdout in
+	// general — 0.0 itself means "use the default fraction", per
+	// jsonl.Options.HoldoutFrac's own doc — so a specific seed is the only
+	// deterministic way to pin every fixture Case to dev).
+	f.splitSeed = "8"
+	f.evalsPath = writeBridgeEvalsFixture(t, "c1", "c2", "c3", "c4", "c5", "b1", "b2", "b3", "b4", "b5")
+
+	var out bytes.Buffer
+	err := runBridgeCore(context.Background(), &bytes.Buffer{}, &out, f, pool)
+	if err == nil {
+		t.Fatal("want an error: no TOGETHER_API_KEY is set")
+	}
+	if strings.Contains(err.Error(), "--evals") || strings.Contains(err.Error(), "Case ID") {
+		t.Errorf("got an evals-shaped refusal, want a credential refusal — evals resolution should have succeeded: %q", err.Error())
+	}
+}
+
+// writeBridgeEvalsFixture writes a minimal JSONL --evals file with one
+// Case per id, for the bridge CLI tests that need real Case content
+// behind the value.Plan's Case IDs.
+func writeBridgeEvalsFixture(t *testing.T, ids ...string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "evals.jsonl")
+	var buf bytes.Buffer
+	for _, id := range ids {
+		buf.WriteString(`{"id":"` + id + `","input":"hello"}` + "\n")
+	}
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+		t.Fatalf("writing evals fixture: %v", err)
+	}
+	return path
 }
 
 // TestBridgeRefusesUnpricedModelWithoutTheEscapeHatch is acceptance

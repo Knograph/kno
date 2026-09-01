@@ -1,0 +1,4 @@
+Hand-authored, per this package's PROVENANCE WARNING (verify). Exercises the
+FAILED terminal state: JobState.error's own godoc requires the provider's
+error text to surface verbatim, and acceptance criterion 23 requires exit 1
+on it.
