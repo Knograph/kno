@@ -1184,7 +1184,7 @@ func TestSelectHoldoutCanaryCatchesAForeignRun(t *testing.T) {
 
 			rec := &recordingT{}
 			st := &holdoutCanaryStore{Store: openTestStore(t), t: rec, valueRunID: "val"}
-			t.Cleanup(func() { _ = st.Store.Close() })
+			t.Cleanup(func() { _ = st.Close() })
 
 			_ = tc.read(st)
 
@@ -1200,7 +1200,7 @@ func TestSelectHoldoutCanaryCatchesAForeignRun(t *testing.T) {
 
 		rec := &recordingT{}
 		st := &holdoutCanaryStore{Store: openTestStore(t), t: rec, valueRunID: "val"}
-		t.Cleanup(func() { _ = st.Store.Close() })
+		t.Cleanup(func() { _ = st.Close() })
 
 		_, _ = st.Measurements(ctx, "val", "asset-a")
 		require.False(t, rec.fired, "the canary blocked the one read Select may make: %s", rec.msg)
