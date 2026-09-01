@@ -28,6 +28,27 @@ covenants — breaking any of them requires a major version.
      At release time the hand-written heading is renamed from [Unreleased] to
      the version. See docs/debt.md#76 for why that is still a manual step. -->
 
+## [0.1.4](https://github.com/uknoAI/kno/compare/v0.1.3...v0.1.4) (2026-09-01)
+
+
+### Features
+
+* every stage reports what it spent, or says it could not ([#168](https://github.com/uknoAI/kno/issues/168)) ([dd5f0e9](https://github.com/uknoAI/kno/commit/dd5f0e9d600fa7cc2206ec10536069555ee41d78))
+* kno validate — the holdout finally speaks ([#169](https://github.com/uknoAI/kno/issues/169)) ([e13b558](https://github.com/uknoAI/kno/commit/e13b55849e2e1821b716565ad7d5738d52c7b07a))
+
+
+### Bug Fixes
+
+* **build:** the ledger gate refuses duplicate entry ids ([#166](https://github.com/uknoAI/kno/issues/166)) ([7055062](https://github.com/uknoAI/kno/commit/70550628f4749a29183bbf7e337524ef81de7346))
+* **value:** a resumed run restores the tokens it spent ([#170](https://github.com/uknoAI/kno/issues/170)) ([00f0044](https://github.com/uknoAI/kno/commit/00f0044ea8c34628ad650df2425325d745f6aadf))
+
+
+### Documentation
+
+* **debt:** dispose four silent lapses and backstop seven vague triggers ([#167](https://github.com/uknoAI/kno/issues/167)) ([706b186](https://github.com/uknoAI/kno/commit/706b186486edc5e3edf268e694fedb8b0de88054))
+* fold the hand-written changelog into v0.1.3 ([#164](https://github.com/uknoAI/kno/issues/164)) ([788c09f](https://github.com/uknoAI/kno/commit/788c09faffcaf314fe8288447ff1dfa0fd08a8d6))
+* move the cookbook to uknoAI/kno-examples, leaving tombstones ([#163](https://github.com/uknoAI/kno/issues/163)) ([94f32df](https://github.com/uknoAI/kno/commit/94f32dfc5f0bd6d9e49570f02278375d249cb5e4))
+
 ## [Unreleased]
 
 ### Bug Fixes
