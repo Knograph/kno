@@ -139,7 +139,10 @@ func (o ExportOptions) Export(ctx context.Context) (*ExportResult, error) {
 				Wrap(fmt.Errorf("asset %s is in the Portfolio but not in the pool", e.GetAssetId()))
 		}
 	}
-	artifact, manifest := render(p, entries, assets, o.Destination)
+	artifact, manifest, err := render(p, entries, assets, o.Destination)
+	if err != nil {
+		return nil, err
+	}
 	if err := writeAtomic(o.Path, artifact); err != nil {
 		return nil, err
 	}
@@ -290,17 +293,20 @@ func render(
 	entries []*PortfolioEntry,
 	assets map[string]*Asset,
 	dest knov1.Destination,
-) (artifact []byte, manifest []byte) {
+) (artifact []byte, manifest []byte, err error) {
 	manifest = renderManifest(p, entries, assets, dest)
 	switch dest {
 	case knov1.Destination_DESTINATION_TUNING_SET:
-		artifact = renderTuningSet(entries, assets)
+		artifact, err = renderTuningSet(entries, assets)
 	case knov1.Destination_DESTINATION_KNOWLEDGE_BASE:
 		artifact = renderKnowledgeBase(entries, assets)
 	default: // CONTEXT
 		artifact = renderContextPack(entries, assets)
 	}
-	return artifact, manifest
+	if err != nil {
+		return nil, nil, err
+	}
+	return artifact, manifest, nil
 }
 
 // renderContextPack is the context grammar: the selected Assets' content,
@@ -356,23 +362,106 @@ type chatMessage struct {
 
 // renderTuningSet is the tuning-set grammar: OpenAI chat format JSONL, one
 // example per selected Asset, in selection order — the shape DESIGN.md pins
-// and the Tuner adapters will parse.
-func renderTuningSet(entries []*PortfolioEntry, assets map[string]*Asset) []byte {
+// and the Tuner adapters parse.
+//
+// Every hosted fine-tuning API requires at least one `assistant` message per
+// example — there is no target to train on otherwise, and
+// JOB_STATUS_VALIDATING_FILES exists precisely to catch a file that lacks
+// one. An earlier version of this function emitted a single `user` message
+// per Asset and no assistant turn at all: every line it produced was
+// therefore rejected by every provider's validation step, which made the
+// artifact a list of prompts wearing the JSONL of a training set rather than
+// one. See tuningExample for the fix and the two shapes it accepts.
+func renderTuningSet(entries []*PortfolioEntry, assets map[string]*Asset) ([]byte, error) {
 	var out []byte
 	for _, e := range entries {
-		ex := chatExample{Messages: []chatMessage{{
-			Role:    "user",
-			Content: string(contentOf(assets, e)),
-		}}}
+		ex, err := tuningExample(contentOf(assets, e))
+		if err != nil {
+			return nil, errs.ErrInvalidInput.
+				WithFix("give the Asset chat-JSONL content with an assistant message, " +
+					"or plain demonstration text that can be wrapped as one").
+				Wrap(fmt.Errorf("asset %s: %w", e.GetAssetId(), err))
+		}
 		line, err := json.Marshal(ex)
 		if err != nil {
-			// A string always marshals; this is unreachable.
+			// chatExample's fields are plain strings; this is unreachable.
 			continue
 		}
 		out = append(out, line...)
 		out = append(out, '\n')
 	}
-	return out
+	return out, nil
+}
+
+// errUntrainable means a behavior Asset's content cannot become a tuning-set
+// example with an assistant turn to train on.
+var errUntrainable = errors.New("core: content cannot be rendered as a tuning-set example")
+
+// tuningExample renders one Asset's content as one chat-format training
+// example, in one of two ways:
+//
+//   - The content is ALREADY chat JSONL — a single JSON object whose
+//     top-level shape is {"messages": [...]}. Parsed and re-marshaled
+//     verbatim (which also normalizes whitespace so every line is compact
+//     single-line JSON, the property JSONL depends on), PROVIDED it carries
+//     at least one assistant message. Chat JSON with zero messages, or with
+//     messages but no assistant turn, is refused rather than silently
+//     shipped as an untrainable line — that shape is exactly the defect
+//     this function exists to stop reproducing one level up.
+//   - Otherwise, the content is the demonstration itself: wrapped as a
+//     single assistant message. There is no accessible Goal instruction to
+//     carry as a system message here — the Export stage holds a Select
+//     run's ID and destination entries, not a live core.Goal (whose
+//     interface exposes Score/Domain/Direction and no instruction text) —
+//     so the wrapped example carries no system role. See the plan's Step 1
+//     and this PR's report for that gap.
+//
+// Empty content is refused: a zero-example demonstration is not trainable at
+// any price, and paying a provider to say so is a paid no-op.
+func tuningExample(content []byte) (chatExample, error) {
+	trimmed := bytes.TrimSpace(content)
+	if len(trimmed) == 0 {
+		return chatExample{}, fmt.Errorf("%w: the content is empty", errUntrainable)
+	}
+	if looksLikeChatJSON(trimmed) {
+		var ex chatExample
+		if err := json.Unmarshal(trimmed, &ex); err != nil {
+			return chatExample{}, fmt.Errorf(
+				"%w: the content looks like chat JSON (starts with '{') but does not parse: %v",
+				errUntrainable, err,
+			)
+		}
+		if !hasAssistantTurn(ex.Messages) {
+			return chatExample{}, fmt.Errorf(
+				"%w: the content parses as chat JSON but carries no assistant message, "+
+					"so there is no target to train on", errUntrainable,
+			)
+		}
+		return ex, nil
+	}
+	return chatExample{Messages: []chatMessage{{
+		Role:    "assistant",
+		Content: string(content),
+	}}}, nil
+}
+
+// looksLikeChatJSON is a cheap pre-check: content that does not even start
+// like a JSON object is plain-text demonstration content, not a malformed
+// attempt at the chat-JSONL shape, and must fall through to the wrapping
+// path rather than being refused for failing to parse as JSON.
+func looksLikeChatJSON(trimmed []byte) bool {
+	return len(trimmed) > 0 && trimmed[0] == '{'
+}
+
+// hasAssistantTurn reports whether msgs carries at least one assistant
+// message — the requirement every hosted fine-tuning API enforces.
+func hasAssistantTurn(msgs []chatMessage) bool {
+	for _, m := range msgs {
+		if m.Role == "assistant" {
+			return true
+		}
+	}
+	return false
 }
 
 // destName is the CLI grammar's spelling of a Destination — the name a user

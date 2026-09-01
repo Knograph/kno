@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/gob"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/knograph/kno/core/errs"
 	"github.com/knograph/kno/core/value"
 	knov1 "github.com/knograph/kno/gen/kno/v1"
 	"github.com/knograph/kno/store"
@@ -127,7 +129,11 @@ func TestExportTuningSetPinned(t *testing.T) {
 	require.Equal(t, 1, res.AssetCount)
 	require.Equal(t, knov1.Destination_DESTINATION_TUNING_SET, res.Destination)
 
-	want := "{\"messages\":[{\"role\":\"user\",\"content\":\"translate the following to french: hello world\"}]}\n"
+	// The fixture's Asset content is plain text, not chat JSON, so it is
+	// wrapped as a single ASSISTANT turn — never a `user` message with no
+	// target, which is the untrainable shape every hosted FT API rejects.
+	// See TestRenderTuningSetRequiresAnAssistantTurn for the full matrix.
+	want := "{\"messages\":[{\"role\":\"assistant\",\"content\":\"translate the following to french: hello world\"}]}\n"
 	require.Equal(t, want, readFile(t, path))
 	manifest := readFile(t, path+".manifest.md")
 	require.Contains(t, manifest, "- Select run: `sel-1`")
@@ -136,6 +142,128 @@ func TestExportTuningSetPinned(t *testing.T) {
 	require.Contains(t, manifest, "1. `tune-a` — Tune asset (provenance: transcripts)")
 	require.NotNil(t, res.BytesWritten)
 	require.Equal(t, selRun, selRun) // keep the var: the fixture's run ID is asserted via the manifest
+}
+
+// TestRenderTuningSetRequiresAnAssistantTurn is the table pinning the Step-1
+// fix: every hosted fine-tuning API requires at least one `assistant`
+// message per example, and the old renderer produced a `user`-only line for
+// every input, which no provider's validation step would accept.
+func TestRenderTuningSetRequiresAnAssistantTurn(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		content string
+		want    string // expected marshaled line, sans trailing newline; empty means refused
+		wantErr bool
+	}{
+		{
+			name:    "plain demonstration text is wrapped as a single assistant turn",
+			content: "translate the following to french: hello world",
+			want:    `{"messages":[{"role":"assistant","content":"translate the following to french: hello world"}]}`,
+		},
+		{
+			name:    "already chat JSON with an assistant message passes through, re-marshaled",
+			content: `{"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"hello"}]}`,
+			want:    `{"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"hello"}]}`,
+		},
+		{
+			name:    "pretty-printed chat JSON is compacted to one line",
+			content: "{\n  \"messages\": [\n    {\"role\": \"user\", \"content\": \"hi\"},\n    {\"role\": \"assistant\", \"content\": \"hello\"}\n  ]\n}",
+			want:    `{"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"hello"}]}`,
+		},
+		{
+			name:    "empty content is refused, not silently shipped as a zero-example line",
+			content: "",
+			wantErr: true,
+		},
+		{
+			name:    "whitespace-only content is refused",
+			content: "   \n\t  ",
+			wantErr: true,
+		},
+		{
+			name:    "chat JSON with only a user message has no target and is refused",
+			content: `{"messages":[{"role":"user","content":"hi"}]}`,
+			wantErr: true,
+		},
+		{
+			name:    "chat JSON with zero messages is refused",
+			content: `{"messages":[]}`,
+			wantErr: true,
+		},
+		{
+			name:    "content that starts with { but is not valid JSON is refused, not silently wrapped",
+			content: `{not json`,
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			ex, err := tuningExample([]byte(tc.content))
+			if tc.wantErr {
+				require.Error(t, err)
+				require.ErrorIs(t, err, errUntrainable)
+				return
+			}
+			require.NoError(t, err)
+			require.True(t, hasAssistantTurn(ex.Messages), "every accepted example must carry an assistant turn")
+			line, err := json.Marshal(ex)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, string(line))
+		})
+	}
+}
+
+// TestExportRefusesUnrenderableTuningAsset drives the refusal through the
+// full Export stage: a behavior Asset with empty content must refuse before
+// anything is written, naming the Asset.
+func TestExportRefusesUnrenderableTuningAsset(t *testing.T) {
+	t.Parallel()
+
+	st := openTestStore(t)
+	_, pool := exportFixture(t, st)
+	// Corrupt the tuning-set Asset's content in place: empty content cannot
+	// render as any kind of training example.
+	for _, a := range pool.assets {
+		if a.Id == "tune-a" {
+			a.Content = nil
+		}
+	}
+	path := filepath.Join(t.TempDir(), "training.jsonl")
+	_, err := runExport(t, exportOpts(st, pool, knov1.Destination_DESTINATION_TUNING_SET, path, false))
+	require.Error(t, err)
+	require.ErrorIs(t, err, errs.ErrInvalidInput)
+	require.Contains(t, err.Error(), "tune-a")
+
+	// The refusal must leave nothing behind, matching every other Export
+	// validation failure's contract.
+	_, statErr := os.Stat(path)
+	require.True(t, os.IsNotExist(statErr))
+}
+
+// TestOldSingleUserMessageShapeIsNeverProducedAgain is acceptance criterion
+// 4's negative assertion: no input at all — not even one that used to
+// reproduce the pre-fix output — can make renderTuningSet emit a line whose
+// only message has role "user".
+func TestOldSingleUserMessageShapeIsNeverProducedAgain(t *testing.T) {
+	t.Parallel()
+
+	inputs := []string{
+		"translate the following to french: hello world",
+		`{"messages":[{"role":"user","content":"hi"},{"role":"assistant","content":"hello"}]}`,
+	}
+	for _, in := range inputs {
+		ex, err := tuningExample([]byte(in))
+		require.NoError(t, err)
+		if len(ex.Messages) == 1 {
+			require.NotEqual(t, "user", ex.Messages[0].Role,
+				"a single-message example must never be role=user with no assistant turn")
+		}
+	}
 }
 
 // TestExportContextPackPinned: the context grammar is the selected Assets'
