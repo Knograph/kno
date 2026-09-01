@@ -46,7 +46,11 @@ Use a judge Goal when the behavior is genuinely semantic ("tone", "helpfulness")
   next step" beats "answers helpfully".
 - Anchor the scale. A 1-5 with no definitions is a random number generator wearing a rubric.
 - Calibration matters. Judge agreement with a human-labeled set is how you know the judge
-  isn't the thing being measured. (`judge calibrate` is the v0.2 tooling for this.)
+  isn't the thing being measured — and judge error is not noise that averages out, it shrinks
+  every effect you measure toward zero by a factor you can put a number on. `kno judge
+  calibrate` reports that number (Cohen's kappa, with an interval, against a derived floor);
+  [Calibrate a judge](cookbook/calibrate-a-judge.md) is the recipe and [What a judge's kappa
+  claims](what-the-numbers-mean.md#what-a-judges-kappa-claims) is the arithmetic.
 
 ## 4. Multi-dimensional Goals
 

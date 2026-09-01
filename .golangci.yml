@@ -110,6 +110,13 @@ linters:
             - "!**/adapters/evals/hf/**"
             - "!**/adapters/pool/hf/**"
             - "!**/adapters/internal/datasetserver/**"
+            # judge/format.go is the calibration set's on-disk format: a
+            # hand-written JSONL shape decoded into plain Go structs, with the
+            # conversion into core.Case and core.Response happening after the
+            # decode so a kno.v1 type never crosses the marshaler. Same
+            # contract as adapters/**/format.go, scoped to the one file so it
+            # cannot spread to code that touches kno.v1 types.
+            - "!**/judge/format.go"
           deny:
             - pkg: encoding/json
               desc: >-

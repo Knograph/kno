@@ -134,6 +134,7 @@ beside them --- one declaration, not a copy of the list maintained here.`,
 	root.AddCommand(newValidateCmd())
 	root.AddCommand(newExportCmd())
 	root.AddCommand(newReportCmd())
+	root.AddCommand(newJudgeCmd())
 	root.AddCommand(newDoctorCmd())
 	root.AddCommand(newPurgeCmd())
 	return root

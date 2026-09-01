@@ -66,7 +66,7 @@ make check        # runs everything below; this is the only command you need to 
 
 ## Testing strategy
 
-- **Determinism first.** LLM-dependent code is tested against recorded fixtures (`testdata/fixtures/`, recorded via `make record-fixtures`, secrets scrubbed at record time). Judges are tested against the human-labeled calibration set with agreement thresholds — a judge prompt change that drops agreement below threshold fails CI.
+- **Determinism first.** LLM-dependent code is tested against recorded fixtures (`testdata/fixtures/`, recorded via `make record-fixtures`, secrets scrubbed at record time). Judges are tested against the human-labeled calibration set with agreement thresholds — a judge prompt change that drops agreement below threshold fails CI (`make judge-calibrate-check`, in `make check`, gating Cohen's kappa against a derived floor and a recorded baseline, with no provider call). The mechanism is real; its coverage is vacuous until the first judge Goal exists, because the only Goal the registry admits today is `exact-match`.
 - **Statistical code gets statistical tests.** `stats/` is property-tested (rapid or gopter): CI coverage properties, holdout-isolation invariants ("no code path reads holdout before Validate" is an actual test using a canary case), winner's-curse regression test with synthetic data where ground truth is known.
 - **Table-driven tests, `t.Parallel()` by default,** subtests named after the scenario in vocabulary terms. Golden files for report rendering and CLI output (`make update-golden` to regenerate, diffs reviewed like code).
 - **Every bug fix ships with the test that would have caught it.** No test, no fix.
@@ -121,7 +121,7 @@ make check        # runs everything below; this is the only command you need to 
 
 - `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, issue templates (bug/feature/plugin), PR template with the DoD checklist, `CODEOWNERS` routing reviews (core/stats → maintainers; adapters → adapter owners).
 - **License: Apache-2.0** (patent grant matters for enterprise adoption). **DCO sign-off** (`git commit -s`), not a CLA — lower contributor friction, sufficient for Apache-2.0.
-- `good-first-issue` is a curated pipeline, not a label of neglect: each one has context, pointers, and a test to make pass. Ring-1 adapters are the designed on-ramp today, because `coretest`'s conformance suite already defines correct for them; judge prompts join once `judge calibrate` (v0.2) gives a prompt something to be measured against. Do not advertise an on-ramp before the thing a contributor would submit to exists.
+- `good-first-issue` is a curated pipeline, not a label of neglect: each one has context, pointers, and a test to make pass. Ring-1 adapters and **calibration records** are the designed on-ramps today — `coretest`'s conformance suite defines correct for the first, and the calibration set's load-time invariants define it for the second; judge prompts join once a judge Goal exists for a prompt to belong to. Do not advertise an on-ramp before the thing a contributor would submit to exists.
 - Every external PR gets a first response within 48h, even if it's "reviewing this week."
 
 ## Agent parallelization quick-reference

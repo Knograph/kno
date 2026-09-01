@@ -1,0 +1,13 @@
+{
+  "name": "single-label",
+  "version": 1,
+  "content_sha256": "c9ab809826e0479c3d4774d54181e27b5f934f52dc99e3d3b57116877539042f",
+  "labelers": [
+    "labeler-a",
+    "labeler-b",
+    "adjudicator"
+  ],
+  "description": "One record carries a single human label. A record labeled by one person's judgement is exactly what the set exists to hold a judge to.",
+  "class_balance": "deliberately broken; see description",
+  "license": "Apache-2.0, original to this repository"
+}

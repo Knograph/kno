@@ -63,12 +63,14 @@ your-own-provider
 zendesk
 "
 
-# Pages that still live here, in full. `check-your-evals` documents `kno eval
-# inspect`, which is on main and in no release: kno-examples checks every
-# command against the released binary, so migrating it would report the whole
-# page as broken. It moves in the release window that ships the command.
+# Pages that still live here, in full. Both document commands that are on main
+# and in no release — `kno eval inspect` and `kno judge calibrate` — and
+# kno-examples checks every command against the RELEASED binary, so migrating
+# either would report the whole page as broken. They move in the release window
+# that ships the command.
 RESIDENT="
 check-your-evals
+calibrate-a-judge
 "
 
 # README.md is the index — a pointer page, not a recipe and not a stub.

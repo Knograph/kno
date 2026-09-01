@@ -11,8 +11,8 @@ import (
 
 	"github.com/knograph/kno/adapters/evals/jsonl"
 	"github.com/knograph/kno/core"
-	"github.com/knograph/kno/core/errs"
 	knov1 "github.com/knograph/kno/gen/kno/v1"
+	"github.com/knograph/kno/goal"
 	"github.com/knograph/kno/goal/exactmatch"
 	"github.com/knograph/kno/stats/budget"
 )
@@ -24,15 +24,33 @@ import (
 // a missing one is somebody's money.
 const confirmThresholdUSD = 1.00
 
-// resolveGoal turns a goal name into a Goal.
-func resolveGoal(name string) (core.Goal, error) {
-	if name == "exact-match" {
-		return &exactmatch.Goal{}, nil
+// goalRegistry builds the registry this build can name Goals from.
+//
+// Registration is EXPLICIT here rather than an init() side effect in each
+// Goal's package: a Goal registered by init() is a Goal whose presence depends
+// on an import nobody reads, so deleting an apparently unused import silently
+// removes a --goal value.
+//
+// Register can refuse — goal.Registry is default-deny, and a Goal absent from
+// its self-contained allowlist does not register whatever it says about
+// itself. A refusal here is a wiring bug in this function, not user input, so
+// it panics: shipping a binary whose --goal silently resolves to nothing is
+// worse than not starting.
+func goalRegistry() *goal.Registry {
+	r := goal.NewRegistry()
+	if err := r.Register("exact-match", &exactmatch.Goal{}); err != nil {
+		panic(fmt.Sprintf("cli: wiring the goal registry: %v", err))
 	}
-	return nil, errs.ErrInvalidInput.WithFix(
-		"only `exact-match` is available in this build; judged goals land with the judge",
-	).
-		Wrap(fmt.Errorf("no goal named %q", name))
+	return r
+}
+
+// resolveGoal turns a goal name into a Goal.
+//
+// It was a hardcoded `if name == "exact-match"`, whose fix line could only ever
+// name that one Goal however many existed. The registry's error names what IS
+// available.
+func resolveGoal(name string) (core.Goal, error) {
+	return goalRegistry().Resolve(name)
 }
 
 // newRunID returns a sortable, unique run identifier.

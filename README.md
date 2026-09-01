@@ -335,6 +335,7 @@ Enum membership does not mean shipped: the schema leads the implementation ([CLA
 | `kno validate` | Measure the selected portfolio against the untouched holdout |
 | `kno export` | Write a portfolio's selected assets to a destination |
 | `kno report` | The one-page verdict across the recorded stages |
+| `kno judge calibrate` | Report how well a goal agrees with human labels, against a floor |
 | `kno doctor` | Print what this build supports |
 | `kno purge` | Delete stored agent output and judge rationales for a run |
 

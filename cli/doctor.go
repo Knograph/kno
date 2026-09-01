@@ -151,7 +151,7 @@ type doctorReport struct {
 // Extracted from runDoctor so docs/status.json reports the same list rather
 // than a second copy of it (cli/status.go). One list, two readers.
 func doctorGoals() []string {
-	return []string{"exact-match"}
+	return goalRegistry().Names()
 }
 
 // runDoctor renders the matrix.

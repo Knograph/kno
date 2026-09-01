@@ -50,13 +50,22 @@ jq -e 'select(.guarded) | .spent_usd_micros < 5000000' value.json
 
 **6. Human and `--json` renderings of one stage are pinned to identical content** by an equivalence test or golden. The two surfaces disagreeing about what a stage cost is worse than either being absent.
 
+**6. A reported statistic is rounded to four decimal places where it is computed, not where it is printed.** A float64 rendered at full precision carries up to seventeen significant digits, and its tail digits are not ours: Go may fuse a multiply-add into a single FMA instruction, which arm64 does and amd64 does not, and anything reaching `math.Log`, `math.Exp` or `math.Sqrt` is architecture-specific outright. Two consequences, and the second is the one that matters.
+
+The mechanical one: a golden cannot hold such a number. `kno eval inspect`'s `separable_effect` hit this first (`cli/evalinspect.go`, "a golden holding 0.19685978500032256 cannot pass on both"), and `kno judge calibrate` hit it again — `kappa_interval.high` recorded as `0.929508759876331` on darwin/arm64 and read `0.9295087598763309` on linux/amd64, one ULP apart, with the human rendering byte-identical. Re-recording only moves the failure to the other runner.
+
+The substantive one: **emitting seventeen digits is a false precision claim.** A percentile bootstrap over thirty records does not carry them, and a document whose stated job is honest reporting must not imply otherwise. Rounding at the point of computation — rather than formatting at each renderer — is what makes the human line, the `--json` document and the golden carry *one* number, so a verdict can always be reproduced from the output that announced it.
+
+Four places, not more: it is finer than any measurement in this product resolves and coarser than the noise. Integer-valued keys (counts, micro-USD, `n_pairs`) are unaffected; they are exact.
+
 ## What this record does not do
 
 **It records a decision; it does not enforce one.** Nothing in `make check` reads a markdown file, and a rule that lives only in `docs/adr/` is obeyed exactly as long as the next contributor happens to have read it. The enforcement is three mechanical artifacts:
 
 - the per-stage JSON goldens under `cli/testdata/json/` (rule 2 — a renamed or removed key is a golden diff, reviewed like code);
 - `cli/testdata/json/v0.1-shape.json`, the frozen capture of what v0.1.0 emitted unconditionally, checked as a subset of current output (rule 2, with historical force);
-- `TestSpendFieldsAreReadInOneFile` (rule 4's single formatter) and `TestGuardedMatchesTheStage` / `TestSelectExportReportEmitNoSpendBlock` (rules 4–5).
+- `TestSpendFieldsAreReadInOneFile` (rule 4's single formatter) and `TestGuardedMatchesTheStage` / `TestSelectExportReportEmitNoSpendBlock` (rules 4–5);
+- `TestNoJudgeJSONFloatCarriesMoreThanFourPlaces` and `TestEveryReportedStatisticIsRoundedAtTheSource` (rule 6). Note the scope honestly: these walk **`kno judge calibrate`'s** document and statistics as a property, so a key added there later without the treatment fails. Every other command's compliance with rule 6 rests on its own goldens, which catch it only on the architecture CI happens to run — the judge property test is the shape the others should grow, not evidence that they already have it.
 
 The value of this record is that a reviewer rejecting a future PR has something to cite. Its value is **not** that the PR would have been caught without those tests. **Any rule added here later that no test enforces must be labelled as guidance in this document**, rather than left to read as a constraint. A decision record that quietly accumulates unenforced rules is how a contract becomes folklore — which is the failure mode that produced this ADR in the first place.
 
