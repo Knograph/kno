@@ -28,6 +28,23 @@ covenants — breaking any of them requires a major version.
      At release time the hand-written heading is renamed from [Unreleased] to
      the version. See docs/debt.md#76 for why that is still a manual step. -->
 
+## [0.2.0](https://github.com/uknoAI/kno/compare/v0.1.7...v0.2.0) (2026-09-02)
+
+
+### ⚠ BREAKING CHANGES
+
+* core.Tuner gained Deploy, Teardown, ListJobs and ListEndpoints, and store.Store gained WriteTuningJob, UpdateTuningJob, TuningJobs, LeakedEndpoints, WriteValidation, Validation and RecordHoldoutUse. An out-of-tree implementation of either interface must add them. The store schema moves 6 to 8: a 0.1.x database is readable by 0.2.0, a 0.2.0 database is not readable by 0.1.x.
+
+### Bug Fixes
+
+* **fake:** refuse an Asset with no content ([#202](https://github.com/uknoAI/kno/issues/202)) ([948e018](https://github.com/uknoAI/kno/commit/948e018abb505980ccc6db0bc7dd43978b8877d3))
+
+
+### Documentation
+
+* fold v0.1.7, and give the 0.2.0 breaking changes their notice ([#203](https://github.com/uknoAI/kno/issues/203)) ([4598b4b](https://github.com/uknoAI/kno/commit/4598b4b3454dedde238d87bf8a2d864c1eb66ad0))
+* re-record the quickstart GIF for v0.1.7 ([#199](https://github.com/uknoAI/kno/issues/199)) ([19ba099](https://github.com/uknoAI/kno/commit/19ba0991af7fffaac7a30c42a871aaffcdb41b2f))
+
 ## [0.1.7](https://github.com/uknoAI/kno/compare/v0.1.6...v0.1.7) (2026-09-01)
 
 
