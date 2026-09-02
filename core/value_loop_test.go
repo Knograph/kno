@@ -174,10 +174,19 @@ func writeBaselineWithFailures(t *testing.T, h *valueHarness, cases []*core.Case
 }
 
 // poolOf is a Pool holding the named Assets.
+// poolOf builds a Pool of Assets that carry content, because an Asset without
+// it is not a treatment arm.
+//
+// The content used to be omitted, and that worked only because `fake:` was the
+// one ContextInjector in the tree that accepted an empty Asset. Every real one
+// refuses it — an Agent carrying nothing IS the control arm, so measuring it as
+// the treatment arm reports a difference of exactly zero that is not a
+// measurement. Now that the fake refuses it too, these fixtures say what they
+// always meant.
 func poolOf(ids ...string) core.Pool {
 	assets := make([]*core.Asset, len(ids))
 	for i, id := range ids {
-		assets[i] = &core.Asset{Id: id}
+		assets[i] = &core.Asset{Id: id, Content: []byte("content for " + id)}
 	}
 	return loopPool{assets: assets}
 }

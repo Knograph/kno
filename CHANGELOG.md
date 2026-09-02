@@ -115,6 +115,24 @@ covenants — breaking any of them requires a major version.
 * move the cookbook to uknoAI/kno-examples, leaving tombstones ([#163](https://github.com/uknoAI/kno/issues/163)) ([94f32df](https://github.com/uknoAI/kno/commit/94f32dfc5f0bd6d9e49570f02278375d249cb5e4))
 
 ## [Unreleased]
+
+### Fixed
+
+- **`fake:` accepted an Asset with no content, and that permissiveness let a
+  real defect ship.** `WithContextSet` has always refused an empty set — an
+  Agent carrying nothing *is* the control arm, so measuring it as the treatment
+  arm reports a paired difference of exactly zero that is not a measurement.
+  `WithContext` had no such guard, which made the fake the only
+  `ContextInjector` in the tree that would accept an empty Asset; every real one
+  refuses it.
+
+  The asymmetry was load-bearing. `core/value_loop.go` built its treatment arm
+  from a content-free `&Asset{Id: ...}` and shipped that way, because the only
+  adapter its tests ran against was the permissive one. A test double more
+  permissive than every adapter it stands in for cannot fail where they would.
+
+  Two holdout-isolation fixtures relied on the old behaviour and now carry
+  content, which is what they always meant.
 ### Added
 
 - **`kno bridge` measures instead of refusing to start.** The tuner-bridge

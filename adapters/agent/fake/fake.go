@@ -215,7 +215,30 @@ func (a *Agent) Capabilities() *core.Capabilities {
 
 // WithContext wraps the agent so the Asset travels with every Invoke, which is
 // what makes the treatment arm the treatment arm.
+//
+// An Asset with no content is REFUSED, for the reason WithContextSet already
+// gives about an empty set: an Agent carrying nothing IS the control arm, so
+// returning one here makes Value measure the control against itself, report a
+// paired difference of exactly zero, and put a tight interval around it —
+// which reads in the report as "measured, and inert", the one conclusion the
+// stage exists to reach honestly.
+//
+// The two guards were asymmetric, and the gap was load-bearing. Every real
+// ContextInjector already refuses an empty Asset (openaicompat's assetContent
+// says so in the same words), so the fake was the only adapter that would
+// accept one — which is exactly why core/value_loop.go building its treatment
+// arm from a content-free &Asset{Id: ...} survived until a run against a real
+// provider refused it. A test double more permissive than every adapter it
+// stands in for cannot fail where they would.
 func (a *Agent) WithContext(asset *core.Asset) (core.Agent, error) {
+	if len(asset.GetContent()) == 0 {
+		return nil, errs.ErrInvalidInput.
+			WithFix("check the Pool: this Asset has no content to measure").
+			Wrap(fmt.Errorf("fake: asset %s is empty; an Agent carrying no content "+
+				"is the control arm, and measuring it as the treatment arm reports "+
+				"a difference of exactly zero that is not a measurement",
+				asset.GetId()))
+	}
 	return &contextAgent{inner: a, asset: asset}, nil
 }
 
@@ -245,7 +268,8 @@ func (a *Agent) WithContextSet(assets []*core.Asset) (core.Agent, error) {
 	for i, asset := range assets {
 		if asset == nil {
 			return nil, errs.ErrInvalidInput.Wrap(
-				fmt.Errorf("fake: the Portfolio holds a nil Asset at position %d", i))
+				fmt.Errorf("fake: the Portfolio holds a nil Asset at position %d", i),
+			)
 		}
 		if i > 0 {
 			b.WriteString("\n\n")
