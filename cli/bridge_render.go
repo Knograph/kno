@@ -9,20 +9,22 @@ import (
 )
 
 // renderBridgePlan prints the un-armed plan every bridge run computes
-// first: one line per job, a separately-labelled hosting line, the total,
-// and — armed or not — the irreversibility sentence, per the tuner-bridge
-// plan's Step 4. hostingCapUSDMicros is Step 2(f)'s cap-bounded worst case
-// (N+1 endpoints x --bridge-max-serve-minutes x rate), stated as a ceiling
-// rather than a prediction because hosting is stoppable and usually costs
-// less.
-func renderBridgePlan(out io.Writer, f bridgeFlags, quotes []bridge.GroupQuote, groups *bridge.GroupsPlan, hostingCapUSDMicros int64) error {
+// first: one line per job, a separately-labelled hosting line, an
+// eval-pass line, the total, and — armed or not — the irreversibility
+// sentence, per the tuner-bridge plan's Step 4. hostingCapUSDMicros is
+// Step 2(f)'s cap-bounded worst case (N+1 endpoints x
+// --bridge-max-serve-minutes x rate). evalCapUSDMicros is the eval pass's
+// own worst case (docs/plans/2026-09-02-openai-tuner.md §4) — zero for a
+// provider with no per-token rate, such as Together today. Both are stated
+// as ceilings rather than predictions.
+func renderBridgePlan(out io.Writer, f bridgeFlags, quotes []bridge.GroupQuote, groups *bridge.GroupsPlan, hostingCapUSDMicros, evalCapUSDMicros int64) error {
 	if f.jsonOut {
-		return renderBridgePlanJSON(out, f, quotes, groups, hostingCapUSDMicros)
+		return renderBridgePlanJSON(out, f, quotes, groups, hostingCapUSDMicros, evalCapUSDMicros)
 	}
-	return renderBridgePlanHuman(out, f, quotes, groups, hostingCapUSDMicros)
+	return renderBridgePlanHuman(out, f, quotes, groups, hostingCapUSDMicros, evalCapUSDMicros)
 }
 
-func renderBridgePlanHuman(out io.Writer, f bridgeFlags, quotes []bridge.GroupQuote, groups *bridge.GroupsPlan, hostingCapUSDMicros int64) error {
+func renderBridgePlanHuman(out io.Writer, f bridgeFlags, quotes []bridge.GroupQuote, groups *bridge.GroupsPlan, hostingCapUSDMicros, evalCapUSDMicros int64) error {
 	var b []byte
 	b = append(b, fmt.Sprintf("Bridge plan for %s (%d job%s):\n\n",
 		f.tuner, len(quotes), pluralSuffix(len(quotes)))...)
@@ -30,11 +32,12 @@ func renderBridgePlanHuman(out io.Writer, f bridgeFlags, quotes []bridge.GroupQu
 		b = append(b, fmt.Sprintf("  %-24s %4d asset(s)  %10d tokens  %s\n",
 			q.Group, len(q.AssetIDs), q.TrainTokens, formatUSD(q.EstimatedCostUSDMicros))...)
 	}
+	total := bridge.TotalEstimatedCostUSDMicros(quotes) + hostingCapUSDMicros + evalCapUSDMicros
 	b = append(b, fmt.Sprintf("\n  Training subtotal:            %s\n", formatUSD(bridge.TotalEstimatedCostUSDMicros(quotes)))...)
 	b = append(b, fmt.Sprintf("  Hosting (worst case, capped):  %s  (%d endpoint%s x %d min)\n",
 		formatUSD(hostingCapUSDMicros), len(quotes), pluralSuffix(len(quotes)), f.maxServeMinutes)...)
-	b = append(b, fmt.Sprintf("  Total (worst case):            %s\n",
-		formatUSD(bridge.TotalEstimatedCostUSDMicros(quotes)+hostingCapUSDMicros))...)
+	b = append(b, fmt.Sprintf("  Eval pass (worst case):        %s\n", formatUSD(evalCapUSDMicros))...)
+	b = append(b, fmt.Sprintf("  Total (worst case):            %s\n", formatUSD(total))...)
 
 	if len(groups.Skipped) > 0 {
 		b = append(b, fmt.Sprintf("\n  Skipped (below core.MinClusterCases): %v\n", groups.Skipped)...)
@@ -70,10 +73,14 @@ type bridgePlanJSON struct {
 	Jobs                []bridgeJobJSON `json:"jobs"`
 	TrainingSubtotalUSD float64         `json:"training_subtotal_usd"`
 	HostingCapUSD       float64         `json:"hosting_cap_usd"`
-	TotalEstimatedUSD   float64         `json:"total_estimated_usd"`
-	Skipped             []string        `json:"skipped_clusters,omitempty"`
-	Unknown             []string        `json:"unknown_assets,omitempty"`
-	Armed               bool            `json:"armed"`
+	// EvalPassCapUSD is the eval pass's own worst case
+	// (docs/plans/2026-09-02-openai-tuner.md §4) — 0 for a provider with no
+	// per-token rate, such as Together today.
+	EvalPassCapUSD    float64  `json:"eval_pass_cap_usd"`
+	TotalEstimatedUSD float64  `json:"total_estimated_usd"`
+	Skipped           []string `json:"skipped_clusters,omitempty"`
+	Unknown           []string `json:"unknown_assets,omitempty"`
+	Armed             bool     `json:"armed"`
 }
 
 type bridgeJobJSON struct {
@@ -83,7 +90,7 @@ type bridgeJobJSON struct {
 	EstimatedCostUSD float64 `json:"estimated_cost_usd"`
 }
 
-func renderBridgePlanJSON(out io.Writer, f bridgeFlags, quotes []bridge.GroupQuote, groups *bridge.GroupsPlan, hostingCapUSDMicros int64) error {
+func renderBridgePlanJSON(out io.Writer, f bridgeFlags, quotes []bridge.GroupQuote, groups *bridge.GroupsPlan, hostingCapUSDMicros, evalCapUSDMicros int64) error {
 	doc := bridgePlanJSON{
 		Tuner:   f.tuner,
 		Armed:   f.bridgeArmed,
@@ -101,7 +108,8 @@ func renderBridgePlanJSON(out io.Writer, f bridgeFlags, quotes []bridge.GroupQuo
 	trainingSubtotal := bridge.TotalEstimatedCostUSDMicros(quotes)
 	doc.TrainingSubtotalUSD = microsToUSD(trainingSubtotal)
 	doc.HostingCapUSD = microsToUSD(hostingCapUSDMicros)
-	doc.TotalEstimatedUSD = microsToUSD(trainingSubtotal + hostingCapUSDMicros)
+	doc.EvalPassCapUSD = microsToUSD(evalCapUSDMicros)
+	doc.TotalEstimatedUSD = microsToUSD(trainingSubtotal + hostingCapUSDMicros + evalCapUSDMicros)
 
 	enc := json.NewEncoder(out)
 	enc.SetIndent("", "  ")

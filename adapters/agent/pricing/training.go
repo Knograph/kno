@@ -3,6 +3,10 @@ package pricing
 import (
 	"math"
 	"math/bits"
+
+	"google.golang.org/protobuf/proto"
+
+	knov1 "github.com/knograph/kno/gen/kno/v1"
 )
 
 // TrainPrice is a training-token rate for a base model, plus an optional
@@ -57,6 +61,59 @@ type ServePrice struct {
 var trainTable = map[string]map[string]TrainPrice{}
 
 var serveTable = map[string]map[string]ServePrice{}
+
+// fineTunedTable is the THIRD bridge pricing dimension: what a fine-tuned
+// model costs to INVOKE, keyed table[scheme][baseModel] exactly like
+// trainTable and serveTable above.
+//
+// SHIPS EMPTY, for the same reason those two do, and one the eval-seam
+// pricing plan's third review round insisted on stating precisely: a
+// fine-tuned model's inference rate is NOT the kind of unmeasurable
+// provider-internal slop TrainingHeadroomPct and RegionalMultiplierPct
+// bound. OpenAI publishes it, per base model, on the same page table.go
+// already cites. A multiplier applied to the BASE rate here would be
+// exactly the fabricated-rate failure table.go's own package doc refuses —
+// "An unknown model is NOT priced at zero... Lookup reports absence; the
+// caller decides" — dressed up as a safety margin. It is not a margin: it is
+// a guess wearing a percentage sign, on a spend path with a real number one
+// lookup away. Until a reviewed diff adds rows (the same discipline
+// table.go and trainTable/serveTable both apply), every base model is
+// refused under LookupFineTunedPrice, which is the same "an unpriced model
+// under a cap is refused, never guessed" rule core/score.go's
+// AcceptFreeCalls-false path already enforces for every other Agent. See
+// docs/debt.md for the ledger entry this ships with.
+//
+// Values are knov1.Price, not a bespoke struct like TrainPrice/ServePrice:
+// a fine-tuned inference rate is the SAME shape as the base inference rates
+// table.go carries (input/cached-input/cache-write/output per million
+// tokens) — it is Estimate's own p argument, fed straight into
+// pricing.EstimateWithPrice, the same function WorstCase already calls.
+// TrainPrice and ServePrice are bespoke because training and hosting are
+// genuinely different dimensions (see TrainPrice's doc); inference is not.
+var fineTunedTable = map[string]map[string]*knov1.Price{}
+
+// LookupFineTunedPrice returns the published fine-tuned inference rate for a
+// base model — the rate OpenAI (or any per-token provider) bills for calls
+// against a model it fine-tuned from baseModel, which is ABOVE the base
+// rate table.go's Lookup carries.
+//
+// The second return is false for a model with no row — until fineTunedTable
+// gains entries, every model — and the caller must not substitute the base
+// rate, a multiplier, or zero: see fineTunedTable's doc. A COPY, always, for
+// the identical data-race reason Lookup's own doc gives.
+func LookupFineTunedPrice(scheme, model string) (*knov1.Price, bool) {
+	byModel, ok := fineTunedTable[scheme]
+	if !ok {
+		return nil, false
+	}
+	if p, ok := byModel[model]; ok {
+		return proto.CloneOf(p), true
+	}
+	if base, ok := longestPrefix(model, byModel); ok && isVersionSuffix(model[len(base):]) {
+		return proto.CloneOf(byModel[base]), true
+	}
+	return nil, false
+}
 
 // TrainingHeadroomPct is the provider-class headroom multiplier Step 2(a)
 // calls for: providers bill packed sequences, padding, and sometimes an

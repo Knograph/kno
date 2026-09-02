@@ -133,6 +133,45 @@ covenants — breaking any of them requires a major version.
 
 ## [Unreleased]
 
+### Added
+
+- **`kno bridge`'s eval pass is now priced, not asserted free.** `bridge/score.go`'s
+  `AcceptFreeCalls: true` was a Together-specific truth (a dedicated endpoint's
+  hosting ticker already covers inference) stated as if it held for every
+  provider. It is now `evalPrice == nil`, where `evalPrice` is resolved once in
+  `cli/bridge.go`'s `runBridgeCore` — beside `resolveTrainPrice` and
+  `resolveServePrice` — from a new `fineTunedTable` in `adapters/agent/pricing`
+  keyed by `(scheme, base model)`. The table **ships empty**: a base model with
+  no row is refused under a cost cap, never priced at zero and never
+  multiplied — the same doctrine `trainTable`/`serveTable` already apply.
+  `table.go`'s package doc says why: *"An unknown model is NOT priced at
+  zero... Lookup reports absence; the caller decides."*
+
+  The un-armed plan now prints a third line, "Eval pass (worst case)",
+  computed with `pricing.EstimateWithPrice` directly rather than by
+  constructing an Agent — `openaicompat.New` refuses construction without a
+  bound credential, which would have broken `kno bridge`'s own "zero network
+  calls, zero dollars spent" promise for an un-armed, un-credentialed run.
+  Both the printed plan and the armed run's consent total carry this addend.
+
+  `--price-serve-per-minute 0` is now a confirmed zero rather than an
+  implicit refusal: `resolveServePrice` takes a new `priceServeUSDSet`,
+  captured from `cmd.Flags().Changed("price-serve-per-minute")`, the same
+  mechanism `cli/baseline.go`'s `--cost-per-call-usd` already uses to
+  distinguish an explicit zero from an absent flag.
+
+  `newBridgeTuner` and `bridgeAgentFactory`'s `switch scheme` are now a
+  scheme-keyed registry (`bridgeAdapters`), so a second Tuner adapter is a
+  map entry rather than a new branch in two places.
+
+  **No behaviour change for Together**: `table.go` carries zero `"together"`
+  fine-tuned rows, so `evalPrice` stays `nil`, `AcceptFreeCalls` stays `true`,
+  and every dollar figure a Together run prints is unchanged.
+
+  See `docs/plans/2026-09-02-openai-tuner.md` (PR 1 of 2 — the adapter and
+  its `coretest` conformance suite are PR 2). Repays `docs/debt.md#159` and
+  `docs/debt.md#161`.
+
 ### Fixed
 
 - **A ready `Endpoint` with no `ReadyAt` ran with no time bound and no cost

@@ -24,15 +24,18 @@ type AgentFactory func(ctx context.Context, model *knov1.AgentRef) (core.Agent, 
 // AgentFactory-built agent over a Cases source resolved once for the whole
 // bridge run, filtered per Measure call to the Case IDs asked for.
 //
-// It asserts AcceptFreeCalls — decision B2 of
-// docs/plans/2026-09-01-bridge-eval-seam.md: a Together dedicated endpoint
-// bills per minute per replica regardless of how many Cases run through
-// it, and bridge/hosting.go's ticker already meters that spend through the
-// SAME budget guard. Charging a per-call estimate on top would
-// double-count the same dollars, and the assertion — not a discovery — is
-// what keeps the engine's "a zero estimate under a cap is refused like an
-// unknown one" rule from firing on a legitimately zero-marginal call. See
-// core.ScoreParams.AcceptFreeCalls.
+// AcceptFreeCalls is the caller's decision, not this type's — see the field
+// doc below. It used to be asserted unconditionally here (decision B2 of
+// docs/plans/2026-09-01-bridge-eval-seam.md), true for every provider on
+// the theory that inference on reserved capacity is always free. That is
+// Together-specific: a Together dedicated endpoint bills per minute per
+// replica regardless of how many Cases run through it, and
+// bridge/hosting.go's ticker already meters that spend through the SAME
+// budget guard, so charging a per-call estimate on top would double-count
+// the same dollars. A provider with no hosting ticker and a real per-token
+// rate has no such cover — see
+// docs/plans/2026-09-02-openai-tuner.md §2 for the correction and
+// docs/debt.md#159 for the ledger entry it repays.
 type ScoreEvalRunner struct {
 	// Cases is the whole bridge run's Case content, ALREADY resolved from
 	// --evals and sealed to dev-only — the CLI choke point per the plan's
@@ -53,6 +56,21 @@ type ScoreEvalRunner struct {
 
 	// NewAgent builds the Agent to invoke for one group's deployed model.
 	NewAgent AgentFactory
+
+	// AcceptFreeCalls asserts that every Invoke this pass makes is already
+	// paid for through a channel other than the per-call budget guard —
+	// core.ScoreParams.AcceptFreeCalls, passed straight through.
+	//
+	// The caller (cli) sets this from whether an eval-pass price resolved
+	// for --tuner's base model: true when it did not (a Together dedicated
+	// endpoint's hosting ticker already covers inference — see this type's
+	// doc), false when it did (a per-token provider, whose Agent then
+	// prices each Case through core.Estimator instead). Keyed on the
+	// resolved price rather than on scheme, per
+	// docs/plans/2026-09-02-openai-tuner.md §2: scheme-keying would bake in
+	// an assumption that breaks the first time one provider offers both
+	// reserved capacity and per-token serving.
+	AcceptFreeCalls bool
 
 	// Concurrency, MaxAttempts, RetryBudget and RetryBackoff pass through
 	// to core.ScorePass unchanged. Zero means ScorePass's own defaults.
@@ -76,8 +94,8 @@ func (r *ScoreEvalRunner) Measure(ctx context.Context, group string, model *knov
 
 	res, err := core.ScorePass(ctx, core.ScoreParams{
 		Agent: agent, AgentRef: model, Goal: r.Goal, Cases: filtered, Guard: r.Guard,
-		// See ScoreEvalRunner's doc: hosting already meters this spend.
-		AcceptFreeCalls: true,
+		// The caller's decision — see ScoreEvalRunner.AcceptFreeCalls's doc.
+		AcceptFreeCalls: r.AcceptFreeCalls,
 		Concurrency:     r.Concurrency,
 		MaxAttempts:     r.MaxAttempts,
 		RetryBudget:     r.RetryBudget,

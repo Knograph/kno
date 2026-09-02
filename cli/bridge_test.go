@@ -109,13 +109,19 @@ func bridgeFixture(t *testing.T) (dbPath string, pool core.Pool) {
 
 func bridgeTestFlags(dbPath string) bridgeFlags {
 	return bridgeFlags{
-		dbPath:           dbPath,
-		selectRunID:      "sel-1",
-		tuner:            "together:meta-llama/Llama-3-8b",
-		maxGroups:        6,
-		epochs:           3,
-		priceTrainUSD:    1.50,
-		priceServeUSD:    0.02,
+		dbPath:        dbPath,
+		selectRunID:   "sel-1",
+		tuner:         "together:meta-llama/Llama-3-8b",
+		maxGroups:     6,
+		epochs:        3,
+		priceTrainUSD: 1.50,
+		priceServeUSD: 0.02,
+		// bridgeFlags{} literals bypass cobra entirely, so priceServeUSDSet
+		// has to be set by hand here to stand in for
+		// cmd.Flags().Changed("price-serve-per-minute") — see
+		// TestNewBridgeCmdCapturesPriceServeUSDSet for the cobra-level
+		// proof that the real flag parsing wires this correctly.
+		priceServeUSDSet: true,
 		maxLiveEndpoints: 1,
 		maxServeMinutes:  30,
 	}
@@ -272,6 +278,71 @@ func TestBridgeArmedWithEvalsReachesTunerConstruction(t *testing.T) {
 	}
 }
 
+// writeBridgePoolFixture writes a JSONL --pool file carrying the same two
+// Assets bridgeFixture's injected core.Pool does, for the cobra-level tests
+// that need a real --pool STRING (going through resolvePool's grammar)
+// rather than an injected Pool value.
+func writeBridgePoolFixture(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "pool.jsonl")
+	content := `{"id":"tune-a","content":"demonstrate refunding a duplicate charge"}
+{"id":"tune-b","content":"demonstrate resolving a billing dispute"}
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("writing pool fixture: %v", err)
+	}
+	return path
+}
+
+// TestNewBridgeCmdCapturesPriceServeUSDSet is the cobra-level half of
+// resolveServePrice's "confirmed zero" fix
+// (docs/plans/2026-09-02-openai-tuner.md §5). Every other bridge CLI test
+// builds a bridgeFlags{} literal directly, bypassing cobra entirely — which
+// can only exercise resolveServePrice ONCE priceServeUSDSet is already set,
+// never prove that newBridgeCmd's RunE actually captures
+// cmd.Flags().Changed("price-serve-per-minute") into it. This drives the
+// real *cobra.Command both ways.
+func TestNewBridgeCmdCapturesPriceServeUSDSet(t *testing.T) {
+	dbPath, _ := bridgeFixture(t)
+	poolPath := writeBridgePoolFixture(t)
+	base := []string{
+		"--select-run-id", "sel-1", "--db", dbPath, "--pool", poolPath,
+		"--tuner", "together:meta-llama/Llama-3-8b", "--price-train-per-mtok", "1.50",
+	}
+
+	t.Run("omitted: refused, naming the escape hatch", func(t *testing.T) {
+		cmd := newBridgeCmd()
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetErr(&out)
+		cmd.SetArgs(base)
+		err := cmd.Execute()
+		if err == nil {
+			t.Fatal("want a refusal: no --price-serve-per-minute and no table row for together:meta-llama/Llama-3-8b")
+		}
+		if !strings.Contains(err.Error(), "--price-serve-per-minute") {
+			t.Errorf("error does not name the escape hatch: %q", err.Error())
+		}
+	})
+
+	t.Run("explicit zero: accepted as a confirmed zero, not an absent flag", func(t *testing.T) {
+		cmd := newBridgeCmd()
+		var out bytes.Buffer
+		cmd.SetOut(&out)
+		cmd.SetErr(&out)
+		cmd.SetArgs(append(append([]string{}, base...), "--price-serve-per-minute", "0"))
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("explicit --price-serve-per-minute 0 should be accepted: %v", err)
+		}
+		if !strings.Contains(out.String(), "Total") {
+			t.Errorf("plan was not printed: %q", out.String())
+		}
+		if !strings.Contains(out.String(), "Eval pass") {
+			t.Errorf("plan does not carry the eval-pass line: %q", out.String())
+		}
+	})
+}
+
 // writeBridgeEvalsFixture writes a minimal JSONL --evals file with one
 // Case per id, for the bridge CLI tests that need real Case content
 // behind the value.Plan's Case IDs.
@@ -286,6 +357,58 @@ func writeBridgeEvalsFixture(t *testing.T, ids ...string) string {
 		t.Fatalf("writing evals fixture: %v", err)
 	}
 	return path
+}
+
+// TestResolveServePriceExplicitZeroVersusAbsent is the unit-level half of
+// TestNewBridgeCmdCapturesPriceServeUSDSet: resolveServePrice itself must
+// accept an explicit zero (Set true) as a confirmed rate and still refuse
+// an unset flag (Set false), for a model with no table row.
+func TestResolveServePriceExplicitZeroVersusAbsent(t *testing.T) {
+	got, err := resolveServePrice("together", "meta-llama/Llama-3-8b", 0, true)
+	if err != nil {
+		t.Fatalf("explicit zero: resolveServePrice returned %v, want no error", err)
+	}
+	if got.PerMinuteUSDMicros != 0 {
+		t.Errorf("explicit zero: PerMinuteUSDMicros = %d, want 0", got.PerMinuteUSDMicros)
+	}
+
+	if _, err := resolveServePrice("together", "meta-llama/Llama-3-8b", 0, false); err == nil {
+		t.Fatal("unset flag with no table row: want a refusal, got none")
+	} else if !strings.Contains(err.Error(), "--price-serve-per-minute") {
+		t.Errorf("error does not name the escape hatch: %q", err.Error())
+	}
+
+	if _, err := resolveServePrice("together", "meta-llama/Llama-3-8b", -1, true); err == nil {
+		t.Fatal("negative explicit rate: want a refusal, got none")
+	}
+}
+
+// TestResolveEvalPriceTogetherStaysNil pins the eval-seam pricing plan's
+// core "no behaviour change" claim (docs/plans/2026-09-02-openai-tuner.md
+// §2): pricing.LookupFineTunedPrice carries zero "together" rows, so
+// resolveEvalPrice must return nil for it — the same nil that made
+// AcceptFreeCalls true before this PR existed.
+func TestResolveEvalPriceTogetherStaysNil(t *testing.T) {
+	if got := resolveEvalPrice("together", "meta-llama/Llama-3-8b"); got != nil {
+		t.Errorf("resolveEvalPrice(together, ...) = %v, want nil (table.go carries no together fine-tuned rows)", got)
+	}
+}
+
+// TestBridgeUnarmedTogetherPlanOmitsEvalPassCost is the integration-level
+// half of TestResolveEvalPriceTogetherStaysNil: the printed plan's eval-pass
+// line is $0.00 and the total is unaffected, so a Together run's figures
+// are byte-for-byte what they were before this PR.
+func TestBridgeUnarmedTogetherPlanOmitsEvalPassCost(t *testing.T) {
+	dbPath, pool := bridgeFixture(t)
+	f := bridgeTestFlags(dbPath)
+
+	var out bytes.Buffer
+	if err := runBridgeCore(context.Background(), &bytes.Buffer{}, &out, f, pool); err != nil {
+		t.Fatalf("runBridgeCore: %v", err)
+	}
+	if !strings.Contains(out.String(), "Eval pass (worst case):        $0.00") {
+		t.Errorf("eval-pass line is not a confirmed zero: %q", out.String())
+	}
 }
 
 // TestBridgeRefusesUnpricedModelWithoutTheEscapeHatch is acceptance
