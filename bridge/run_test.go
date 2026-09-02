@@ -689,6 +689,29 @@ type blockingEvalRunner struct {
 	once     sync.Once
 }
 
+// blockAfterAllIn answers the all-in group normally and then hangs, so a test
+// can reach a leave-one-out measurement with a real baseline behind it.
+type blockAfterAllIn struct {
+	scores   map[string]float64
+	started  chan struct{}
+	returned chan struct{}
+	once     sync.Once
+}
+
+func (b *blockAfterAllIn) Measure(ctx context.Context, group string, _ *knov1.AgentRef, ids []string) (map[string]float64, error) {
+	if group == bridge.AllIn {
+		out := make(map[string]float64, len(ids))
+		for _, id := range ids {
+			out[id] = b.scores[id]
+		}
+		return out, nil
+	}
+	b.once.Do(func() { close(b.started) })
+	<-ctx.Done()
+	close(b.returned)
+	return nil, ctx.Err()
+}
+
 func (b *blockingEvalRunner) Measure(ctx context.Context, _ string, _ *knov1.AgentRef, _ []string) (map[string]float64, error) {
 	b.once.Do(func() { close(b.started) })
 	<-ctx.Done()
@@ -821,5 +844,116 @@ func TestRunValidateRequiredFields(t *testing.T) {
 				t.Errorf("want an error for %s", tc.name)
 			}
 		})
+	}
+}
+
+// TestServeMinutesCapStopsAHungMeasurement is the flag doing what its help
+// says, and it is a spend-safety test rather than a lifecycle one.
+//
+// `--bridge-max-serve-minutes` is documented as "tear an endpoint down and
+// report its group unknown after this many served minutes." It reached only
+// SweepEndpoints, which runs on a LATER invocation cleaning up after a crash;
+// nothing bounded a live run. A measurement that hung billed the endpoint for
+// as long as it hung, with --max-cost-usd defaulting to 0 (unlimited) as the
+// only other bound.
+//
+// A zero-rate provider makes it strictly worse: SettleServeTick settles zero
+// every tick, the guard never refuses a zero estimate, and the cost-based
+// backstop disappears. A clock is the only bound that does not depend on the
+// endpoint costing something.
+func TestServeMinutesCapStopsAHungMeasurement(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := newBridgeTestStore(t)
+	if err := st.CreateRun(ctx, &knov1.Run{Id: "run-1", Stage: knov1.Stage_STAGE_BRIDGE, Status: knov1.RunStatus_RUN_STATUS_RUNNING}); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	em, err := bridge.NewEmitter(ctx, st, "run-1")
+	if err != nil {
+		t.Fatalf("NewEmitter: %v", err)
+	}
+
+	// ReadyAt already past the cap, so the deadline has expired before the
+	// measurement starts: no sleeping in a test to prove a timeout fires.
+	tuner := &fakeTuner{
+		ref:            &core.JobRef{Id: "job-1", Provider: "together", SubmittedAt: "2026-08-31T00:00:00Z"},
+		statusSequence: []*core.JobState{succeeded("job-1")},
+		deployResult: &core.Endpoint{
+			ID: "ep-1", Provider: "together", Served: "meta-llama/Llama-3-8b-ft",
+			Ready: true, ReadyAt: time.Now().Add(-90 * time.Minute),
+		},
+	}
+	eval := &blockAfterAllIn{
+		scores:   map[string]float64{},
+		started:  make(chan struct{}),
+		returned: make(chan struct{}),
+	}
+
+	// baseRunParams, not a hand-rolled RunParams literal: it is the one
+	// place DevCaseIDs and ControlCaseIDs are wired up, and both groups'
+	// needed Case ID sets (unionCaseIDs for all-in, groupCaseIDs for
+	// cluster-x — bridge/measure.go) derive from them. Omitting them makes
+	// every group's needed-Case-ID set EMPTY, so missingIDs reports nothing
+	// missing and ensureMeasured returns before ever calling
+	// deployAndMeasure — Tuner.Deploy is never invoked, Eval.Measure is
+	// never invoked, and the run fails downstream with "group cluster-x has
+	// no all-in baseline scores recorded", not with a timeout. That dead end
+	// looks like a measurement bug; it is a test-fixture bug, caught by
+	// tracing measureGroup -> ensureMeasured -> missingIDs and finding
+	// deploys=0 in the tuner's own call count.
+	guard := budget.New(budget.Limits{}, nil, 0)
+	p := baseRunParams(st, guard, tuner, em, eval)
+	// A zero serve price: the guard can never refuse, so the clock is the
+	// only thing that can stop this.
+	p.ServePrice = pricing.ServePrice{PerMinuteUSDMicros: 0}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = bridge.Run(ctx, p)
+	}()
+
+	select {
+	case <-eval.returned:
+	case <-time.After(15 * time.Second):
+		t.Fatal("the serve-minutes cap did not stop a hung measurement; the " +
+			"endpoint bills for as long as the measurement hangs, and at a zero " +
+			"serve rate no cost cap can stop it either")
+	}
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("Run never returned after the cap expired")
+	}
+
+	// The endpoint MUST be torn down. core.Tuner.Teardown's own doc: "MUST be
+	// called on every exit path once Deploy has returned successfully —
+	// success, eval-pass failure, a budget or serve-minute cap, a timeout, or
+	// cancellation." A serve-minute cap is named in that list. An endpoint
+	// left up after the run has moved on bills until someone notices, which
+	// is worse than the hang this cap exists to stop.
+	if tuner.deployCalls == 0 {
+		t.Fatal("no endpoint was ever deployed, so the teardown assertion below " +
+			"would pass vacuously — the fixture is not exercising the path")
+	}
+	if tuner.teardownCalls < tuner.deployCalls {
+		t.Errorf("deployed %d endpoint(s) and tore down %d; an endpoint whose "+
+			"measurement was cut short by the serve-minutes cap is still live "+
+			"and still billing",
+			tuner.deployCalls, tuner.teardownCalls)
+	}
+	// Both the all-in group's own union pass and cluster-x's cut-short
+	// measurement deploy an endpoint, so both must come back down —
+	// teardown is deferred immediately after DeployGroup succeeds
+	// (deployAndMeasure, bridge/run.go), before measureCtx even exists, so
+	// it runs on every return path out of that function including the one
+	// the serve-minutes deadline forces. A leaked endpoint bills forever;
+	// see core.Tuner.Teardown's doc.
+	if tuner.deployCalls != 2 {
+		t.Errorf("Deploy called %d times, want 2 (all-in, then cluster-x)", tuner.deployCalls)
+	}
+	if tuner.teardownCalls != 2 {
+		t.Errorf("Teardown called %d times, want 2 — every deployed endpoint, including the one "+
+			"the serve-minutes cap cut off, must be torn down", tuner.teardownCalls)
 	}
 }

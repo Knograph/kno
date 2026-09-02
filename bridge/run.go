@@ -370,8 +370,33 @@ func deployAndMeasure(
 	// minutes actually consumed between the refusal and teardown. Those
 	// are real charges, and recording them as orphan spend is the honest
 	// treatment — cancelling the ticker too would simply lose them.
+	// The deadline is --bridge-max-serve-minutes, enforced HERE and not only
+	// at resume.
+	//
+	// The flag's own help says it tears an endpoint down "after this many
+	// served minutes", and until now it did not: MaxServeMinutes reached only
+	// SweepEndpoints, which runs when a LATER invocation cleans up after a
+	// crash. Nothing bounded a live run. A measurement that hangs — a provider
+	// outage, a retry storm inside ScorePass's loop — billed the endpoint for
+	// as long as it hung, bounded only by --max-cost-usd, which defaults to 0
+	// meaning unlimited.
+	//
+	// A provider that bills nothing per minute makes it worse rather than
+	// better: SettleServeTick then settles zero every tick, the guard never
+	// refuses a zero estimate, and the cost-based backstop that nominally
+	// covered the metered case disappears entirely. The cap has to be a clock,
+	// because it is the only bound that does not depend on the endpoint
+	// costing something.
+	//
+	// Measured from ReadyAt, which is when billing starts, not from now.
 	measureCtx, cancelMeasure := context.WithCancel(ctx)
 	defer cancelMeasure()
+	if p.MaxServeMinutes > 0 && !ep.ReadyAt.IsZero() {
+		deadline := ep.ReadyAt.Add(time.Duration(p.MaxServeMinutes) * time.Minute)
+		var stopDeadline context.CancelFunc
+		measureCtx, stopDeadline = context.WithDeadline(measureCtx, deadline)
+		defer stopDeadline()
+	}
 
 	stopTick := startServeTicker(ctx, cancelMeasure, p, q.Group, ep)
 	defer func() {
