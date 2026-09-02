@@ -7,6 +7,7 @@ import (
 	"iter"
 	"net/url"
 	"sort"
+	"strings"
 
 	"github.com/knograph/kno/adapters/agent/openaicompat"
 	"github.com/knograph/kno/adapters/agent/pricing"
@@ -39,8 +40,14 @@ func confirmAndRun(
 	ctx context.Context, _ io.Reader, out io.Writer, f bridgeFlags,
 	db store.Store, plan *value.Plan, groups *bridge.GroupsPlan,
 	scheme, model string, quotes []bridge.GroupQuote, servePrice pricing.ServePrice, hostingCapUSDMicros int64,
+	evalPrice *knov1.Price, evalCapUSDMicros int64, evalCalls int,
 ) error {
-	total := bridge.TotalEstimatedCostUSDMicros(quotes) + hostingCapUSDMicros
+	// Three addends now, not two: training, the hosting cap, and the eval
+	// pass's own worst case — docs/plans/2026-09-02-openai-tuner.md §4.
+	// evalCapUSDMicros is zero whenever evalPrice is nil (Together today),
+	// so this sum is byte-for-byte what it was before for every scheme
+	// pricing.LookupFineTunedPrice carries no row for.
+	total := bridge.TotalEstimatedCostUSDMicros(quotes) + hostingCapUSDMicros + evalCapUSDMicros
 	var totalTokens int64
 	for _, q := range quotes {
 		totalTokens += q.TrainTokens
@@ -54,7 +61,7 @@ func confirmAndRun(
 	)
 
 	res, err := guard.Authorize(ctx, budget.Estimate{
-		Calls:         int64(len(quotes)),
+		Calls:         int64(len(quotes) + evalCalls),
 		CostUSDMicros: total,
 		Tokens:        totalTokens,
 	})
@@ -64,12 +71,13 @@ func confirmAndRun(
 		// spent). Nothing was written, nothing was submitted.
 		return err
 	}
-	// This reservation covers training and the hosting cap; the eval
-	// passes themselves are asserted free (see bridgeAgentFactory) and
-	// settle nothing against it. Release rather than Settle: the guard
-	// bridge.Run receives below re-authorizes every real spend itself, so
-	// double-counting this planning-time reservation would overstate the
-	// first real charge.
+	// This reservation covers training, the hosting cap, and the eval
+	// pass's worst case. Release rather than Settle: the guard bridge.Run
+	// receives below re-authorizes every real spend itself (training,
+	// hosting ticks, and — when evalPrice is non-nil — each eval Case
+	// through core.ScorePass's own Estimator path), so double-counting
+	// this planning-time reservation would overstate the first real
+	// charge.
 	res.Release()
 
 	// --evals is required only once armed: the un-armed plan needs no
@@ -126,7 +134,7 @@ func confirmAndRun(
 	if err != nil {
 		return err
 	}
-	agentFactory, err := bridgeAgentFactory(f, scheme)
+	agentFactory, err := bridgeAgentFactory(f, scheme, evalPrice)
 	if err != nil {
 		return err
 	}
@@ -158,6 +166,12 @@ func confirmAndRun(
 		Eval: &bridge.ScoreEvalRunner{
 			Cases: core.Seal(staticEvals{cases: cases}),
 			Goal:  goal, Guard: runGuard, NewAgent: agentFactory,
+			// Keyed on whether a price resolved, not on scheme — §2 of
+			// docs/plans/2026-09-02-openai-tuner.md, repaying
+			// docs/debt.md#159. Together's evalPrice is nil (table.go
+			// carries no "together" fine-tuned rows), so this stays true
+			// and behaviour is unchanged.
+			AcceptFreeCalls: evalPrice == nil,
 		},
 		ServePrice:       servePrice,
 		MaxLiveEndpoints: f.maxLiveEndpoints,
@@ -242,16 +256,78 @@ func (s staticEvals) Cases(context.Context) (iter.Seq2[*core.Case, error], error
 	}, nil
 }
 
-// newBridgeTuner constructs the core.Tuner --tuner names. Only "together"
-// ships in this build (adapters/tuner/together) — matching the
-// tuner-bridge plan's Step 5 sequencing (Together first, Fireworks and
-// OpenAI later).
+// tunerFactory constructs the core.Tuner one --tuner scheme needs.
+type tunerFactory func(f bridgeFlags) (core.Tuner, error)
+
+// evalAgentFactoryBuilder constructs the bridge.AgentFactory that invokes
+// one scheme's deployed model over its eval passes, given the eval-pass
+// price resolveEvalPrice already resolved for --tuner's base model
+// (nil when this scheme/model has no per-token rate).
+type evalAgentFactoryBuilder func(f bridgeFlags, evalPrice *knov1.Price) (bridge.AgentFactory, error)
+
+// bridgeAdapter bundles what one --tuner scheme needs: a Tuner constructor
+// and the AgentFactory builder for its deployed model's eval passes.
+//
+// This is docs/debt.md#161's repayment: newBridgeTuner and
+// bridgeAgentFactory used to switch on scheme separately, so adding a
+// second Tuner meant adding an arm to TWO switches (and could add one to
+// only one of them, since nothing forced the pair to move together). A
+// second adapter is now ONE map entry carrying both halves.
+type bridgeAdapter struct {
+	tuner tunerFactory
+	agent evalAgentFactoryBuilder
+}
+
+// bridgeAdapters is the scheme-keyed registry. Only "together" ships in
+// this build (adapters/tuner/together) — matching the tuner-bridge plan's
+// Step 5 sequencing (Together first, OpenAI and others later, each landing
+// as a new entry here rather than a new branch).
+var bridgeAdapters = map[string]bridgeAdapter{
+	"together": {tuner: newTogetherTuner, agent: newTogetherAgentFactory},
+}
+
+// supportedTunerSchemes lists what --tuner accepts, sorted, for a refusal
+// message that names what IS known rather than only what is not —
+// pricing.Models' own convention, applied here.
+func supportedTunerSchemes() string {
+	schemes := make([]string, 0, len(bridgeAdapters))
+	for s := range bridgeAdapters {
+		schemes = append(schemes, s)
+	}
+	sort.Strings(schemes)
+	return strings.Join(schemes, ", ")
+}
+
+// newBridgeTuner constructs the core.Tuner --tuner names, by dispatching
+// through bridgeAdapters rather than a switch.
 func newBridgeTuner(f bridgeFlags, scheme string) (core.Tuner, error) {
-	if scheme != "together" {
+	adapter, ok := bridgeAdapters[scheme]
+	if !ok {
 		return nil, errs.ErrCapabilityUnsupported.
-			WithFix("pass --tuner together:<model>; no other Tuner ships in this build").
+			WithFix(fmt.Sprintf("pass --tuner as one of: %s", supportedTunerSchemes())).
 			Wrap(fmt.Errorf("no Tuner adapter for scheme %q", scheme))
 	}
+	return adapter.tuner(f)
+}
+
+// bridgeAgentFactory builds the bridge.AgentFactory for --tuner's
+// provider, by dispatching through bridgeAdapters rather than a switch.
+// evalPrice is threaded through from resolveEvalPrice (resolved once in
+// runBridgeCore) rather than re-derived here from a transport Ref's
+// scheme — see resolveEvalPrice's doc for why re-deriving would
+// double-count a Together run's hosting ticker.
+func bridgeAgentFactory(f bridgeFlags, scheme string, evalPrice *knov1.Price) (bridge.AgentFactory, error) {
+	adapter, ok := bridgeAdapters[scheme]
+	if !ok {
+		return nil, errs.ErrCapabilityUnsupported.
+			WithFix(fmt.Sprintf("pass --tuner as one of: %s", supportedTunerSchemes())).
+			Wrap(fmt.Errorf("no inference wiring for scheme %q", scheme))
+	}
+	return adapter.agent(f, evalPrice)
+}
+
+// newTogetherTuner is bridgeAdapters["together"].tuner.
+func newTogetherTuner(f bridgeFlags) (core.Tuner, error) {
 	bindings, err := keyBindings(f.keyEnv)
 	if err != nil {
 		return nil, err
@@ -263,11 +339,10 @@ func newBridgeTuner(f bridgeFlags, scheme string) (core.Tuner, error) {
 	})
 }
 
-// bridgeAgentFactory builds the bridge.AgentFactory for --tuner's
-// provider: an Agent that invokes the deployed model over its
-// OpenAI-compatible chat completions API, per the tuner-bridge plan's Step
-// 5 ("the eval passes go through adapters/agent/openaicompat... with no
-// new inference code").
+// newTogetherAgentFactory is bridgeAdapters["together"].agent: an Agent
+// that invokes the deployed model over its OpenAI-compatible chat
+// completions API, per the tuner-bridge plan's Step 5 ("the eval passes go
+// through adapters/agent/openaicompat... with no new inference code").
 //
 // (verify): a Together dedicated endpoint's inference route is asserted
 // here as together.DefaultBaseURL + "/v1", the OpenAI-compatible path
@@ -276,12 +351,7 @@ func newBridgeTuner(f bridgeFlags, scheme string) (core.Tuner, error) {
 // path with its served-model name in the "model" field — the same class
 // of provider fact the tuner-bridge plan tags (verify) throughout, and
 // unconfirmed by this PR against a live endpoint. See this PR's report.
-func bridgeAgentFactory(f bridgeFlags, scheme string) (bridge.AgentFactory, error) {
-	if scheme != "together" {
-		return nil, errs.ErrCapabilityUnsupported.
-			WithFix("pass --tuner together:<model>; no other Tuner ships in this build").
-			Wrap(fmt.Errorf("no inference wiring for scheme %q", scheme))
-	}
+func newTogetherAgentFactory(f bridgeFlags, evalPrice *knov1.Price) (bridge.AgentFactory, error) {
 	userBindings, err := keyBindings(f.keyEnv)
 	if err != nil {
 		return nil, err
@@ -307,12 +377,17 @@ func bridgeAgentFactory(f bridgeFlags, scheme string) (bridge.AgentFactory, erro
 			Ref: ref, KeyEnv: bindings,
 			AllowInsecureBaseURL: f.allowInsecureURL,
 			AllowPrivateAddress:  f.allowPrivateAddress,
-			// Price left nil deliberately: ScorePass's AcceptFreeCalls
-			// asserts these calls are already paid for by the hosting
-			// ticker (bridge/hosting.go). A per-run-generated endpoint id
-			// is never in the static pricing table regardless, so an
-			// unpriced lookup already means "no rate" — consistent with
-			// the assertion rather than fighting it.
+			// evalPrice is nil for Together today (pricing.LookupFineTunedPrice
+			// carries no "together" rows), which is what makes
+			// ScoreEvalRunner's AcceptFreeCalls true and this Agent's own
+			// Estimator path never consulted. A per-run-generated endpoint
+			// id is never in the static pricing table regardless — that
+			// was true before this change and stays true — but the price
+			// itself is now resolved once at the CLI layer (by base model,
+			// not by this endpoint's generated name) rather than always
+			// nil, so a future per-token scheme registered here gets
+			// priced correctly instead of silently asserting free.
+			Price: evalPrice,
 		})
 	}, nil
 }

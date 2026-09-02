@@ -81,6 +81,11 @@ func TestScoreEvalRunnerMeasureScoresOnlyTheAskedForCases(t *testing.T) {
 	runner := &bridge.ScoreEvalRunner{
 		Cases: core.Seal(pool), Goal: scoreEvalRunnerGoal{value: 0.75}, Guard: guard,
 		NewAgent: func(context.Context, *knov1.AgentRef) (core.Agent, error) { return agent, nil },
+		// Asserted explicitly now that the caller decides — see
+		// ScoreEvalRunner.AcceptFreeCalls's doc. This test's whole point is
+		// proving the assertion bypasses the zero-cost refusal, so it must
+		// set the field rather than rely on any default.
+		AcceptFreeCalls: true,
 	}
 
 	scores, err := runner.Measure(context.Background(), "cluster-x",
@@ -104,6 +109,55 @@ func TestScoreEvalRunnerMeasureScoresOnlyTheAskedForCases(t *testing.T) {
 		if id != "d1" && id != "d2" {
 			t.Errorf("agent invoked on unexpected case %s", id)
 		}
+	}
+}
+
+// zeroEstimateAgent implements core.Estimator and reports a zero cost for
+// every Case — the shape an untabled per-token provider's Agent would
+// produce if AcceptFreeCalls were wrongly asserted true for it.
+type zeroEstimateAgent struct{ scoreEvalRunnerAgent }
+
+func (*zeroEstimateAgent) Estimate(context.Context, *core.Case) (budget.Estimate, error) {
+	return budget.Estimate{Calls: 1}, nil
+}
+
+func (*zeroEstimateAgent) WorstCase() budget.Estimate {
+	return budget.Estimate{Calls: 1}
+}
+
+// TestScoreEvalRunnerMeasureRefusesAZeroEstimateWhenNotAcceptingFreeCalls
+// pins the OTHER half of AcceptFreeCalls now that it is the caller's
+// decision rather than a hardcoded assertion (docs/plans/2026-09-02-openai-tuner.md
+// §2, docs/debt.md#159): with AcceptFreeCalls false and a cost cap set,
+// core.ScorePass's per-Case estimate refuses a zero estimate exactly as
+// core/ring0.go's Estimator doctrine requires — the Case is never invoked
+// and never scored — rather than silently treating it as free the way the
+// old hardcoded AcceptFreeCalls:true would have.
+func TestScoreEvalRunnerMeasureRefusesAZeroEstimateWhenNotAcceptingFreeCalls(t *testing.T) {
+	t.Parallel()
+
+	agent := &zeroEstimateAgent{}
+	pool := scoreEvalRunnerCases{cases: []*core.Case{devCase("d1")}}
+	guard := budget.New(budget.Limits{MaxCostUSDMicros: 1}, nil, 0)
+
+	runner := &bridge.ScoreEvalRunner{
+		Cases: core.Seal(pool), Goal: scoreEvalRunnerGoal{value: 0.75}, Guard: guard,
+		NewAgent:        func(context.Context, *knov1.AgentRef) (core.Agent, error) { return agent, nil },
+		AcceptFreeCalls: false,
+	}
+
+	// The refusal is per-Case (core.ScorePass records it in Errors and
+	// keeps going, matching openaicompat's own "one refusal per Case"
+	// history — docs/debt.md#46), so Measure itself need not return a
+	// top-level error. What matters is that d1 was never invoked and never
+	// scored — the model was not silently called for free.
+	scores, _ := runner.Measure(context.Background(), "cluster-x",
+		&knov1.AgentRef{Scheme: "openai", Target: "ft-model"}, []string{"d1"})
+	if _, ok := scores["d1"]; ok {
+		t.Errorf("d1 was scored, want it refused: scores = %v", scores)
+	}
+	if len(agent.calls) != 0 {
+		t.Errorf("agent invoked %d times, want 0 — the refusal must fire before Invoke", len(agent.calls))
 	}
 }
 

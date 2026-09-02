@@ -12,11 +12,13 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/knograph/kno/adapters/agent/openaicompat"
 	"github.com/knograph/kno/adapters/agent/pricing"
 	"github.com/knograph/kno/bridge"
 	"github.com/knograph/kno/core"
 	"github.com/knograph/kno/core/errs"
 	"github.com/knograph/kno/core/value"
+	knov1 "github.com/knograph/kno/gen/kno/v1"
 	"github.com/knograph/kno/store"
 )
 
@@ -44,6 +46,15 @@ type bridgeFlags struct {
 	priceServeUSD    float64 // dollars per replica per minute; the --price-serve-per-minute escape hatch
 	maxLiveEndpoints int
 	maxServeMinutes  int32
+
+	// priceServeUSDSet records whether --price-serve-per-minute was passed
+	// at all, as opposed to left at its zero default — cli/baseline.go's
+	// costPerCallSet precedent, applied here. 0.0 is a legitimate rate (a
+	// provider that genuinely does not bill for serving), and without this
+	// an explicit --price-serve-per-minute 0 would be indistinguishable
+	// from an absent flag, which resolveServePrice must not confuse: see
+	// its doc.
+	priceServeUSDSet bool
 
 	// evalsPath is --evals: eval cases behind the value.Plan's Case IDs,
 	// resolved and sealed at THIS choke point — see runBridgeMeasured's
@@ -89,11 +100,15 @@ WITH --bridge, the plan is the same and a job is submitted for every group
 in it once confirmed. Each job is charged when it is submitted and cannot be un-submitted.
 Hosting a tuned model for its eval passes is charged per minute per endpoint,
 including while idle, capped by --bridge-max-serve-minutes and serialized to
---bridge-max-live-endpoints live endpoints at once. --evals is required once
-armed: it is where the Case CONTENT behind the value.Plan's Case IDs comes
-from, resolved and sealed once, dev Cases only — the holdout is never read.
-A Case ID the plan names with no Case in --evals refuses the whole run
-before any job is submitted.`,
+--bridge-max-live-endpoints live endpoints at once. Invoking the deployed
+model during the eval pass is priced separately, per provider: free when
+the provider's serving rate already covers inference (the hosting line
+above is the only charge), priced per call when it does not — the plan
+prints an "Eval pass" line either way, so which case applies is never
+silent. --evals is required once armed: it is where the Case CONTENT behind
+the value.Plan's Case IDs comes from, resolved and sealed once, dev Cases
+only — the holdout is never read. A Case ID the plan names with no Case in
+--evals refuses the whole run before any job is submitted.`,
 		Example: `  # See the plan and the price, without spending anything
   kno bridge --select-run-id <id> --pool assets.jsonl --tuner together:meta-llama/Llama-3-8b --price-train-per-mtok 1.50 --price-serve-per-minute 0.02
 
@@ -103,6 +118,11 @@ before any job is submitted.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			// runBridgeCore receives a plain bridgeFlags struct and never
+			// sees cmd, so the presence check has to happen here — the same
+			// reason cli/baseline.go's costPerCallSet is captured in RunE
+			// rather than inside runBaseline.
+			f.priceServeUSDSet = cmd.Flags().Changed("price-serve-per-minute")
 			return runBridge(cmd.Context(), cmd.InOrStdin(), cmd.OutOrStdout(), f)
 		},
 	}
@@ -226,10 +246,14 @@ func runBridgeCore(ctx context.Context, in io.Reader, out io.Writer, f bridgeFla
 	// no --accept-unknown-cost escape for the bridge", extended to hosting.
 	// Resolved up front, at planning time, so the un-armed plan can print
 	// the hosting cap even though nothing has been deployed yet.
-	servePrice, err := resolveServePrice(scheme, model, f.priceServeUSD)
+	servePrice, err := resolveServePrice(scheme, model, f.priceServeUSD, f.priceServeUSDSet)
 	if err != nil {
 		return err
 	}
+	// The third pricing dimension: what the eval pass itself costs, if
+	// anything. Resolved ONCE, here, beside the other two, and threaded
+	// down rather than re-derived — see resolveEvalPrice's doc.
+	evalPrice := resolveEvalPrice(scheme, model)
 
 	quotes, err := bridge.QuoteGroups(p, groups, assets, model, price, f.epochs)
 	if err != nil {
@@ -241,14 +265,111 @@ func runBridgeCore(ctx context.Context, in io.Reader, out io.Writer, f bridgeFla
 	// prediction: hosting is stoppable and usually costs less.
 	hostingCapUSDMicros := pricing.EstimateServeCap(servePrice, int(f.maxServeMinutes), 1) * int64(len(quotes))
 
-	if err := renderBridgePlan(out, f, quotes, groups, hostingCapUSDMicros); err != nil {
+	// devCaseIDs needs only the value.Plan's persisted Case IDs — no
+	// --evals, no network — so it (and the eval-pass ceiling built from it)
+	// is available un-armed, ahead of renderBridgePlan. This computation
+	// used to live inside confirmAndRun, reached only after arming; moving
+	// it here is what lets BOTH the printed plan and confirmAndRun's
+	// consent total carry the eval pass's worst case as a third addend —
+	// docs/plans/2026-09-02-openai-tuner.md §4: "a ceiling enforced
+	// silently at runtime without appearing in the figure the user agreed
+	// to is the same defect in a new place."
+	devCaseIDs := bridge.DevCaseIDsForGroups(plan, groups)
+	evalCapUSDMicros, evalCalls, err := evalPassCeiling(evalPrice, model, groups, devCaseIDs, plan.ControlCaseIDs)
+	if err != nil {
+		return err
+	}
+
+	if err := renderBridgePlan(out, f, quotes, groups, hostingCapUSDMicros, evalCapUSDMicros); err != nil {
 		return err
 	}
 
 	if !f.bridgeArmed {
 		return nil
 	}
-	return confirmAndRun(ctx, in, out, f, db, plan, groups, scheme, model, quotes, servePrice, hostingCapUSDMicros)
+	return confirmAndRun(ctx, in, out, f, db, plan, groups, scheme, model, quotes,
+		servePrice, hostingCapUSDMicros, evalPrice, evalCapUSDMicros, evalCalls)
+}
+
+// evalPassCeiling reports the worst-case cost of the eval pass an armed run
+// will make, and how many invocations that worst case is spread across —
+// the shape pricing.EstimateServeCap already uses for hosting (a per-unit
+// worst case times a unit count), applied to the eval-pass dimension per
+// docs/plans/2026-09-02-openai-tuner.md §4.
+//
+// price nil (no per-token rate resolved for this base model, per
+// resolveEvalPrice) reports zero for both — Together's case today, and any
+// future provider whose eval calls are genuinely free.
+//
+// The per-call worst case is computed with pricing.EstimateWithPrice
+// directly — the exact function openaicompat.Agent.WorstCase calls
+// internally — rather than by constructing an Agent: openaicompat.New
+// refuses construction without a bound credential, which would make an
+// un-armed `kno bridge` (no OPENAI_API_KEY set) fail to print a plan at all,
+// breaking the command's own "zero network calls, zero dollars spent"
+// promise. The prompt shape mirrors WorstCase's own worst Case (the full
+// DefaultMaxPromptBytes ceiling, no Asset — bridgeAgentFactory injects
+// none) and DefaultMaxOutputTokens, matching what the real Agent will
+// actually be constructed with once armed.
+//
+// The call count is the SUM over every group bridge.Run will actually
+// measure: the all-in group's union pass (every leave-one-out group's dev
+// Cases plus the control partition) plus each leave-one-out group's own
+// dev-plus-control pass — mirroring bridge/measure.go's unpublished
+// unionCaseIDs/groupCaseIDs exactly, duplicated here because this figure is
+// needed before bridge.RunParams exists, un-armed. NOT the deduplicated
+// Case-ID union across the whole run: the same Case is invoked once per
+// group whose deployed model it measures, so deduplicating across groups
+// would UNDER-count the real number of billed calls.
+func evalPassCeiling(
+	price *knov1.Price, model string, groups *bridge.GroupsPlan,
+	devCaseIDs map[string][]string, controlCaseIDs []string,
+) (capUSDMicros int64, calls int, err error) {
+	if price == nil {
+		return 0, 0, nil
+	}
+
+	total := len(evalGroupCaseIDs(bridge.AllIn, devCaseIDs, controlCaseIDs))
+	for tag := range groups.LeaveOneOut {
+		total += len(evalGroupCaseIDs(tag, devCaseIDs, controlCaseIDs))
+	}
+	if total == 0 {
+		return 0, 0, nil
+	}
+
+	worst := pricing.Prompt{Input: strings.Repeat("x", openaicompat.DefaultMaxPromptBytes)}
+	est, err := pricing.EstimateWithPrice(price, model, worst, openaicompat.DefaultMaxOutputTokens)
+	if err != nil {
+		return 0, 0, errs.ErrInvalidInput.WithFix(
+			"the fine-tuned pricing table row for this model cannot be turned into an " +
+				"estimate; check pricing.Version's table for a malformed row",
+		).Wrap(err)
+	}
+	return saturatingMul(est.CostUSDMicros, int64(total)), total, nil
+}
+
+// evalGroupCaseIDs is one group's own Case-ID set: its cluster's dev Cases
+// unioned with the control partition, or — when group is bridge.AllIn —
+// every OTHER group's dev Cases unioned with the control partition.
+// Matches bridge/measure.go's unionCaseIDs (the all-in union pass) and
+// groupCaseIDs (one leave-one-out group's pass) exactly.
+func evalGroupCaseIDs(group string, devCaseIDs map[string][]string, controlCaseIDs []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(controlCaseIDs))
+	for _, id := range controlCaseIDs {
+		set[id] = struct{}{}
+	}
+	if group == bridge.AllIn {
+		for _, ids := range devCaseIDs {
+			for _, id := range ids {
+				set[id] = struct{}{}
+			}
+		}
+		return set
+	}
+	for _, id := range devCaseIDs[group] {
+		set[id] = struct{}{}
+	}
+	return set
 }
 
 // parseTunerRef splits --tuner's scheme:model grammar.
@@ -284,17 +405,60 @@ func resolveTrainPrice(scheme, model string, priceUSDPerMTok float64) (pricing.T
 // Step 2(f): "an unpriced serve rate is refused exactly as an unpriced
 // train rate is", with --price-serve-per-minute as the same explicit
 // escape and no --accept-unknown-cost path.
-func resolveServePrice(scheme, model string, priceUSDPerMinute float64) (pricing.ServePrice, error) {
+//
+// priceUSDPerMinuteSet must come from cmd.Flags().Changed("price-serve-per-minute")
+// (newBridgeCmd's RunE captures it into bridgeFlags.priceServeUSDSet), NOT
+// from priceUSDPerMinute > 0. A provider that genuinely does not bill for
+// serving needs to say --price-serve-per-minute 0 and be believed: with
+// serveTable carrying no row for it, ">0" would refuse the flag that is
+// supposed to unblock exactly this case, and relaxing to ">=0" would make
+// EVERY unset flag on EVERY scheme silently resolve to "confirmed free" —
+// a far larger hole than the one being fixed. See cli/baseline.go's
+// costPerCallSet for the identical reasoning applied to
+// --cost-per-call-usd.
+func resolveServePrice(scheme, model string, priceUSDPerMinute float64, priceUSDPerMinuteSet bool) (pricing.ServePrice, error) {
 	if p, ok := pricing.LookupServePrice(scheme, model); ok {
 		return p, nil
 	}
-	if priceUSDPerMinute > 0 {
+	if priceUSDPerMinuteSet {
+		if priceUSDPerMinute < 0 {
+			return pricing.ServePrice{}, errs.ErrInvalidInput.
+				WithFix("pass a non-negative --price-serve-per-minute").
+				Wrap(fmt.Errorf("--price-serve-per-minute is %.6f; a negative rate would "+
+					"credit the budget on every hosting tick", priceUSDPerMinute))
+		}
 		return pricing.ServePrice{PerMinuteUSDMicros: usdToMicros(priceUSDPerMinute)}, nil
 	}
 	return pricing.ServePrice{}, errs.ErrInvalidInput.
 		WithFix(fmt.Sprintf("pass --price-serve-per-minute, naming the hosting rate for %s:%s "+
-			"(pricing.Version %s carries no row for it)", scheme, model, pricing.Version)).
+			"(pricing.Version %s carries no row for it; pass 0 if this provider genuinely "+
+			"does not bill for serving)", scheme, model, pricing.Version)).
 		Wrap(fmt.Errorf("%s:%s has no serve price", scheme, model))
+}
+
+// resolveEvalPrice looks up the published fine-tuned INFERENCE rate for
+// --tuner's base model — the third pricing dimension alongside
+// resolveTrainPrice and resolveServePrice, resolved once here and threaded
+// down to bridgeAgentFactory and bridge.ScoreEvalRunner rather than
+// re-derived from the deployed model's transport Ref: bridgeAgentFactory
+// hardcodes Ref.Scheme "openai" for Together's OpenAI-compatible HTTP
+// route, and re-deriving off that string would resolve OpenAI rates for a
+// Together model — charging per call on top of its hosting ticker, the
+// double-count docs/plans/2026-09-02-openai-tuner.md exists to prevent.
+//
+// Unlike resolveTrainPrice and resolveServePrice, an absent row is NOT
+// refused here — there is no --accept-unknown-cost-style escape hatch for
+// this dimension in this build (see docs/debt.md#162). A nil return feeds
+// AcceptFreeCalls (§2 of the plan above): free only when this model has no
+// per-token rate at all, which is exactly true for a Together dedicated
+// endpoint (pricing.LookupFineTunedPrice has no "together" rows) and
+// exactly false once a per-token Tuner's base model gets one.
+func resolveEvalPrice(scheme, model string) *knov1.Price {
+	p, ok := pricing.LookupFineTunedPrice(scheme, model)
+	if !ok {
+		return nil
+	}
+	return p
 }
 
 // loadValuePlan decodes the source Value run's persisted value.Plan.

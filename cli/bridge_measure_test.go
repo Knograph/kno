@@ -51,7 +51,7 @@ func TestNewBridgeTunerConstructsATogetherTuner(t *testing.T) {
 // bridgeAgentFactory's construction path the same way — the factory
 // itself and the Agent it builds are both pure construction, no network.
 func TestBridgeAgentFactoryRefusesAnUnsupportedScheme(t *testing.T) {
-	_, err := bridgeAgentFactory(bridgeFlags{}, "fireworks")
+	_, err := bridgeAgentFactory(bridgeFlags{}, "fireworks", nil)
 	if err == nil {
 		t.Fatal("want a refusal for a scheme with no shipped inference wiring")
 	}
@@ -59,7 +59,7 @@ func TestBridgeAgentFactoryRefusesAnUnsupportedScheme(t *testing.T) {
 
 func TestBridgeAgentFactoryBuildsAnAgentForTogether(t *testing.T) {
 	t.Setenv("TOGETHER_API_KEY", "sk-test")
-	factory, err := bridgeAgentFactory(bridgeFlags{}, "together")
+	factory, err := bridgeAgentFactory(bridgeFlags{}, "together", nil)
 	if err != nil {
 		t.Fatalf("bridgeAgentFactory: %v", err)
 	}
