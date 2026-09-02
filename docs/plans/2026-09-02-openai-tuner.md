@@ -75,15 +75,46 @@ from `(scheme, model)`. Using the base model rather than the deployed name
 sidesteps the problem the Together adapter already names: a per-run-generated
 endpoint id can never appear in a static table.
 
+**Corrected after the second review (P1): the base rate alone is a systematic
+UNDER-estimate, and that is worse than no estimate at all.**
+
+OpenAI bills fine-tuned inference above the base rate. `openaicompat` uses the
+same `a.price` for both the per-Case reservation and the settlement of the
+invoked model (`adapters/agent/openaicompat/estimate.go`), so reservation and
+settlement would agree with each other and both be wrong against the real
+invoice. A user setting `--max-cost-usd 5` reaches "cap reached" on arithmetic
+that understates what OpenAI actually charged.
+
+That is worse than having no estimate, and the code says so: with no `Estimator`
+under a cap, `core.ScorePass.estimate()` returns `unpriceable` and the Case is
+refused — an honest stop (`core/score.go`). A zero estimate under a cap is
+refused for the same reason. Only a *confident wrong number* gets authorized.
+
+So the base rate carries a **documented pessimistic multiplier** for
+fine-tuned inference, in the shape this package already uses for exactly this
+kind of known-imprecise correction — `pricing.TrainingHeadroomPct` and
+`pricing.RegionalMultiplierPct` (`adapters/agent/pricing/region.go`). The
+multiplier is stated as an over-estimate on purpose: erring high refuses a run
+that might have fit, which is recoverable; erring low spends money the user did
+not agree to, which is not.
+
 **No change to `core.Tuner`.** No new method, nothing breaking, and the pricing
 decision lands beside the two that already live at that layer.
 
 ### 2. `AcceptFreeCalls` becomes a field, not a constant
 
-`bridge/score.go`'s `AcceptFreeCalls: true` becomes a value the CLI sets per
-scheme: true where serving is reserved capacity already metered by the ticker,
-false where inference bills per token. **This repays #159**, and the entry is
-marked repaid in the same PR rather than left for a later audit.
+`bridge/score.go`'s `AcceptFreeCalls: true` becomes a value the CLI sets.
+
+**Corrected after the second review (P5): keyed on whether a price resolved, not
+on the scheme.** `AcceptFreeCalls := evalPrice == nil` — free only when this
+model has no per-token rate at all. Keying on scheme would bake in an assumption
+that breaks the first time one provider offers both reserved capacity and
+per-token serving, and it would mean another hardcoded `switch scheme` beside the
+two that already exist. Deriving it from the resolved price is scheme-agnostic,
+costs no extra code, and handles a hybrid provider without a new branch.
+
+**This repays #159**, and the entry is marked repaid in the same PR rather than
+left for a later audit.
 
 ### 3. `Deploy`/`Teardown` as the no-op the interface already sanctions
 
@@ -96,9 +127,18 @@ marked repaid in the same PR rather than left for a later audit.
 Written for this case, never exercised. A place where the no-op does not fit is a
 finding about the interface, not something to route around.
 
-One hazard already retired: `--bridge-max-serve-minutes` did not bound a live run
-at all, and a zero serve rate removed the cost-based backstop entirely. Fixed in
-#206 before this plan proceeds, which is why the no-op is now safe to build on.
+Two hazards retired before this plan proceeds, both found by reviewing it:
+
+- `--bridge-max-serve-minutes` did not bound a live run at all, and a zero serve
+  rate removed the cost-based backstop entirely (#206).
+- **The plan previously claimed #206 made the no-op safe. It did not.** Both the
+  deadline and the hosting ticker are guarded on `Endpoint.ReadyAt`, and a no-op
+  written the natural way — `return &core.Endpoint{Ready: true}, nil` — sets no
+  `ReadyAt`, disarming both silently. `DeployGroup` now refuses that (#208).
+
+So the adapter's `Deploy` MUST stamp `ReadyAt`. That is now enforced centrally,
+and the `coretest` conformance suite (see Test plan) asserts it for every Tuner
+rather than leaving it to each adapter's memory.
 
 ### 4. The eval-pass quote, without breaking the un-armed guarantee
 
@@ -109,9 +149,19 @@ from real token counts would need Case **content**, which for a remote
 Together user.
 
 So the un-armed quote uses a **worst-case ceiling from the Case count**, the
-shape `EstimateServeCap` already uses for hosting: a pessimistic per-Case token
-bound times the number of Cases, needing no content. It over-states, which is the
-safe direction for a figure someone consents to.
+shape `EstimateServeCap` already uses for hosting: `Agent.WorstCase()`, which is
+genuinely content-free (it prices a synthetic maximum-length prompt), times the
+number of Cases.
+
+**Corrected after the second review (P4): the count is available un-armed, but
+the wiring is not, and the plan has to name it.** The Case IDs come from the
+persisted `value.Plan`, which `runBridgeCore` already loads locally with no
+network and no `--evals`. The computation that derives them currently lives
+inside `confirmAndRun`, reached only *after* arming and after the first
+`Authorize`. It must move or be duplicated ahead of `renderBridgePlan`, and
+**both** the printed plan and `confirmAndRun`'s consent total need a third
+addend. A ceiling enforced silently at runtime by `ScorePass`'s guard, without
+appearing in the figure the user agreed to, is the same defect in a new place.
 
 ### 5. `resolveServePrice` must be able to say "confirmed zero"
 
@@ -121,8 +171,20 @@ shipping empty, `kno bridge --tuner openai:<model>` would hard-refuse at
 plan-print time with no way to unblock it: passing `0` fails the check, and any
 positive number is a lie.
 
-Fix, and add the OpenAI `serveTable` rows carrying a genuine zero — the
-zero-versus-unknown distinction `core/ring0.go` already draws, applied to serving.
+**Corrected after the second review (P3): the mechanism matters, and the naive
+one is worse than the bug.** `--price-serve-per-minute` defaults to `0`, so at
+the `float64` level an explicit `0` is indistinguishable from an absent flag.
+Relaxing `> 0` to `>= 0` would make **every unset flag, on every scheme**,
+silently resolve to "confirmed free" — a far larger hole than the one being
+fixed. The presence check is `cmd.Flags().Changed("price-serve-per-minute")`,
+the same way `--cost-per-call-usd` already distinguishes an explicit zero from
+no claim (`cli/baseline.go`).
+
+Add the OpenAI `serveTable` rows carrying a genuine zero as well — the
+zero-versus-unknown distinction `core/ring0.go` already draws, applied to
+serving. With a table row present, `LookupServePrice` succeeds on map presence
+and the flag path is not reached for OpenAI at all; the flag fix is for
+everything else.
 
 ### 6. Adopt-by-suffix uses `metadata`, not `suffix`
 
@@ -201,7 +263,27 @@ model, `cli/bridge`'s help, `docs/status.json`, `CHANGELOG.md`.
 *To be filled by the second Phase 1 review, and mirrored to `docs/debt.md` with
 triggers.*
 
-Two the review should weigh:
+**Debt dispositions this PR owes**, per CLAUDE.md's ledger rules:
+
+- **#159 — repaid.** `AcceptFreeCalls` stops being a constant.
+- **#161 — its trigger fires on this PR.** It reads in part *"when a second
+  Tuner adapter lands and the `switch scheme` in `newBridgeTuner`/
+  `bridgeAgentFactory` needs a real second case."* That is exactly this change.
+  It is repaid if §2's price-derived key removes the scheme switch, and must
+  otherwise be re-dated with a written reason. Silent carryover is not an option.
+
+Three the review should weigh:
+
+3. **`api` and `tui` cannot reach this pricing decision.** `resolveTrainPrice`
+   and `resolveServePrice` are already unexported in `cli/`, and this adds a
+   third money decision to that pile. Prime directive 3 says the shells are
+   supposed to be thin over identical engine calls; a future `kno serve` bridge
+   endpoint would have to re-derive all three, with real risk of the same run
+   being priced differently depending on which shell invoked it. Pre-existing,
+   worsened here. *Suggested trigger: before `kno serve` exposes a bridge
+   endpoint.*
+
+Two more the review should weigh:
 
 1. **`adapters/agent/internal/transport` is unreachable** from `adapters/tuner/`,
    so the Together adapter reimplemented a local security layer and this one will
@@ -211,3 +293,9 @@ Two the review should weigh:
 2. **The un-armed quote's worst-case ceiling will over-state**, possibly by a
    lot. Over-stating a figure someone consents to is the safe direction, but a
    ceiling far above the real cost is its own kind of dishonest.
+3. **No escape-hatch flag exists for the eval-pass rate.** `--price-train-per-mtok`
+   and `--price-serve-per-minute` cover their dimensions; there is no equivalent
+   for inference. `table.go` carries three OpenAI rows, so any other fine-tunable
+   base model has no rate, and every Case then refuses under a cap or falls back
+   to `EstCostPerCallUSDMicros` without one — reopening the free-calls hole for
+   an untabled model.
