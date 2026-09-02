@@ -133,6 +133,8 @@ covenants — breaking any of them requires a major version.
 
 ## [Unreleased]
 
+## v0.2.0 — in detail
+
 ### Migration notes — 0.2.0 breaks the Go API, deliberately
 
 Pre-1.0, a minor bump may break with notice here and migration notes. This is
