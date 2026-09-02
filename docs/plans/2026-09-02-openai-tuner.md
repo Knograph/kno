@@ -90,16 +90,38 @@ under a cap, `core.ScorePass.estimate()` returns `unpriceable` and the Case is
 refused — an honest stop (`core/score.go`). A zero estimate under a cap is
 refused for the same reason. Only a *confident wrong number* gets authorized.
 
-So the base rate carries a **documented pessimistic multiplier** for
-fine-tuned inference, in the shape this package already uses for exactly this
-kind of known-imprecise correction — `pricing.TrainingHeadroomPct` and
-`pricing.RegionalMultiplierPct` (`adapters/agent/pricing/region.go`). The
-multiplier is stated as an over-estimate on purpose: erring high refuses a run
-that might have fit, which is recoverable; erring low spends money the user did
-not agree to, which is not.
+**Corrected again after the third review: a multiplier is the fabricated-rate
+failure this repository refuses elsewhere, and the analogy was wrong.**
 
-**No change to `core.Tuner`.** No new method, nothing breaking, and the pricing
-decision lands beside the two that already live at that layer.
+`TrainingHeadroomPct` and `RegionalMultiplierPct` bound genuinely *unmeasurable*
+provider-internal slop — packed sequences, padding, infra markup with no clean
+per-model source. A fine-tuned model's inference rate is not unmeasurable:
+OpenAI publishes it, per base model, on the same page `table.go` already cites.
+Inventing a multiplier where a real number is look-up-able is precisely what
+`trainTable` and `serveTable` ship **empty** to prevent, and what `table.go`'s
+own doctrine states: *"An unknown model is NOT priced at zero... Lookup reports
+absence; the caller decides."*
+
+So: a `fineTunedTable` keyed by `(scheme, base model)`, carrying published
+fine-tuned inference rates, **shipping empty** and filled by a reviewed diff
+exactly as the other two tables are. A base model with no row is **refused**
+under a cap, not multiplied. That is the same honest stop `ScorePass.estimate()`
+already makes for an unpriceable Case, and it keeps the property that no number
+in the guard's path was invented by us.
+
+**No signature change to `core.Tuner`.** No new method, nothing breaking. (§6
+does edit one doc comment on it — non-breaking, but worth saying so rather than
+surprising a reviewer diffing `core/`.)
+
+**The price must be threaded, not re-derived (third review).**
+`bridgeAgentFactory` hardcodes `Price: nil` today and also hardcodes
+`Ref.Scheme: "openai"` for Together's OpenAI-compatible HTTP route. Two plain
+strings both called "scheme", and the type system will not catch a mix-up:
+re-deriving the price inside the factory off `ref.Scheme` would resolve
+OpenAI-table rates for a Together model, charging per call on top of the hosting
+ticker — the double-count the seam plan exists to prevent. The eval price is
+resolved once in `runBridgeCore`, beside `resolveTrainPrice`/`resolveServePrice`,
+and passed down.
 
 ### 2. `AcceptFreeCalls` becomes a field, not a constant
 
@@ -137,8 +159,11 @@ Two hazards retired before this plan proceeds, both found by reviewing it:
   `ReadyAt`, disarming both silently. `DeployGroup` now refuses that (#208).
 
 So the adapter's `Deploy` MUST stamp `ReadyAt`. That is now enforced centrally,
-and the `coretest` conformance suite (see Test plan) asserts it for every Tuner
-rather than leaving it to each adapter's memory.
+and the `coretest` conformance suite (see Test plan) asserts it too — not
+because `DeployGroup` might forget, since #208 makes that refusal universal, but
+because it fails at the adapter's own unit level rather than requiring a full
+`DeployGroup` integration path, and it documents the contract for the next
+adapter author before they write `Deploy`.
 
 ### 4. The eval-pass quote, without breaking the un-armed guarantee
 
@@ -149,9 +174,19 @@ from real token counts would need Case **content**, which for a remote
 Together user.
 
 So the un-armed quote uses a **worst-case ceiling from the Case count**, the
-shape `EstimateServeCap` already uses for hosting: `Agent.WorstCase()`, which is
-genuinely content-free (it prices a synthetic maximum-length prompt), times the
-number of Cases.
+shape `EstimateServeCap` already uses for hosting.
+
+**Corrected after the third review: it must NOT construct an Agent to get one.**
+`Agent.WorstCase()` is content-free, but `openaicompat.New` refuses construction
+without a bound credential — so computing the ceiling that way would make
+`kno bridge` (un-armed, no `OPENAI_API_KEY`) fail to print a plan at all,
+breaking the command's own promise of *"all locally, with zero network calls and
+zero dollars spent... read the plan before you decide whether to pay for it."*
+Today's un-armed path constructs no Agent, and `EstimateServeCap` — the hosting
+analogue — is pure arithmetic over a `ServePrice`.
+
+The ceiling is computed with `pricing.EstimateWithPrice`, already exported and
+already what `WorstCase()` calls internally. No Agent, no credential, no network.
 
 **Corrected after the second review (P4): the count is available un-armed, but
 the wiring is not, and the plan has to name it.** The Case IDs come from the
@@ -170,6 +205,15 @@ appearing in the figure the user agreed to, is the same defect in a new place.
 shipping empty, `kno bridge --tuner openai:<model>` would hard-refuse at
 plan-print time with no way to unblock it: passing `0` fails the check, and any
 positive number is a lie.
+
+**The wiring, named rather than left to the keyboard (third review).** The
+precedent is `cli/baseline.go`, and the mechanism is three parts, not one:
+`bridgeFlags` gains a `priceServeUSDSet bool`; `newBridgeCmd`'s `RunE` captures
+`cmd.Flags().Changed("price-serve-per-minute")` into it, because `runBridgeCore`
+receives a plain struct and never sees `cmd`; and `resolveServePrice` takes that
+flag. `cli/bridge_test.go` builds `bridgeFlags{}` literals directly at several
+call sites, bypassing cobra entirely — so a unit test can only exercise the
+field, and proving the `Changed()` capture works needs a cobra-level test too.
 
 **Corrected after the second review (P3): the mechanism matters, and the naive
 one is worse than the bug.** `--price-serve-per-minute` defaults to `0`, so at
@@ -247,6 +291,25 @@ vendor's account is a product problem, and the interface learns nothing.
   and **omits** it under a zero-marginal one — the behaviour #159 is about.
 - `resolveServePrice` accepts an explicit zero and still refuses an absent price.
 
+## This is two PRs, not one
+
+Third review, and correct: the plan bundles four separable workstreams. Splitting
+them along package boundaries, per `CLAUDE.md`'s own decomposition rule:
+
+**PR 1 — the pricing seam.** §1, §2, §4, §5, plus the `newBridgeTuner` registry.
+Touches `cli/` and `bridge/score.go` only. Repays #159 and #161. Testable today
+against Together with **no behaviour change** — `evalPrice` stays nil because
+`table.go` has no `"together"` key — plus a synthetic priced Tuner fixture for
+"the quote includes the eval pass under a per-token Tuner". No adapter needed.
+
+**PR 2 — the adapter.** `adapters/tuner/openai`, the `coretest` Tuner conformance
+suite, and the real fine-tuned-inference table rows. The conformance suite needs
+two structurally different adapters to mean anything, so it belongs here.
+
+**The sequencing is a safety property, not tidiness.** PR 2 must not be reachable
+via `--tuner openai:` before PR 1 merges, or it ships the exact
+asserted-free-while-really-billing hole #159 describes.
+
 ## Rollback
 
 Additive: a new adapter, a CLI-layer price resolution, and one field that was a
@@ -269,8 +332,13 @@ triggers.*
 - **#161 — its trigger fires on this PR.** It reads in part *"when a second
   Tuner adapter lands and the `switch scheme` in `newBridgeTuner`/
   `bridgeAgentFactory` needs a real second case."* That is exactly this change.
-  It is repaid if §2's price-derived key removes the scheme switch, and must
-  otherwise be re-dated with a written reason. Silent carryover is not an option.
+  **Corrected after the third review: §2 does not repay it.** §2 is about
+  `AcceptFreeCalls`; adding an OpenAI branch to `newBridgeTuner` and
+  `bridgeAgentFactory` *adds an arm to* the switch rather than removing it. Only
+  a scheme-keyed registry (`map[string]TunerFactory`) removes it. PR 1 builds
+  that registry and repays #161 properly; if it does not, #161 is re-dated with
+  a written reason in the same PR. Naming a fired trigger without dispositioning
+  it is the silent carryover the ledger exists to prevent.
 
 Three the review should weigh:
 
