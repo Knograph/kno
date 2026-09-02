@@ -161,6 +161,27 @@ If you only run the CLI, there is nothing to do.
 
 ### Fixed
 
+- **`bridge:` `--bridge-max-serve-minutes` did not tear an endpoint down
+  during a live run — only a LATER invocation's resume-time sweep read it.**
+  The flag's own help says it stops billing "after this many served
+  minutes"; until now nothing in the live path (`deployAndMeasure`,
+  `startServeTicker`, `SettleServeTick`) ever compared elapsed minutes to
+  it. A measurement that hung — a provider outage, a retry storm inside
+  `core.ScorePass`'s loop — billed the endpoint for as long as it hung,
+  bounded only by `--max-cost-usd`, which defaults to 0 (unlimited). A
+  zero-rate provider made it worse rather than better: `SettleServeTick`
+  settles zero every tick, the budget guard never refuses a zero estimate,
+  and the cost-based backstop disappears entirely — a clock is the only
+  bound that does not depend on the endpoint costing something.
+
+  `deployAndMeasure` (`bridge/run.go`) now derives a deadline from
+  `ep.ReadyAt + MaxServeMinutes` — measured from when billing starts, not
+  from when the measurement began — and wires it into the context passed to
+  `EvalRunner.Measure`. Reaching it cancels the measurement, and the
+  deferred, unconditional teardown (already in place for the mid-serve
+  budget-refusal case) tears the endpoint down immediately rather than
+  after a measurement nobody can pay for.
+
 - **`fake:` accepted an Asset with no content, and that permissiveness let a
   real defect ship.** `WithContextSet` has always refused an empty set — an
   Agent carrying nothing *is* the control arm, so measuring it as the treatment

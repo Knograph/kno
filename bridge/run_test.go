@@ -889,23 +889,28 @@ func TestServeMinutesCapStopsAHungMeasurement(t *testing.T) {
 		returned: make(chan struct{}),
 	}
 
+	// baseRunParams, not a hand-rolled RunParams literal: it is the one
+	// place DevCaseIDs and ControlCaseIDs are wired up, and both groups'
+	// needed Case ID sets (unionCaseIDs for all-in, groupCaseIDs for
+	// cluster-x — bridge/measure.go) derive from them. Omitting them makes
+	// every group's needed-Case-ID set EMPTY, so missingIDs reports nothing
+	// missing and ensureMeasured returns before ever calling
+	// deployAndMeasure — Tuner.Deploy is never invoked, Eval.Measure is
+	// never invoked, and the run fails downstream with "group cluster-x has
+	// no all-in baseline scores recorded", not with a timeout. That dead end
+	// looks like a measurement bug; it is a test-fixture bug, caught by
+	// tracing measureGroup -> ensureMeasured -> missingIDs and finding
+	// deploys=0 in the tuner's own call count.
+	guard := budget.New(budget.Limits{}, nil, 0)
+	p := baseRunParams(st, guard, tuner, em, eval)
+	// A zero serve price: the guard can never refuse, so the clock is the
+	// only thing that can stop this.
+	p.ServePrice = pricing.ServePrice{PerMinuteUSDMicros: 0}
+
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, _ = bridge.Run(ctx, bridge.RunParams{
-			RunID: "run-1", Store: st, Guard: budget.New(budget.Limits{}, nil, 0),
-			Tuner: tuner, Emitter: em, Provider: "together",
-			Quotes:    testQuotes(),
-			BaseModel: &knov1.AgentRef{Ref: "together:meta-llama/Llama-3-8b", Scheme: "together", Target: "meta-llama/Llama-3-8b"},
-			Epochs:    3, GoalDomain: knov1.ScoreDomain_SCORE_DOMAIN_UNIT_INTERVAL,
-			PollInterval: time.Millisecond, TickInterval: time.Hour,
-			// A zero serve price: the guard can never refuse, so the clock is
-			// the only thing that can stop this.
-			ServePrice: pricing.ServePrice{PerMinuteUSDMicros: 0},
-			Eval:       eval,
-			// 30 minutes, against an endpoint ready 90 minutes ago.
-			MaxLiveEndpoints: 1, MaxServeMinutes: 30,
-		})
+		_, _ = bridge.Run(ctx, p)
 	}()
 
 	select {
@@ -920,7 +925,35 @@ func TestServeMinutesCapStopsAHungMeasurement(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("Run never returned after the cap expired")
 	}
-	if tuner.teardownCalls == 0 {
-		t.Error("the endpoint was never torn down after the serve-minutes cap expired")
+
+	// The endpoint MUST be torn down. core.Tuner.Teardown's own doc: "MUST be
+	// called on every exit path once Deploy has returned successfully —
+	// success, eval-pass failure, a budget or serve-minute cap, a timeout, or
+	// cancellation." A serve-minute cap is named in that list. An endpoint
+	// left up after the run has moved on bills until someone notices, which
+	// is worse than the hang this cap exists to stop.
+	if tuner.deployCalls == 0 {
+		t.Fatal("no endpoint was ever deployed, so the teardown assertion below " +
+			"would pass vacuously — the fixture is not exercising the path")
+	}
+	if tuner.teardownCalls < tuner.deployCalls {
+		t.Errorf("deployed %d endpoint(s) and tore down %d; an endpoint whose "+
+			"measurement was cut short by the serve-minutes cap is still live "+
+			"and still billing",
+			tuner.deployCalls, tuner.teardownCalls)
+	}
+	// Both the all-in group's own union pass and cluster-x's cut-short
+	// measurement deploy an endpoint, so both must come back down —
+	// teardown is deferred immediately after DeployGroup succeeds
+	// (deployAndMeasure, bridge/run.go), before measureCtx even exists, so
+	// it runs on every return path out of that function including the one
+	// the serve-minutes deadline forces. A leaked endpoint bills forever;
+	// see core.Tuner.Teardown's doc.
+	if tuner.deployCalls != 2 {
+		t.Errorf("Deploy called %d times, want 2 (all-in, then cluster-x)", tuner.deployCalls)
+	}
+	if tuner.teardownCalls != 2 {
+		t.Errorf("Teardown called %d times, want 2 — every deployed endpoint, including the one "+
+			"the serve-minutes cap cut off, must be torn down", tuner.teardownCalls)
 	}
 }
