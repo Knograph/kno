@@ -133,6 +133,23 @@ covenants — breaking any of them requires a major version.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A ready `Endpoint` with no `ReadyAt` ran with no time bound and no cost
+  bound.** Two safety mechanisms are silently guarded on that field: the
+  serve-minutes deadline attaches only when `ReadyAt` is non-zero, and
+  `SettleServeTick` returns `(0, nil)` when it is zero, so the hosting ticker
+  settles nothing and the budget guard is never consulted. Those are the only
+  two bounds on a live measurement — one by time, one by cost — and neither
+  path reported giving up.
+
+  Not hypothetical: `core.Tuner.Deploy`'s doc invites an auto-serving provider
+  to implement it as *"a no-op returning a zero-rate Endpoint"*, and the
+  natural way to write that is `return &core.Endpoint{Ready: true}, nil`,
+  which sets no `ReadyAt`. The interface's own escape hatch led straight to the
+  unbounded case. `DeployGroup` now refuses it, so the check lives where every
+  adapter passes rather than in each adapter's memory.
+
 ### Migration notes — 0.2.0 breaks the Go API, deliberately
 
 Pre-1.0, a minor bump may break with notice here and migration notes. This is
