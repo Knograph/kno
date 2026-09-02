@@ -75,6 +75,32 @@ func DeployGroup(ctx context.Context, p DeployParams) (*core.Endpoint, error) {
 		return nil, fmt.Errorf("deploying the %s group's model: %w", p.AblationGroup, err)
 	}
 
+	// A ready Endpoint MUST carry the moment it became ready, because two
+	// independent safety mechanisms are silently disarmed without it and
+	// neither says so.
+	//
+	// The serve-minutes deadline is guarded on `!ep.ReadyAt.IsZero()`
+	// (bridge/run.go), so a zero leaves the measurement with no clock.
+	// SettleServeTick returns `0, nil` on a zero ReadyAt, so the ticker
+	// settles nothing and the budget guard is never consulted. Together they
+	// are the ONLY two bounds on a live measurement: one by time, one by
+	// cost. An Endpoint with a zero ReadyAt has neither, and nothing on
+	// either path logs that it gave up.
+	//
+	// This is not hypothetical for a future adapter. core.Tuner.Deploy's doc
+	// invites a provider that auto-serves to implement it as "a no-op
+	// returning a zero-rate Endpoint", and the natural way to write that is
+	// `return &core.Endpoint{Ready: true, ...}, nil` — which sets no
+	// ReadyAt. The interface's own escape hatch leads straight to the
+	// unbounded case, so the check belongs here, where every adapter passes,
+	// rather than in each adapter's memory.
+	if ep.Ready && ep.ReadyAt.IsZero() {
+		return nil, fmt.Errorf("bridge: the %s group's Tuner returned a ready "+
+			"Endpoint with no ReadyAt; the serve-minutes deadline and the "+
+			"hosting ticker are both guarded on it, so this endpoint would run "+
+			"with neither a time bound nor a cost bound", p.AblationGroup)
+	}
+
 	id := ep.ID
 	rec.EndpointID = &id
 	if err := p.Store.UpdateTuningJob(ctx, p.RunID, rec); err != nil {

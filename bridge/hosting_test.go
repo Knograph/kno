@@ -3,6 +3,7 @@ package bridge_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -43,7 +44,11 @@ func TestDeployGroupRecordsWriteAheadThenEndpointID(t *testing.T) {
 	st := newBridgeTestStore(t)
 	deployedRun(t, st)
 
-	tuner := &fakeTuner{deployResult: &core.Endpoint{ID: "ep-1", Provider: "together", Ready: true}}
+	// ReadyAt is set because a ready Endpoint without one has no serve-minutes
+	// deadline and no hosting ticker — DeployGroup refuses it.
+	tuner := &fakeTuner{deployResult: &core.Endpoint{
+		ID: "ep-1", Provider: "together", Ready: true, ReadyAt: time.Now(),
+	}}
 	ep, err := bridge.DeployGroup(ctx, bridge.DeployParams{
 		RunID: "run-1", AblationGroup: "all-in",
 		Store: st, Tuner: tuner, Ref: &core.JobRef{Id: "job-1"},
@@ -472,5 +477,43 @@ func TestSweepEndpointsSkipsAlreadyTornDownRows(t *testing.T) {
 	}
 	if tuner.teardownCalls != 0 || tuner.listEndpointsCalls != 0 {
 		t.Errorf("tuner called (teardown=%d, listEndpoints=%d), want zero calls", tuner.teardownCalls, tuner.listEndpointsCalls)
+	}
+}
+
+// TestDeployRefusesAReadyEndpointWithNoReadyAt pins the precondition two
+// safety mechanisms are silently guarded on.
+//
+// The serve-minutes deadline (bridge/run.go) only attaches when ReadyAt is
+// non-zero, and SettleServeTick returns (0, nil) when it is zero. Those are
+// the ONLY two bounds on a live measurement — one by time, one by cost — so a
+// ready Endpoint with a zero ReadyAt runs with neither, and neither path says
+// it gave up.
+//
+// This is the shape core.Tuner.Deploy's own doc invites: it tells a provider
+// that auto-serves to implement Deploy as "a no-op returning a zero-rate
+// Endpoint", and the natural way to write that is
+// `return &core.Endpoint{Ready: true}, nil`, which sets no ReadyAt. The
+// interface's escape hatch leads straight to the unbounded case, so the check
+// lives where every adapter passes rather than in each adapter's memory.
+func TestDeployRefusesAReadyEndpointWithNoReadyAt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := newBridgeTestStore(t)
+	deployedRun(t, st)
+
+	tuner := &fakeTuner{deployResult: &core.Endpoint{
+		ID: "ep-1", Provider: "together", Ready: true, // no ReadyAt
+	}}
+	_, err := bridge.DeployGroup(ctx, bridge.DeployParams{
+		RunID: "run-1", AblationGroup: "all-in", Store: st, Tuner: tuner,
+		Ref: &core.JobRef{Id: "job-1", Provider: "together"},
+	})
+	if err == nil {
+		t.Fatal("DeployGroup accepted a ready Endpoint with no ReadyAt; that " +
+			"endpoint runs with no serve-minutes deadline and no hosting ticker, " +
+			"so nothing bounds it by time or by cost")
+	}
+	if !strings.Contains(err.Error(), "ReadyAt") {
+		t.Errorf("the refusal does not name ReadyAt: %v", err)
 	}
 }
