@@ -172,6 +172,57 @@ covenants — breaking any of them requires a major version.
   its `coretest` conformance suite are PR 2). Repays `docs/debt.md#159` and
   `docs/debt.md#161`.
 
+- **`kno bridge --tuner openai:<model>` — the second Tuner adapter, and the
+  `coretest` conformance suite that makes `core.Tuner` an interface rather
+  than a description of Together.** `adapters/tuner/openai` implements all
+  eight `core.Tuner` methods against OpenAI's fine-tuning API, registered in
+  `bridgeAdapters` as a map entry (`docs/debt.md#161`'s registry, not a
+  branch). It is Together's structural mirror: `Deploy`/`Teardown` are
+  no-ops (OpenAI auto-serves a finished job, with no separate hosting
+  resource to create or destroy — `Deploy` still confirms the model
+  actually answers, via a free `GET /v1/models/{id}` probe, before
+  reporting ready, so it satisfies the same non-zero-`ReadyAt` contract
+  `bridge.DeployGroup` (#208) enforces); `ListJobs` adopts by a namespaced
+  `metadata` tag rather than a `suffix` field, since OpenAI's job object
+  echoes no `suffix` of its own; `ListEndpoints` always returns empty,
+  deliberately, since there is never a dedicated-endpoint resource to list.
+
+  **`adapters/agent/pricing`'s `fineTunedTable` stays empty for `"openai"`
+  in this PR too** — inventing a fine-tuned inference rate is exactly what
+  three plan-review rounds rejected, and what the table's own doctrine
+  forbids. The refusal this produces is the feature, not a gap: `cli/bridge.go`
+  gains `acceptFreeCalls(evalPrice, servePrice)`, replacing PR 1's
+  `evalPrice == nil` rule with `evalPrice == nil && servePrice.PerMinuteUSDMicros
+  > 0` — free is asserted only when a real, nonzero hosting charge already
+  covers the eval pass (Together), never merely because no per-token rate
+  resolved. A capped `kno bridge --tuner openai:<model>` now reaches
+  `core.ScorePass`'s existing unpriced-under-a-cap refusal instead of
+  bypassing it. Repays `docs/debt.md#162`. `adapters/agent/pricing.serveTable`
+  gains genuine-zero `"openai"` rows (a structural fact — no separate
+  hosting bill — not a market rate needing sourcing), so `--tuner
+  openai:<model>` resolves its hosting dimension without an explicit
+  `--price-serve-per-minute 0` on every invocation.
+
+  **`coretest` gained a `Tuner` conformance suite** (`ConformTuner`,
+  `TunerScenario`) — new work, not reuse, exercised against both
+  `adapters/tuner/together` and `adapters/tuner/openai`. It asserts a
+  `Deploy` returning `Ready: true` returns a non-zero `ReadyAt`; `Teardown`
+  is safe after a successful `Deploy`; `Status` reaches a terminal state;
+  and `ListJobs` returns only jobs matching what was submitted. Where the
+  two adapters cannot share an assertion — `ListEndpoints` finds a real,
+  listable resource for Together but is always empty for OpenAI — the
+  scenario carries a field naming the difference rather than the harness
+  silently weakening the check.
+
+  `adapters/tuner/openai` uses `adapters/internal/endpointsec` directly for
+  its HTTP transport safety, rather than a local copy of the policy —
+  `together/security.go`'s own doc named the missing shared package as the
+  real fix; it already existed one directory over, under a different name,
+  built for a different first caller. `docs/debt.md#163` records that
+  `together/security.go` itself is not yet migrated onto it.
+
+  See `docs/plans/2026-09-02-openai-tuner.md` (PR 2 of 2).
+
 ### Fixed
 
 - **A ready `Endpoint` with no `ReadyAt` ran with no time bound and no cost

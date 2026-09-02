@@ -113,7 +113,11 @@ only — the holdout is never read. A Case ID the plan names with no Case in
   kno bridge --select-run-id <id> --pool assets.jsonl --tuner together:meta-llama/Llama-3-8b --price-train-per-mtok 1.50 --price-serve-per-minute 0.02
 
   # Arm it: submit every group's job, deploy and measure it, tear it down
-  kno bridge --select-run-id <id> --pool assets.jsonl --evals cases.jsonl --tuner together:meta-llama/Llama-3-8b --price-train-per-mtok 1.50 --price-serve-per-minute 0.02 --bridge --yes`,
+  kno bridge --select-run-id <id> --pool assets.jsonl --evals cases.jsonl --tuner together:meta-llama/Llama-3-8b --price-train-per-mtok 1.50 --price-serve-per-minute 0.02 --bridge --yes
+
+  # OpenAI auto-serves the finished job (no --price-serve-per-minute needed);
+  # the eval pass has no published rate yet, so a cost cap refuses it
+  kno bridge --select-run-id <id> --pool assets.jsonl --tuner openai:gpt-5.6-terra --price-train-per-mtok 1.50`,
 		Args:          cobra.NoArgs,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -133,7 +137,7 @@ only — the holdout is never read. A Case ID the plan names with no Case in
 	flags.StringVar(&f.poolPath, "pool", "",
 		"assets whose content the training files render: a JSONL file path, csv:<file>, or md:<file-or-dir> (required)")
 	flags.StringVar(&f.tuner, "tuner", "",
-		"the base model to tune, as scheme:model, e.g. together:meta-llama/Llama-3-8b (required)")
+		"the base model to tune, as scheme:model — together:meta-llama/Llama-3-8b or openai:gpt-5.6-terra (required)")
 	flags.StringVar(&f.dbPath, "db", "kno.db", "where runs and traces are stored")
 	flags.BoolVar(&f.bridgeArmed, "bridge", false,
 		"submit jobs; without it the plan is printed and nothing is submitted or spent")
@@ -447,18 +451,54 @@ func resolveServePrice(scheme, model string, priceUSDPerMinute float64, priceUSD
 // double-count docs/plans/2026-09-02-openai-tuner.md exists to prevent.
 //
 // Unlike resolveTrainPrice and resolveServePrice, an absent row is NOT
-// refused here — there is no --accept-unknown-cost-style escape hatch for
-// this dimension in this build (see docs/debt.md#162). A nil return feeds
-// AcceptFreeCalls (§2 of the plan above): free only when this model has no
-// per-token rate at all, which is exactly true for a Together dedicated
-// endpoint (pricing.LookupFineTunedPrice has no "together" rows) and
-// exactly false once a per-token Tuner's base model gets one.
+// refused HERE — the refusal this dimension needs is not "no escape-hatch
+// flag exists" (docs/debt.md#162's original gap), it is acceptFreeCalls
+// below, which #162 is repaid by: see that function's doc for how a nil
+// result is no longer treated as an unconditional free-calls claim. A nil
+// return here means only "this model has no published per-token rate in
+// fineTunedTable" — true for a Together dedicated endpoint AND for
+// adapters/tuner/openai in this PR (fineTunedTable ships empty for
+// "openai" too — see that package's doc and this PR's report for why
+// inventing a rate here was rejected).
 func resolveEvalPrice(scheme, model string) *knov1.Price {
 	p, ok := pricing.LookupFineTunedPrice(scheme, model)
 	if !ok {
 		return nil
 	}
 	return p
+}
+
+// acceptFreeCalls decides bridge.ScoreEvalRunner.AcceptFreeCalls — repaying
+// docs/debt.md#162's disposition.
+//
+// #159's original rule was `evalPrice == nil`: free whenever no per-token
+// rate resolved. That is correct for Together, where a nonzero hosting
+// ticker (servePrice) is the real spend already covering inference — but it
+// is exactly WRONG for an auto-serving, per-token provider whose base model
+// has no fineTunedTable row (adapters/tuner/openai in this PR, since that
+// table ships empty deliberately): there, evalPrice == nil would assert
+// every eval-pass call free with NO dollar line anywhere accounting for it,
+// reopening the precise hole #159 closed, for an untabled model specifically.
+//
+// The fix adds servePrice.PerMinuteUSDMicros > 0 as a second, required
+// condition: calls are asserted free only when a REAL, nonzero hosting
+// charge already covers them. When servePrice is a genuine zero (true for
+// "openai" — see adapters/agent/pricing.serveTable's own doc — or for any
+// scheme a user explicitly confirms bills nothing for hosting via
+// --price-serve-per-minute 0) AND evalPrice is nil, AcceptFreeCalls is
+// false instead: core.ScorePass's own Estimator path then runs
+// (core/score.go's estimate()), which refuses an unpriceable Case under a
+// cost cap with an actionable error — core/score.go's existing
+// "unpriceable" refusal, made REACHABLE for this case rather than bypassed.
+// That refusal IS the intended behaviour for an untabled per-token model,
+// not a gap: see adapters/tuner/openai's package doc.
+//
+// Both conditions are keyed on RESOLVED VALUES, not on scheme, for the same
+// reason §2 of docs/plans/2026-09-02-openai-tuner.md gives for the original
+// rule: scheme-keying bakes in an assumption that breaks the first time one
+// provider offers both reserved capacity and per-token serving.
+func acceptFreeCalls(evalPrice *knov1.Price, servePrice pricing.ServePrice) bool {
+	return evalPrice == nil && servePrice.PerMinuteUSDMicros > 0
 }
 
 // loadValuePlan decodes the source Value run's persisted value.Plan.

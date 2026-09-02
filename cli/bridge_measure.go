@@ -11,6 +11,7 @@ import (
 
 	"github.com/knograph/kno/adapters/agent/openaicompat"
 	"github.com/knograph/kno/adapters/agent/pricing"
+	openaituner "github.com/knograph/kno/adapters/tuner/openai"
 	"github.com/knograph/kno/adapters/tuner/together"
 	"github.com/knograph/kno/bridge"
 	"github.com/knograph/kno/core"
@@ -166,12 +167,7 @@ func confirmAndRun(
 		Eval: &bridge.ScoreEvalRunner{
 			Cases: core.Seal(staticEvals{cases: cases}),
 			Goal:  goal, Guard: runGuard, NewAgent: agentFactory,
-			// Keyed on whether a price resolved, not on scheme — §2 of
-			// docs/plans/2026-09-02-openai-tuner.md, repaying
-			// docs/debt.md#159. Together's evalPrice is nil (table.go
-			// carries no "together" fine-tuned rows), so this stays true
-			// and behaviour is unchanged.
-			AcceptFreeCalls: evalPrice == nil,
+			AcceptFreeCalls: acceptFreeCalls(evalPrice, servePrice),
 		},
 		ServePrice:       servePrice,
 		MaxLiveEndpoints: f.maxLiveEndpoints,
@@ -278,12 +274,14 @@ type bridgeAdapter struct {
 	agent evalAgentFactoryBuilder
 }
 
-// bridgeAdapters is the scheme-keyed registry. Only "together" ships in
-// this build (adapters/tuner/together) — matching the tuner-bridge plan's
-// Step 5 sequencing (Together first, OpenAI and others later, each landing
-// as a new entry here rather than a new branch).
+// bridgeAdapters is the scheme-keyed registry — docs/debt.md#161's
+// repayment: a second Tuner adapter is a map entry, not a branch. "openai"
+// (adapters/tuner/openai) lands here as PR 2 of
+// docs/plans/2026-09-02-openai-tuner.md; "together" shipped first per the
+// tuner-bridge plan's Step 5 sequencing.
 var bridgeAdapters = map[string]bridgeAdapter{
 	"together": {tuner: newTogetherTuner, agent: newTogetherAgentFactory},
+	"openai":   {tuner: newOpenAITuner, agent: newOpenAIAgentFactory},
 }
 
 // supportedTunerSchemes lists what --tuner accepts, sorted, for a refusal
@@ -402,4 +400,51 @@ func bridgeHostOf(baseURL string) string {
 		return ""
 	}
 	return u.Hostname()
+}
+
+// newOpenAITuner is bridgeAdapters["openai"].tuner.
+func newOpenAITuner(f bridgeFlags) (core.Tuner, error) {
+	bindings, err := keyBindings(f.keyEnv)
+	if err != nil {
+		return nil, err
+	}
+	return openaituner.New(openaituner.Options{
+		KeyEnv:               bindings,
+		AllowInsecureBaseURL: f.allowInsecureURL,
+		AllowPrivateAddress:  f.allowPrivateAddress,
+	})
+}
+
+// newOpenAIAgentFactory is bridgeAdapters["openai"].agent: an Agent that
+// invokes the deployed model over OpenAI's own chat completions API.
+//
+// Unlike newTogetherAgentFactory, no special base URL or host binding is
+// needed: OpenAI auto-serves a fine-tuned model at its OWN default host
+// (openaicompat.DefaultBaseURL) under the fine-tuned model's own name —
+// there is no separate "dedicated endpoint" host the way a Together
+// deployment has. OPENAI_API_KEY resolves against that default host exactly
+// as it does for a non-bridge `kno baseline --agent openai:...` run; an
+// explicit --key-env still wins for a self-hosted or proxied base URL.
+func newOpenAIAgentFactory(f bridgeFlags, evalPrice *knov1.Price) (bridge.AgentFactory, error) {
+	bindings, err := keyBindings(f.keyEnv)
+	if err != nil {
+		return nil, err
+	}
+	return func(_ context.Context, model *knov1.AgentRef) (core.Agent, error) {
+		ref := &knov1.AgentRef{Scheme: openaituner.Scheme, Target: model.GetTarget()}
+		return openaicompat.New(openaicompat.Options{
+			Ref: ref, KeyEnv: bindings,
+			AllowInsecureBaseURL: f.allowInsecureURL,
+			AllowPrivateAddress:  f.allowPrivateAddress,
+			// evalPrice is resolveEvalPrice's result for --tuner's base
+			// model (cli/bridge.go), resolved once and threaded down —
+			// see that function's own doc. fineTunedTable ships empty for
+			// "openai" in this PR (deliberately: see adapters/tuner/openai's
+			// package doc and docs/debt.md#162's disposition), so evalPrice
+			// is nil here until a reviewed diff adds rows through
+			// internal/cmd/pricingcheck — which is exactly what makes the
+			// confirmAndRun refusal below load-bearing rather than a gap.
+			Price: evalPrice,
+		})
+	}, nil
 }

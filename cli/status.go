@@ -94,11 +94,19 @@ func stageFacts() []stageFact {
 			"run: the un-armed plan renders every group's training file byte-identically to `kno export`; " +
 			"an armed, confirmed run submits each job, deploys the all-in and every leave-one-out model in " +
 			"turn, invokes each over Cases resolved from --evals, and reports Δ_group/Δ_control with " +
-			"intervals, including the interference verdict. Partial rather than shipped for two reasons: " +
-			"the deployed-endpoint inference route this build's `together` wiring assumes " +
-			"(docs/debt.md#161) is unconfirmed against a live endpoint, and a knowledge-kind Asset " +
-			"explicitly overridden into the tuning set is refused unconditionally rather than honored " +
-			"(bridge.Population's own doc) because no `user_overridden` field exists yet."},
+			"intervals, including the interference verdict. Two Tuner adapters ship: `together` " +
+			"(deploy-required, per-minute hosting) and `openai` (auto-serve, per-token, `fineTunedTable` " +
+			"ships empty so a capped run against an untabled model refuses rather than treating inference " +
+			"as free), dispatched through a scheme-keyed registry and cross-checked by a shared `coretest` " +
+			"Tuner conformance suite. Partial rather than shipped for three reasons: the deployed-endpoint " +
+			"inference route this build's `together` wiring assumes (docs/debt.md#161) is unconfirmed " +
+			"against a live endpoint, and openai's own Deploy readiness probe is equally unconfirmed " +
+			"against a live model; a knowledge-kind Asset explicitly overridden into the tuning set is " +
+			"refused unconditionally rather than honored (bridge.Population's own doc) because no " +
+			"`user_overridden` field exists yet; and no OpenAI fine-tuned inference rate is priced yet " +
+			"(`fineTunedTable` ships empty on principle — see adapters/tuner/openai's doc — until a " +
+			"reviewed diff through internal/cmd/pricingcheck adds rows), so an armed openai run needs an " +
+			"unlimited --max-cost-usd or refuses at the eval pass."},
 	}
 }
 

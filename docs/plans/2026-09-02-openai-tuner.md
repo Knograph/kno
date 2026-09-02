@@ -1,6 +1,17 @@
 # An OpenAI Tuner — and the pricing assumption it breaks
 
-**Status:** Phase 0 — plan, **rewritten after Phase 1 review**. Not implemented.
+**Status:** Implemented in two PRs, per the sequencing this plan requires (see
+"This is two PRs, not one" below). **PR 1** (#209, merged 2026-09-02): the
+pricing seam — §1, §2, §4, §5's flag mechanism, and the `bridgeAdapters`
+registry. Repaid `docs/debt.md#159` and `#161` (mechanism half). **PR 2**:
+`adapters/tuner/openai`, the `coretest` Tuner conformance suite run against
+both adapters, and §5's OpenAI `serveTable` rows. Repaid `docs/debt.md#162`.
+`fineTunedTable` ships empty for `"openai"`, deliberately — per §1's own
+"shipping empty and filled by a reviewed diff exactly as the other two
+tables are" and this PR's own report — so an armed, capped
+`kno bridge --tuner openai:<model>` refuses at the eval pass rather than
+treating inference as free, which is the intended behaviour this plan's §2
+and §4 describe, not a gap.
 
 ## Problem
 

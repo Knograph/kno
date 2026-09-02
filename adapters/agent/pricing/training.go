@@ -41,26 +41,62 @@ type ServePrice struct {
 // trainTable and serveTable are keyed table[scheme][baseModel], exactly like
 // table in table.go.
 //
-// BOTH SHIP EMPTY. The bridge plan tags Together's exact per-model training
-// rate and Together's per-minute dedicated-endpoint rate ***(verify)*** —
-// Phase 1 confirmed the SHAPE (a published per-token training rate exists,
-// roughly $0.48-$3.20/MTok by base-model size and method) but not a specific
-// number this build can stand behind on an $3-8, irreversible-at-submission
-// spend path. Shipping a guessed number here would be confidently wrong in
-// exactly the class of mistake CLAUDE.md's prime directive 4 exists to
-// prevent — better to ship the mechanism unpriced than to ship a wrong
-// price that authorizes real money. Until a reviewed diff adds rows (the
-// same discipline table.go's own doc comment describes for the inference
-// table), every base and served model is refused under LookupTrainPrice and
-// LookupServePrice, and the only way to run a bridge is
-// --price-train-per-mtok / --price-serve-per-minute — the same explicit,
+// trainTable SHIPS EMPTY, for every scheme. The bridge plan tags Together's
+// exact per-model training rate ***(verify)*** — Phase 1 confirmed the SHAPE
+// (a published per-token training rate exists, roughly $0.48-$3.20/MTok by
+// base-model size and method) but not a specific number this build can
+// stand behind on an $3-8, irreversible-at-submission spend path. Shipping a
+// guessed number here would be confidently wrong in exactly the class of
+// mistake CLAUDE.md's prime directive 4 exists to prevent — better to ship
+// the mechanism unpriced than to ship a wrong price that authorizes real
+// money. Until a reviewed diff adds rows (the same discipline table.go's own
+// doc comment describes for the inference table), every base model is
+// refused under LookupTrainPrice, and the only way to run a bridge against
+// an untabled scheme is --price-train-per-mtok — the same explicit,
 // user-stated escape hatch the plan specifies in place of
 // --accept-unknown-cost. See docs/debt.md for the ledger entry this ships
 // with, whose trigger includes "the pricing drift detector gains a
-// training-price or serve-price check".
+// training-price check".
 var trainTable = map[string]map[string]TrainPrice{}
 
-var serveTable = map[string]map[string]ServePrice{}
+// serveTable ships empty for every scheme EXCEPT "openai" — see the rows
+// below for why that one carries a genuine, confirmed zero rather than
+// staying unpriced like everything else in this file.
+//
+// Together's serveTable stays exactly as empty as trainTable, for the
+// identical reason: its real per-minute dedicated-endpoint rate is a market
+// price this build cannot stand behind unsourced, and --price-serve-per-minute
+// is its escape hatch (cli/bridge.go's resolveServePrice).
+//
+// The "openai" rows are different in kind, not degree. A serve RATE is a
+// market number that needs sourcing (Together's case); whether OpenAI bills
+// separately for HOSTING a fine-tuned model at all is not a market number —
+// it is a fact about the product shape, load-bearing throughout this PR's
+// adapter (adapters/tuner/openai's Deploy/Teardown are no-ops because there
+// is no separate hosting resource to create or destroy) and already asserted
+// there. Recording it here too — rather than only in adapter comments — is
+// what lets resolveServePrice (cli/bridge.go) resolve "openai" without
+// requiring every --tuner openai:<model> run to also pass an explicit
+// --price-serve-per-minute 0: docs/plans/2026-09-02-openai-tuner.md §5,
+// "with a table row present, LookupServePrice succeeds on map presence and
+// the flag path is not reached for OpenAI at all; the flag fix is for
+// everything else." This is NOT the fabricated-multiplier failure
+// fineTunedTable's own doc refuses: zero is not a guess bounding an unknown
+// number, it is the number, confirmed by the product's own architecture
+// rather than by a page requiring (verify).
+//
+// Keyed to the SAME three base models table.go's own "openai" inference
+// rows carry (gpt-5.6-sol/-terra/-luna) — the models this build actually
+// treats as real OpenAI targets — rather than every conceivable fine-tunable
+// id, so this table does not silently claim knowledge of a model nothing
+// else in the codebase knows about.
+var serveTable = map[string]map[string]ServePrice{
+	"openai": {
+		"gpt-5.6-sol":   {PerMinuteUSDMicros: 0},
+		"gpt-5.6-terra": {PerMinuteUSDMicros: 0},
+		"gpt-5.6-luna":  {PerMinuteUSDMicros: 0},
+	},
+}
 
 // fineTunedTable is the THIRD bridge pricing dimension: what a fine-tuned
 // model costs to INVOKE, keyed table[scheme][baseModel] exactly like
