@@ -689,6 +689,29 @@ type blockingEvalRunner struct {
 	once     sync.Once
 }
 
+// blockAfterAllIn answers the all-in group normally and then hangs, so a test
+// can reach a leave-one-out measurement with a real baseline behind it.
+type blockAfterAllIn struct {
+	scores   map[string]float64
+	started  chan struct{}
+	returned chan struct{}
+	once     sync.Once
+}
+
+func (b *blockAfterAllIn) Measure(ctx context.Context, group string, _ *knov1.AgentRef, ids []string) (map[string]float64, error) {
+	if group == bridge.AllIn {
+		out := make(map[string]float64, len(ids))
+		for _, id := range ids {
+			out[id] = b.scores[id]
+		}
+		return out, nil
+	}
+	b.once.Do(func() { close(b.started) })
+	<-ctx.Done()
+	close(b.returned)
+	return nil, ctx.Err()
+}
+
 func (b *blockingEvalRunner) Measure(ctx context.Context, _ string, _ *knov1.AgentRef, _ []string) (map[string]float64, error) {
 	b.once.Do(func() { close(b.started) })
 	<-ctx.Done()
@@ -821,5 +844,83 @@ func TestRunValidateRequiredFields(t *testing.T) {
 				t.Errorf("want an error for %s", tc.name)
 			}
 		})
+	}
+}
+
+// TestServeMinutesCapStopsAHungMeasurement is the flag doing what its help
+// says, and it is a spend-safety test rather than a lifecycle one.
+//
+// `--bridge-max-serve-minutes` is documented as "tear an endpoint down and
+// report its group unknown after this many served minutes." It reached only
+// SweepEndpoints, which runs on a LATER invocation cleaning up after a crash;
+// nothing bounded a live run. A measurement that hung billed the endpoint for
+// as long as it hung, with --max-cost-usd defaulting to 0 (unlimited) as the
+// only other bound.
+//
+// A zero-rate provider makes it strictly worse: SettleServeTick settles zero
+// every tick, the guard never refuses a zero estimate, and the cost-based
+// backstop disappears. A clock is the only bound that does not depend on the
+// endpoint costing something.
+func TestServeMinutesCapStopsAHungMeasurement(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := newBridgeTestStore(t)
+	if err := st.CreateRun(ctx, &knov1.Run{Id: "run-1", Stage: knov1.Stage_STAGE_BRIDGE, Status: knov1.RunStatus_RUN_STATUS_RUNNING}); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	em, err := bridge.NewEmitter(ctx, st, "run-1")
+	if err != nil {
+		t.Fatalf("NewEmitter: %v", err)
+	}
+
+	// ReadyAt already past the cap, so the deadline has expired before the
+	// measurement starts: no sleeping in a test to prove a timeout fires.
+	tuner := &fakeTuner{
+		ref:            &core.JobRef{Id: "job-1", Provider: "together", SubmittedAt: "2026-08-31T00:00:00Z"},
+		statusSequence: []*core.JobState{succeeded("job-1")},
+		deployResult: &core.Endpoint{
+			ID: "ep-1", Provider: "together", Served: "meta-llama/Llama-3-8b-ft",
+			Ready: true, ReadyAt: time.Now().Add(-90 * time.Minute),
+		},
+	}
+	eval := &blockAfterAllIn{
+		scores:   map[string]float64{},
+		started:  make(chan struct{}),
+		returned: make(chan struct{}),
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = bridge.Run(ctx, bridge.RunParams{
+			RunID: "run-1", Store: st, Guard: budget.New(budget.Limits{}, nil, 0),
+			Tuner: tuner, Emitter: em, Provider: "together",
+			Quotes:    testQuotes(),
+			BaseModel: &knov1.AgentRef{Ref: "together:meta-llama/Llama-3-8b", Scheme: "together", Target: "meta-llama/Llama-3-8b"},
+			Epochs:    3, GoalDomain: knov1.ScoreDomain_SCORE_DOMAIN_UNIT_INTERVAL,
+			PollInterval: time.Millisecond, TickInterval: time.Hour,
+			// A zero serve price: the guard can never refuse, so the clock is
+			// the only thing that can stop this.
+			ServePrice: pricing.ServePrice{PerMinuteUSDMicros: 0},
+			Eval:       eval,
+			// 30 minutes, against an endpoint ready 90 minutes ago.
+			MaxLiveEndpoints: 1, MaxServeMinutes: 30,
+		})
+	}()
+
+	select {
+	case <-eval.returned:
+	case <-time.After(15 * time.Second):
+		t.Fatal("the serve-minutes cap did not stop a hung measurement; the " +
+			"endpoint bills for as long as the measurement hangs, and at a zero " +
+			"serve rate no cost cap can stop it either")
+	}
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("Run never returned after the cap expired")
+	}
+	if tuner.teardownCalls == 0 {
+		t.Error("the endpoint was never torn down after the serve-minutes cap expired")
 	}
 }
