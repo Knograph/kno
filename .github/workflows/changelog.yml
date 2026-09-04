@@ -97,3 +97,23 @@ jobs:
           echo "Only refactor:, chore:, test:, and build: are exempt. If this one genuinely changes"
           echo "nothing a user would notice, apply the no-changelog label and say why in the PR."
           exit 1
+
+  fold:
+    name: A changelog fold captures only what shipped
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Tags are needed: the check compares the fold against the release's own
+      # tagged CHANGELOG, so a shallow clone without tags cannot answer.
+      #
+      # This runs on the pull_request event, which checks out the prospective
+      # MERGE COMMIT rather than the PR head — and that is the whole point.
+      # The defect it catches is a fold PR that was correct when opened and
+      # became wrong while it waited, because entries merged into the base in
+      # between land under the very heading the fold renames. Only the merge
+      # result shows that.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Every folded entry was pending at its tag
+        run: ./scripts/fold-drift-check.sh

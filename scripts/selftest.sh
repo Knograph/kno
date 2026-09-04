@@ -262,6 +262,7 @@ UNCOVERED=$(
 		pr-ready|a feat: branch with no CHANGELOG entry
 		fold-changelog|an [Unreleased] block that changed since the tag, which must refuse to auto-merge
 		conflict-marker-check|a tracked file containing merge-conflict markers
+		fold-drift-check|a fold capturing an entry that was not pending at its tag
 		test-live|KNO_MAX_COST_USD unset, which must refuse to spend
 		record-fixtures|KNO_MAX_COST_USD unset, which must refuse to spend
 		record-calibration|KNO_MAX_COST_USD unset, which must refuse to spend

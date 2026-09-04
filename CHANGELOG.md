@@ -153,6 +153,24 @@ covenants — breaking any of them requires a major version.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A changelog fold could file entries under a release that predates them, and
+  did so three times.** `scripts/fold-changelog.sh` compares the tree against
+  the tag before renaming `## [Unreleased]` — but only once, when it opens the
+  PR. Everything merged while that PR waits lands under the very heading the
+  rename is about to consume, so the fold is correct when opened and wrong when
+  it merges. v0.1.6, v0.1.7 and v0.2.0 each needed a hand correction, and each
+  was caught by a person reading the diff rather than by a gate.
+
+  `scripts/fold-drift-check.sh` now runs in CI on the **merge result** — the
+  `pull_request` event checks out the prospective merge commit, which is the
+  only view that shows entries added to the base after the PR opened. It
+  refuses a fold whose section captures any entry that was not under
+  `[Unreleased]` at that release's tag, and names each one. The creation-time
+  warning stays as an early signal and is now documented as insufficient rather
+  than mistaken for the gate.
+
 ## v0.2.1 — in detail
 
 ### Added

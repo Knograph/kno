@@ -47,7 +47,15 @@ unreleased_block() {
 	' "$1"
 }
 
-# The race, and why this script now checks for it.
+# The race, and why this script checks for it.
+#
+# NOTE: this check is a snapshot taken when the PR opens, and it is not the
+# gate. It fired correctly for v0.1.6, v0.1.7 and v0.2.0 and was still wrong by
+# merge time in all three, because entries kept landing while the PR waited —
+# which is exactly what it cannot see from here. scripts/fold-drift-check.sh
+# re-runs the comparison against the prospective MERGE COMMIT in CI and is what
+# actually refuses a misfiled fold. What follows is a courtesy warning in the
+# PR body, useful because it names the drift early, and never sufficient.
 #
 # This runs at release time and opens a PR that merges LATER, when its checks
 # go green. Anything merged into main in that window lands under the very
