@@ -153,6 +153,8 @@ covenants — breaking any of them requires a major version.
 
 ## [Unreleased]
 
+## v0.2.1 — in detail
+
 ### Added
 
 - **`kno bridge`'s eval pass is now priced, not asserted free.** `bridge/score.go`'s
