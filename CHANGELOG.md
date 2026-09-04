@@ -28,6 +28,26 @@ covenants — breaking any of them requires a major version.
      At release time the hand-written heading is renamed from [Unreleased] to
      the version. See docs/debt.md#76 for why that is still a manual step. -->
 
+## [0.2.1](https://github.com/uknoAI/kno/compare/v0.2.0...v0.2.1) (2026-09-04)
+
+
+### Features
+
+* **bridge:** price the eval pass instead of asserting it free ([#209](https://github.com/uknoAI/kno/issues/209)) ([9a73019](https://github.com/uknoAI/kno/commit/9a73019d4f0d3a14ce8d953132910f9bc9c5db4c))
+* **tuner:** an OpenAI Tuner, and a conformance suite that spans both ([#211](https://github.com/uknoAI/kno/issues/211)) ([d6fdd6f](https://github.com/uknoAI/kno/commit/d6fdd6f63b560bc540217351859f4aef4716e757))
+
+
+### Bug Fixes
+
+* **bridge:** enforce --bridge-max-serve-minutes during a live run ([#206](https://github.com/uknoAI/kno/issues/206)) ([2fcae7c](https://github.com/uknoAI/kno/commit/2fcae7c982af69eb10c3eca58bbcc6ca4b4f3215))
+* **bridge:** refuse a ready Endpoint that carries no ReadyAt ([#208](https://github.com/uknoAI/kno/issues/208)) ([5f64979](https://github.com/uknoAI/kno/commit/5f64979e9a27f7d0265d0ba00ac89bc266941903))
+
+
+### Documentation
+
+* fold the hand-written changelog into v0.2.0 ([#213](https://github.com/uknoAI/kno/issues/213)) ([0435155](https://github.com/uknoAI/kno/commit/04351550bf3d55697b6e0be99ef1ac15c622beff))
+* **plans:** rewrite the OpenAI Tuner plan after Phase 1 review ([#205](https://github.com/uknoAI/kno/issues/205)) ([eaedcd3](https://github.com/uknoAI/kno/commit/eaedcd33797ae522a0598ab1a25ca65759bce000))
+
 ## [0.2.0](https://github.com/uknoAI/kno/compare/v0.1.7...v0.2.0) (2026-09-02)
 
 
