@@ -28,6 +28,13 @@ covenants — breaking any of them requires a major version.
      At release time the hand-written heading is renamed from [Unreleased] to
      the version. See docs/debt.md#76 for why that is still a manual step. -->
 
+## [0.2.2](https://github.com/uknoAI/kno/compare/v0.2.1...v0.2.2) (2026-09-04)
+
+
+### Documentation
+
+* fold the hand-written changelog into v0.2.1 ([#214](https://github.com/uknoAI/kno/issues/214)) ([d3df2a9](https://github.com/uknoAI/kno/commit/d3df2a9d6c405af93a7db602bd1672d0e2cda461))
+
 ## [0.2.1](https://github.com/uknoAI/kno/compare/v0.2.0...v0.2.1) (2026-09-04)
 
 
