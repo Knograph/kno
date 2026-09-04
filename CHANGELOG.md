@@ -240,32 +240,6 @@ covenants — breaking any of them requires a major version.
   unbounded case. `DeployGroup` now refuses it, so the check lives where every
   adapter passes rather than in each adapter's memory.
 
-### Migration notes — 0.2.0 breaks the Go API, deliberately
-
-Pre-1.0, a minor bump may break with notice here and migration notes. This is
-that notice. Nothing about the CLI, the `kno.yaml` schema or exit codes changes;
-what breaks is the **public Go API**, and only for code that implements our
-interfaces rather than calling them.
-
-- **`core.Tuner` gained four methods** — `Deploy`, `Teardown`, `ListJobs` and
-  `ListEndpoints`. An out-of-tree Tuner must implement all four. `Deploy` and
-  `Teardown` are the dedicated-endpoint lifecycle; `ListJobs` and `ListEndpoints`
-  exist so a resumed run can adopt work a crashed process already paid for,
-  rather than abandoning it or submitting it twice.
-- **`store.Store` gained the tuning-job and validation surface** —
-  `WriteTuningJob`, `UpdateTuningJob`, `TuningJobs`, `LeakedEndpoints`,
-  `WriteValidation`, `Validation` and `RecordHoldoutUse`. An out-of-tree Store
-  must implement them. Most callers embed `*store.SQLite` and are unaffected.
-- **The store schema moves 6 → 8**, additively, and migrates in place on first
-  open. A database written by 0.1.x is read by 0.2.0; one written by 0.2.0 is
-  **not** readable by 0.1.x. Keep a copy before upgrading if you need to roll
-  back.
-- **`EvalRunner.Measure` returns `map[string]float64`** keyed by Case ID rather
-  than positional slices. New in this cycle, so only in-tree callers exist — but
-  it is a public signature and worth naming.
-
-If you only run the CLI, there is nothing to do.
-
 ### Fixed
 
 - **`bridge:` `--bridge-max-serve-minutes` did not tear an endpoint down
@@ -288,6 +262,34 @@ If you only run the CLI, there is nothing to do.
   deferred, unconditional teardown (already in place for the mid-serve
   budget-refusal case) tears the endpoint down immediately rather than
   after a measurement nobody can pay for.
+
+## v0.2.0 — in detail
+
+### Migration notes — 0.2.0 breaks the Go API, deliberately
+
+- **`core.Tuner` gained four methods** — `Deploy`, `Teardown`, `ListJobs` and
+  `ListEndpoints`. An out-of-tree Tuner must implement all four. `Deploy` and
+  `Teardown` are the dedicated-endpoint lifecycle; `ListJobs` and `ListEndpoints`
+  exist so a resumed run can adopt work a crashed process already paid for,
+  rather than abandoning it or submitting it twice.
+
+- **`store.Store` gained the tuning-job and validation surface** —
+  `WriteTuningJob`, `UpdateTuningJob`, `TuningJobs`, `LeakedEndpoints`,
+  `WriteValidation`, `Validation` and `RecordHoldoutUse`. An out-of-tree Store
+  must implement them. Most callers embed `*store.SQLite` and are unaffected.
+
+- **The store schema moves 6 → 8**, additively, and migrates in place on first
+  open. A database written by 0.1.x is read by 0.2.0; one written by 0.2.0 is
+  **not** readable by 0.1.x. Keep a copy before upgrading if you need to roll
+  back.
+
+- **`EvalRunner.Measure` returns `map[string]float64`** keyed by Case ID rather
+  than positional slices. New in this cycle, so only in-tree callers exist — but
+  it is a public signature and worth naming.
+
+If you only run the CLI, there is nothing to do.
+
+### Fixed
 
 - **`fake:` accepted an Asset with no content, and that permissiveness let a
   real defect ship.** `WithContextSet` has always refused an empty set — an
