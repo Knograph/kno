@@ -1,0 +1,6 @@
+The success path: VALIDATING_FILES -> QUEUED -> RUNNING -> SUCCEEDED, then a
+readiness probe (GET /v1/models/{id}) that answers 200 — the model is
+registered and invocable, so Deploy reports Ready true with a non-zero
+ReadyAt. OpenAI's job-status vocabulary has no DEPLOYING state (unlike
+Together's dedicated endpoint), which is why this sequence is four polls,
+not five.

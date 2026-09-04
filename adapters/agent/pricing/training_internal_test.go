@@ -79,7 +79,45 @@ func TestLookupServePriceExactAndPrefixMatch(t *testing.T) {
 	}
 
 	if _, ok := LookupServePrice("openai", "meta-llama/Llama-3-8b"); ok {
-		t.Error("a different scheme with no table must not match")
+		t.Error("a different scheme's table must not match an unrelated model")
+	}
+}
+
+// TestLookupServePriceOpenAIGenuineZero pins training.go's one deliberate
+// exception to "serveTable ships empty": OpenAI auto-serves a fine-tuned
+// model with no separate hosting resource, so PerMinuteUSDMicros is a
+// CONFIRMED zero, not an unsourced market rate — see serveTable's own doc
+// for why this is not the fabricated-multiplier failure fineTunedTable
+// refuses. cli/bridge.go's resolveServePrice depends on this: without a row
+// present, --tuner openai:<model> would hard-refuse at plan-print time with
+// no way to unblock it (serveTable shipping empty means --price-serve-per-minute
+// 0 would be needed on every invocation).
+func TestLookupServePriceOpenAIGenuineZero(t *testing.T) {
+	for _, model := range []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
+		got, ok := LookupServePrice("openai", model)
+		if !ok {
+			t.Errorf("LookupServePrice(%q, %q): ok = false, want a genuine-zero row", "openai", model)
+			continue
+		}
+		if got.PerMinuteUSDMicros != 0 {
+			t.Errorf("LookupServePrice(%q, %q).PerMinuteUSDMicros = %d, want 0",
+				"openai", model, got.PerMinuteUSDMicros)
+		}
+	}
+
+	// A version suffix inherits the base row, matching every other table's
+	// rule.
+	got, ok := LookupServePrice("openai", "gpt-5.6-terra-2026-03-01")
+	if !ok || got.PerMinuteUSDMicros != 0 {
+		t.Errorf("version-suffixed match: got %+v, ok=%v", got, ok)
+	}
+
+	// A model this build does not otherwise treat as a real OpenAI target
+	// must NOT inherit the zero — serveTable's doc: keyed to the same three
+	// models table.go's own "openai" inference rows carry, not every
+	// conceivable fine-tunable id.
+	if _, ok := LookupServePrice("openai", "gpt-9-imaginary"); ok {
+		t.Error("an untabled OpenAI model must not silently inherit a genuine-zero row")
 	}
 }
 

@@ -1,0 +1,3 @@
+The failure path: QUEUED -> FAILED, with the provider's error text surfaced
+verbatim onto JobState.Error — mirroring together/testdata/fixtures/poll-
+failed's own scenario, for the mirror-image adapter.

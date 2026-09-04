@@ -364,6 +364,49 @@ delta computed over a sample that happened to succeed — substituting one
 group's number for another's is exactly the selection bias `validate`
 exists to catch downstream, and the bridge does not reintroduce it upstream.
 
+## What a bridge quote covers, and why it differs by provider
+
+`kno bridge`'s printed plan and its armed-run consent total add up to three
+dollar figures, and which of them is nonzero depends on the `--tuner`
+provider's own billing model — not on anything Kno chooses:
+
+1. **Training**, the one-time cost of the fine-tuning job itself, priced
+   per training token from a published rate (`--price-train-per-mtok` when
+   no table row exists yet).
+2. **Hosting**, what it costs to keep the tuned model reachable for the eval
+   pass, priced per replica per minute — including while idle — for a
+   provider that requires a separate deploy step (Together: a dedicated
+   endpoint). A provider that auto-serves a finished job (OpenAI) has no
+   separate hosting resource at all, so this line is a confirmed **zero**,
+   not an unpriced gap.
+3. **Eval pass**, what it costs to actually invoke the deployed model over
+   the dev and control Cases the leave-one-group-out measurement needs.
+
+The third line is where the two shipped Tuners genuinely diverge, and the
+plan states which case applies rather than leaving it silent either way:
+
+- **Together**: inference on a dedicated endpoint is zero-marginal — the
+  hosting line above already paid for the capacity — so the eval pass reads
+  **$0.00**, and that zero is a real claim about Together's billing, not an
+  omission.
+- **OpenAI**: there is no hosting line to have already paid for inference,
+  so the eval pass is priced per token from a published fine-tuned-inference
+  rate. **As of this writing, that rate is not yet in Kno's pricing table**
+  (`adapters/agent/pricing`'s `fineTunedTable` ships empty for every
+  provider — inventing a number here would be the same class of mistake the
+  base inference table's own doctrine refuses: *"An unknown model is NOT
+  priced at zero... Lookup reports absence; the caller decides."*). Until a
+  reviewed diff adds a row, an armed `kno bridge --tuner openai:<model>` run
+  under `--max-cost-usd` **refuses at the eval pass**, naming what pricing
+  is missing, rather than silently measuring for free. Drop the cost cap (an
+  explicit choice to run unbounded) to proceed without one in the meantime.
+
+The rule producing this is scheme-agnostic on purpose: a quote asserts the
+eval pass is free only when a real, nonzero hosting charge already covers
+it — never merely because no per-token rate happened to resolve. That is
+what makes the same code correct for a future provider that offers both
+reserved capacity and per-token billing, without a new branch.
+
 ## What a confidence interval on a delta claims
 
 Every delta Kno reports comes with an interval, and the interval is the product — a Δ of +0.04 with a range of [−0.11, +0.19] is not a finding, and shipping it as one is what the whole discipline exists to prevent.

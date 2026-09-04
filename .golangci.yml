@@ -134,6 +134,12 @@ linters:
             # adapters/**/format.go. Scoped to the one directory so it
             # cannot spread to code that touches kno.v1 types.
             - "!**/adapters/tuner/together/**"
+            # The OpenAI Tuner adapter is the same contract as the Together
+            # one directly above: a wire-format parser for OpenAI's
+            # fine-tuning and models REST shapes (submitRequest,
+            # statusResponse, jobListResponse, errorEnvelope), no kno.v1 type
+            # involved. Scoped to the one directory so it cannot spread.
+            - "!**/adapters/tuner/openai/**"
             # cli/bridge_render.go's --json output is the same contract as
             # cli/jsonreport.go: a hand-written shape aimed at a jq
             # pipeline, not a kno.v1 type. Scoped to the one file so it

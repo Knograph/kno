@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/knograph/kno/adapters/agent/pricing"
 	"github.com/knograph/kno/core"
 	"github.com/knograph/kno/core/errs"
 	"github.com/knograph/kno/core/value"
@@ -410,6 +411,66 @@ func TestBridgeUnarmedTogetherPlanOmitsEvalPassCost(t *testing.T) {
 		t.Errorf("eval-pass line is not a confirmed zero: %q", out.String())
 	}
 }
+
+// TestResolveEvalPriceOpenAIStaysNilInThisPR pins
+// docs/plans/2026-09-02-openai-tuner.md's explicit scope line: fineTunedTable
+// ships empty for "openai" too, in THIS PR — inventing a rate is exactly
+// what three plan-review rounds rejected. resolveEvalPrice must return nil
+// for every OpenAI model until a reviewed diff (internal/cmd/pricingcheck)
+// adds rows, the same as it does for "together".
+func TestResolveEvalPriceOpenAIStaysNilInThisPR(t *testing.T) {
+	for _, model := range []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
+		if got := resolveEvalPrice("openai", model); got != nil {
+			t.Errorf("resolveEvalPrice(openai, %q) = %v, want nil (fineTunedTable ships empty for openai in this PR)", model, got)
+		}
+	}
+}
+
+// TestAcceptFreeCalls pins docs/debt.md#162's repayment: AcceptFreeCalls is
+// true ONLY when both an absent per-token price AND a real, nonzero hosting
+// charge already cover the eval pass — see acceptFreeCalls's own doc.
+func TestAcceptFreeCalls(t *testing.T) {
+	tests := []struct {
+		name       string
+		evalPrice  *knov1.Price
+		servePrice pricing.ServePrice
+		want       bool
+	}{
+		{
+			name:       "together today: no per-token price, real hosting ticker",
+			evalPrice:  nil,
+			servePrice: pricing.ServePrice{PerMinuteUSDMicros: 20_000},
+			want:       true,
+		},
+		{
+			name:       "openai today: no per-token price (fineTunedTable ships empty), genuine-zero hosting",
+			evalPrice:  nil,
+			servePrice: pricing.ServePrice{PerMinuteUSDMicros: 0},
+			want:       false, // the refusal IS the behaviour — see acceptFreeCalls's doc
+		},
+		{
+			name:       "a future per-token scheme with a real fineTunedTable row",
+			evalPrice:  &knov1.Price{InputPerMtokUsdMicros: int64Ptr(4_000_000)},
+			servePrice: pricing.ServePrice{PerMinuteUSDMicros: 0},
+			want:       false,
+		},
+		{
+			name:       "a priced model even alongside a nonzero hosting rate never double-asserts free",
+			evalPrice:  &knov1.Price{InputPerMtokUsdMicros: int64Ptr(4_000_000)},
+			servePrice: pricing.ServePrice{PerMinuteUSDMicros: 20_000},
+			want:       false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := acceptFreeCalls(tc.evalPrice, tc.servePrice); got != tc.want {
+				t.Errorf("acceptFreeCalls(%v, %+v) = %v, want %v", tc.evalPrice, tc.servePrice, got, tc.want)
+			}
+		})
+	}
+}
+
+func int64Ptr(v int64) *int64 { return &v }
 
 // TestBridgeRefusesUnpricedModelWithoutTheEscapeHatch is acceptance
 // criterion 11: a base model with no training price is refused, naming

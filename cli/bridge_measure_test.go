@@ -23,21 +23,35 @@ func TestBridgeHostOf(t *testing.T) {
 
 // TestNewBridgeTunerRefusesAnUnsupportedScheme and
 // TestNewBridgeTunerConstructsATogetherTuner cover newBridgeTuner's
-// dispatch: only "together" ships in this build, and construction itself
-// makes no network call, so it is exercisable without a live server.
+// dispatch: "together" and "openai" ship in this build, and construction
+// itself makes no network call, so it is exercisable without a live server.
 func TestNewBridgeTunerRefusesAnUnsupportedScheme(t *testing.T) {
 	_, err := newBridgeTuner(bridgeFlags{}, "fireworks")
 	if err == nil {
 		t.Fatal("want a refusal for a scheme with no shipped Tuner adapter")
 	}
-	if !strings.Contains(err.Error(), "together") {
-		t.Errorf("error does not name the supported scheme: %q", err.Error())
+	if !strings.Contains(err.Error(), "together") || !strings.Contains(err.Error(), "openai") {
+		t.Errorf("error does not name every supported scheme: %q", err.Error())
 	}
 }
 
 func TestNewBridgeTunerConstructsATogetherTuner(t *testing.T) {
 	t.Setenv("TOGETHER_API_KEY", "sk-test")
 	tuner, err := newBridgeTuner(bridgeFlags{}, "together")
+	if err != nil {
+		t.Fatalf("newBridgeTuner: %v", err)
+	}
+	if tuner == nil {
+		t.Fatal("want a non-nil Tuner")
+	}
+}
+
+// TestNewBridgeTunerConstructsAnOpenAITuner is TestNewBridgeTunerConstructsATogetherTuner's
+// mirror for docs/plans/2026-09-02-openai-tuner.md's second adapter —
+// bridgeAdapters["openai"] is a map entry, not a branch (docs/debt.md#161).
+func TestNewBridgeTunerConstructsAnOpenAITuner(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "sk-test")
+	tuner, err := newBridgeTuner(bridgeFlags{}, "openai")
 	if err != nil {
 		t.Fatalf("newBridgeTuner: %v", err)
 	}
@@ -64,6 +78,27 @@ func TestBridgeAgentFactoryBuildsAnAgentForTogether(t *testing.T) {
 		t.Fatalf("bridgeAgentFactory: %v", err)
 	}
 	agent, err := factory(context.Background(), &knov1.AgentRef{Target: "meta-llama/Llama-3-8b-kno-run-1-all-in"})
+	if err != nil {
+		t.Fatalf("factory: %v", err)
+	}
+	if agent == nil {
+		t.Fatal("want a non-nil Agent")
+	}
+}
+
+// TestBridgeAgentFactoryBuildsAnAgentForOpenAI is
+// TestBridgeAgentFactoryBuildsAnAgentForTogether's mirror. Unlike Together,
+// no special base URL or host binding is threaded through — OpenAI serves a
+// fine-tuned model at its own default host, so the OPENAI_API_KEY resolved
+// here is the same one a non-bridge `kno baseline --agent openai:...` run
+// would use.
+func TestBridgeAgentFactoryBuildsAnAgentForOpenAI(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "sk-test")
+	factory, err := bridgeAgentFactory(bridgeFlags{}, "openai", nil)
+	if err != nil {
+		t.Fatalf("bridgeAgentFactory: %v", err)
+	}
+	agent, err := factory(context.Background(), &knov1.AgentRef{Target: "ft:gpt-5.6-terra:kno-run-1-all-in"})
 	if err != nil {
 		t.Fatalf("factory: %v", err)
 	}
